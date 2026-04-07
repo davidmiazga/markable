@@ -1,22 +1,45 @@
-import { invoke } from "@tauri-apps/api/core";
+/**
+ * Markable 2.0 — Main entry point
+ *
+ * Initializes the application:
+ * 1. Creates the CodeMirror editor
+ * 2. Sets up event listeners
+ */
 
-let greetInputEl: HTMLInputElement | null;
-let greetMsgEl: HTMLElement | null;
+import { createEditor } from "./editor/editor";
+import "./styles.css";
 
-async function greet() {
-  if (greetMsgEl && greetInputEl) {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsgEl.textContent = await invoke("greet", {
-      name: greetInputEl.value,
-    });
+let editor: ReturnType<typeof createEditor> = null;
+
+/**
+ * Initialize the application
+ */
+function initApp(): void {
+  console.log("Initializing Markable 2.0...");
+
+  // Get editor container
+  const editorContainer = document.getElementById("editor");
+  if (!editorContainer) {
+    console.error("Editor container #editor not found in DOM");
+    return;
   }
+
+  // Create editor instance
+  const welcomeText =
+    "# Welcome to Markable 2.0\n\nStart editing your Markdown here.";
+  editor = createEditor(editorContainer, welcomeText);
+
+  if (!editor) {
+    console.error("Failed to initialize editor");
+    return;
+  }
+
+  console.log("Markable initialized successfully");
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    greet();
-  });
-});
+// Initialize when DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initApp);
+} else {
+  initApp();
+}

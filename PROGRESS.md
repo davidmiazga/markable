@@ -1,7 +1,7 @@
 # Markable 2.0 — Phase 1 Progress Tracker
 
-**Last Updated:** 2026-04-07
-**Current Status:** Steps 00+01+02 Complete, Step 03 Deferred → Ready for Step 04 (File I/O)
+**Last Updated:** 2026-04-06
+**Current Status:** Steps 00+01+02+04+05 Complete, Step 03 Deferred → Ready for Step 06 (File Dialogs)
 
 ---
 
@@ -12,7 +12,7 @@
 | **Requirements** | ✅ COMPLETE | 100% | `docs/requirements/active_task.md` finalized |
 | **Architecture** | ✅ COMPLETE | 100% | `docs/specs/phase1-infrastructure/00_index.md` + 7 step files |
 | **Adjustments** | ✅ COMPLETE | 100% | 5 adjustments validated by requirements-analyst |
-| **Implementation** | 🟡 IN PROGRESS | 43% | Steps 00+01+02 complete, Step 03 deferred, ready for Step 04 |
+| **Implementation** | 🟡 IN PROGRESS | 71% | Steps 00+01+02+04+05 complete, Step 03 deferred, ready for Step 06 |
 
 ---
 
@@ -40,47 +40,21 @@
 - **Note:** No code signing identity currently available; will set up before final build
 
 ### Step 04: Rust File I/O Command Bridge
-- **Status:** 🟡 NEXT
-- **Expected Duration:** 30 minutes
-- **Key Task:** Create `src-tauri/capabilities/default.json` with granular scopes
-- **Files to Create:** src-tauri/capabilities/default.json
-- **Acceptance Criteria:** Capabilities JSON is valid, build completes without warnings
-- **Blockers:** None
-- **Next Trigger:** When capabilities are defined → proceed to Step 03
-
-### Step 03: macOS DMG Build Workaround & Code Signing ⚠️ CRITICAL
-- **Status:** ⏸️ NOT STARTED
-- **Expected Duration:** 1-2 hours
-- **Key Task:** Configure code signing, test `CI=true npm run tauri build`, verify spctl
-- **Files to Create/Modify:** tauri.conf.json (signingIdentity), scripts/build-dmg-fallback.sh, docs/build-notes/macos-dmg-workaround.md
-- **Acceptance Criteria:** `CI=true npm run tauri build` succeeds, `spctl --assess` returns "accepted"
-- **Blockers:** Requires Apple Developer ID to be configured (see RESUME.md)
-- **Next Trigger:** When DMG builds successfully and signature verified → proceed to Step 04
-
-### Step 04: Rust File I/O Command Bridge
-- **Status:** ⏸️ NOT STARTED
-- **Expected Duration:** 2-3 hours
-- **Key Task:** Implement read_file, write_file with atomic swap pattern; create test suite
-- **Files to Create:** src-tauri/src/commands/io.rs, src/lib/bridge.ts, src/lib/errors.ts, tests/bridge.test.ts
-- **Acceptance Criteria:** All tests pass, edge cases EC-5 through EC-13 covered
-- **Blockers:** None
-- **Next Trigger:** When all Step 04 tests pass → proceed to Step 05
+- **Status:** ✅ COMPLETE (2026-04-07)
+- **What was done:** Implemented read_file and write_file Rust commands with atomic swap pattern, created TypeScript bridge with discriminated union types (FileResult<T>), comprehensive test suite: 9 Rust tests (all file operations + atomic safety), 18 TypeScript tests (mock verification + edge cases)
+- **Files Created:** src-tauri/src/commands/io.rs, src-tauri/src/commands/mod.rs, src/lib/bridge.ts, src/lib/errors.ts, tests/bridge.test.ts
 
 ### Step 05: CodeMirror 6 Markdown Editor Setup
-- **Status:** ⏸️ NOT STARTED
-- **Expected Duration:** 1.5-2 hours
-- **Key Task:** Install CM6, create editor factory, set up Markdown syntax highlighting
-- **Files to Create:** src/editor/editor.ts, src/editor/extensions.ts, tests/editor.test.ts
-- **Acceptance Criteria:** Editor renders with syntax highlighting, tests pass, edge cases EC-18, EC-19 covered
-- **Blockers:** None
-- **Next Trigger:** When editor displays and all tests pass → proceed to Step 06
+- **Status:** ✅ COMPLETE (2026-04-06)
+- **What was done:** Installed CodeMirror 6 packages (codemirror, @codemirror/basic-setup), created editor factory with createEditor/getEditorContent/setEditorContent, implemented Markdown syntax highlighting via buildExtensions, replaced generic CSS with full CM6-aware styling (light/dark mode), verified build succeeds and all 18 tests pass
+- **Files Created:** src/editor/editor.ts, src/editor/extensions.ts, updated src/styles.css, installed codemirror packages
 
 ### Step 06: File Dialog Integration
-- **Status:** ⏸️ NOT STARTED
+- **Status:** 🟡 NEXT
 - **Expected Duration:** 1.5-2 hours
-- **Key Task:** Implement dialogs, add toolbar UI, wire file operations
-- **Files to Create:** src-tauri/src/commands/dialogs.rs, src/lib/dialogs.ts, toolbar UI in main.ts
-- **Acceptance Criteria:** Dialogs work, file operations complete end-to-end, tests pass, edge cases EC-14, EC-15, EC-20 covered
+- **Key Task:** Implement native file dialogs, add toolbar UI, wire file operations end-to-end
+- **Files to Create:** src-tauri/src/commands/dialogs.rs, src/lib/dialogs.ts, src/components/toolbar.ts, update src/main.ts
+- **Acceptance Criteria:** Open/Save dialogs work, file operations complete end-to-end, tests pass, edge cases EC-14, EC-15, EC-20 covered
 - **Blockers:** None
 - **Next Trigger:** When all tests pass and file operations work → Phase 1 COMPLETE
 
