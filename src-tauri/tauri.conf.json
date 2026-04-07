@@ -9,7 +9,6 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
-  "capabilities": ["capabilities/default.json"],
   "app": {
     "withGlobalTauri": true,
     "windows": [

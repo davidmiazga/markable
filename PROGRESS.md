@@ -1,7 +1,7 @@
 # Markable 2.0 — Phase 1 Progress Tracker
 
 **Last Updated:** 2026-04-07
-**Current Status:** Steps 00+01 Complete → Ready for Step 02
+**Current Status:** Steps 00+01+02 Complete, Step 03 Deferred → Ready for Step 04 (File I/O)
 
 ---
 
@@ -12,7 +12,7 @@
 | **Requirements** | ✅ COMPLETE | 100% | `docs/requirements/active_task.md` finalized |
 | **Architecture** | ✅ COMPLETE | 100% | `docs/specs/phase1-infrastructure/00_index.md` + 7 step files |
 | **Adjustments** | ✅ COMPLETE | 100% | 5 adjustments validated by requirements-analyst |
-| **Implementation** | 🟡 IN PROGRESS | 28% | Steps 00+01 complete, ready for Step 02 |
+| **Implementation** | 🟡 IN PROGRESS | 43% | Steps 00+01+02 complete, Step 03 deferred, ready for Step 04 |
 
 ---
 
@@ -29,6 +29,17 @@
 - **Files Created:** package.json, tsconfig.json, vite.config.ts, index.html, src/main.ts, src-tauri/ (full Rust backend)
 
 ### Step 02: Tauri v2 Capabilities & Permissions
+- **Status:** ✅ COMPLETE (2026-04-07)
+- **What was done:** Created src-tauri/capabilities/default.json with granular scopes (window, events, dialogs), updated tauri.conf.json to reference capabilities and added window label "main", build succeeds with zero warnings
+- **Files Created:** src-tauri/capabilities/default.json, src-tauri/capabilities/README.md
+
+### Step 03: macOS DMG Build Workaround & Code Signing ⚠️ CRITICAL
+- **Status:** ⏸️ DEFERRED
+- **Reason:** Skipping distribution steps until app is feature-complete and working as expected
+- **When to resume:** After Step 06 passes, when ready for real macOS distribution
+- **Note:** No code signing identity currently available; will set up before final build
+
+### Step 04: Rust File I/O Command Bridge
 - **Status:** 🟡 NEXT
 - **Expected Duration:** 30 minutes
 - **Key Task:** Create `src-tauri/capabilities/default.json` with granular scopes

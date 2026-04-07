@@ -1,0 +1,82 @@
+/**
+ * TypeScript bridge to Tauri Rust commands.
+ *
+ * Wraps Tauri's invoke() with type-safe error handling and
+ * discriminated unions for results.
+ */
+
+import { invoke } from "@tauri-apps/api/core";
+import type { FileResult, TauriCommandError } from "./errors";
+
+/**
+ * Read file contents as UTF-8 string.
+ *
+ * @param path - Absolute file path
+ * @returns Promise resolving to FileResult<string>
+ *
+ * @example
+ * ```typescript
+ * const result = await readFile("/path/to/file.md");
+ * if (result.ok) {
+ *   console.log(result.value); // File contents
+ * } else {
+ *   console.error(result.error.message); // Error message
+ * }
+ * ```
+ */
+export async function readFile(path: string): Promise<FileResult<string>> {
+  try {
+    const content = await invoke<string>("read_file", { path });
+    return { ok: true, value: content };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "read_file",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Write file contents atomically.
+ *
+ * Uses temp-file-swap pattern to ensure data safety.
+ * If write fails, the original file is never modified.
+ *
+ * @param path - Absolute file path (created if doesn't exist)
+ * @param content - Content to write as UTF-8 string
+ * @returns Promise resolving to FileResult<void>
+ *
+ * @example
+ * ```typescript
+ * const result = await writeFile("/path/to/file.md", "# Hello World");
+ * if (result.ok) {
+ *   console.log("File saved successfully");
+ * } else {
+ *   console.error(result.error.message); // Error message
+ * }
+ * ```
+ */
+export async function writeFile(
+  path: string,
+  content: string
+): Promise<FileResult<void>> {
+  try {
+    await invoke("write_file", { path, content });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "write_file",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
