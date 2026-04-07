@@ -1,7 +1,7 @@
 # Markable 2.0 — Phase 1 Progress Tracker
 
 **Last Updated:** 2026-04-06
-**Current Status:** Steps 00+01+02+04+05 Complete, Step 03 Deferred → Ready for Step 06 (File Dialogs)
+**Current Status:** ALL PHASE 1 STEPS COMPLETE ✅ (Steps 00-02, 04-06 complete; Step 03 deferred)
 
 ---
 
@@ -12,7 +12,7 @@
 | **Requirements** | ✅ COMPLETE | 100% | `docs/requirements/active_task.md` finalized |
 | **Architecture** | ✅ COMPLETE | 100% | `docs/specs/phase1-infrastructure/00_index.md` + 7 step files |
 | **Adjustments** | ✅ COMPLETE | 100% | 5 adjustments validated by requirements-analyst |
-| **Implementation** | 🟡 IN PROGRESS | 71% | Steps 00+01+02+04+05 complete, Step 03 deferred, ready for Step 06 |
+| **Implementation** | ✅ COMPLETE | 100% | All core steps (00-02, 04-06) complete, Step 03 deferred for distribution |
 
 ---
 
@@ -50,13 +50,10 @@
 - **Files Created:** src/editor/editor.ts, src/editor/extensions.ts, updated src/styles.css, installed codemirror packages
 
 ### Step 06: File Dialog Integration
-- **Status:** 🟡 NEXT
-- **Expected Duration:** 1.5-2 hours
-- **Key Task:** Implement native file dialogs, add toolbar UI, wire file operations end-to-end
-- **Files to Create:** src-tauri/src/commands/dialogs.rs, src/lib/dialogs.ts, src/components/toolbar.ts, update src/main.ts
-- **Acceptance Criteria:** Open/Save dialogs work, file operations complete end-to-end, tests pass, edge cases EC-14, EC-15, EC-20 covered
-- **Blockers:** None
-- **Next Trigger:** When all tests pass and file operations work → Phase 1 COMPLETE
+- **Status:** ✅ COMPLETE (2026-04-06)
+- **What was done:** Implemented Rust file dialog commands (open_file_dialog, save_file_dialog) using Tauri v2 dialog plugin with file filters, created TypeScript bridge wrapper (src/lib/dialogs.ts) with DialogResult discriminated union, added toolbar UI with Open/Save buttons and file name display, implemented event handlers for file operations (openFile, saveFile, saveFileAs), updated CSS for toolbar layout and dark mode support, created capabilities/default.json with dialog permissions, all tests pass (18 passing)
+- **Files Created:** src-tauri/src/commands/dialogs.rs, src/lib/dialogs.ts, src-tauri/capabilities/default.json
+- **Files Modified:** index.html (toolbar), src/styles.css (toolbar+editor layout), src/main.ts (event handlers), src/lib/bridge.ts (re-export dialogs), src-tauri/src/lib.rs (plugin registration), src-tauri/src/commands/mod.rs (export dialogs), src-tauri/Cargo.toml (dialog plugin dependency)
 
 ---
 
