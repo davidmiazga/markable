@@ -6,6 +6,42 @@ Update: Reported successful workaround identified by users includes successfully
 
 ---
 
+# Learnings from Markable 1.0
+
+Markable 1.0 (Milkdown Crepe + Tauri v2) is a working reference implementation in `markable-1.0-usesMildownCrepe/`. The following patterns proved successful and should be carried forward into 2.0:
+
+## Patterns to Keep
+
+- **Relative image paths** in `assets/` next to the document — portable, no base64 bloat. Uses Tauri's `asset://` protocol for display.
+- **Window state persistence** — debounced save (1000ms) on move/resize, restored before window show to prevent visual flash.
+- **Auto-save with 1500ms debounce** — responsive without disk thrashing. Only saves when a file path exists; prompts otherwise.
+- **Settings as JSON in app config dir** with default-merging on load, so new settings appear seamlessly on app update.
+- **Dynamic menu rebuilding** after settings changes keeps native menus in sync.
+- **Plugin system with error isolation** — 5-error limit disables misbehaving plugins. Worth adapting for CM6 extensions.
+- **Customizable keyboard shortcuts** with a recording UI in settings. Uses `e.code` for letter keys to avoid Alt/Option character mapping issues.
+- **Separate settings WebView** — clean separation of concerns.
+
+## macOS-Specific Solutions
+
+- **Hide-on-close** — app stays in dock (standard macOS behavior).
+- **150ms delay on recent-file menu events** — ensures window is focused before emitting event (real macOS quirk).
+- **Overlay title bar** with draggable region for clean appearance.
+
+## Improvements Needed in 2.0
+
+- **Atomic saves** — 1.0 uses raw `fs::write()`. 2.0 must implement temp-file-swap pattern.
+- **No test suite** in 1.0. 2.0 mandates TDD (Red/Green/Refactor).
+- **Monolithic `main.ts`** (20KB) — decompose into focused modules in 2.0.
+- **Editor destruction/recreation on file open** — CM6 can replace documents in-place, which is cleaner and preserves undo history.
+
+## What to Leave Behind
+
+- Milkdown/Crepe — replaced by CodeMirror 6 for finer live-preview control.
+- MutationObserver hack for lazy-loading images — CM6 decorations handle this natively.
+- Line-number plugin — CM6 has this built in.
+
+---
+
 # Markdown Editor (CM6 + Tauri v2)
 
 ### *Updated for macOS "Tahoe"/Sequoia Compatibility*

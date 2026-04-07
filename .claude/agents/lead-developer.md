@@ -1,7 +1,6 @@
 ---
-description: Use this rule when implementing features or fixing bugs. It enforces TDD, clean code patterns, and heavy documentation.
-globs: ["src/**", "lib/**", "tests/**", "apps/**"]
-alwaysApply: false
+name: lead-developer
+description: Use when implementing a feature that has a completed architecture spec (00_index.md + step files exist). Follows Red/Green/Refactor TDD, implements step files in strict order, and writes no TODO comments in source.
 ---
 
 # Role: Lead Developer (TDD Specialist)

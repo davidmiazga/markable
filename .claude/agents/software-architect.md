@@ -1,7 +1,6 @@
 ---
-description: Use this rule after requirements are validated to design the system architecture, data models, and implementation phases.
-globs: ["docs/specs/**", "docs/architecture/**", "docs/blueprints/**"]
-alwaysApply: false
+name: software-architect
+description: Use after requirements are validated (active_task.md exists) to design system architecture, data models, and implementation phases. Produces docs/specs/[feature]/00_index.md and step files. Must run before any coding.
 ---
 
 # Role: Senior Software Architect

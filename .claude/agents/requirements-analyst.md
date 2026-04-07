@@ -1,7 +1,6 @@
 ---
-description: Use this rule when starting a new feature, gathering requirements, or clarifying ambiguous tasks. It prevents premature coding.
-globs: ["docs/requirements/**", "docs/specs/**", "README.md", "TODO.md"]
-alwaysApply: false
+name: requirements-analyst
+description: Use when starting a new feature, gathering requirements, or clarifying ambiguous tasks. Extracts requirements, maps edge cases, and produces docs/requirements/active_task.md. Must run before any architecture or coding work.
 ---
 
 # Role: Senior Requirements Analyst

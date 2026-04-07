@@ -2,7 +2,29 @@
   "permissions": {
     "allow": [
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(chmod:*)",
+      "Bash(find /Users/dave -name *ccr* -o -name *router*config*)",
+      "Bash(find /Users/dave -name *router* -o -name *ccr*)",
+      "Bash(ccr --version)",
+      "Bash(ccr status:*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(ccr restart:*)",
+      "Bash(curl -s http://127.0.0.1:3456/api/config)",
+      "Bash(env)",
+      "Bash(ccr activate:*)",
+      "Bash(find ~/.claude -name statusbar* -o -name *status*)",
+      "Skill(update-config)",
+      "Bash(/Users/dave/.claude/statusline.sh)",
+      "Read(//Users/dave/.claude/**)",
+      "Bash(~/.claude/statusline.sh)",
+      "Bash(cat:*)",
+      "Bash(bash ~/.claude/statusline.sh)",
+      "Bash(rm ~/.claude/statusline.log)",
+      "Bash(touch ~/.claude/statusline.log)",
+      "Bash(git commit:*)",
+      "WebSearch",
+      "Bash(wc:*)"
     ]
   }
 }
