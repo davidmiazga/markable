@@ -50,7 +50,13 @@
 - **Files Created:** src/editor/editor.ts, src/editor/extensions.ts, updated src/styles.css, installed codemirror packages
 
 ### Step 06: File Dialog Integration
-- **Status:** ✅ COMPLETE (2026-04-06)
+- **Status:** ✅ COMPLETE & VISUALLY VERIFIED (2026-04-06)
+- **Visual Verification:** All 5 test suites passed ✅
+  - File open dialog: Works, filters .md/.txt files, loads content correctly
+  - File save dialog: Works, saves to disk with atomic writes
+  - Save existing files: Works without dialog, updates on disk
+  - Dialog cancellation: Graceful, no errors, app remains responsive
+  - UI/Layout: Toolbar displays correctly, buttons have proper states, editor fills space, dark mode works
 - **What was done:** Implemented Rust file dialog commands (open_file_dialog, save_file_dialog) using Tauri v2 dialog plugin with file filters, created TypeScript bridge wrapper (src/lib/dialogs.ts) with DialogResult discriminated union, added toolbar UI with Open/Save buttons and file name display, implemented event handlers for file operations (openFile, saveFile, saveFileAs), updated CSS for toolbar layout and dark mode support, created capabilities/default.json with dialog permissions, all tests pass (18 passing)
 - **Files Created:** src-tauri/src/commands/dialogs.rs, src/lib/dialogs.ts, src-tauri/capabilities/default.json
 - **Files Modified:** index.html (toolbar), src/styles.css (toolbar+editor layout), src/main.ts (event handlers), src/lib/bridge.ts (re-export dialogs), src-tauri/src/lib.rs (plugin registration), src-tauri/src/commands/mod.rs (export dialogs), src-tauri/Cargo.toml (dialog plugin dependency)
@@ -59,7 +65,39 @@
 
 ## Session Notes
 
-### Current Session (2026-04-06)
+### Current Session (2026-04-06 - Continued/Context 3)
+
+**Summary of work completed:**
+1. ✅ Step 05 (CodeMirror 6 Editor): Finished CSS styling, verified build and tests
+2. ✅ Step 06 (File Dialogs): Implemented full file dialog system end-to-end
+3. ✅ Added mandatory visual verification testing to workflow
+
+**Step 05 completion:**
+- Installed CodeMirror packages (codemirror, @codemirror/basic-setup)
+- Created editor factory (src/editor/editor.ts, src/editor/extensions.ts)
+- Replaced boilerplate CSS with CM6-aware styling (light/dark mode)
+- All 18 tests passing, build succeeds
+
+**Step 06 completion:**
+- Implemented Rust dialog commands using tauri-plugin-dialog v2
+- Created TypeScript bridge (src/lib/dialogs.ts) with DialogResult type
+- Added toolbar UI with Open/Save buttons and file name display
+- Implemented file operation handlers (open, save, save-as)
+- Full visual testing completed and verified ✅
+
+**Key learnings:**
+- Tauri v2 dialog plugin uses callback-based API (not async/await)
+- Need to use mpsc channel to synchronously wait for dialog result
+- Capabilities field not supported at root level in tauri.conf.json
+- Dialog plugin has built-in permissions, capabilities file is documentation
+
+**What's ready for next session:**
+- Phase 1 infrastructure 100% complete
+- App is fully functional for file editing
+- Step 03 (DMG/code signing) deferred until app feature-complete
+- Ready to begin Phase 2 features (multi-file, live preview, theming, menu)
+
+### Previous Session (2026-04-06)
 
 **What was accomplished:**
 1. Lead-developer agent reviewed initial plan
