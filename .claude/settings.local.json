@@ -24,7 +24,18 @@
       "Bash(touch ~/.claude/statusline.log)",
       "Bash(git commit:*)",
       "WebSearch",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npm --version)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(npm create:*)",
+      "Bash(cp -r \"./--project-name/src-tauri\" .)",
+      "Bash(cp -r \"./--project-name/src/\"* ./src/)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(cargo test:*)",
+      "Bash(npx tsc:*)",
+      "Bash(/Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/src-tauri/capabilities/default.json:*)"
     ]
   }
 }

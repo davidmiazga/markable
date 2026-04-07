@@ -1,7 +1,7 @@
 # Markable 2.0 — Phase 1 Progress Tracker
 
-**Last Updated:** 2026-04-06
-**Current Status:** Architecture Complete → Ready for Implementation (Step 00)
+**Last Updated:** 2026-04-07
+**Current Status:** Steps 00+01 Complete → Ready for Step 02
 
 ---
 
@@ -12,32 +12,24 @@
 | **Requirements** | ✅ COMPLETE | 100% | `docs/requirements/active_task.md` finalized |
 | **Architecture** | ✅ COMPLETE | 100% | `docs/specs/phase1-infrastructure/00_index.md` + 7 step files |
 | **Adjustments** | ✅ COMPLETE | 100% | 5 adjustments validated by requirements-analyst |
-| **Implementation** | ⏸️ PAUSED | 0% | Ready to start Step 00 |
+| **Implementation** | 🟡 IN PROGRESS | 28% | Steps 00+01 complete, ready for Step 02 |
 
 ---
 
 ## Implementation Progress (7 Steps)
 
 ### Step 00: Test Infrastructure Setup
-- **Status:** ⏸️ NOT STARTED
-- **Expected Duration:** 1-2 hours
-- **Key Task:** Create Vitest config, test mocks, Rust test utilities
-- **Files to Create:** vitest.config.ts, tests/setup.ts, tests/mocks/tauri.ts, src-tauri/src/test_utils.rs
-- **Acceptance Criteria:** `npm run test:run` passes, `cargo test` passes
-- **Blockers:** None
-- **Next Trigger:** When all tests in step 00 pass → proceed to Step 01
+- **Status:** ✅ COMPLETE (2026-04-07)
+- **What was done:** Vitest 4.1.3 configured with happy-dom, mock helpers for Tauri commands created, 6 example tests passing, Rust test_utils with temp file helpers, 2 Rust tests passing
+- **Files Created:** vitest.config.ts, tests/mocks/tauri.ts, tests/example.test.ts
 
 ### Step 01: Tauri v2 + Vite + TypeScript Scaffolding
-- **Status:** ⏸️ NOT STARTED
-- **Expected Duration:** 30-45 minutes
-- **Key Task:** Run `npm create tauri-app`, configure tsconfig.json, verify `npm run tauri dev`
-- **Files to Create/Modify:** package.json, tsconfig.json, vite.config.ts, src/main.ts, src-tauri/
-- **Acceptance Criteria:** Window opens, hot reload works, `tsc --noEmit` zero errors
-- **Blockers:** None
-- **Next Trigger:** When dev window opens and hot reload works → proceed to Step 02
+- **Status:** ✅ COMPLETE (2026-04-07)
+- **What was done:** Scaffolded via npm create tauri-app (vanilla-ts), fixed package name to "markable", configured tsconfig strict mode (ES2022), Vite port 1420, Cargo.toml + tauri.conf.json fixed, tsc --noEmit zero errors, npm run build succeeds
+- **Files Created:** package.json, tsconfig.json, vite.config.ts, index.html, src/main.ts, src-tauri/ (full Rust backend)
 
 ### Step 02: Tauri v2 Capabilities & Permissions
-- **Status:** ⏸️ NOT STARTED
+- **Status:** 🟡 NEXT
 - **Expected Duration:** 30 minutes
 - **Key Task:** Create `src-tauri/capabilities/default.json` with granular scopes
 - **Files to Create:** src-tauri/capabilities/default.json
