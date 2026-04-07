@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "identifier": "default",
+  "description": "Capability set for Markable file operations",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
+}

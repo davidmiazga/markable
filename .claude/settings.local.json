@@ -36,7 +36,8 @@
       "Bash(cargo test:*)",
       "Bash(npx tsc:*)",
       "Bash(/Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/src-tauri/capabilities/default.json:*)",
-      "Bash(security find-identity:*)"
+      "Bash(security find-identity:*)",
+      "Bash(cargo build:*)"
     ]
   }
 }

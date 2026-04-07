@@ -9,6 +9,25 @@
   </head>
 
   <body>
-    <div id="editor" role="textbox" aria-label="Markdown editor"></div>
+    <!-- Toolbar with file operations -->
+    <div class="toolbar">
+      <button id="btn-open" class="btn" title="Open file (Cmd+O)">
+        📂 Open
+      </button>
+      <button id="btn-save" class="btn" title="Save file (Cmd+S)">
+        💾 Save
+      </button>
+      <span id="file-name" class="file-name"></span>
+    </div>
+
+    <!-- Main application container -->
+    <div id="app">
+      <!-- Editor container: CodeMirror will mount here -->
+      <div
+        id="editor"
+        role="textbox"
+        aria-label="Markdown editor for Markable"
+      ></div>
+    </div>
   </body>
 </html>

@@ -6,7 +6,11 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { FileResult, TauriCommandError } from "./errors";
+import type { FileResult, DialogResult, TauriCommandError } from "./errors";
+
+// Re-export dialog functions from dialogs.ts
+export { openFileDialog, saveFileDialog } from "./dialogs";
+export type { DialogResult };
 
 /**
  * Read file contents as UTF-8 string.
