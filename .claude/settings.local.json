@@ -62,7 +62,11 @@
       "Bash(echo $SHELL)",
       "Bash(cargo metadata:*)",
       "Bash(lsof -ti:1420)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(node:*)",
+      "Bash(ls /Users/davidmiazga/Documents/_code-workArea/markable-2.0/node_modules/@fontsource/inter/*.css)",
+      "Bash(npm ls:*)",
+      "Bash(npm info:*)"
     ]
   }
 }

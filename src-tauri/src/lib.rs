@@ -20,7 +20,13 @@ pub fn run() {
         .on_menu_event(|app_handle, event| {
             let id = event.id().as_ref();
             match id {
-                "file-new" | "file-open" | "file-save" | "file-save-as" => {
+                "file-new" | "file-open" | "file-save" | "file-save-as"
+                | "view-toggle-preview"
+                | "theme-next" | "theme-prev"
+                | "theme-light" | "theme-dark" | "theme-system" => {
+                    let _ = app_handle.emit("menu-event", json!({ "action": id }));
+                }
+                _ if id.starts_with("format-") => {
                     let _ = app_handle.emit("menu-event", json!({ "action": id }));
                 }
                 _ => {

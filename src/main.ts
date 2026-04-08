@@ -10,6 +10,19 @@
  */
 
 import { createEditor } from "./editor/editor";
+import { previewCompartment, previewExtensions } from "./editor/extensions";
+import {
+  toggleHeading,
+  toggleInlineWrap,
+  toggleLinePrefix,
+  toggleOrderedList,
+  toggleTaskList,
+  insertCodeFence,
+  insertHorizontalRule,
+  indentLines,
+  outdentLines,
+  clearFormatting,
+} from "./editor/format";
 import {
   readFile,
   writeFile,
@@ -18,11 +31,18 @@ import {
 } from "./lib/bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/400-italic.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
 import "./styles.css";
 
 // Global editor instance and current file path
 let editor: ReturnType<typeof createEditor> = null;
 let currentFilePath: string | null = null;
+let previewEnabled = true;
+let currentTheme: "light" | "dark" | "system" = "system";
 
 /**
  * Extract just the filename from a full path.
@@ -40,6 +60,39 @@ function updateTitleBar() {
   if (titleEl) {
     titleEl.textContent = displayName;
   }
+}
+
+function setTheme(theme: "light" | "dark" | "system") {
+  currentTheme = theme;
+  if (theme === "system") {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+  console.log(`Theme: ${theme}`);
+}
+
+const themeOrder: Array<"light" | "dark" | "system"> = ["light", "dark", "system"];
+
+function nextTheme() {
+  setTheme(themeOrder[(themeOrder.indexOf(currentTheme) + 1) % themeOrder.length]);
+}
+
+function prevTheme() {
+  setTheme(themeOrder[(themeOrder.indexOf(currentTheme) - 1 + themeOrder.length) % themeOrder.length]);
+}
+
+function togglePreview() {
+  if (!editor) return;
+  previewEnabled = !previewEnabled;
+  editor.dispatch({
+    effects: previewCompartment.reconfigure(
+      previewEnabled ? previewExtensions : []
+    ),
+  });
+  document.getElementById("editor")?.classList.toggle("preview-mode", previewEnabled);
+  console.log(`Preview mode: ${previewEnabled ? "ON" : "OFF"}`);
 }
 
 function newFile() {
@@ -203,6 +256,15 @@ async function initApp() {
     return;
   }
 
+  // Preview mode starts ON — hide line numbers
+  editorContainer.classList.add("preview-mode");
+
+  // Auto-focus the editor so the cursor is blinking immediately
+  editor.focus();
+
+  // Default to system theme
+  setTheme("system");
+
   // Listen for menu events from Rust
   await listen<{ action: string }>("menu-event", (event) => {
     switch (event.payload.action) {
@@ -218,7 +280,50 @@ async function initApp() {
       case "file-save-as":
         saveFileAs();
         break;
+      case "view-toggle-preview":
+        togglePreview();
+        break;
+      case "theme-next":
+        nextTheme();
+        break;
+      case "theme-prev":
+        prevTheme();
+        break;
+      case "theme-light":
+        setTheme("light");
+        break;
+      case "theme-dark":
+        setTheme("dark");
+        break;
+      case "theme-system":
+        setTheme("system");
+        break;
+      case "format-h1": if (editor) toggleHeading(editor, 1); break;
+      case "format-h2": if (editor) toggleHeading(editor, 2); break;
+      case "format-h3": if (editor) toggleHeading(editor, 3); break;
+      case "format-h4": if (editor) toggleHeading(editor, 4); break;
+      case "format-h5": if (editor) toggleHeading(editor, 5); break;
+      case "format-h6": if (editor) toggleHeading(editor, 6); break;
+      case "format-bold": if (editor) toggleInlineWrap(editor, "**"); break;
+      case "format-italic": if (editor) toggleInlineWrap(editor, "*"); break;
+      case "format-underline": if (editor) toggleInlineWrap(editor, "__"); break;
+      case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
+      case "format-highlight": if (editor) toggleInlineWrap(editor, "=="); break;
+      case "format-code-fence": if (editor) insertCodeFence(editor); break;
+      case "format-quote": if (editor) toggleLinePrefix(editor, "> "); break;
+      case "format-bullet-list": if (editor) toggleLinePrefix(editor, "- "); break;
+      case "format-ordered-list": if (editor) toggleOrderedList(editor); break;
+      case "format-task-list": if (editor) toggleTaskList(editor); break;
+      case "format-indent": if (editor) indentLines(editor); break;
+      case "format-outdent": if (editor) outdentLines(editor); break;
+      case "format-hr": if (editor) insertHorizontalRule(editor); break;
+      case "format-clear": if (editor) clearFormatting(editor); break;
     }
+  });
+
+  // Re-focus editor when window regains focus
+  window.addEventListener("focus", () => {
+    if (editor) editor.focus();
   });
 
   updateTitleBar();

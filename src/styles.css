@@ -4,30 +4,30 @@
 
 /* --- Design Tokens --- */
 :root {
-  /* Typography */
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-
-  /* Light mode colors (default) */
-  --bg-primary: #ffffff;
-  --bg-titlebar: #f6f6f6;
-  --text-primary: #1f1f1f;
-  --text-titlebar: #666666;
-  --border-color: #e0e0e0;
-  --gutter-bg: #f5f5f5;
-  --gutter-active-bg: #f0f0f0;
-  --cursor-color: #1f1f1f;
-
+  /* Light mode (default) */
+  --bg-primary: hsl(0, 0%, 100%);
+  --bg-titlebar: hsl(0, 0%, 96%);
+  --text-primary: hsl(213, 13%, 16%);
+  --text-secondary: hsl(212, 10%, 38%);
+  --text-titlebar: hsla(0, 0%, 40%, 0.12);
+  --text-titlebar-hover: hsla(0, 0%, 40%, 0.8);
+  --border-color: hsl(0, 0%, 88%);
+  --cursor-color: hsl(213, 13%, 16%);
+  --selection-bg: #0078d726;
+  --code-bg: hsla(210, 13%, 72%, 0.2);
+  --code-text: hsl(213, 13%, 16%);
+  --link-color: hsl(212, 92%, 45%);
+  --heading-color: hsl(213, 13%, 16%);
+  --blockquote-color: hsl(212, 10%, 38%);
+  --blockquote-border: hsl(210, 18%, 84%);
+  --hr-color: hsl(210, 18%, 87%);
+  
   /* Layout constants */
   --titlebar-height: 38px;
   --traffic-light-offset: 80px;
-
-  color: var(--text-primary);
-  background-color: var(--bg-primary);
-
+  --preview-max-width: 720px;
+  --preview-padding: 40px;
+  
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -35,11 +35,32 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* --- Flash Prevention ---
-   Set background immediately on html and body so there is
-   never a frame of white/wrong color before CSS variables load. */
+/* --- Dark Mode --- */
+[data-theme="dark"] {
+  --bg-primary: hsl(216, 28%, 7%);
+  --bg-titlebar: hsl(216, 28%, 7%);
+  --text-primary: hsl(216, 28%, 93%);
+  --text-secondary: hsl(216, 28%, 65%);
+  --text-titlebar: hsla(216, 28%, 65%, .22);
+  --border-color: hsl(216, 28%, 30%);
+  --cursor-color: hsl(216, 28%, 93%);
+  --selection-bg: rgba(56, 139, 253, 0.2);
+  --code-bg: rgba(110, 118, 129, 0.25);
+  --code-text: hsl(216, 28%, 93%);
+  --link-color: hsl(216, 28%, 45%);
+  --heading-color: var(--text-primary);
+  --blockquote-color: hsl(216, 28%, 65%);
+  --blockquote-border: hsl(216, 28%, 30%);
+  --hr-color: hsl(216, 28%, 30%);
+}
+
+/* --- Flash Prevention --- */
 html {
   background-color: #ffffff;
+}
+[data-theme="dark"] html,
+html[data-theme="dark"] {
+  background-color: hsl(216, 28%, 7%);
 }
 
 /* --- Full-Viewport Layout --- */
@@ -58,6 +79,8 @@ body {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
 }
 
 /* ============================================================
@@ -71,7 +94,7 @@ body {
   align-items: center;
   justify-content: center;
   background-color: var(--bg-titlebar);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: none;
   user-select: none;
   -webkit-user-select: none;
   flex-shrink: 0;
@@ -79,6 +102,7 @@ body {
 }
 
 #titlebar-title {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
   color: var(--text-titlebar);
   font-weight: 400;
@@ -88,6 +112,11 @@ body {
   max-width: calc(100% - var(--traffic-light-offset) - var(--traffic-light-offset));
   text-align: center;
   pointer-events: auto;
+  transition: color 0.75s ease;
+}
+#titlebar:hover #titlebar-title {
+  color: var(--text-hover);
+  transition: color 0.25s ease;
 }
 
 /* ============================================================
@@ -107,118 +136,256 @@ body {
 }
 
 /* ============================================================
-   CodeMirror Theme
+   CodeMirror -- Base (colors handled by EditorView.theme in extensions.ts)
    ============================================================ */
 .cm-editor {
   height: 100% !important;
 }
 
-.cm-gutters {
-  background-color: var(--gutter-bg);
-  border-right: 1px solid var(--border-color);
+.cm-editor.cm-focused {
+  outline: none;
 }
 
-.cm-activeLineGutter {
-  background-color: var(--gutter-active-bg);
+.cm-scroller {
+  overflow: auto;
 }
 
-.cm-cursor {
-  border-left-color: var(--cursor-color);
+.cm-cursor,
+.cm-cursor-primary {
+  border-left-color: var(--cursor-color) !important;
 }
 
-/* Markdown syntax highlighting */
-.cm-strong {
-  font-weight: bold;
-}
-
-.cm-em {
-  font-style: italic;
-}
-
-.cm-heading1,
-.cm-heading2,
-.cm-heading3,
-.cm-heading4,
-.cm-heading5,
-.cm-heading6 {
-  color: #d63384;
-  font-weight: bold;
-}
-
-.cm-link {
-  color: #0066cc;
-  text-decoration: underline;
-}
-
-.cm-quote {
-  color: #6a737d;
-  font-style: italic;
-}
-
-.cm-atom,
-.cm-number {
-  color: #005cc5;
-}
-
-.cm-string {
-  color: #24292e;
+.cm-selectionBackground,
+.cm-editor ::selection {
+  background-color: var(--selection-bg) !important;
 }
 
 /* ============================================================
-   Dark Mode
+   CodeMirror -- Gutters (code mode only)
    ============================================================ */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #1e1e1e;
-    --bg-titlebar: #252526;
-    --text-primary: #e0e0e0;
-    --text-titlebar: #999999;
-    --border-color: #3e3e42;
-    --gutter-bg: #252526;
-    --gutter-active-bg: #2d2d30;
-    --cursor-color: #e0e0e0;
-  }
+.cm-lineNumbers .cm-gutterElement {
+  opacity: 0.4;
+  font-size: 12px;
+}
 
-  html {
-    background-color: #1e1e1e;
-  }
+/* Hide gutters in preview mode */
+.preview-mode .cm-gutters {
+  display: none !important;
+}
 
-  .cm-heading1,
-  .cm-heading2,
-  .cm-heading3,
-  .cm-heading4,
-  .cm-heading5,
-  .cm-heading6 {
-    color: #c586c0;
-  }
+/* ============================================================
+   Preview Mode -- Typography & Layout
+   ============================================================ */
+.preview-mode .cm-content {
+  max-width: var(--preview-max-width);
+  margin: 0 auto;
+  padding: 24px var(--preview-padding);
+}
 
-  .cm-link {
-    color: #569cd6;
-  }
+.preview-mode .cm-activeLine {
+  background-color: transparent;
+}
 
-  .cm-quote {
-    color: #858585;
-  }
+/* ============================================================
+   Code Mode -- Typography
+   ============================================================ */
+#editor:not(.preview-mode) .cm-editor {
+  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
 
-  .cm-atom,
-  .cm-number {
-    color: #4ec9b0;
-  }
+#editor:not(.preview-mode) .cm-content {
+  padding: 8px 16px;
+  font-family: inherit;
+}
 
-  .cm-string {
-    color: #ce9178;
-  }
+/* ============================================================
+   Code Mode -- Syntax Highlighting
+   ============================================================ */
+#editor:not(.preview-mode) .cm-strong {
+  font-weight: bold;
+}
 
-  .cm-editor {
-    background-color: #1e1e1e;
-    color: #e0e0e0;
-  }
+#editor:not(.preview-mode) .cm-em {
+  font-style: italic;
+}
 
-  .cm-content {
-    color: #e0e0e0;
-  }
+#editor:not(.preview-mode) .cm-heading1,
+#editor:not(.preview-mode) .cm-heading2,
+#editor:not(.preview-mode) .cm-heading3,
+#editor:not(.preview-mode) .cm-heading4,
+#editor:not(.preview-mode) .cm-heading5,
+#editor:not(.preview-mode) .cm-heading6 {
+  color: var(--heading-color);
+  font-weight: bold;
+}
 
-  .cm-line {
-    color: #e0e0e0;
-  }
+#editor:not(.preview-mode) .cm-link {
+  color: var(--link-color);
+  text-decoration: underline;
+}
+
+#editor:not(.preview-mode) .cm-quote {
+  color: var(--blockquote-color);
+  font-style: italic;
+}
+
+/* ============================================================
+   Live Preview -- Heading Styles
+   ============================================================ */
+.cm-live-h1 span, .cm-live-h2 span, .cm-live-h3 span, .cm-live-h4 span, .cm-live-h5 span, .cm-live-h6 span {
+  text-decoration: none !important;
+}
+.cm-live-h1 span{
+  font-size: 3em;
+  font-weight: 200 !important;
+  line-height: 1.25;
+  color: var(--heading-color);
+}
+
+.cm-live-h2 span{
+  font-size: 2.2em;
+  font-weight: 200;
+  line-height: 1.25;
+  color: var(--heading-color);
+}
+
+.cm-live-h3 span{
+  font-size: 1.75em;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--heading-color);
+}
+
+.cm-live-h4 span{
+  font-size: 1.5em;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--heading-color);
+}
+
+.cm-live-h5 span{
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--heading-color);
+}
+
+.cm-live-h6 span{
+  font-size: .9em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--heading-color);
+}
+
+/* ============================================================
+   Live Preview -- Inline Formatting
+   ============================================================ */
+.cm-live-bold {
+  font-weight: 600;
+}
+
+.cm-live-italic {
+  font-style: italic;
+}
+
+.cm-live-underline {
+  text-decoration: underline;
+}
+
+.cm-live-strikethrough {
+  text-decoration: line-through;
+}
+
+.cm-live-highlight {
+  background-color: hsla(55, 97%, 60%, 0.4);
+  border-radius: 3px;
+  padding: 1px 0;
+}
+
+[data-theme="dark"] .cm-live-highlight {
+  background-color: hsla(55, 80%, 40%, 0.35);
+}
+
+/* --- Code Block: line decoration layout ---
+   Adjust padding values here to control text inset.
+   To widen the background, increase padding-left/right.
+   The bg is constrained to .cm-content width (max-width: 720px). */
+.cm-live-codeblock {
+  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-size: 0.85em;
+  line-height: 1.6;
+  background-color: var(--code-bg);
+  color: var(--code-text);
+  padding:10px 18px !important;
+  position: relative;
+}
+
+.cm-live-codeblock-only {
+  border-radius: 8px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  overflow: visible;
+}
+
+.cm-live-codeblock-first {
+  border-radius: 8px 8px 0 0;
+  padding-top: 16px;
+  overflow: visible;
+}
+
+.cm-live-codeblock-last {
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 16px;
+}
+
+/* --- Code Block: copy icon --- */
+.cm-codeblock-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  opacity: 0.35;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  line-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+.cm-codeblock-copy svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cm-codeblock-copy:hover {
+  opacity: 1;
+  background-color: hsla(0, 0%, 50%, 0.12);
+}
+
+.cm-codeblock-copy.copied svg {
+  stroke: hsl(142, 60%, 45%);
+}
+
+.cm-live-code {
+  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-size: 0.85em;
+  background-color: var(--code-bg);
+  color: var(--code-text);
+  border-radius: 6px;
+  padding: 2px 6px;
 }

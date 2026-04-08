@@ -67,7 +67,7 @@ A macOS-standard application menu using the app name "Markable".
 - Open triggers the file dialog and loads the selected file.
 - Save writes the current content (or triggers Save As if no file path).
 - Save As triggers the save dialog.
-- Close hides the window (consistent with hide-on-close from Phase 2A).
+- Close closes the window (app stays in dock, consistent with Phase 2A).
 - Export/Import are visible but disabled.
 
 ---
@@ -258,7 +258,7 @@ The file name display moves to the title bar (already showing filename from Phas
 | EC-1 | Cmd-S with no file open (untitled) | Triggers Save As dialog |
 | EC-2 | Cmd-N with unsaved changes | For now: discards changes (no dirty-tracking yet). Future: prompt to save. |
 | EC-3 | Cmd-O when file is already open | Replaces current content with new file |
-| EC-4 | Cmd-W (Close) | Hides window, app stays in dock (matches Phase 2A) |
+| EC-4 | Cmd-W (Close) | Closes window, app stays in dock (matches Phase 2A) |
 | EC-5 | Cmd-Q (Quit) | Fully quits the app |
 | EC-6 | Disabled menu item clicked | No action, no error |
 | EC-7 | Keyboard shortcut for disabled item | No action, no error |
@@ -324,7 +324,7 @@ The file name display moves to the title bar (already showing filename from Phas
 - [ ] Cmd-O opens file dialog
 - [ ] Cmd-S saves (or triggers Save As if untitled)
 - [ ] Cmd-Shift-S triggers Save As
-- [ ] Cmd-W hides window
+- [ ] Cmd-W closes window (app stays in dock)
 - [ ] Cmd-Q quits app
 - [ ] Old toolbar is removed
 - [ ] Editor takes full height below title bar
