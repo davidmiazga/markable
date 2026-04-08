@@ -10,6 +10,41 @@ import { EditorState, Range } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNodeRef } from "@lezer/common";
 
+class CheckboxWidget extends WidgetType {
+  constructor(private checked: boolean) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = this.checked;
+    cb.className = "cm-live-checkbox";
+    cb.disabled = true;
+    return cb;
+  }
+
+  eq(other: CheckboxWidget): boolean {
+    return this.checked === other.checked;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+class HorizontalRuleWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const hr = document.createElement("hr");
+    hr.className = "cm-live-hr";
+    return hr;
+  }
+
+  eq(): boolean {
+    return true;
+  }
+}
+
 class CopyButtonWidget extends WidgetType {
   constructor(private code: string) {
     super();
@@ -164,6 +199,119 @@ function handleFencedCode(
   );
 }
 
+function handleBlockquote(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  activeLines: Set<number>,
+  decorations: Range<Decoration>[]
+) {
+  const startLine = state.doc.lineAt(node.from);
+  const endLine = state.doc.lineAt(node.to);
+
+  for (let ln = startLine.number; ln <= endLine.number; ln++) {
+    if (activeLines.has(ln)) continue;
+    const line = state.doc.line(ln);
+    decorations.push(Decoration.line({ class: "cm-live-blockquote" }).range(line.from));
+
+    // Hide the "> " prefix
+    const text = line.text;
+    const match = text.match(/^>\s?/);
+    if (match) {
+      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
+    }
+  }
+}
+
+function handleBulletItem(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  decorations: Range<Decoration>[]
+) {
+  const cursor = node.node.cursor();
+  if (!cursor.firstChild()) return;
+
+  // Check if this is a task list item (has Task child)
+  let isTask = false;
+  let taskChecked = false;
+  const cursorCopy = node.node.cursor();
+  if (cursorCopy.firstChild()) {
+    do {
+      if (cursorCopy.name === "Task") {
+        isTask = true;
+        // Check for TaskMarker inside Task
+        const taskCursor = cursorCopy.node.cursor();
+        if (taskCursor.firstChild()) {
+          do {
+            if (taskCursor.name === "TaskMarker") {
+              const markerText = state.doc.sliceString(taskCursor.from, taskCursor.to);
+              taskChecked = markerText === "[x]" || markerText === "[X]";
+            }
+          } while (taskCursor.nextSibling());
+        }
+      }
+    } while (cursorCopy.nextSibling());
+  }
+
+  if (isTask) {
+    // Hide "- [ ] " or "- [x] " prefix
+    const line = state.doc.lineAt(node.from);
+    const match = line.text.match(/^[-*+]\s\[[ xX]\]\s?/);
+    if (match) {
+      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
+    }
+    // Add checkbox widget
+    decorations.push(
+      Decoration.widget({
+        widget: new CheckboxWidget(taskChecked),
+        side: -1,
+      }).range(line.from)
+    );
+    decorations.push(
+      Decoration.line({ class: taskChecked ? "cm-live-task cm-live-task-checked" : "cm-live-task" }).range(line.from)
+    );
+  } else {
+    // Regular bullet — hide "- " and apply bullet style
+    const line = state.doc.lineAt(node.from);
+    const match = line.text.match(/^[-*+]\s/);
+    if (match) {
+      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
+    }
+    decorations.push(Decoration.line({ class: "cm-live-bullet" }).range(line.from));
+  }
+}
+
+function handleOrderedItem(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  decorations: Range<Decoration>[]
+) {
+  const line = state.doc.lineAt(node.from);
+  const match = line.text.match(/^(\d+)\.\s/);
+  if (match) {
+    // Hide the "1. " prefix
+    decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
+    // Use CSS counter with the actual number
+    decorations.push(
+      Decoration.line({
+        class: "cm-live-ordered",
+        attributes: { "data-order": match[1] },
+      }).range(line.from)
+    );
+  }
+}
+
+function handleHorizontalRule(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  decorations: Range<Decoration>[]
+) {
+  const line = state.doc.lineAt(node.from);
+  // Replace the entire --- with an hr widget
+  decorations.push(Decoration.replace({
+    widget: new HorizontalRuleWidget(),
+  }).range(line.from, line.to));
+}
+
 function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const activeLines = getActiveLines(state);
@@ -174,7 +322,7 @@ function buildDecorations(view: EditorView): DecorationSet {
     tree.iterate({
       from,
       to,
-      enter(node) {
+      enter(node): false | void {
         const line = state.doc.lineAt(node.from);
         if (activeLines.has(line.number)) return;
 
@@ -196,6 +344,19 @@ function buildDecorations(view: EditorView): DecorationSet {
           handleInlineMarkers(node, decorations, "cm-live-strikethrough");
         } else if (name === "Highlight") {
           handleInlineMarkers(node, decorations, "cm-live-highlight");
+        } else if (name === "Blockquote") {
+          handleBlockquote(node, state, activeLines, decorations);
+          return false; // don't descend, we handle children ourselves
+        } else if (name === "ListItem") {
+          // Check parent to determine bullet vs ordered
+          const parent = node.node.parent;
+          if (parent && parent.name === "OrderedList") {
+            handleOrderedItem(node, state, decorations);
+          } else {
+            handleBulletItem(node, state, decorations);
+          }
+        } else if (name === "HorizontalRule") {
+          handleHorizontalRule(node, state, decorations);
         } else if (name === "FencedCode") {
           // For multi-line blocks, check if cursor is on ANY line in the block
           const endLine = state.doc.lineAt(node.to).number;

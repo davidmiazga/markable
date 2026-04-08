@@ -389,3 +389,66 @@ body {
   border-radius: 6px;
   padding: 2px 6px;
 }
+
+/* ============================================================
+   Live Preview -- Blockquote
+   ============================================================ */
+.cm-live-blockquote {
+  border-left: 3px solid var(--blockquote-border);
+  padding-left: 16px;
+  color: var(--blockquote-color);
+  font-style: italic;
+}
+
+/* ============================================================
+   Live Preview -- Bullet List
+   ============================================================ */
+.cm-live-bullet {
+  margin-left: 16px;
+  text-indent: -16px;
+}
+
+.cm-live-bullet::before {
+  content: "\2022  ";
+  color: var(--text-secondary);
+}
+
+/* ============================================================
+   Live Preview -- Ordered List
+   ============================================================ */
+.cm-live-ordered {
+  margin-left: 0;
+  text-indent: 0;
+}
+
+.cm-live-ordered::before {
+  content: attr(data-order) ". ";
+  color: var(--text-secondary);
+}
+
+/* ============================================================
+   Live Preview -- Task List
+   ============================================================ */
+.cm-live-task {
+  padding-left: 4px;
+}
+
+.cm-live-task-checked {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.cm-live-checkbox {
+  margin-right: 6px;
+  vertical-align: middle;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Live Preview -- Horizontal Rule
+   ============================================================ */
+.cm-live-hr {
+  border: none;
+  border-top: 1px solid var(--hr-color);
+  margin: 16px 0;
+}
