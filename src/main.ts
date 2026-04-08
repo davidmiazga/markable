@@ -17,6 +17,7 @@ import {
   saveFileDialog,
 } from "./lib/bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 
 // Global editor instance and current file path
@@ -33,35 +34,24 @@ function getFileName(path: string): string {
   return path.split("/").pop() || path;
 }
 
-/**
- * Update the document title in the custom title bar.
- *
- * Shows "Untitled" when no file is open, or the filename when a file is loaded.
- * Also updates the toolbar file-name span for backwards compatibility.
- */
 function updateTitleBar() {
   const titleEl = document.getElementById("titlebar-title");
-  const fileNameEl = document.getElementById("file-name");
-
   const displayName = currentFilePath ? getFileName(currentFilePath) : "Untitled";
-
   if (titleEl) {
     titleEl.textContent = displayName;
   }
-
-  // Also update toolbar file-name display
-  if (fileNameEl) {
-    if (currentFilePath) {
-      fileNameEl.textContent = `Editing: ${getFileName(currentFilePath)}`;
-    } else {
-      fileNameEl.textContent = "";
-    }
-  }
 }
 
-/**
- * Load file contents into editor
- */
+function newFile() {
+  if (editor) {
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: "" },
+    });
+  }
+  currentFilePath = null;
+  updateTitleBar();
+}
+
 async function openFile() {
   console.log("Open file dialog triggered");
 
@@ -207,28 +197,30 @@ async function initApp() {
   }
 
   // Create editor instance
-  editor = createEditor(
-    editorContainer,
-    "# Welcome to Markable 2.0\n\nUse the buttons above to open and save files."
-  );
+  editor = createEditor(editorContainer, "");
   if (!editor) {
     console.error("Failed to initialize editor");
     return;
   }
 
-  // Set up file dialog button listeners
-  const openBtn = document.getElementById("btn-open");
-  const saveBtn = document.getElementById("btn-save");
+  // Listen for menu events from Rust
+  await listen<{ action: string }>("menu-event", (event) => {
+    switch (event.payload.action) {
+      case "file-new":
+        newFile();
+        break;
+      case "file-open":
+        openFile();
+        break;
+      case "file-save":
+        saveFile();
+        break;
+      case "file-save-as":
+        saveFileAs();
+        break;
+    }
+  });
 
-  if (openBtn) {
-    openBtn.addEventListener("click", openFile);
-  }
-
-  if (saveBtn) {
-    saveBtn.addEventListener("click", saveFile);
-  }
-
-  // Set initial title bar state
   updateTitleBar();
 
   // Show the window now that everything is rendered

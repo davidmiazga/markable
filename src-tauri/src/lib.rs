@@ -1,6 +1,8 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use serde_json::json;
 
 mod commands;
+mod menu;
 
 pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file};
 
@@ -14,6 +16,19 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .menu(|handle| menu::build_menu(handle))
+        .on_menu_event(|app_handle, event| {
+            let id = event.id().as_ref();
+            match id {
+                "file-new" | "file-open" | "file-save" | "file-save-as" => {
+                    let _ = app_handle.emit("menu-event", json!({ "action": id }));
+                }
+                _ => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Unhandled menu event: {}", id);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             open_file_dialog,
