@@ -9,13 +9,18 @@
   </head>
 
   <body>
+    <!-- Custom title bar: drag region with document title -->
+    <div id="titlebar" data-tauri-drag-region>
+      <span id="titlebar-title" data-tauri-drag-region>Untitled</span>
+    </div>
+
     <!-- Toolbar with file operations -->
     <div class="toolbar">
       <button id="btn-open" class="btn" title="Open file (Cmd+O)">
-        📂 Open
+        Open
       </button>
       <button id="btn-save" class="btn" title="Save file (Cmd+S)">
-        💾 Save
+        Save
       </button>
       <span id="file-name" class="file-name"></span>
     </div>

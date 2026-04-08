@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod commands;
 
 pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file};
@@ -19,8 +21,28 @@ pub fn run() {
             save_file_dialog,
             write_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .on_window_event(|window, event| {
+            // Hide-on-close: intercept the close request and hide the window
+            // instead of destroying it. This is standard macOS behavior --
+            // the app stays in the dock and can be re-shown.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Handle macOS dock icon re-activation:
+            // When the app is "resumed" (dock icon clicked while all windows hidden),
+            // find the main window and show it.
+            if let tauri::RunEvent::Resumed = event {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

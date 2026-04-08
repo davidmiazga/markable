@@ -1,10 +1,14 @@
 {
   "version": 1,
   "identifier": "default",
-  "description": "Capability set for Markable file operations",
+  "description": "Capability set for Markable file operations and window management",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save"

@@ -1,10 +1,12 @@
 /**
- * Markable 2.0 — Main Entry Point
+ * Markable 2.0 -- Main Entry Point
  *
  * Initializes the application:
  * 1. Waits for DOM to be ready
  * 2. Creates the CodeMirror editor
  * 3. Sets up event listeners for file operations
+ * 4. Updates the custom title bar with document name
+ * 5. Shows the window after frontend renders (no-flash pattern)
  */
 
 import { createEditor } from "./editor/editor";
@@ -14,11 +16,48 @@ import {
   openFileDialog,
   saveFileDialog,
 } from "./lib/bridge";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./styles.css";
 
 // Global editor instance and current file path
 let editor: ReturnType<typeof createEditor> = null;
 let currentFilePath: string | null = null;
+
+/**
+ * Extract just the filename from a full path.
+ *
+ * @param path - Full file path (e.g., "/Users/me/docs/notes.md")
+ * @returns Just the filename (e.g., "notes.md")
+ */
+function getFileName(path: string): string {
+  return path.split("/").pop() || path;
+}
+
+/**
+ * Update the document title in the custom title bar.
+ *
+ * Shows "Untitled" when no file is open, or the filename when a file is loaded.
+ * Also updates the toolbar file-name span for backwards compatibility.
+ */
+function updateTitleBar() {
+  const titleEl = document.getElementById("titlebar-title");
+  const fileNameEl = document.getElementById("file-name");
+
+  const displayName = currentFilePath ? getFileName(currentFilePath) : "Untitled";
+
+  if (titleEl) {
+    titleEl.textContent = displayName;
+  }
+
+  // Also update toolbar file-name display
+  if (fileNameEl) {
+    if (currentFilePath) {
+      fileNameEl.textContent = `Editing: ${getFileName(currentFilePath)}`;
+    } else {
+      fileNameEl.textContent = "";
+    }
+  }
+}
 
 /**
  * Load file contents into editor
@@ -57,9 +96,9 @@ async function openFile() {
     editor.dispatch(transaction);
   }
 
-  // Update current file and display name
+  // Update current file and title bar
   currentFilePath = path;
-  updateFileNameDisplay();
+  updateTitleBar();
 
   console.log(`File loaded: ${path}`);
 }
@@ -92,7 +131,7 @@ async function saveFile() {
   }
 
   console.log(`File saved: ${currentFilePath}`);
-  updateFileNameDisplay();
+  updateTitleBar();
 }
 
 /**
@@ -126,26 +165,31 @@ async function saveFileAs() {
     return;
   }
 
-  // Update current file path
+  // Update current file path and title bar
   currentFilePath = path;
-  updateFileNameDisplay();
+  updateTitleBar();
 
   console.log(`File saved: ${path}`);
 }
 
 /**
- * Update the file name display in toolbar
+ * Show the window after the frontend has fully rendered.
+ *
+ * This implements the "no-flash" pattern:
+ * 1. Window starts with visible: false in tauri.conf.json
+ * 2. Frontend loads, CSS applies, editor mounts
+ * 3. This function calls window.show() to make it visible
+ * 4. User sees a fully styled window from the first frame
  */
-function updateFileNameDisplay() {
-  const fileNameEl = document.getElementById("file-name");
-  if (fileNameEl) {
-    if (currentFilePath) {
-      // Extract just the filename from the path
-      const fileName = currentFilePath.split("/").pop() || currentFilePath;
-      fileNameEl.textContent = `Editing: ${fileName}`;
-    } else {
-      fileNameEl.textContent = "";
-    }
+async function showWindow() {
+  try {
+    const appWindow = getCurrentWebviewWindow();
+    await appWindow.show();
+    console.log("Window shown (no-flash pattern complete)");
+  } catch (err) {
+    console.error("Failed to show window:", err);
+    // If show fails, the window remains hidden.
+    // This should never happen in production, but log for debugging.
   }
 }
 
@@ -183,6 +227,12 @@ async function initApp() {
   if (saveBtn) {
     saveBtn.addEventListener("click", saveFile);
   }
+
+  // Set initial title bar state
+  updateTitleBar();
+
+  // Show the window now that everything is rendered
+  await showWindow();
 
   console.log("Markable initialized successfully");
 }

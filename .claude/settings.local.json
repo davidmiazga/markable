@@ -37,7 +37,32 @@
       "Bash(npx tsc:*)",
       "Bash(/Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/src-tauri/capabilities/default.json:*)",
       "Bash(security find-identity:*)",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "WebFetch(domain:v2.tauri.app)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:schema.tauri.app)",
+      "WebFetch(domain:github.com)",
+      "Bash(find /Users/davidmiazga/.cargo/registry/src -maxdepth 2 -name tauri-2* -type d)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:stackoverflow.com)",
+      "Bash(cargo check:*)",
+      "Bash(source \"$HOME/.cargo/env\")",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(ls /Users/davidmiazga/.rustup/toolchains/*/bin/cargo)",
+      "Bash(mdfind -name cargo)",
+      "Bash(node -e \"JSON.parse\\(require\\(''fs''\\).readFileSync\\(''src-tauri/tauri.conf.json'',''utf8''\\)\\); console.log\\(''tauri.conf.json: VALID''\\)\")",
+      "Bash(node -e \"JSON.parse\\(require\\(''fs''\\).readFileSync\\(''src-tauri/capabilities/default.json'',''utf8''\\)\\); console.log\\(''capabilities/default.json: VALID''\\)\")",
+      "Bash(npx vitest:*)",
+      "Bash(npx vite:*)",
+      "Bash(source ~/.zshrc)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(grep -E '/bin/cargo$')",
+      "Bash(rustup show:*)",
+      "Bash(echo $SHELL)",
+      "Bash(cargo metadata:*)",
+      "Bash(lsof -ti:1420)",
+      "Bash(xargs kill:*)"
     ]
   }
 }
