@@ -98,7 +98,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "format-outdent", "Outdent", true, Some("CmdOrCtrl+["))?,
             &MenuItem::with_id(handle, "format-hr", "Horizontal Rule", true, Some("CmdOrCtrl+Shift+R"))?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "format-clear", "Clear All Formatting", true, Some("CmdOrCtrl+\\"))?,
+            &MenuItem::with_id(handle, "format-clear", "Clear All Formatting", true, Some("CmdOrCtrl+Shift+\\"))?,
         ],
     )?;
 

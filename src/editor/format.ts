@@ -298,7 +298,7 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-]", mac: "Meta-]", run: (v) => { indentLines(v); return true; } },
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },
-  { key: "Meta-\\", mac: "Meta-\\", run: (v) => { clearFormatting(v); return true; } },
+  { key: "Meta-Shift-\\", mac: "Meta-Shift-\\", run: (v) => { clearFormatting(v); return true; } },
 ];
 
 /** Remove all markdown formatting from selected lines. */
