@@ -79,7 +79,12 @@
 /* Theme Buttons */
 .settings-theme-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.settings-theme-custom {
+  margin-top: 4px;
 }
 
 .settings-theme-btn {

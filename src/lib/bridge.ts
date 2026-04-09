@@ -141,3 +141,45 @@ export async function updateRecentFilesMenu(paths: string[]): Promise<void> {
     console.error("Failed to update recent files menu:", error);
   }
 }
+
+// --- Theme commands ---
+
+export interface ThemeEntry {
+  name: string;
+  filename: string;
+}
+
+/**
+ * List all custom .css theme files from the themes directory.
+ */
+export async function listThemes(): Promise<ThemeEntry[]> {
+  try {
+    return await invoke<ThemeEntry[]>("list_themes");
+  } catch (error) {
+    console.error("Failed to list themes:", error);
+    return [];
+  }
+}
+
+/**
+ * Update the native Theme menu to include custom themes.
+ */
+export async function updateThemeMenu(themes: ThemeEntry[]): Promise<void> {
+  try {
+    await invoke("update_theme_menu", { themes });
+  } catch (error) {
+    console.error("Failed to update theme menu:", error);
+  }
+}
+
+/**
+ * Read the CSS contents of a custom theme file.
+ */
+export async function readThemeCss(filename: string): Promise<string | null> {
+  try {
+    return await invoke<string>("read_theme_css", { filename });
+  } catch (error) {
+    console.error(`Failed to read theme CSS "${filename}":`, error);
+    return null;
+  }
+}

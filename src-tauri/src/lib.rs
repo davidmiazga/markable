@@ -1,12 +1,12 @@
 use tauri::{Emitter, Manager};
-use tauri::menu::MenuItem;
+use tauri::menu::{MenuItem, PredefinedMenuItem};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod commands;
 mod menu;
 
-pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file, get_settings, save_settings};
+pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -97,6 +97,83 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
     Ok(())
 }
 
+/// Rebuild the Theme menu to include custom themes after the built-in entries.
+/// Called from frontend after theme discovery.
+#[tauri::command]
+fn update_theme_menu(app: tauri::AppHandle, themes: Vec<commands::themes::ThemeEntry>) -> Result<(), String> {
+    let menu = app.menu().ok_or("No app menu found")?;
+    let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
+
+    // Find the "theme-menu" submenu
+    for item in &items {
+        if let Some(submenu) = item.as_submenu() {
+            if submenu.id().as_ref() == "theme-menu" {
+                // Remove everything and rebuild from scratch
+                let existing = submenu.items().map_err(|e| format!("Failed to get items: {}", e))?;
+                for old in &existing {
+                    let _ = submenu.remove(old);
+                }
+
+                // Re-add built-in items
+                let next = MenuItem::with_id(&app, "theme-next", "Next Theme", true, Some("CmdOrCtrl+Alt+."))
+                    .map_err(|e| format!("{}", e))?;
+                let prev = MenuItem::with_id(&app, "theme-prev", "Previous Theme", true, Some("CmdOrCtrl+Alt+,"))
+                    .map_err(|e| format!("{}", e))?;
+                let sep1 = PredefinedMenuItem::separator(&app)
+                    .map_err(|e| format!("{}", e))?;
+                let light = MenuItem::with_id(&app, "theme-light", "Light", true, None::<&str>)
+                    .map_err(|e| format!("{}", e))?;
+                let dark = MenuItem::with_id(&app, "theme-dark", "Dark", true, None::<&str>)
+                    .map_err(|e| format!("{}", e))?;
+                let system = MenuItem::with_id(&app, "theme-system", "System", true, None::<&str>)
+                    .map_err(|e| format!("{}", e))?;
+
+                submenu.append(&next).map_err(|e| format!("{}", e))?;
+                submenu.append(&prev).map_err(|e| format!("{}", e))?;
+                submenu.append(&sep1).map_err(|e| format!("{}", e))?;
+                submenu.append(&light).map_err(|e| format!("{}", e))?;
+                submenu.append(&dark).map_err(|e| format!("{}", e))?;
+                submenu.append(&system).map_err(|e| format!("{}", e))?;
+
+                // Add custom themes if any
+                if !themes.is_empty() {
+                    let sep2 = PredefinedMenuItem::separator(&app)
+                        .map_err(|e| format!("{}", e))?;
+                    submenu.append(&sep2).map_err(|e| format!("{}", e))?;
+
+                    for theme in &themes {
+                        let n = MENU_ITEM_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let id = format!("custom-theme-{}-{}", theme.filename, n);
+
+                        let item = MenuItem::with_id(&app, &id, &theme.name, true, None::<&str>)
+                            .map_err(|e| format!("{}", e))?;
+                        submenu.append(&item).map_err(|e| format!("{}", e))?;
+
+                        // Register per-item handler
+                        let app_clone = app.clone();
+                        let filename = theme.filename.clone();
+                        app.on_menu_event(move |_app, event| {
+                            if event.id().as_ref() == id {
+                                if let Some(window) = app_clone.get_webview_window("main") {
+                                    if !window.is_visible().unwrap_or(true) {
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
+                                }
+                                let _ = app_clone.emit("menu-event", json!({ "action": format!("custom:{}", filename) }));
+                            }
+                        });
+                    }
+                }
+
+                return Ok(());
+            }
+        }
+    }
+
+    Err("Could not find theme-menu submenu".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -139,7 +216,10 @@ pub fn run() {
             write_file,
             get_settings,
             save_settings,
-            update_recent_files_menu
+            list_themes,
+            read_theme_css,
+            update_recent_files_menu,
+            update_theme_menu
         ])
         .on_window_event(|window, event| {
             // Hide-on-close: intercept the close request and hide the window

@@ -115,8 +115,9 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    let theme_menu = Submenu::with_items(
+    let theme_menu = Submenu::with_id_and_items(
         handle,
+        "theme-menu",
         "Theme",
         true,
         &[

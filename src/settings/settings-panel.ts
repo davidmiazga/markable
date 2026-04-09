@@ -8,13 +8,17 @@ import {
   DEFAULT_SETTINGS,
 } from "../lib/settings";
 import { updateRecentFilesMenu } from "../lib/bridge";
+import type { ThemeEntry } from "../lib/bridge";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
 let isOpen = false;
 let onSetTheme: ((name: string) => void) | null = null;
 
-export function createSettingsPanel(setThemeFn: (name: string) => void): void {
+export function createSettingsPanel(
+  setThemeFn: (name: string) => void,
+  customThemes: ThemeEntry[] = [],
+): void {
   onSetTheme = setThemeFn;
 
   const overlay = document.createElement("div");
@@ -23,6 +27,11 @@ export function createSettingsPanel(setThemeFn: (name: string) => void): void {
   overlay.setAttribute("aria-hidden", "true");
 
   const c = EDITOR_CONSTRAINTS;
+
+  // Build custom theme buttons HTML
+  const customButtons = customThemes
+    .map((t) => `<button class="settings-theme-btn" data-theme="custom:${t.filename}">${t.name}</button>`)
+    .join("\n            ");
 
   overlay.innerHTML = `
     <div class="settings-backdrop"></div>
@@ -38,6 +47,10 @@ export function createSettingsPanel(setThemeFn: (name: string) => void): void {
             <button class="settings-theme-btn" data-theme="default-dark">Dark</button>
             <button class="settings-theme-btn" data-theme="system">System</button>
           </div>
+          ${customThemes.length > 0 ? `
+          <div class="settings-theme-options settings-theme-custom" id="settings-theme-custom-group">
+            ${customButtons}
+          </div>` : ""}
         </div>
         <div class="settings-section">
           <label class="settings-label">Content Width</label>
@@ -111,17 +124,21 @@ function wireEvents(): void {
     }
   });
 
-  // Theme buttons
+  // Theme buttons (both bundled and custom groups use event delegation)
+  const handleThemeClick = (e: Event) => {
+    const btn = (e.target as HTMLElement).closest("[data-theme]");
+    if (!btn) return;
+    const themeName = btn.getAttribute("data-theme");
+    if (themeName && onSetTheme) {
+      onSetTheme(themeName);
+      syncThemeButtons(themeName);
+    }
+  };
+
   panelElement.querySelector("#settings-theme-group")
-    ?.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest("[data-theme]");
-      if (!btn) return;
-      const themeName = btn.getAttribute("data-theme");
-      if (themeName && onSetTheme) {
-        onSetTheme(themeName);
-        syncThemeButtons(themeName);
-      }
-    });
+    ?.addEventListener("click", handleThemeClick);
+  panelElement.querySelector("#settings-theme-custom-group")
+    ?.addEventListener("click", handleThemeClick);
 
   // Content width slider — live update on input
   const widthSlider = panelElement.querySelector("#settings-content-width") as HTMLInputElement;
@@ -177,7 +194,8 @@ function syncPanelToSettings(): void {
 }
 
 function syncThemeButtons(activeTheme: string): void {
-  const buttons = document.querySelectorAll("#settings-theme-group .settings-theme-btn");
+  // Check both built-in and custom theme button groups
+  const buttons = document.querySelectorAll("#settings-theme-group .settings-theme-btn, #settings-theme-custom-group .settings-theme-btn");
   buttons.forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-theme") === activeTheme);
   });

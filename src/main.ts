@@ -29,7 +29,11 @@ import {
   openFileDialog,
   saveFileDialog,
   updateRecentFilesMenu,
+  listThemes,
+  readThemeCss,
+  updateThemeMenu,
 } from "./lib/bridge";
+import type { ThemeEntry } from "./lib/bridge";
 import {
   loadSettings,
   applyWindowSettings,
@@ -73,41 +77,89 @@ async function refreshRecentFilesMenu(): Promise<void> {
   await updateRecentFilesMenu(getCurrentSettings().recentFiles);
 }
 
-// --- Theme system with persistence and fallback chain ---
+// --- Theme system with persistence, custom CSS themes, and fallback chain ---
 
 const BUNDLED_DEFAULT = "default-dark";
+const CUSTOM_STYLE_ID = "markable-custom-theme";
 
-function tryApplyTheme(themeName: string): boolean {
-  try {
-    const themeMap: Record<string, string> = {
-      "light": "light",
-      "default-light": "light",
-      "dark": "dark",
-      "default-dark": "dark",
-    };
+// Bundled themes map to data-theme attribute values
+const BUNDLED_THEMES: Record<string, string> = {
+  "light": "light",
+  "default-light": "light",
+  "dark": "dark",
+  "default-dark": "dark",
+};
 
-    if (themeName === "system") {
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
-      return true;
-    }
+// Discovered custom themes (populated at startup)
+let customThemes: ThemeEntry[] = [];
 
-    const dataTheme = themeMap[themeName];
-    if (dataTheme === undefined) {
-      console.warn(`Unknown theme: "${themeName}"`);
-      return false;
-    }
+// Theme cycle order: bundled + custom + system
+let themeOrder: string[] = ["default-light", "default-dark", "system"];
 
-    document.documentElement.setAttribute("data-theme", dataTheme);
+function buildThemeOrder(): void {
+  themeOrder = [
+    "default-light",
+    "default-dark",
+    ...customThemes.map((t) => `custom:${t.filename}`),
+    "system",
+  ];
+}
+
+export function getCustomThemes(): ThemeEntry[] {
+  return customThemes;
+}
+
+export function getThemeOrder(): string[] {
+  return themeOrder;
+}
+
+function removeCustomStylesheet(): void {
+  document.getElementById(CUSTOM_STYLE_ID)?.remove();
+}
+
+function injectCustomStylesheet(css: string): void {
+  removeCustomStylesheet();
+  const style = document.createElement("style");
+  style.id = CUSTOM_STYLE_ID;
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+function applyBundledTheme(themeName: string): boolean {
+  if (themeName === "system") {
+    removeCustomStylesheet();
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
     return true;
-  } catch (err) {
-    console.error(`Error applying theme "${themeName}":`, err);
-    return false;
   }
+
+  const dataTheme = BUNDLED_THEMES[themeName];
+  if (dataTheme === undefined) return false;
+
+  removeCustomStylesheet();
+  document.documentElement.setAttribute("data-theme", dataTheme);
+  return true;
+}
+
+async function applyCustomTheme(filename: string): Promise<boolean> {
+  const css = await readThemeCss(filename);
+  if (css === null) return false;
+
+  // Custom themes build on top of dark base
+  document.documentElement.setAttribute("data-theme", "dark");
+  injectCustomStylesheet(css);
+  return true;
 }
 
 async function setTheme(themeName: string, persist = true): Promise<void> {
-  const success = tryApplyTheme(themeName);
+  let success: boolean;
+
+  if (themeName.startsWith("custom:")) {
+    const filename = themeName.slice("custom:".length);
+    success = await applyCustomTheme(filename);
+  } else {
+    success = applyBundledTheme(themeName);
+  }
 
   if (success) {
     if (persist) {
@@ -125,7 +177,7 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
   const fallbackName = settings.theme.fallback;
 
   if (fallbackName && fallbackName !== themeName) {
-    const fallbackSuccess = tryApplyTheme(fallbackName);
+    const fallbackSuccess = applyBundledTheme(fallbackName);
     if (fallbackSuccess) {
       if (persist) {
         await updateSettings((s) => ({
@@ -139,8 +191,8 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
   }
 
   // Both failed — use bundled default
-  console.warn(`Using bundled default theme.`);
-  tryApplyTheme(BUNDLED_DEFAULT);
+  console.warn("Using bundled default theme.");
+  applyBundledTheme(BUNDLED_DEFAULT);
   if (persist) {
     await updateSettings((s) => ({
       ...s,
@@ -148,8 +200,6 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
     }));
   }
 }
-
-const themeOrder: string[] = ["default-light", "default-dark", "system"];
 
 function nextTheme() {
   const current = getCurrentSettings().theme.active;
@@ -431,11 +481,21 @@ async function initApp() {
   // Auto-focus the editor so the cursor is blinking immediately
   editor.focus();
 
+  // Discover custom themes from the themes directory
+  customThemes = await listThemes();
+  buildThemeOrder();
+  console.log(`Found ${customThemes.length} custom theme(s)`);
+
+  // Update the native Theme menu with custom themes
+  if (customThemes.length > 0) {
+    await updateThemeMenu(customThemes);
+  }
+
   // Apply persisted theme before window.show() (no-flash)
   await setTheme(settings.theme.active, false);
 
   // Create settings panel (DOM injection, hidden by default)
-  createSettingsPanel((name) => setTheme(name));
+  createSettingsPanel((name) => setTheme(name), customThemes);
 
   // Populate the native Open Recent submenu with persisted files
   await refreshRecentFilesMenu();
@@ -516,6 +576,8 @@ async function initApp() {
           if (idx >= 0 && idx < files.length) {
             openRecentFileByPath(files[idx]);
           }
+        } else if (action.startsWith("custom:")) {
+          setTheme(action);
         }
         break;
       }
@@ -530,7 +592,7 @@ async function initApp() {
   // Respond to OS dark/light mode changes when "system" theme is active
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (getCurrentSettings().theme.active === "system") {
-      tryApplyTheme("system");
+      applyBundledTheme("system");
     }
   });
 
