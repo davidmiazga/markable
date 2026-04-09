@@ -1,0 +1,288 @@
+/* ============================================================
+   Find Widget — Markable 2.0
+   A floating find/replace panel modeled after VS Code's find widget.
+
+   Layout: position:fixed, appended to document.body.
+   All colors use CSS custom properties defined in styles.css so
+   the widget automatically follows the active theme without any
+   JavaScript intervention.
+
+   See docs/specs/find-replace/00_index.md for design decisions.
+   ============================================================ */
+
+/* ---- Root container ---- */
+
+.find-widget {
+  /* display:flex is set by JS in open(); default is none (hidden). */
+  flex-direction: column;
+  gap: 0;
+
+  /* D-2: Fixed positioning relative to the viewport. Avoids #editor overflow
+     clipping and makes viewport-relative drag math straightforward. */
+  position: fixed;
+
+  /* D-6: z-index 200 sits above editor content (max ~10 in the CM6 editor)
+     but below the settings panel (z-index 1000). EC-24 satisfied. */
+  z-index: 200;
+
+  /* Width: minimum 320px for all controls to fit at default, max 480px.
+     EC-21: the @media rule below handles very narrow viewports. */
+  min-width: 320px;
+  max-width: 480px;
+
+  /* Visual: colors via CSS custom properties (FR-9.1, FR-9.2). */
+  background-color: var(--search-panel-bg);
+  border: 1px solid var(--search-panel-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+
+  /* Typography: inherit from system UI stack. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--text-primary);
+
+  /* The entire widget surface (except inputs and buttons) is a drag handle. */
+  cursor: move;
+
+  /* Prevent accidental text selection in the underlying editor during
+     interactions with the widget (mouse clicks, drags). FR-7.5. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Restore normal cursors for interactive elements so they don't show 'move'. */
+.find-widget input {
+  cursor: text;
+}
+.find-widget button {
+  cursor: pointer;
+}
+
+/* Dark mode: deeper shadow for better visual separation. Step_06 polish. */
+[data-theme="dark"] .find-widget {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* ---- Find row ---- */
+
+.find-widget-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  /* flex-wrap:nowrap ensures controls never wrap to a second line.
+     The find input uses min-width:0 to shrink when space is limited. */
+  flex-wrap: nowrap;
+}
+
+/* ---- Chevron toggle button ---- */
+
+.find-widget-chevron {
+  /* Shared base with toggle buttons, but slightly different shape. */
+  flex-shrink: 0;
+  width: 22px;
+  height: 26px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 400;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+
+  background-color: transparent;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease, background-color 0.1s ease, color 0.1s ease;
+}
+
+.find-widget-chevron:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+/* FR-3.9: Rotate 90° when the replace row is expanded. */
+.find-widget-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+/* ---- Find / Replace text inputs ---- */
+
+.find-widget-input,
+.find-widget-replace-input {
+  flex: 1;
+  /* min-width:0 allows the flex child to shrink below its intrinsic width
+     (the browser default is min-width:auto for inputs). Without this the
+     find row can overflow at narrow widget widths. */
+  min-width: 0;
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+
+  /* FR-9.3: Input colors from theme tokens. */
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+/* Allow text selection inside inputs (override the parent user-select:none). */
+.find-widget-input,
+.find-widget-replace-input {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.find-widget-input:focus,
+.find-widget-replace-input:focus {
+  border-color: var(--link-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--link-color) 20%, transparent);
+}
+
+/* FR-12.2 / EC-3: No-results error state — red tint on the input field. */
+.find-widget-input.find-widget-no-results {
+  border-color: hsl(0, 72%, 51%);
+  background-color: color-mix(in srgb, hsl(0, 72%, 51%) 10%, var(--bg-primary));
+}
+
+/* FR-12.3 / EC-6: Invalid regexp state — orange tint (distinct from red). */
+.find-widget-input.find-widget-invalid-regexp {
+  border-color: hsl(30, 90%, 50%);
+  background-color: color-mix(in srgb, hsl(30, 90%, 50%) 10%, var(--bg-primary));
+}
+
+/* ---- Toggle buttons: Match Case (Aa), Whole Word (ab), Regexp (.*) ---- */
+
+.find-widget-toggle {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 4px;
+  /* Monospaced font so "Aa", "ab", ".*" render at equal widths. */
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background-color: transparent;
+  /* FR-9.3: Use secondary text color so inactive toggles are subdued but
+     still visible (NOT white on white). */
+  color: var(--text-secondary);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.find-widget-toggle:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+/* FR-9.5 / AC-18-20: Active state — blue tint using --link-color. */
+.find-widget-toggle.active {
+  background-color: color-mix(in srgb, var(--link-color) 15%, var(--bg-primary));
+  color: var(--link-color);
+  border-color: color-mix(in srgb, var(--link-color) 35%, transparent);
+}
+
+/* ---- Count label ---- */
+
+.find-widget-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* "No results" and "Invalid" label share the red/error color. */
+.find-widget-count.no-results {
+  color: hsl(0, 72%, 51%);
+}
+
+/* ---- Navigation buttons (↑ ↓) and Close button (×) ---- */
+
+.find-widget-prev,
+.find-widget-next,
+.find-widget-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+
+  background-color: transparent;
+  /* FR-9.3: Use secondary text color so buttons are visible but not
+     dominant (NOT transparent text on transparent background). */
+  color: var(--text-secondary);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.find-widget-prev:hover,
+.find-widget-next:hover,
+.find-widget-close:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+/* ---- Replace row ---- */
+
+.find-widget-replace-row {
+  /* display:flex is set by JS when the row is expanded; default is none. */
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 7px 8px;
+  border-top: 1px solid var(--search-panel-border);
+}
+
+/* "Replace" (replace-one) and "All" (replace-all) action buttons. */
+.find-widget-replace-one,
+.find-widget-replace-all {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+
+  /* FR-9.3: Explicit background and text color — NOT transparent, ensuring
+     contrast on both light and dark themes. */
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  transition: background-color 0.1s ease;
+}
+
+.find-widget-replace-one:hover,
+.find-widget-replace-all:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+}
+
+/* ---- EC-21: Viewport clamping for very narrow screens (< 400px) ---- */
+@media (max-width: 400px) {
+  .find-widget {
+    min-width: 0;
+    width: calc(100vw - 32px);
+    /* Override JS-set position to ensure the widget is fully visible. */
+    right: 16px !important;
+    left: 16px !important;
+  }
+}

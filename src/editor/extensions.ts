@@ -12,8 +12,10 @@ import { tags } from "@lezer/highlight";
 import { HighlightExtension } from "./highlight-ext";
 import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
+import { search, searchKeymap } from "@codemirror/search";
 import { livePreviewExtension } from "./live-preview";
 import { formatKeymap } from "./format";
+import { searchTheme } from "./search-theme";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
 const baseTheme = EditorView.theme({
@@ -79,6 +81,30 @@ export const previewExtensions: Extension = [livePreviewExtension, previewTheme]
 export const previewCompartment = new Compartment();
 
 /**
+ * FR-2.2 / TC-2: Suppress the CM6 built-in search panel DOM entirely.
+ *
+ * search() must be registered so that its searchState StateField is
+ * present in the editor state — without it, setSearchQuery, findNext,
+ * findPrevious, replaceNext, replaceAll, and searchKeymap all silently
+ * no-op. However, the default panel factory injects .cm-panels DOM that
+ * conflicts with the custom FindWidget.
+ *
+ * createPanel returns a minimal Panel whose dom is a zero-size hidden div.
+ * CM6 mounts this "panel" but it contributes nothing to layout.
+ * openSearchPanel / closeSearchPanel are never called from application
+ * code (main.ts uses FindWidget.open/close instead), so the togglePanel
+ * effect that would make the hidden div visible is never dispatched in
+ * normal operation.
+ *
+ * These are module-level constants, not re-created on each buildExtensions()
+ * call. This is safe because Panel.dom is never mutated by CM6.
+ */
+// Requires DOM at import time. Safe in Tauri WebView and Vitest/happy-dom. Not suitable for SSR.
+const _hiddenPanelDom = document.createElement("div");
+_hiddenPanelDom.style.cssText = "display:none;width:0;height:0;overflow:hidden;position:absolute";
+const _suppressedPanel = { dom: _hiddenPanelDom };
+
+/**
  * Build the extension set for the editor.
  * Live preview starts ON by default.
  */
@@ -93,7 +119,29 @@ export function buildExtensions(): Extension[] {
 
   extensions.push(EditorView.lineWrapping);
   extensions.push(Prec.high(keymap.of(formatKeymap)));
+
+  // TC-2: search() registers the searchState StateField required by
+  // setSearchQuery, findNext, findPrevious, replaceNext, replaceAll.
+  // createPanel is overridden to suppress the built-in panel DOM so it
+  // never conflicts with the custom FindWidget floating overlay.
+  // See docs/specs/find-replace/00_index.md § TC-2 Resolution.
+  //
+  // IMPORTANT: search() must be registered BEFORE Prec.high(keymap.of(searchKeymap)).
+  // CM6 applies extensions in registration order. The `search()` call registers the
+  // searchState StateField and panel factory that the searchKeymap commands rely on.
+  // If searchKeymap is registered first, its commands (findNext, closeSearchPanel, etc.)
+  // will dispatch effects into a state that does not yet have the searchState field,
+  // causing them to silently no-op on the first keypress.
+  extensions.push(search({ createPanel: () => _suppressedPanel }));
+
+  // TC-3: searchKeymap at Prec.high so it is not shadowed by basicSetup's default keymaps.
+  // Verified: Mod-f, Mod-g, Mod-Shift-g, F3, Escape do not conflict with formatKeymap.
+  extensions.push(Prec.high(keymap.of(searchKeymap)));
   extensions.push(baseTheme);
+  // FR-4.4: searchTheme registered after basicSetup (applied in editor.ts) and after
+  // baseTheme so it wins CSS specificity on .cm-panels, .cm-textfield, .cm-button,
+  // and match highlights.
+  extensions.push(searchTheme);
   extensions.push(syntaxHighlighting(themeHighlight));
   extensions.push(previewCompartment.of(previewExtensions));
 

@@ -11,6 +11,8 @@
 
 import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions } from "./editor/extensions";
+import { createFindWidget } from "./editor/find-widget";
+import type { FindWidget } from "./editor/find-widget";
 import {
   toggleHeading,
   toggleInlineWrap,
@@ -60,6 +62,8 @@ import "./styles.css";
 let editor: ReturnType<typeof createEditor> = null;
 let currentFilePath: string | null = null;
 let previewEnabled = true;
+/** Floating find/replace widget. Initialized in initApp() after editor is ready. */
+let findWidget: FindWidget | null = null;
 
 function getFileName(path: string): string {
   return path.split("/").pop() || path;
@@ -248,6 +252,12 @@ function togglePreview() {
 
 function newFile() {
   if (editor) {
+    // FR-11.1: Close the FindWidget and clear the CM6 search state before
+    // replacing the document. A `changes`-only transaction does NOT reset
+    // StateField values in CM6, so stale highlights from the previous file
+    // would remain visible unless we clear explicitly.
+    findWidget?.close();
+    findWidget?.clearQuery();
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: "" },
     });
@@ -280,6 +290,12 @@ async function openFile() {
   // Load into editor
   if (editor) {
     const content = readResult.value;
+    // FR-11.1 / EC-12: Close the FindWidget and clear CM6 search state before
+    // replacing the document. A changes-only transaction does not reset
+    // StateField values, so stale highlights from the previous file would
+    // remain visible without this explicit clear.
+    findWidget?.close();
+    findWidget?.clearQuery();
     const transaction = editor.state.update({
       changes: {
         from: 0,
@@ -403,6 +419,12 @@ async function openRecentFileByPath(path: string): Promise<void> {
   }
 
   if (editor) {
+    // FR-11.1 / EC-12: Close the FindWidget and clear CM6 search state before
+    // replacing the document. Changes-only transactions do not reset StateField
+    // values, so stale highlights from the previous file would remain visible
+    // without this explicit clear.
+    findWidget?.close();
+    findWidget?.clearQuery();
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: result.value },
     });
@@ -494,6 +516,10 @@ async function initApp() {
   // Apply persisted theme before window.show() (no-flash)
   await setTheme(settings.theme.active, false);
 
+  // Create the floating find/replace widget (appended to document.body, hidden by default).
+  // Must be created after `editor` is confirmed non-null.
+  findWidget = createFindWidget(editor);
+
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel((name) => setTheme(name), customThemes);
 
@@ -568,6 +594,39 @@ async function initApp() {
       case "format-outdent": if (editor) outdentLines(editor); break;
       case "format-hr": if (editor) insertHorizontalRule(editor); break;
       case "format-clear": if (editor) clearFormatting(editor); break;
+
+      // EC-1: guard against editor / findWidget not yet initialized
+      case "edit-find":
+        if (!editor || !findWidget) break;
+        {
+          // FR-5.1 / FR-5.2: Pre-fill the find input with the current selection
+          // if one exists. This spares the user from having to retype the term.
+          const sel = editor.state.selection.main;
+          if (sel.from !== sel.to) {
+            const selectedText = editor.state.sliceDoc(sel.from, sel.to);
+            // FR-5.3 / EC-13: Truncate multi-line selections to the first line
+            // so the find input stays single-line and the SearchQuery is valid.
+            findWidget.setPreFill(selectedText);
+          }
+          findWidget.open("find");
+        }
+        break;
+
+      // EC-16: guard against editor / findWidget not yet initialized
+      case "edit-find-replace":
+        if (!editor || !findWidget) break;
+        {
+          // FR-5.1 / FR-5.2: Same pre-fill logic as edit-find.
+          const sel = editor.state.selection.main;
+          if (sel.from !== sel.to) {
+            const selectedText = editor.state.sliceDoc(sel.from, sel.to);
+            // FR-5.3 / EC-13: First line only for multi-line selections.
+            findWidget.setPreFill(selectedText);
+          }
+          findWidget.open("replace");
+        }
+        break;
+
       default: {
         const action = event.payload.action;
         if (action.startsWith("recent-file-")) {
@@ -584,8 +643,59 @@ async function initApp() {
     }
   });
 
-  // Re-focus editor when window regains focus
+  // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom
+  // FindWidget opens for BOTH the menu event path and the direct keypress path.
+  //
+  // Rationale: searchKeymap includes `{ key: "Mod-f", run: openSearchPanel }`.
+  // With the suppressed panel factory (step_01), openSearchPanel dispatches
+  // togglePanel internally but produces no visible UI. Without this listener,
+  // pressing Cmd-F directly (not via the menu) would be a no-op for the widget.
+  // By listening on `document` at the capture phase we intercept the keydown
+  // before it reaches the CM6 editor and before searchKeymap fires.
+  document.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (!editor || !findWidget) return;
+
+    // On macOS, Command key sets e.metaKey. Cmd-F opens find; Cmd-Opt-F opens
+    // find with replace visible. With altKey held, macOS may report e.key as
+    // 'ƒ' (Option+F = florin) even when metaKey is also held — handle both.
+    const isCmdF =
+      e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && e.key === "f";
+    const isCmdOptF =
+      e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey &&
+      (e.key === "f" || e.key === "ƒ");
+
+    if (isCmdF) {
+      e.preventDefault();
+      e.stopPropagation();
+      const sel = editor.state.selection.main;
+      if (sel.from !== sel.to) {
+        // FR-5.1 / EC-13: Pre-fill with first line of selection.
+        findWidget.setPreFill(editor.state.sliceDoc(sel.from, sel.to));
+      }
+      findWidget.open("find");
+      return;
+    }
+
+    if (isCmdOptF) {
+      e.preventDefault();
+      e.stopPropagation();
+      const sel = editor.state.selection.main;
+      if (sel.from !== sel.to) {
+        // FR-5.1 / EC-13: Pre-fill with first line of selection.
+        findWidget.setPreFill(editor.state.sliceDoc(sel.from, sel.to));
+      }
+      findWidget.open("replace");
+    }
+  });
+
+  // EC-29: If the FindWidget is open when the window regains focus, do not
+  // steal focus away from the find input. The browser restores focus to the
+  // last focused element within the widget automatically.
   window.addEventListener("focus", () => {
+    if (findWidget?.isOpen()) {
+      // FindWidget manages its own focus. No action needed here.
+      return;
+    }
     if (editor) editor.focus();
   });
 

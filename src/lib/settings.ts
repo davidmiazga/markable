@@ -12,12 +12,24 @@ import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
+/**
+ * Persisted position for the floating FindWidget.
+ * Stored as viewport-relative pixel coordinates (top-left corner of the widget).
+ * null means "use default position" (upper-right, below the title bar).
+ */
+export interface FindWidgetPosition {
+  x: number;
+  y: number;
+}
+
 export interface MarkableSettings {
   version: number;
   window: WindowSettings;
   editor: EditorSettings;
   theme: ThemeSettings;
   recentFiles: string[];
+  /** TC-6: optional field — null means use default position (upper-right). */
+  findWidget: FindWidgetPosition | null;
 }
 
 export interface WindowSettings {
@@ -62,6 +74,8 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     fallback: "default-dark",
   },
   recentFiles: [],
+  /** FR-8.1: null means use default position (upper-right, below title bar). */
+  findWidget: null,
 };
 
 // --- Window state helpers ---
@@ -142,7 +156,13 @@ export async function loadSettings(): Promise<MarkableSettings> {
   const result = await getSettings();
 
   if (result.ok) {
-    currentSettings = result.value;
+    // Merge loaded data over defaults so that any new optional fields added to
+    // DEFAULT_SETTINGS (e.g. findWidget) are present even in old settings files
+    // that pre-date the field. Object spread at the top level is sufficient for
+    // flat optional fields; nested objects (window, editor, theme) are replaced
+    // wholesale by the persisted value, which is correct since they are always
+    // fully written on save.
+    currentSettings = { ...structuredClone(DEFAULT_SETTINGS), ...result.value };
   } else {
     console.error("Failed to load settings:", result.error.message);
     console.warn("Using default settings.");
