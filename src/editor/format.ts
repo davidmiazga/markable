@@ -277,6 +277,185 @@ export function outdentLines(view: EditorView) {
   }
 }
 
+/**
+ * Insert a Markdown link at the cursor or wrap the current selection.
+ *
+ * Reads the clipboard asynchronously and covers four cases:
+ *   - selection + valid URL  → [selection](url)     cursor placed after ')'
+ *   - selection + no URL     → [selection]()         cursor placed between '()'
+ *   - no selection + valid URL → [](url)             cursor placed between '[]'
+ *   - no selection + no URL    → []()                cursor placed between '[]'
+ *
+ * URL validity test: /^https?:\/\/\S+/ applied to the trimmed clipboard string.
+ * On clipboard read failure: falls back to the "no URL" path; logs console.warn.
+ * No alert or modal is shown for clipboard errors (EC-L1).
+ *
+ * @param view - The active CodeMirror EditorView.
+ * @returns Promise that resolves after the transaction is dispatched.
+ */
+export async function insertLink(view: EditorView): Promise<void> {
+  // Regex accepts http:// and https:// URLs; anything else is treated as plain text.
+  const URL_RE = /^https?:\/\/\S+/;
+
+  let url = "";
+  try {
+    const raw = await navigator.clipboard.readText();
+    const trimmed = raw.trim();
+    // Only accept the clipboard content as a URL if it matches the regex (EC-L5).
+    if (URL_RE.test(trimmed)) {
+      url = trimmed;
+    }
+  } catch (err) {
+    // EC-L1: clipboard permission denied or API unavailable — fall through to
+    // the no-URL path without alerting the user.
+    console.warn("insertLink: clipboard read failed, using empty URL", err);
+  }
+
+  const state = view.state;
+  const { from, to } = state.selection.main;
+  const hasSelection = from !== to;
+
+  if (hasSelection) {
+    const label = state.doc.sliceString(from, to);
+    if (url) {
+      // AC-L1: selection + valid URL → [label](url), cursor after ')'
+      view.dispatch({
+        changes: { from, to, insert: `[${label}](${url})` },
+        selection: { anchor: from + label.length + url.length + 4 },
+      });
+    } else {
+      // AC-L2: selection + no valid URL → [label](), cursor between '()'
+      const insert = `[${label}]()`;
+      view.dispatch({
+        changes: { from, to, insert },
+        // Position the cursor between the parentheses (one character before the closing ')')
+        selection: { anchor: from + insert.length - 1 },
+      });
+    }
+  } else {
+    if (url) {
+      // AC-L3: no selection + valid URL → [](url), cursor between '[]'
+      const insert = `[](${url})`;
+      view.dispatch({
+        changes: { from, to, insert },
+        // Position the cursor between the square brackets (one character after '[')
+        selection: { anchor: from + 1 },
+      });
+    } else {
+      // AC-L4: no selection + no valid URL → [](), cursor between '[]'
+      view.dispatch({
+        changes: { from, to, insert: `[]()` },
+        selection: { anchor: from + 1 },
+      });
+    }
+  }
+
+  view.focus();
+}
+
+/**
+ * Move the line(s) covered by the primary selection one position upward.
+ *
+ * Operates on selection.main only, consistent with toggleOrderedList.
+ * A multi-line selection is moved as a single block — all lines between
+ * lineAt(main.from) and lineAt(main.to) inclusive swap with the single
+ * line immediately above the block.
+ *
+ * Implementation note: ranges use [line.from .. line.to] (exclusive of the
+ * trailing '\n') so that the newline separator characters remain in place and
+ * no newlines are gained or lost (EC-M7).
+ *
+ * @param view - The active CodeMirror EditorView.
+ */
+export function moveLineUp(view: EditorView): void {
+  const state = view.state;
+  const main = state.selection.main;
+
+  const firstLine = state.doc.lineAt(main.from);
+  const lastLine  = state.doc.lineAt(main.to);
+
+  // EC-M1 / EC-M3 / EC-M5: no-op when the block starts at the first line.
+  if (firstLine.number === 1) return;
+
+  const aboveLine = state.doc.line(firstLine.number - 1);
+  // Extract text content only — newlines are NOT included in the sliced range.
+  const aboveText = state.doc.sliceString(aboveLine.from, aboveLine.to);
+  const blockText = state.doc.sliceString(firstLine.from, lastLine.to);
+
+  // Preserve the caret's visual offset within the moved block.
+  // Offsets are computed from main.from (Math.min(anchor, head)) rather than
+  // firstLine.from so that backward selections — where main.anchor sits on the
+  // LAST selected line and its raw offset would exceed the block length — still
+  // produce correct post-move positions (EC-M3 backward-selection fix).
+  const anchorOffUp = main.anchor - main.from;
+  const headOffUp   = main.head   - main.from;
+
+  // Single transaction: replace aboveLine's text with blockText, and the
+  // block's text with aboveText. The '\n' between lines stays untouched.
+  view.dispatch({
+    changes: [
+      { from: aboveLine.from, to: aboveLine.to, insert: blockText },
+      { from: firstLine.from, to: lastLine.to,  insert: aboveText },
+    ],
+    selection: {
+      anchor: aboveLine.from + anchorOffUp,
+      head:   aboveLine.from + headOffUp,
+    },
+  });
+
+  view.focus();
+}
+
+/**
+ * Move the line(s) covered by the primary selection one position downward.
+ *
+ * Mirror of moveLineUp. Operates on selection.main only.
+ * No-op if the last selected line is already the last line of the document.
+ *
+ * After the swap, the block now starts at firstLine.from + belowText.length + 1
+ * (the +1 accounts for the '\n' that separates what was the below-line from the
+ * moved block).
+ *
+ * @param view - The active CodeMirror EditorView.
+ */
+export function moveLineDown(view: EditorView): void {
+  const state = view.state;
+  const main = state.selection.main;
+
+  const firstLine = state.doc.lineAt(main.from);
+  const lastLine  = state.doc.lineAt(main.to);
+
+  // EC-M2 / EC-M4 / EC-M5: no-op when the block ends at the last line.
+  if (lastLine.number === state.doc.lines) return;
+
+  const belowLine = state.doc.line(lastLine.number + 1);
+  const belowText = state.doc.sliceString(belowLine.from, belowLine.to);
+  const blockText = state.doc.sliceString(firstLine.from, lastLine.to);
+
+  // After the swap the block occupies positions starting at:
+  //   firstLine.from + belowText.length + 1
+  // (+1 for the '\n' between the former below-line and the moved block).
+  const newBlockStart = firstLine.from + belowText.length + 1;
+
+  // Offsets are computed from main.from rather than firstLine.from for the
+  // same backward-selection reason documented in moveLineUp (EC-M3 fix).
+  const anchorOffDown = main.anchor - main.from;
+  const headOffDown   = main.head   - main.from;
+
+  view.dispatch({
+    changes: [
+      { from: firstLine.from, to: lastLine.to,  insert: belowText },
+      { from: belowLine.from, to: belowLine.to, insert: blockText },
+    ],
+    selection: {
+      anchor: newBlockStart + anchorOffDown,
+      head:   newBlockStart + headOffDown,
+    },
+  });
+
+  view.focus();
+}
+
 /** CodeMirror keybindings for all formatting commands (macOS). */
 export const formatKeymap: KeyBinding[] = [
   { key: "Meta-1", mac: "Meta-1", run: (v) => { toggleHeading(v, 1); return true; } },
@@ -299,6 +478,11 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },
   { key: "Meta-Shift-\\", mac: "Meta-Shift-\\", run: (v) => { clearFormatting(v); return true; } },
+  // AC-L1–AC-L4: Cmd-K triggers insertLink for all four selection/clipboard cases. The void prefix satisfies CM6's synchronous run contract (async clipboard read).
+  { key: "Meta-k", mac: "Meta-k", run: (v) => { void insertLink(v); return true; } },
+  // AC-M1/AC-M2: Opt-Up/Down move the selected line block up or down one line.
+  { key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } },
+  { key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } },
 ];
 
 /** Remove all markdown formatting from selected lines. */

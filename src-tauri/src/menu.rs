@@ -48,6 +48,10 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "file-import", "Import", false, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::close_window(handle, Some("Close"))?,
+            // AC-C2: "Close All" sits directly below "Close" with CmdOrCtrl+Shift+W.
+            // In the single-window architecture this hides the window just as "Close" does,
+            // but the distinct menu item preserves standard macOS File menu conventions.
+            &MenuItem::with_id(handle, "file-close-all", "Close All", true, Some("CmdOrCtrl+Shift+W"))?,
         ],
     )?;
 
@@ -100,6 +104,11 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "format-underline", "Underline", true, Some("CmdOrCtrl+U"))?,
             &MenuItem::with_id(handle, "format-strikethrough", "Strikethrough", true, Some("CmdOrCtrl+Shift+X"))?,
             &MenuItem::with_id(handle, "format-highlight", "Highlight", true, Some("CmdOrCtrl+Shift+H"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            // AC-L5: "Insert Link..." appears in the Format menu with CmdOrCtrl+K accelerator.
+            // The "format-link" event ID is automatically forwarded by the
+            // `starts_with("format-")` catch-all arm in lib.rs on_menu_event.
+            &MenuItem::with_id(handle, "format-link", "Insert Link...", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "format-code-fence", "Code Fence", true, Some("CmdOrCtrl+Shift+C"))?,
             &MenuItem::with_id(handle, "format-quote", "Quote", true, Some("CmdOrCtrl+Shift+."))?,

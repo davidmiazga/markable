@@ -24,6 +24,7 @@ import {
   indentLines,
   outdentLines,
   clearFormatting,
+  insertLink,
 } from "./editor/format";
 import {
   readFile,
@@ -548,6 +549,13 @@ async function initApp() {
       case "file-save-as":
         saveFileAs();
         break;
+      case "file-close-all":
+        // AC-C1: hide the window rather than destroying it.
+        // EC-C2: Tauri hide() is safe on an already-hidden window (no-op).
+        // void prefix: hide() returns Promise<void>; not awaited in this
+        // synchronous event listener.
+        void getCurrentWebviewWindow().hide();
+        break;
       case "file-export":
         // FR-2.2: void-prefix keeps the async call from producing an unhandled
         // promise in the synchronous switch/event-listener context.
@@ -592,6 +600,14 @@ async function initApp() {
       case "format-underline": if (editor) toggleInlineWrap(editor, "__"); break;
       case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
       case "format-highlight": if (editor) toggleInlineWrap(editor, "=="); break;
+      case "format-link":
+        // AC-L6: menu path calls the same insertLink function as the Cmd-K keymap.
+        // EC-L6: guard ensures the editor is initialised before calling.
+        // void prefix: insertLink returns Promise<void>; we do not await it in the
+        // synchronous event listener (same pattern as file-export above).
+        if (!editor) break;
+        void insertLink(editor);
+        break;
       case "format-code-fence": if (editor) insertCodeFence(editor); break;
       case "format-quote": if (editor) toggleLinePrefix(editor, "> "); break;
       case "format-bullet-list": if (editor) toggleLinePrefix(editor, "- "); break;

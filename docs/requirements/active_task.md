@@ -1,267 +1,187 @@
-# Active Task: Export as HTML
+# Active Task: Three Small Editor Features
 
 **Status:** Requirements Validated
 **Date:** 2026-04-09
-**Revision:** 1
-**Depends on:** Phase 2B Menu System (complete), Phase 2C Settings & Persistence (complete)
-**Feature Checkpoint:** 1 — Base Features (File Menu: Export)
+**Covers:** Paste Link (Cmd-K), Move Line Up/Down (Opt-Up/Opt-Down), Close All (Cmd-Shift-W)
 
 ---
 
-## Executive Summary
+## 1. Feature Scope
 
-As a user, I want to export the current document as a standalone HTML file so that I can share my Markdown content as a self-contained web page that renders correctly in any browser without requiring Markable to be installed.
+This task delivers three self-contained editor enhancements that close known gaps in Feature Checkpoint 1. Each feature is independent and can be implemented and tested in isolation, but all three will ship in a single commit batch.
 
----
-
-## Dependency Notice — `marked` Package
-
-During codebase analysis it was confirmed that `marked` is **not present** in `package.json` and is **not installed** in `node_modules`. The user indicated it was already installed, but this is incorrect.
-
-**Blocking action required before implementation begins:** The Lead Developer must run `npm install marked` and verify the package is added to `dependencies` in `package.json` before writing any export code. TypeScript types are available via `@types/marked` (devDependency) if not bundled with the package. The Architect must include this install step as Step 0 in the spec.
+| Feature | Trigger | Layers touched |
+|---------|---------|----------------|
+| Paste Link Over Text | Cmd-K (CM6 keymap) + new Format menu item | `format.ts`, `menu.rs`, `main.ts` |
+| Move Line Up / Down | Opt-Up / Opt-Down (CM6 keymap only) | `format.ts` |
+| Close All | Cmd-Shift-W (new File menu item) | `menu.rs`, `main.ts` |
 
 ---
 
-## Feature Scope
+## 2. Functional Requirements
 
-### In Scope
+### Feature 1: Paste Link Over Text (Cmd-K)
 
-- Enable the `file-export` menu item in `menu.rs` (currently `enabled: false`).
-- Add `"file-export"` to the `on_menu_event` forward list in `lib.rs`.
-- Handle the `"file-export"` action in the `menu-event` listener in `main.ts`.
-- Convert the current editor content (raw Markdown string from `editor.state.doc.toString()`) to HTML using `marked`.
-- Wrap the resulting HTML fragment in a full standalone HTML document shell (doctype, `<html>`, `<head>`, `<body>`).
-- Embed a minimal stylesheet directly in the `<head>` as a `<style>` block. No external CSS files are referenced; the exported file must be fully self-contained.
-- Include a placeholder comment in the `<head>`: `<!-- To customize styles, see: [future URL] -->`.
-- Derive the document `<title>` from: first H1 heading in the Markdown source, falling back to the current filename without extension, falling back to `"Untitled"`.
-- Present a native save-file dialog (using the existing `saveFileDialog` bridge function) pre-populated with the suggested filename: current document name with `.html` extension (e.g., `notes.md` → `notes.html`), falling back to `untitled.html`.
-- Write the final HTML string to the chosen path using the existing `writeFile` bridge function.
-- Raw HTML blocks in the Markdown source pass through to the output as-is (no sanitization).
-- `currentFilePath` (the tracked `.md` path) does NOT change after export — the export is fire-and-forget.
+**Summary:** As a user I want to press Cmd-K to wrap selected text as a Markdown link using the clipboard URL, or to insert a bare link scaffold when there is no selection or no URL.
 
-### Out of Scope
+#### Current state (confirmed from source)
+- No link-insertion function exists in `src/editor/format.ts`.
+- No `format-link` or `insert-link` menu item exists in `src-tauri/src/menu.rs`.
+- No corresponding case exists in the `menu-event` switch in `src/main.ts`.
 
-- The `file-import` menu item remains disabled. Import is not implemented in this task.
-- Export formats other than HTML (PDF, DOCX, ePub, etc.) — deferred.
-- Applying the user's active Markable theme to the exported HTML — the embedded stylesheet is a fixed minimal set, not derived from the active theme's CSS variables.
-- Custom stylesheet selection at export time — deferred.
-- Image embedding or asset resolution — images referenced in Markdown are emitted as-is; relative paths may not resolve when the HTML is opened from a different location. Deferred to a future asset-handling task.
-- Syntax highlighting in exported code blocks — deferred.
-- Adding the exported file to the recent files list — export does not affect `currentFilePath` or `recentFiles`.
-- A progress indicator for large documents — not needed for expected document sizes.
-- Exporting from a document with unsaved changes warning — export reads whatever is currently in the editor buffer; whether the buffer is saved or not is irrelevant to export.
+#### Required behavior (all four cases)
 
----
+| Condition | Result |
+|-----------|--------|
+| Text selected AND clipboard contains a valid URL | Replace selection with `[<selection>](<url>)`. No prompt. |
+| Text selected AND clipboard does NOT contain a valid URL | Replace selection with `[<selection>]()`. Cursor inside the empty parens. |
+| No selection AND clipboard contains a valid URL | Insert `[](<url>)`. Cursor inside the empty square brackets. |
+| No selection AND clipboard does NOT contain a valid URL | Insert `[]()`. Cursor inside the square brackets. |
 
-## Functional Requirements
+#### URL validity rule
+A string is considered a "valid URL" for this feature if it matches the pattern `^https?://\S+` (starts with `http://` or `https://` followed by at least one non-whitespace character). No full URL parsing is required.
 
-### FR-1: Enable Export Menu Item
+#### Asynchronous clipboard constraint
+`navigator.clipboard.readText()` is asynchronous. The CM6 keymap `run` callback must return `true` synchronously while performing the clipboard read and CM6 dispatch inside an async wrapper (`void asyncFn()`). This pattern is already used in the `document.addEventListener("keydown", ...)` block in `main.ts` and is therefore precedented in this codebase.
 
-- FR-1.1: In `src-tauri/src/menu.rs`, the `file-export` `MenuItem` is changed from `enabled: false` to `enabled: true`. The accelerator `CmdOrCtrl+Alt+E` is retained as-is.
-- FR-1.2: In `src-tauri/src/lib.rs`, the string `"file-export"` is added to the `forward` match arm in `on_menu_event` so that the event is emitted to the frontend.
+#### Menu item placement
+Add "Insert Link" to the Format menu in `menu.rs`, after the "Highlight" item and before the separator that precedes "Code Fence". Accelerator: `CmdOrCtrl+K`. Menu event action string: `"format-link"`.
 
-### FR-2: Frontend Menu Event Handling
-
-- FR-2.1: A new `"file-export"` case is added to the `switch` block inside the `menu-event` listener in `src/main.ts`.
-- FR-2.2: The case calls an `exportAsHtml()` function (defined in the same file or a dedicated module — Architect decides). The call must be `await`-safe (either the case uses `void exportAsHtml()` or the surrounding listener is async-compatible, consistent with the pattern used by existing cases such as `"file-save"`).
-
-### FR-3: Markdown-to-HTML Conversion
-
-- FR-3.1: The raw Markdown string is obtained from `editor.state.doc.toString()` at the moment the export is triggered. This is the same pattern used by `saveFile()`.
-- FR-3.2: `marked` is used to convert the Markdown string to an HTML fragment string. The conversion must handle: headings, paragraphs, bold, italic, strikethrough, inline code, code fences, blockquotes, unordered lists, ordered lists, task lists, links, images, horizontal rules, and tables.
-- FR-3.3: Raw HTML blocks in the Markdown source are passed through to the output unchanged. No HTML sanitization is applied.
-- FR-3.4: The `marked` call must be synchronous or awaited correctly. If `marked` returns a `Promise` in the version installed, it must be `await`-ed. The Architect must confirm the API shape of the installed version before writing step files.
-
-### FR-4: Standalone HTML Document Construction
-
-The export function assembles a complete HTML string with the following structure:
-
-- FR-4.1: The document begins with `<!DOCTYPE html>`.
-- FR-4.2: The `<html lang="en">` element wraps the entire document.
-- FR-4.3: The `<head>` contains:
-  - `<meta charset="UTF-8">`
-  - `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
-  - `<title>` — see FR-5 for derivation logic.
-  - `<style>` — the embedded minimal stylesheet (see FR-6).
-  - The placeholder comment: `<!-- To customize styles, see: [future URL] -->`
-- FR-4.4: The `<body>` contains a single `<div class="content">` wrapper, inside which the converted HTML fragment is placed.
-- FR-4.5: The assembled HTML string is a single UTF-8 string. No BOM is prepended.
-
-### FR-5: Document Title Derivation
-
-- FR-5.1: The export function scans the raw Markdown string for the first H1 heading. An H1 is a line that matches the pattern `^# ` (ATX-style heading only — setext-style headings are ignored for simplicity). The heading text is extracted by stripping the leading `# ` prefix and trimming whitespace.
-- FR-5.2: If no H1 is found, the title falls back to the current filename without its extension. This is derived from `currentFilePath` using the same `getFileName()` helper already in `main.ts`, then stripping the file extension (e.g., `notes.md` → `notes`).
-- FR-5.3: If `currentFilePath` is also null (untitled document), the title falls back to the string `"Untitled"`.
-- FR-5.4: The derived title string is HTML-escaped before insertion into the `<title>` element to prevent malformed HTML if the heading contains characters such as `<`, `>`, or `&`.
-
-### FR-6: Embedded Minimal Stylesheet
-
-- FR-6.1: The embedded stylesheet is a fixed, minimal CSS block sufficient to produce a readable document in any browser. It is defined as a constant string in the export module (not read from disk at runtime).
-- FR-6.2: The stylesheet must define at minimum: a readable body font (system font stack), maximum content width centered in the viewport, line-height, heading sizes, code block styling (monospace font, background tint, padding), blockquote styling (left border, indentation), and link color.
-- FR-6.3: The stylesheet must not reference any external resources (no `@import`, no external `url()` references for fonts or images). All values are self-contained.
-- FR-6.4: The Architect is responsible for drafting the exact CSS content in the step file. The requirements analyst does not prescribe specific pixel values, but the result must pass a visual readability check by the user as part of acceptance criteria.
-
-### FR-7: Save File Dialog
-
-- FR-7.1: The export function calls the existing `saveFileDialog()` function from `src/lib/bridge.ts` (which re-exports it from `src/lib/dialogs.ts`). No new Tauri command is needed for the dialog.
-- FR-7.2: The dialog is presented with a default suggested filename constructed as follows: take the filename component of `currentFilePath` (e.g., `notes.md`), replace the `.md` extension with `.html` to produce `notes.html`. If `currentFilePath` is null, the suggested filename is `untitled.html`.
-- FR-7.3: The dialog must filter to show HTML files (`.html`, `.htm`) by default, but must also allow saving without a filter (so the user can type any filename). The Architect must verify whether `saveFileDialog` in `src/lib/dialogs.ts` accepts filter parameters; if not, a new dialog helper or an update to the existing one is required.
-- FR-7.4: If the user cancels the dialog (`result.cancelled === true`), the export is silently aborted. No error is shown. `currentFilePath` is unchanged.
-- FR-7.5: If the user confirms a path, the export proceeds to FR-8. The path chosen by the user is used as-is (the dialog is responsible for appending `.html` if the user omits it — or the export function appends `.html` if the path does not already end in `.html` or `.htm`). The Architect must decide and document the exact filename-suffix enforcement rule.
-
-### FR-8: File Write
-
-- FR-8.1: The assembled HTML string is written to the path returned by the save dialog using the existing `writeFile(path, content)` bridge function. This reuses the atomic temp-file-swap write pattern already in place.
-- FR-8.2: If `writeFile` returns `{ ok: false }`, a native `alert()` is shown to the user with the error message: `"Export failed: " + result.error.message`. This is consistent with the error handling pattern used in `saveFile()` and `saveFileAs()`.
-- FR-8.3: If `writeFile` returns `{ ok: true }`, no success notification is shown. The export is silent on success (consistent with how Save behaves).
-- FR-8.4: `currentFilePath` is NOT updated after a successful export. The editor continues to track the original `.md` file path (or null if untitled).
-
-### FR-9: Editor State Guard
-
-- FR-9.1: The export function must check that `editor` is non-null before attempting to read `editor.state.doc.toString()`. If `editor` is null (init not yet complete), the function returns early with no visible error.
+#### Frontend wiring
+Add a `case "format-link":` branch to the `menu-event` listener in `main.ts`. Both the keymap path and the menu-event path must call a single shared function; the link-insertion logic must not be duplicated between them.
 
 ---
 
-## Edge Case Inventory
+### Feature 2: Move Line Up / Down (Opt-Up / Opt-Down)
 
-Every item below must be covered by a test or explicit inline handling with a comment referencing the EC number. This list is the Code Reviewer's mandatory test checklist.
+**Summary:** As a user I want to press Option-Up or Option-Down to move the current line (or all lines covered by the selection) one position upward or downward in the document.
+
+#### Current state (confirmed from source)
+- No move-line function exists in `src/editor/format.ts`.
+- No move-line menu items exist in `src-tauri/src/menu.rs`.
+- The Format menu has indent/outdent but no move-line entries.
+
+#### Required behavior
+
+- **Opt-Up:** The contiguous block of lines covered by the selection moves one line upward by swapping with the line immediately above. If any line in the selection is line 1, the operation is a no-op.
+- **Opt-Down:** The contiguous block of lines covered by the selection moves one line downward by swapping with the line immediately below. If any line in the selection is the last line of the document, the operation is a no-op.
+- After the move the selection tracks the moved lines so the user can press the shortcut again to keep moving.
+- Multi-line selections move as a unit, not line-by-line independently.
+
+#### Shortcut safety
+Option-Up and Option-Down do not produce characters on macOS (they are pure navigation keys). This is safe per the project's keyboard shortcut conventions — the "avoid Alt- as sole modifier" rule applies only to keys that type characters.
+
+#### CM6 keymap bindings
+Add two entries to `formatKeymap` in `format.ts`:
+
+```
+{ key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } }
+{ key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } }
+```
+
+#### Menu items
+No menu items are required. This feature is keyboard-only.
+
+---
+
+### Feature 3: Close All (Cmd-Shift-W)
+
+**Summary:** As a user I want to press Cmd-Shift-W to close all open Markable windows, with each window following the same hide-on-close behavior as Cmd-W.
+
+#### Current state (confirmed from source)
+- The File menu contains `PredefinedMenuItem::close_window` labeled "Close" (line 50 of `menu.rs`). This maps to Cmd-W via the OS.
+- No "Close All" item exists anywhere in the menu.
+- No `file-close-all` case exists in the `menu-event` switch in `main.ts`.
+
+#### Required behavior
+- Cmd-Shift-W triggers "Close All."
+- In the current single-window architecture, the observable effect is identical to "Close" — the window hides rather than the process quitting.
+- The implementation calls `getCurrentWebviewWindow().hide()` in `main.ts`.
+- The action is handled via a `"file-close-all"` menu-event case.
+
+#### Menu item placement
+Add "Close All" to the File menu in `menu.rs`, immediately after `PredefinedMenuItem::close_window` (line 50). Accelerator: `CmdOrCtrl+Shift+W`. Menu event action string: `"file-close-all"`.
+
+#### Future multi-window note (out of scope for this task)
+When Markable gains multiple windows, Close All will need to iterate over all `WebviewWindow` instances. This is deferred.
+
+---
+
+## 3. Edge Case Inventory
+
+All items in this inventory are mandatory test cases for the Code Reviewer.
+
+### Feature 1 — Paste Link
 
 | # | Edge Case | Expected Behavior |
-|---|---|---|
-| EC-1 | Export triggered on an empty document (zero characters in editor) | Valid empty-body export. `<body>` contains `<div class="content"></div>`. Title falls through H1 check (no H1) to filename or "Untitled". No crash. |
-| EC-2 | Export triggered on an untitled document (currentFilePath is null) | Suggested filename in dialog is `untitled.html`. `<title>` is `"Untitled"`. No crash. |
-| EC-3 | Document has no H1 but has a currentFilePath | `<title>` is the filename without extension (e.g., `notes.md` → `notes`). H1 scan produces no match; fallback is used. |
-| EC-4 | Document has multiple H1 headings | The FIRST H1 encountered (scanning top to bottom) is used for the title. Subsequent H1s are ignored for title derivation. |
-| EC-5 | H1 heading text contains HTML special characters (e.g., `# Notes <draft> & ideas`) | The title string is HTML-escaped before insertion into `<title>`. The body conversion by `marked` handles escaping within rendered content separately. |
-| EC-6 | Filename contains characters that are invalid in HTML `<title>` (same as EC-5, e.g., filename `report<2026>.md`) | Filename-derived title is also HTML-escaped. |
-| EC-7 | Document contains raw HTML blocks | HTML blocks pass through as-is into the exported body. The resulting file may contain the raw HTML. No sanitization. The behavior is documented as intentional. |
-| EC-8 | User cancels the save dialog | Export silently aborts. `currentFilePath` unchanged. Editor content unchanged. No error shown. |
-| EC-9 | `writeFile` returns an error (e.g., disk full, permissions denied on chosen path) | `alert("Export failed: " + result.error.message)` is shown. No other state changes occur. |
-| EC-10 | Document contains a setext-style H1 (underline-style: text on one line, `===` on the next) | Title derivation only scans for ATX-style `^# ` headings. A setext H1 does NOT match the title scan. The title falls back to filename or "Untitled". The `marked` library still renders the setext H1 correctly in the output body. This is a documented simplification. |
-| EC-11 | Document contains a very large amount of text (50,000+ characters) | `marked` conversion completes without UI freeze. If `marked` is synchronous, it runs on the main thread — acceptable for typical document sizes. If profiling shows blocking, the Architect may opt for a `setTimeout`-deferred call, but this is not required unless a regression is observed. |
-| EC-12 | Document contains a code fence with a language tag (e.g., ` ```rust `) | `marked` renders it as `<pre><code class="language-rust">...</code></pre>`. No syntax highlighting is applied in the exported file (highlighting is out of scope). The code content is present and readable. |
-| EC-13 | Document contains task list items (`- [ ] item` and `- [x] item`) | `marked` default behavior renders these as `<li>` elements. If `marked` does not render checkboxes by default, the output contains the raw `[ ]` / `[x]` text. The Architect must verify `marked`'s task list handling and document the result — no special rendering is required by these requirements. |
-| EC-14 | Document contains a Markdown link whose URL contains `<` or `>` or `&` | `marked` handles attribute-safe escaping in generated `href` values. This is a `marked` library responsibility, not custom code. Verify and note in tests. |
-| EC-15 | The file system path chosen by the user does not end in `.html` or `.htm` | The export function appends `.html` to the path (per FR-7.5, the Architect defines the rule). The written file has a `.html` extension regardless of what the user typed. |
-| EC-16 | `editor` is null when export is triggered (application still initializing) | The export function returns early without any dialog or error. Consistent with the guard pattern used in `saveFile()`. |
-| EC-17 | currentFilePath ends in an extension other than `.md` (e.g., `.txt`) | The suggested export filename replaces only the final extension with `.html` (e.g., `notes.txt` → `notes.html`). Path splitting logic must handle any extension, not only `.md`. |
-| EC-18 | currentFilePath has no extension (e.g., file named `README` with no dot) | Suggested export filename is `README.html`. The title fallback is `README` (the full filename, no dot to strip). |
-| EC-19 | Document's first H1 is on the last line with no trailing newline | The ATX scan must not require a newline after the heading line. A line matching `^# ` at the end of the string without a trailing `\n` is still a valid H1. |
-| EC-20 | `marked` is not installed (package missing from node_modules) | Build fails at TypeScript import stage. This is a pre-condition failure, not a runtime edge case. The requirement to install `marked` (see Dependency Notice) must be completed before implementation begins. |
+|---|-----------|-------------------|
+| EC-L1 | Clipboard permission denied (`readText()` rejects) | Catch the rejection; fall back to the "no URL" path. Log to console. Do not show an alert. |
+| EC-L2 | Clipboard string has trailing whitespace or a newline (e.g., `"https://example.com \n"`) | Trim the clipboard string before the URL validity check and before inserting into the document. |
+| EC-L3 | Selection spans multiple lines | Treat the full selected text as the link label including embedded newlines. No special handling is required. |
+| EC-L4 | Selection is already a complete Markdown link (e.g., `[foo](bar)`) | No toggle-off behavior. Wrap the entire selection as a new link label: `[[foo](bar)](url)`. This is intentional. |
+| EC-L5 | Clipboard contains a non-http/https URL (`ftp://`, `file://`, `mailto:`) | Fails the `^https?://` check. Fall back to the "no valid URL" path. |
+| EC-L6 | Editor instance is null when the menu item fires | Guard with `if (!editor) break;`, consistent with all other Format menu cases in `main.ts`. |
+
+### Feature 2 — Move Line
+
+| # | Edge Case | Expected Behavior |
+|---|-----------|-------------------|
+| EC-M1 | Cursor is on line 1; user presses Opt-Up | No-op. Document unchanged. |
+| EC-M2 | Cursor is on the last line; user presses Opt-Down | No-op. Document unchanged. |
+| EC-M3 | Selection spans from line 1 through line N; user presses Opt-Up | No-op because one of the selected lines is already at line 1. |
+| EC-M4 | Selection spans from line N through the last line; user presses Opt-Down | No-op because one of the selected lines is already the last line. |
+| EC-M5 | Document contains exactly one line | Both Opt-Up and Opt-Down are no-ops. |
+| EC-M6 | Multiple selection ranges (multi-cursor) | Apply the move to `state.selection.main` only. Ignore secondary ranges. Consistent with `toggleOrderedList` and `insertHorizontalRule` in the existing codebase. |
+| EC-M7 | Last line has no trailing newline and is being moved upward | The swap must not gain or lose a trailing newline. Line boundary offsets must be used precisely. |
+
+### Feature 3 — Close All
+
+| # | Edge Case | Expected Behavior |
+|---|-----------|-------------------|
+| EC-C1 | Document has unsaved changes when Cmd-Shift-W is pressed | Hide without prompt, consistent with Cmd-W behavior. No unsaved-changes guard is introduced in this task. |
+| EC-C2 | Window is already hidden when Close All fires | `hide()` on an already-hidden window must be a safe no-op. Verify the Tauri v2 API contract; if it is not safe, add an `isVisible()` guard. |
+| EC-C3 | Menu event arrives before `initApp()` has registered the listener | Events arriving before the listener is registered are dropped by the Tauri event system. This is acceptable and consistent with all other menu items. |
+| EC-C4 | Window is re-opened after Close All via the Dock icon | The window must reappear normally, confirming it was hidden and not destroyed. |
 
 ---
 
-## Acceptance Criteria
+## 4. Acceptance Criteria
 
-All of the following must be true before this task is considered complete. User visual verification is required for all UI items.
+### Feature 1 — Paste Link
 
-### Menu Wiring
-- [ ] AC-1: `File > Export` menu item is enabled and visible in the macOS menu bar.
-- [ ] AC-2: Pressing `Cmd-Alt-E` triggers the export flow.
-- [ ] AC-3: Clicking `File > Export` triggers the export flow.
+- AC-L1: Cmd-K with text selected and a valid URL on the clipboard wraps the selection as `[selection](url)` in a single undoable transaction.
+- AC-L2: Cmd-K with text selected and non-URL clipboard content produces `[selection]()` with cursor between the empty parens.
+- AC-L3: Cmd-K with no selection and a valid URL inserts `[](url)` with cursor between the square brackets.
+- AC-L4: Cmd-K with no selection and non-URL clipboard content inserts `[]()` with cursor between the square brackets.
+- AC-L5: The Format menu shows "Insert Link" with accelerator Cmd-K, after "Highlight" and before the "Code Fence" group.
+- AC-L6: Triggering "Insert Link" from the menu produces identical behavior to the Cmd-K keymap binding.
+- AC-L7: Clipboard read failure silently falls back to the no-URL path; no alert is presented to the user.
 
-### Save Dialog Behavior
-- [ ] AC-4: The native save dialog opens when export is triggered.
-- [ ] AC-5: The default suggested filename in the dialog is `[current-document-name].html` (e.g., if the open file is `notes.md`, the dialog suggests `notes.html`).
-- [ ] AC-6: For an untitled document, the suggested filename is `untitled.html`.
-- [ ] AC-7: Cancelling the dialog produces no file, no error, and no state change.
+### Feature 2 — Move Line
 
-### Exported File Structure
-- [ ] AC-8: The exported file is valid HTML5 — begins with `<!DOCTYPE html>` and contains a complete `<html>`, `<head>`, and `<body>` structure.
-- [ ] AC-9: The exported file opens correctly in Safari, Firefox, and Chrome without errors.
-- [ ] AC-10: The `<title>` tag contains the first H1 heading text when one is present.
-- [ ] AC-11: The `<title>` tag falls back to the filename (without extension) when no H1 is present.
-- [ ] AC-12: The `<title>` tag is `"Untitled"` for an untitled document with no H1.
-- [ ] AC-13: The exported file contains an embedded `<style>` block (not a `<link>` to an external file).
-- [ ] AC-14: The embedded stylesheet produces a readable document when the exported file is opened in a browser without any internet connection.
-- [ ] AC-15: The placeholder comment `<!-- To customize styles, see: [future URL] -->` is present in the `<head>`.
+- AC-M1: Opt-Up on a cursor line moves that line one position upward; cursor remains on the moved line.
+- AC-M2: Opt-Down on a cursor line moves that line one position downward; cursor remains on the moved line.
+- AC-M3: Pressing Opt-Up repeatedly from line 3 succeeds until line 1; a further press on line 1 is a no-op.
+- AC-M4: A multi-line selection moves as a contiguous block; the selection after the move spans the same lines in their new positions.
+- AC-M5: Opt-Up on line 1 does not alter the document content.
+- AC-M6: Opt-Down on the last line does not alter the document content.
 
-### Content Fidelity
-- [ ] AC-16: Headings, paragraphs, bold, italic, strikethrough, inline code, code fences, blockquotes, unordered lists, ordered lists, horizontal rules, and links all render correctly in the exported HTML when opened in a browser.
-- [ ] AC-17: Raw HTML blocks in the Markdown source appear in the exported file output without modification.
-- [ ] AC-18: An empty document produces an exported file with an empty `<div class="content">` — no crash, no partial output.
+### Feature 3 — Close All
 
-### Error Handling
-- [ ] AC-19: If the file write fails, an alert is shown with the message `"Export failed: [error detail]"`.
-- [ ] AC-20: `currentFilePath` remains pointing to the original `.md` file (or null) after a successful export — it is not changed to the `.html` path.
-
-### Code Quality
-- [ ] AC-21: All TypeScript passes `tsc --noEmit` with no errors.
-- [ ] AC-22: No TODO comments in source files.
-- [ ] AC-23: `marked` is listed in `dependencies` in `package.json` (not `devDependencies`).
-- [ ] AC-24: All 20 edge cases are covered by tests or explicit inline handling with a comment referencing the EC number.
-- [ ] AC-25: Vitest test count increases (export tests added to the frontend test suite).
+- AC-C1: Cmd-Shift-W hides the window (the process continues running; the app remains in the Dock).
+- AC-C2: The File menu shows "Close All" with accelerator Cmd-Shift-W, immediately below "Close".
+- AC-C3: Triggering "Close All" from the menu produces the same hide behavior as the keyboard shortcut.
+- AC-C4: After Close All, clicking the Dock icon re-shows the window confirming it was hidden, not destroyed.
 
 ---
 
-## Technical Constraints
+## 5. Out of Scope
 
-### TC-1: No New Rust Commands Required
-
-The export feature requires no new Tauri backend commands. All required functionality is available via existing commands:
-- `save_file_dialog` (for the save dialog)
-- `write_file` (for atomic file write)
-
-The only Rust changes are enabling the menu item (`menu.rs`) and forwarding the event (`lib.rs`).
-
-### TC-2: `marked` Version and API Shape
-
-The Architect must confirm the API shape of the `marked` version installed. As of `marked` v5+, the `marked(src)` function may return a `Promise<string>` rather than a `string`. The export function must `await` the result if necessary. The Architect verifies this in Step 0 of the spec and documents the correct call signature.
-
-### TC-3: No Solo Alt- Shortcuts
-
-The existing accelerator `CmdOrCtrl+Alt+E` uses a compound modifier and is acceptable. No new solo `Alt-` shortcuts may be introduced.
-
-### TC-4: Atomic Write Pattern
-
-File writes use the existing `writeFile` bridge which delegates to the Rust `write_file` command (temp-file-swap pattern). The export function must not bypass this by calling any direct Tauri FS API. This ensures data safety and consistency with the rest of the codebase.
-
-### TC-5: No Base64 Image Embedding
-
-Images referenced in Markdown (via `![alt](path)`) are rendered as `<img src="path">` tags in the output. The path value is not resolved or converted to a data URI. This is a known limitation documented in Out of Scope.
-
-### TC-6: HTML Escaping Responsibility Boundary
-
-The `marked` library is responsible for escaping Markdown-derived content inside the HTML body. The export function is additionally responsible for escaping the title string (derived from the H1 or filename) before inserting it into the `<title>` element. These are separate operations and must not be conflated.
-
-### TC-7: Export Module Placement
-
-The Architect decides whether `exportAsHtml()` lives in `src/main.ts` (co-located with other file operations like `saveFile`) or in a new dedicated module such as `src/lib/export.ts`. Given that the function has a pure input/output structure (Markdown string in, HTML string out for the conversion step), a dedicated module is preferred for testability. The conversion logic (step FR-3 through FR-6) should be extractable as a pure function `buildHtmlDocument(markdown: string, title: string): string` that can be unit-tested without a DOM or Tauri runtime.
-
----
-
-## Impact Analysis
-
-| Area | Impact |
-|---|---|
-| `src-tauri/src/menu.rs` | Change `file-export` from `enabled: false` to `enabled: true`. Minimal change. |
-| `src-tauri/src/lib.rs` | Add `"file-export"` to the forwarded menu event IDs in `on_menu_event`. One-line change. |
-| `src/main.ts` | Add `"file-export"` case to the `menu-event` switch block. Calls new `exportAsHtml()`. |
-| `src/lib/export.ts` (new) | New module containing `buildHtmlDocument()` (pure) and `exportAsHtml()` (effectful: dialog + write). |
-| `src/lib/dialogs.ts` | May require update to pass file type filters to `saveFileDialog`. Architect evaluates. |
-| `package.json` | Add `marked` to `dependencies`. Add `@types/marked` to `devDependencies` if needed. |
-| `tests/export.test.ts` (new) | Vitest tests for `buildHtmlDocument()` — title derivation, HTML escaping, document structure, all edge cases. |
-
----
-
-## Files Expected to be Created or Modified
-
-| File | Change Type | Summary |
-|---|---|---|
-| `src-tauri/src/menu.rs` | Modified | Enable `file-export` menu item |
-| `src-tauri/src/lib.rs` | Modified | Forward `"file-export"` menu event to frontend |
-| `src/main.ts` | Modified | Add `"file-export"` case in menu-event listener |
-| `src/lib/export.ts` | New | HTML document builder + export orchestration function |
-| `src/lib/dialogs.ts` | Possibly modified | Add file type filter support to `saveFileDialog` if not already present |
-| `package.json` | Modified | Add `marked` (and optionally `@types/marked`) |
-| `tests/export.test.ts` | New | Vitest unit tests for export logic |
-
----
-
-## Handoff Summary
-
-- Artifact: `docs/requirements/active_task.md`
-- Status: Requirements Validated
-- Edge cases to verify in tests: 20 items in Edge Case Inventory
-
-Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.
+- **URL dialog / prompt:** Feature 1 never opens a modal to ask the user to type a URL.
+- **Toggle-off link (Remove Link):** Pressing Cmd-K on an already-formatted Markdown link does not unwrap it. That is a separate future feature.
+- **Non-http/https URL recognition:** `ftp://`, `mailto:`, and `file://` are not recognized as valid URLs for this feature.
+- **Move Line menu items:** Opt-Up / Opt-Down are keyboard-only in this task. No menu items are added.
+- **Unsaved-changes prompt on Close All:** A "dirty document" indicator and save prompt is a separate future feature covering all close paths.
+- **Multi-window Close All:** Iterating over multiple Tauri windows is deferred to the multi-window architecture phase.
+- **Paste Without Formatting, Copy as Markdown, Copy as HTML:** Remain in the FC1 gap list; not addressed here.
+- **Insert Image, Insert Table, Superscript, Subscript, Math, Front Matter Fence:** Not part of this task.

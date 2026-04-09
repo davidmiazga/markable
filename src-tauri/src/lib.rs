@@ -185,6 +185,9 @@ pub fn run() {
             let forward = match id {
                 "app-settings"
                 | "file-new" | "file-open" | "file-save" | "file-save-as" | "file-export"
+                // AC-C1/AC-C3: file-close-all is explicitly forwarded so the
+                // frontend hide() call fires via the standard menu-event pathway.
+                | "file-close-all"
                 | "view-toggle-preview"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"
