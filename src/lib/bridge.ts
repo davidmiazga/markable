@@ -130,3 +130,14 @@ export async function saveSettings(
     };
   }
 }
+
+/**
+ * Update the native "Open Recent" submenu with the given file paths.
+ */
+export async function updateRecentFilesMenu(paths: string[]): Promise<void> {
+  try {
+    await invoke("update_recent_files_menu", { paths });
+  } catch (error) {
+    console.error("Failed to update recent files menu:", error);
+  }
+}

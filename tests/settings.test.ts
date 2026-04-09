@@ -88,8 +88,8 @@ describe("EDITOR_CONSTRAINTS", () => {
   });
 
   it("has correct font size range", () => {
-    expect(EDITOR_CONSTRAINTS.baseFontSize.min).toBe(10);
-    expect(EDITOR_CONSTRAINTS.baseFontSize.max).toBe(28);
+    expect(EDITOR_CONSTRAINTS.baseFontSize.min).toBe(8);
+    expect(EDITOR_CONSTRAINTS.baseFontSize.max).toBe(48);
   });
 });
 

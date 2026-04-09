@@ -187,7 +187,7 @@ export function updateSettingsInMemory(
 
 export const EDITOR_CONSTRAINTS = {
   contentMaxWidth: { min: 500, max: 1400, step: 50 },
-  baseFontSize: { min: 10, max: 28, step: 1 },
+  baseFontSize: { min: 8, max: 48, step: 2 },
 } as const;
 
 export function applyEditorSettings(editor: EditorSettings): void {

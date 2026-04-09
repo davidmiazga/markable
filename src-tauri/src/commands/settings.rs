@@ -16,8 +16,8 @@ const SETTINGS_FILENAME: &str = "settings.json";
 // Validation constants
 const MIN_CONTENT_MAX_WIDTH: u32 = 500;
 const MAX_CONTENT_MAX_WIDTH: u32 = 1400;
-const MIN_BASE_FONT_SIZE: u32 = 10;
-const MAX_BASE_FONT_SIZE: u32 = 28;
+const MIN_BASE_FONT_SIZE: u32 = 8;
+const MAX_BASE_FONT_SIZE: u32 = 48;
 const MAX_RECENT_FILES: usize = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

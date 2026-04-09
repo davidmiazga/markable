@@ -31,7 +31,15 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         &[
             &MenuItem::with_id(handle, "file-new", "New", true, Some("CmdOrCtrl+N"))?,
             &MenuItem::with_id(handle, "file-open", "Open...", true, Some("CmdOrCtrl+O"))?,
-            &MenuItem::with_id(handle, "file-reopen-last", "Reopen Last", true, Some("CmdOrCtrl+Alt+O"))?,
+            &Submenu::with_id_and_items(
+                handle,
+                "open-recent-submenu",
+                "Open Recent",
+                true,
+                &[
+                    &MenuItem::with_id(handle, "recent-empty", "(No Recent Files)", false, None::<&str>)?,
+                ],
+            )?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,
@@ -68,6 +76,10 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         &[
             &MenuItem::with_id(handle, "view-toggle-preview", "Preview", true, Some("CmdOrCtrl+E"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "view-zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?,
+            &MenuItem::with_id(handle, "view-zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
+            &MenuItem::with_id(handle, "view-zoom-reset", "Reset Zoom", true, Some("CmdOrCtrl+0"))?,
         ],
     )?;
 

@@ -28,6 +28,7 @@ import {
   writeFile,
   openFileDialog,
   saveFileDialog,
+  updateRecentFilesMenu,
 } from "./lib/bridge";
 import {
   loadSettings,
@@ -39,7 +40,7 @@ import {
   saveSettingsDebounced,
   addRecentFile,
   removeRecentFile,
-  getMostRecentFile,
+  EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -66,6 +67,10 @@ function updateTitleBar() {
   if (titleEl) {
     titleEl.textContent = displayName;
   }
+}
+
+async function refreshRecentFilesMenu(): Promise<void> {
+  await updateRecentFilesMenu(getCurrentSettings().recentFiles);
 }
 
 // --- Theme system with persistence and fallback chain ---
@@ -160,6 +165,25 @@ function prevTheme() {
   setTheme(prev);
 }
 
+async function zoomIn() {
+  const s = getCurrentSettings();
+  const next = Math.min(s.editor.baseFontSize + EDITOR_CONSTRAINTS.baseFontSize.step, EDITOR_CONSTRAINTS.baseFontSize.max);
+  await updateSettings((c) => ({ ...c, editor: { ...c.editor, baseFontSize: next } }));
+  applyEditorSettings(getCurrentSettings().editor);
+}
+
+async function zoomOut() {
+  const s = getCurrentSettings();
+  const next = Math.max(s.editor.baseFontSize - EDITOR_CONSTRAINTS.baseFontSize.step, EDITOR_CONSTRAINTS.baseFontSize.min);
+  await updateSettings((c) => ({ ...c, editor: { ...c.editor, baseFontSize: next } }));
+  applyEditorSettings(getCurrentSettings().editor);
+}
+
+async function zoomReset() {
+  await updateSettings((c) => ({ ...c, editor: { ...c.editor, baseFontSize: 16 } }));
+  applyEditorSettings(getCurrentSettings().editor);
+}
+
 function togglePreview() {
   if (!editor) return;
   previewEnabled = !previewEnabled;
@@ -220,6 +244,7 @@ async function openFile() {
   currentFilePath = path;
   updateTitleBar();
   await addRecentFile(path);
+  await refreshRecentFilesMenu();
 
   console.log(`File loaded: ${path}`);
 }
@@ -254,6 +279,7 @@ async function saveFile() {
   console.log(`File saved: ${currentFilePath}`);
   updateTitleBar();
   await addRecentFile(currentFilePath);
+  await refreshRecentFilesMenu();
 }
 
 /**
@@ -291,6 +317,7 @@ async function saveFileAs() {
   currentFilePath = path;
   updateTitleBar();
   await addRecentFile(path);
+  await refreshRecentFilesMenu();
 
   console.log(`File saved: ${path}`);
 }
@@ -316,17 +343,12 @@ async function showWindow() {
   }
 }
 
-async function reopenLastFile(): Promise<void> {
-  const path = getMostRecentFile();
-  if (!path) {
-    console.log("No recent files to reopen.");
-    return;
-  }
-
+async function openRecentFileByPath(path: string): Promise<void> {
   const result = await readFile(path);
   if (!result.ok) {
     console.warn(`Recent file not found: ${path}`);
     await removeRecentFile(path);
+    await refreshRecentFilesMenu();
     return;
   }
 
@@ -337,7 +359,9 @@ async function reopenLastFile(): Promise<void> {
   }
   currentFilePath = path;
   updateTitleBar();
-  console.log(`Reopened: ${path}`);
+  await addRecentFile(path);
+  await refreshRecentFilesMenu();
+  console.log(`Opened recent: ${path}`);
 }
 
 async function setupWindowStateListeners(): Promise<void> {
@@ -413,6 +437,9 @@ async function initApp() {
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel((name) => setTheme(name));
 
+  // Populate the native Open Recent submenu with persisted files
+  await refreshRecentFilesMenu();
+
   // Track window move/resize for settings persistence
   await setupWindowStateListeners();
 
@@ -434,9 +461,6 @@ async function initApp() {
       case "file-save-as":
         saveFileAs();
         break;
-      case "file-reopen-last":
-        reopenLastFile();
-        break;
       case "view-toggle-preview":
         togglePreview();
         break;
@@ -454,6 +478,15 @@ async function initApp() {
         break;
       case "theme-system":
         setTheme("system");
+        break;
+      case "view-zoom-in":
+        zoomIn();
+        break;
+      case "view-zoom-out":
+        zoomOut();
+        break;
+      case "view-zoom-reset":
+        zoomReset();
         break;
       case "format-h1": if (editor) toggleHeading(editor, 1); break;
       case "format-h2": if (editor) toggleHeading(editor, 2); break;
@@ -475,6 +508,17 @@ async function initApp() {
       case "format-outdent": if (editor) outdentLines(editor); break;
       case "format-hr": if (editor) insertHorizontalRule(editor); break;
       case "format-clear": if (editor) clearFormatting(editor); break;
+      default: {
+        const action = event.payload.action;
+        if (action.startsWith("recent-file-")) {
+          const idx = parseInt(action.replace("recent-file-", ""), 10);
+          const files = getCurrentSettings().recentFiles;
+          if (idx >= 0 && idx < files.length) {
+            openRecentFileByPath(files[idx]);
+          }
+        }
+        break;
+      }
     }
   });
 

@@ -7,6 +7,7 @@ import {
   EDITOR_CONSTRAINTS,
   DEFAULT_SETTINGS,
 } from "../lib/settings";
+import { updateRecentFilesMenu } from "../lib/bridge";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
@@ -44,14 +45,6 @@ export function createSettingsPanel(setThemeFn: (name: string) => void): void {
             <input type="range" class="settings-slider" id="settings-content-width"
               min="${c.contentMaxWidth.min}" max="${c.contentMaxWidth.max}" step="${c.contentMaxWidth.step}" />
             <span class="settings-value" id="settings-content-width-value"></span>
-          </div>
-        </div>
-        <div class="settings-section">
-          <label class="settings-label">Font Size</label>
-          <div class="settings-slider-row">
-            <input type="range" class="settings-slider" id="settings-font-size"
-              min="${c.baseFontSize.min}" max="${c.baseFontSize.max}" step="${c.baseFontSize.step}" />
-            <span class="settings-value" id="settings-font-size-value"></span>
           </div>
         </div>
         <div class="settings-section">
@@ -152,32 +145,11 @@ function wireEvents(): void {
     }));
   });
 
-  // Font size slider — live update on input
-  const fontSlider = panelElement.querySelector("#settings-font-size") as HTMLInputElement;
-  fontSlider?.addEventListener("input", (e) => {
-    const value = parseInt((e.target as HTMLInputElement).value, 10);
-    const display = panelElement?.querySelector("#settings-font-size-value");
-    if (display) display.textContent = `${value}px`;
-    updateSettingsInMemory((s) => ({
-      ...s,
-      editor: { ...s.editor, baseFontSize: value },
-    }));
-    applyEditorSettings(getCurrentSettings().editor);
-  });
-
-  // Font size — persist on release
-  fontSlider?.addEventListener("change", async () => {
-    const value = parseInt(fontSlider.value, 10);
-    await updateSettings((s) => ({
-      ...s,
-      editor: { ...s.editor, baseFontSize: value },
-    }));
-  });
-
   // Clear recent files
   panelElement.querySelector("#settings-clear-recent")
     ?.addEventListener("click", async () => {
       await clearRecentFiles();
+      await updateRecentFilesMenu([]);
       syncRecentFilesCount();
     });
 
@@ -200,11 +172,6 @@ function syncPanelToSettings(): void {
   if (widthSlider) widthSlider.value = String(settings.editor.contentMaxWidth);
   const widthValue = document.querySelector("#settings-content-width-value");
   if (widthValue) widthValue.textContent = `${settings.editor.contentMaxWidth}px`;
-
-  const fontSlider = document.querySelector("#settings-font-size") as HTMLInputElement;
-  if (fontSlider) fontSlider.value = String(settings.editor.baseFontSize);
-  const fontValue = document.querySelector("#settings-font-size-value");
-  if (fontValue) fontValue.textContent = `${settings.editor.baseFontSize}px`;
 
   syncRecentFilesCount();
 }
