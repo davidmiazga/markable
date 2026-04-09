@@ -6,6 +6,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileResult, DialogResult, TauriCommandError } from "./errors";
 
 import type { MarkableSettings } from "./settings";
@@ -169,6 +170,19 @@ export async function updateThemeMenu(themes: ThemeEntry[]): Promise<void> {
     await invoke("update_theme_menu", { themes });
   } catch (error) {
     console.error("Failed to update theme menu:", error);
+  }
+}
+
+/**
+ * Read plain text from the system clipboard via Tauri (no browser permission needed).
+ * Returns empty string on failure.
+ */
+export async function readClipboardText(): Promise<string> {
+  try {
+    return await clipboardReadText() ?? "";
+  } catch (err) {
+    console.warn("readClipboardText failed:", err);
+    return "";
   }
 }
 

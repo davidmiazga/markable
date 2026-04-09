@@ -177,6 +177,7 @@ fn update_theme_menu(app: tauri::AppHandle, themes: Vec<commands::themes::ThemeE
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .menu(|handle| menu::build_menu(handle))
@@ -188,6 +189,7 @@ pub fn run() {
                 // AC-C1/AC-C3: file-close-all is explicitly forwarded so the
                 // frontend hide() call fires via the standard menu-event pathway.
                 | "file-close-all"
+                | "edit-paste-plain"
                 | "edit-paste-link"
                 | "edit-copy-plain"
                 | "edit-copy-html"

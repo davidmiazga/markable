@@ -26,6 +26,7 @@ import {
   clearFormatting,
   copyAsPlainText,
   copyAsHtml,
+  pasteWithoutFormatting,
 } from "./editor/format";
 import {
   readFile,
@@ -629,6 +630,7 @@ async function initApp() {
       case "format-outdent": if (editor) outdentLines(editor); break;
       case "format-hr": if (editor) insertHorizontalRule(editor); break;
       case "format-clear": if (editor) clearFormatting(editor); break;
+      case "edit-paste-plain": if (editor) pasteWithoutFormatting(editor); break;
       case "edit-copy-plain": if (editor) copyAsPlainText(editor); break;
       case "edit-copy-html": if (editor) copyAsHtml(editor); break;
 

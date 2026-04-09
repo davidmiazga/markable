@@ -8,6 +8,7 @@
 import { EditorView, type KeyBinding } from "@codemirror/view";
 import { EditorSelection, Prec } from "@codemirror/state";
 import { marked } from "marked";
+import { readClipboardText } from "../lib/bridge";
 
 /**
  * Toggle a heading level on the current line(s).
@@ -352,6 +353,24 @@ export async function insertLink(view: EditorView): Promise<void> {
   view.focus();
 }
 
+/**
+ * Paste plain text from clipboard, ignoring any rich-text (HTML/RTF) data.
+ * Standard macOS "Paste and Match Style" equivalent (Cmd-Shift-V).
+ */
+export function pasteWithoutFormatting(view: EditorView): void {
+  readClipboardText().then((text) => {
+    if (!text) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, to, insert: text },
+      selection: EditorSelection.cursor(from + text.length),
+      userEvent: "input.paste",
+      scrollIntoView: true,
+    });
+    view.focus();
+  });
+}
+
 /** URL regex shared by insertLink and pasteURLHandler. */
 const URL_RE = /^https?:\/\/\S+/;
 
@@ -535,6 +554,8 @@ export const formatKeymap: KeyBinding[] = [
   // AC-M1/AC-M2: Opt-Up/Down move the selected line block up or down one line.
   { key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } },
   { key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } },
+  // Cmd-Shift-V: paste without formatting (plain text only, ignores HTML/RTF).
+  { key: "Meta-Alt-v", mac: "Meta-Alt-v", run: (v) => { pasteWithoutFormatting(v); return true; } },
   // Cmd-Alt-C: copy as HTML; Cmd-Alt-T: copy as plain text.
   { key: "Meta-Alt-c", mac: "Meta-Alt-c", run: (v) => { copyAsHtml(v); return true; } },
   { key: "Meta-Alt-t", mac: "Meta-Alt-t", run: (v) => { copyAsPlainText(v); return true; } },
