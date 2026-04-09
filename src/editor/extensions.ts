@@ -39,7 +39,7 @@ const interStack = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans
 export const previewTheme = EditorView.theme({
   "&": {
     fontFamily: interStack,
-    fontSize: "16px",
+    fontSize: "var(--settings-base-font-size)",
     lineHeight: "1.7",
   },
   ".cm-content": {

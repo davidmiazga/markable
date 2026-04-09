@@ -1,470 +1,457 @@
-# Active Task: Markable 2.0 — Phase 1 Infrastructure & "Tahoe" Workaround
+# Active Task: Markable 2.0 -- Settings & Persistence
 
 **Status:** Requirements Validated
-**Date:** 2026-04-04
-**Phase:** 1 — Infrastructure & Build Foundation
+**Date:** 2026-04-08
+**Depends on:** Phase 2A Chromeless Window (complete), Phase 2B Menu System (complete)
+**Feature Checkpoint:** 1 -- Base Features (item 3: Settings & Persistence, item 4: Theming persistence)
 
 ---
 
 ## Executive Summary
 
-Phase 1 establishes the foundational infrastructure for Markable 2.0, focusing on **project scaffolding**, **macOS Tahoe/Sequoia DMG build compatibility**, and **core file I/O capabilities**. This phase does not deliver the full editor experience—that comes in Phase 2. Instead, Phase 1 ensures the build pipeline is solid, the Rust-TypeScript bridge is functional, and basic CodeMirror 6 integration works.
+This phase implements the settings and persistence layer for Markable 2.0. The app must remember its state across launches: window position and size, active theme, content width, font size, and recently opened files. Settings are stored in a single JSON file at the standard macOS Application Support path, written atomically (same pattern as document writes), and read at startup before the window is shown. A minimal settings panel (inspired by Whispr Flow) allows users to adjust core preferences visually. Keybinding customization is explicitly deferred to Phase 2.
 
-This phase is **critical** because it unblocks all downstream development. Without a working build and stable file I/O, subsequent phases cannot proceed. The macOS Sequoia/Tahoe DMG compiler incompatibility is a known blocker that must be solved upfront.
+This is the backbone for user experience continuity. Without persistence, every launch feels like a fresh install.
+
+---
+
+## Settings File Location & Schema
+
+**Path:** `~/Library/Application Support/com.markable.app/settings.json`
+
+**Schema (version 1):**
+
+```json
+{
+  "version": 1,
+  "window": {
+    "x": 200,
+    "y": 100,
+    "width": 960,
+    "height": 1080,
+    "fullscreen": false,
+    "maximized": false
+  },
+  "editor": {
+    "contentMaxWidth": 900,
+    "contentPadding": "responsive",
+    "baseFontSize": 16
+  },
+  "theme": {
+    "active": "default-dark",
+    "fallback": "default-dark"
+  },
+  "recentFiles": [
+    "/Users/me/docs/notes.md",
+    "/Users/me/docs/todo.md"
+  ]
+}
+```
 
 ---
 
 ## Functional Requirements
 
-### R1: Tauri v2 + Vite + TypeScript Scaffolding
+### R1: Settings File Lifecycle
+
+**As a user, I want** the app to persist my settings across launches so I never have to reconfigure anything.
 
 **What must be built:**
-- Initialize a new Tauri v2 project with Vite + TypeScript (vanilla template).
-- Verify the initial dev build completes: `npm run tauri dev` launches a window.
-- Configure Tauri's dev and build scripts in `package.json`.
-- Tauri CLI version locked in `package.json` (or via `cargo.lock` equivalent).
+- On first launch, if `settings.json` does not exist, create it with all default values.
+- On every subsequent launch, read `settings.json` before the window is shown (blocking read during init, before `window.show()`).
+- Settings are read in Rust, serialized to JSON, and passed to the frontend via a Tauri command (`get_settings`).
+- A corresponding `save_settings` Tauri command accepts the full settings object and writes atomically.
+
+**Default Values:**
+- `window`: 50% of primary screen width, 100% of screen height, centered horizontally.
+- `editor.contentMaxWidth`: 900 (pixels).
+- `editor.contentPadding`: `"responsive"` (frontend maps this to breakpoint-based padding).
+- `editor.baseFontSize`: 16 (pixels).
+- `theme.active`: `"default-dark"` (or whichever is the bundled default).
+- `theme.fallback`: same as `theme.active` at time of last successful theme load.
+- `recentFiles`: empty array `[]`.
 
 **Acceptance Criteria:**
-- `npm install` succeeds without warnings.
-- `npm run tauri dev` opens a Tauri window with a working TypeScript environment.
-- Hot reload works (edit a TypeScript file, window reflects change).
-- No build errors or deprecation warnings on initial setup.
+- AC-1.1: First launch creates `settings.json` at the correct path with all default values.
+- AC-1.2: Subsequent launches read and apply saved settings before the window becomes visible.
+- AC-1.3: `get_settings` Tauri command returns the full settings object as JSON.
+- AC-1.4: `save_settings` Tauri command writes atomically (temp-file-swap pattern).
+- AC-1.5: The `~/Library/Application Support/com.markable.app/` directory is created automatically if missing.
 
 ---
 
-### R2: Tauri v2 Permission Scopes
+### R2: Window State Persistence
+
+**As a user, I want** the app to reopen at the same position and size I left it.
 
 **What must be built:**
-- Define granular permission scopes in `src-tauri/capabilities/default.json`.
-- Enable `fs` scope with read/write access to user-selected directories.
-- Enable `dialog` scope for File Open and Save As dialogs.
-- Document the reasoning behind each scope choice.
+- On window move or resize, save `window.x`, `window.y`, `window.width`, `window.height` to settings.
+- Save is debounced at 1000ms to avoid excessive writes during drag/resize.
+- On launch, restore the saved window position and size.
+- Also persist `fullscreen` and `maximized` boolean states.
+
+**Missing Monitor Behavior:**
+- If the saved position would place the window entirely off-screen (e.g., the external monitor was disconnected), reset to defaults: 50% of current primary screen width, 100% of screen height, centered horizontally on the primary screen.
 
 **Acceptance Criteria:**
-- `tauri.conf.json` and `capabilities/default.json` are properly configured.
-- No "permission denied" errors when attempting file I/O operations.
-- The app does not request blanket filesystem access; scopes are granular.
+- AC-2.1: Moving the window and relaunching restores the same position.
+- AC-2.2: Resizing the window and relaunching restores the same size.
+- AC-2.3: Fullscreen state persists across launches.
+- AC-2.4: Window state saves are debounced (no more than one write per 1000ms during continuous drag/resize).
+- AC-2.5: If the saved position is off-screen, the window centers on the primary display with default dimensions.
 
 ---
 
-### R3: macOS DMG Build Workaround (CRITICAL)
+### R3: Content Width Persistence
+
+**As a user, I want** my chosen content width preference to persist so my reading/writing layout is consistent.
 
 **What must be built:**
-
-This is the **single most critical requirement** for Phase 1 because it blocks all macOS distribution.
-
-#### 3.1 CI=true Headless DMG
-
-- Set `CI=true` in the build environment to force Tauri's bundler to use a "headless" DMG creation method.
-- This bypasses the AppleScript-based icon positioning that triggers the Sequoia/Tahoe security checks.
-- Document the environment variable requirement in build scripts and CI/CD.
-
-**Build command:**
-```bash
-CI=true npm run tauri build
-```
-
-#### 3.2 Code Signing & Notarization
-
-- Configure `signingIdentity` in `tauri.conf.json` with a valid Apple Developer ID.
-- Provide placeholders and instructions for users to substitute their own signing identity.
-- Document that unsigned apps are flagged as "Damaged" by Gatekeeper on macOS Tahoe+.
-
-**Verification command:**
-```bash
-spctl --assess --verbose /path/to/Markable.app
-```
-
-Expected output: `accepted` (not `rejected`).
-
-#### 3.3 Fallback: App-Only Build + Manual DMG
-
-- If `CI=true` still fails, provide a fallback script:
-  ```bash
-  cargo tauri build --bundles app
-  create-dmg --volname "Markable" --window-pos 200 120 --window-size 600 300 \
-    "Markable.dmg" "src-tauri/target/release/bundle/macos/Markable.app"
-  ```
-- Document this as a workaround for developers, not end-users.
-
-#### 3.4 Documentation
-
-- Create `docs/build-notes/macos-dmg-workaround.md` with:
-  - Explanation of the Sequoia/Tahoe incompatibility.
-  - Step-by-step build instructions with `CI=true`.
-  - Fallback procedures if the primary workaround fails.
-  - Links to Tauri GitHub issues for latest updates.
+- `editor.contentMaxWidth` controls the CSS `max-width` of the `.cm-content` area in preview mode.
+- Default: 900px.
+- Responsive padding based on breakpoints:
+  - Window width < 640px (sm): 16px left/right padding.
+  - Window width 640-767px (md): 24px left/right padding.
+  - Window width 768-1023px (lg): 64px left/right padding.
+  - Window width >= 1024px (xl): 64px left/right padding.
+- These breakpoints and padding values are defined in CSS. The setting persists the user's chosen `contentMaxWidth` value. Users may later tweak padding percentages directly in CSS/themes.
+- When the user changes content width in the settings panel, the editor updates immediately (no restart).
 
 **Acceptance Criteria:**
-- `CI=true npm run tauri build` produces a working DMG file (no "Damaged" errors).
-- DMG can be opened and the app can be dragged to `/Applications`.
-- The app launches without Gatekeeper warnings.
-- Signing identity is properly configured (verified via `spctl`).
+- AC-3.1: `contentMaxWidth` value persists across launches.
+- AC-3.2: Changing content width in the settings panel updates the editor layout immediately.
+- AC-3.3: Responsive padding breakpoints are applied via CSS (not JavaScript).
+- AC-3.4: The value 900 is the default if no setting exists.
 
 ---
 
-### R4: Rust Command Bridge (File I/O)
+### R4: Font Size Persistence
+
+**As a user, I want** my chosen base font size to persist so text is always at my preferred reading size.
 
 **What must be built:**
-
-Establish a working Tauri IPC bridge for file operations. This is the backbone for all file I/O in Phase 2+.
-
-#### 4.1 read_file Command
-
-**Function signature (Rust):**
-```rust
-#[tauri::command]
-fn read_file(path: String) -> Result<String, String>
-```
-
-**Behavior:**
-- Accept an absolute file path.
-- Read the file contents as UTF-8.
-- Return the contents on success, or a descriptive error message on failure.
-
-**Error cases to handle:**
-- File not found → `"File not found: <path>"`
-- Permission denied → `"Permission denied: <path>"`
-- Invalid UTF-8 → `"Invalid UTF-8 in file: <path>"`
-
-#### 4.2 write_file Command
-
-**Function signature (Rust):**
-```rust
-#[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String>
-```
-
-**Behavior:**
-- Accept an absolute file path and content string.
-- Write the content atomically (temp-file-swap pattern).
-- Return success or a descriptive error message.
-
-**Atomic Write Pattern (MUST IMPLEMENT):**
-1. Write to a temporary file in the same directory as the target file.
-2. Sync the temporary file to disk.
-3. Atomically rename the temp file to the target path (using `std::fs::rename`).
-4. If any step fails, ensure the original file is untouched.
-
-**Error cases to handle:**
-- Path is invalid or contains invalid characters.
-- Disk is full → `"Disk full: insufficient space to write <path>"`
-- Permission denied → `"Permission denied: <path>"`
-- Temp-file-swap fails → `"Write failed: atomic swap could not complete"`
-
-#### 4.3 Frontend TypeScript Bridge
-
-**Function signatures (TypeScript):**
-```typescript
-async function readFile(path: string): Promise<string>
-async function writeFile(path: string, content: string): Promise<void>
-```
-
-**Behavior:**
-- Use Tauri's `@tauri-apps/api/core` to invoke the Rust commands.
-- Wrap errors in a descriptive format for UI consumption.
+- `editor.baseFontSize` is a numeric value (in pixels) that acts as the base from which all editor typography scales.
+- H1-H6 sizes scale proportionally from this base (using the existing em-based scale in `styles.css`: H1 = 3em, H2 = 2.2em, H3 = 1.75em, H4 = 1.5em, H5 = 1em, H6 = 0.9em).
+- Default: 16px (matching the current `previewTheme` in `extensions.ts`).
+- Changing the font size in the settings panel updates the editor immediately.
 
 **Acceptance Criteria:**
-- `npm run tauri dev` allows manual testing of `readFile` and `writeFile` via browser console.
-- Reading a valid file returns its contents.
-- Writing to a new file creates it; writing to an existing file replaces it atomically.
-- All error cases produce user-friendly messages.
-- Atomic swap is verified by killing the app mid-write and confirming the original file is uncorrupted.
+- AC-4.1: `baseFontSize` persists across launches.
+- AC-4.2: Changing font size in the settings panel updates all editor text immediately.
+- AC-4.3: Heading sizes scale proportionally (the em ratios do not change).
+- AC-4.4: Default base font size is 16px.
 
 ---
 
-### R5: Basic CodeMirror 6 Integration
+### R5: Recent Files List
+
+**As a user, I want** to quickly reopen recently edited files without navigating the filesystem.
 
 **What must be built:**
-
-A minimal, functional CodeMirror 6 editor with Markdown syntax highlighting. This is the foundation for Phase 2's live preview mode.
-
-#### 5.1 CodeMirror 6 Setup
-
-**Dependencies to install:**
-```bash
-npm install @codemirror/view @codemirror/state @codemirror/basic-setup @codemirror/lang-markdown
-```
-
-**Basic EditorView:**
-- Create an EditorView instance in `src/main.ts` or a dedicated module.
-- Attach it to a DOM element (e.g., `#editor`).
-- Enable `basicSetup` extension (includes line numbers, folding, gutter, etc.).
-- Load `markdown()` language support for syntax highlighting.
-
-#### 5.2 Markdown Syntax Highlighting
-
-**Requirements:**
-- Headings (`#`, `##`, etc.) are highlighted.
-- Bold (`**text**`), italic (`*text*`), and code inline (`` `text` ``) are highlighted.
-- Code blocks with fence markers (` ``` `) are highlighted.
-- Links (`[text](url)`) are highlighted.
-- No custom decorations or live preview hiding in Phase 1 — just basic syntax highlighting.
+- Maintain a list of up to 10 most recently opened/saved file paths in `recentFiles`.
+- When a file is opened or saved, add it to the front of the list (or move it to the front if already present).
+- If the list exceeds 10 items, drop the oldest entry.
+- Recent files are displayed in the File menu as a submenu.
+- The most recent file can be reopened via a keyboard shortcut: `Cmd-Opt-O` ("Reopen Last").
+- Stale entries (file no longer exists on disk) are shown grayed out in the menu. If the user attempts to open a stale entry, show a brief notification that the file was not found and remove it from the list.
 
 **Acceptance Criteria:**
-- A `.md` file opened in the editor displays syntax colors.
-- Editing the text updates highlighting in real-time.
-- No console errors related to CodeMirror.
+- AC-5.1: Opening a file adds it to the recent files list.
+- AC-5.2: The list never exceeds 10 entries.
+- AC-5.3: Duplicate paths are moved to the front, not duplicated.
+- AC-5.4: Recent files persist across launches.
+- AC-5.5: `Cmd-Opt-O` reopens the most recent file.
+- AC-5.6: Stale entries appear grayed out and are removed on attempted open.
 
 ---
 
-### R6: File Dialog Integration
+### R6: Theme Persistence
+
+**As a user, I want** my chosen theme to load automatically on every launch because I spent time selecting it.
 
 **What must be built:**
-
-Use Tauri's native file dialogs for Open and Save As operations.
-
-#### 6.1 File Open Dialog
-
-**Function signature (Rust):**
-```rust
-#[tauri::command]
-async fn open_file_dialog() -> Result<String, String>
-```
-
-**Behavior:**
-- Invoke `tauri::api::dialog::FileDialogBuilder` with:
-  - Default directory: user's home folder or last-opened directory.
-  - File filters: `.md` and `.txt` files.
-- Return the selected file path (absolute) on success.
-- Return `None` (or error) if the user cancels.
+- `theme.active` stores the name/identifier of the currently selected theme.
+- `theme.fallback` stores the last known-good theme. This is updated whenever a theme loads successfully. If the active theme fails to load (file missing, CSS parse error), the app falls back to `theme.fallback`. If both fail, fall back to a hardcoded default bundled with the app.
+- On launch, load the theme specified by `theme.active` before showing the window (part of the no-flash init sequence).
+- Theme changes via the Theme menu or settings panel update `theme.active` and persist immediately.
 
 **Acceptance Criteria:**
-- Clicking a button triggers the dialog.
-- User can navigate to a `.md` file and select it.
-- Selected path is returned and can be used with `read_file`.
+- AC-6.1: Selected theme persists across launches.
+- AC-6.2: If the active theme file is missing or corrupt, the app falls back to `theme.fallback`.
+- AC-6.3: If both active and fallback themes fail, the app loads the hardcoded bundled default.
+- AC-6.4: The app never crashes due to a theme loading error.
+- AC-6.5: Theme changes take effect immediately without restart.
+- AC-6.6: `theme.fallback` is updated only after a theme loads successfully.
 
-#### 6.2 File Save As Dialog
+---
 
-**Function signature (Rust):**
-```rust
-#[tauri::command]
-async fn save_file_dialog() -> Result<String, String>
-```
+### R7: Settings Panel UI
 
-**Behavior:**
-- Invoke `tauri::api::dialog::FileDialogBuilder` with:
-  - Default directory: last-saved directory or home folder.
-  - Default file name: `"untitled.md"`.
-- Return the selected file path on success.
+**As a user, I want** a clean settings panel to adjust my preferences visually, without editing JSON.
+
+**What must be built:**
+- A settings panel accessible via `Cmd-,` (standard macOS shortcut) or System Menu > Settings.
+- Style reference: Whispr Flow (https://wisprflow.ai/) -- clean, minimal, no clutter.
+- The panel is a modal overlay or a slide-in panel (Architect to decide based on app layout).
+- Phase 1 settings panel includes:
+  1. **Content Width**: A slider or numeric input (min: 500px, max: 1400px, step: 50px).
+  2. **Base Font Size**: A slider or numeric input (min: 10px, max: 28px, step: 1px).
+  3. **Theme Selection**: A list or dropdown of available themes (from themes directory).
+  4. **Recent Files**: A "Clear Recent Files" button.
+- Changes apply immediately (live preview as user adjusts).
+- A "Reset to Defaults" button restores all settings to their default values.
+- The panel does NOT include keybinding configuration (deferred to Phase 2).
 
 **Acceptance Criteria:**
-- Clicking a button triggers the dialog.
-- User can specify a new filename and location.
-- Selected path is returned and can be used with `write_file`.
+- AC-7.1: `Cmd-,` opens the settings panel.
+- AC-7.2: Content width can be adjusted and the editor updates live.
+- AC-7.3: Font size can be adjusted and the editor updates live.
+- AC-7.4: Theme can be selected from available themes.
+- AC-7.5: "Clear Recent Files" empties the recent files list.
+- AC-7.6: "Reset to Defaults" restores all settings to defaults and updates the editor immediately.
+- AC-7.7: Settings panel is dismissible (Escape key or click-outside).
+- AC-7.8: Settings panel respects the current theme (dark/light).
+
+---
+
+### R8: Settings Schema Migration
+
+**As a user, I want** my settings to survive app updates without losing any values I customized.
+
+**What must be built:**
+- The settings file includes a `"version"` field (integer, starting at 1).
+- On launch, if the file's version is less than the app's current schema version, run a migration:
+  - Add any new keys with their default values.
+  - Never overwrite existing user values.
+  - Increment the version number.
+  - Write the migrated settings file atomically.
+- Migration logic is versioned and sequential (v1 -> v2, v2 -> v3, etc.).
+
+**Acceptance Criteria:**
+- AC-8.1: A v1 settings file opened by a v2 app gains new keys with defaults; existing values are preserved.
+- AC-8.2: The version field is incremented after migration.
+- AC-8.3: Migration writes atomically (no partial state on disk).
+- AC-8.4: If migration fails, the app falls back to defaults and logs a warning (does not crash).
 
 ---
 
 ## Non-Functional Requirements
 
-### NF1: Build Reproducibility
+### NF1: Settings Load Performance
 
-- The build process must be deterministic: running `CI=true npm run tauri build` twice produces identical (bit-for-bit or functionally equivalent) artifacts.
-- All build dependencies are pinned to specific versions (no floating versions like `^1.0.0`).
+- Reading and applying settings must complete within 50ms on a modern machine. The window must not be delayed noticeably by settings I/O.
 
-### NF2: Build Speed (Development)
+### NF2: Atomic Writes for Settings
 
-- `npm run tauri dev` must launch a window within 30 seconds on a modern machine.
-- Hot reload of TypeScript files must complete within 2 seconds.
+- All settings writes use the existing temp-file-swap pattern (same as `write_file` in `commands/io.rs`). A crash or power loss during a settings save must never corrupt the settings file.
 
-### NF3: Code is Test-Ready
+### NF3: No Restart Required
 
-- Rust modules have public interfaces suitable for unit testing.
-- No monolithic `main.rs`; code is modularized by concern (e.g., `io.rs`, `commands.rs`).
-- TypeScript is organized into modules with clear exports.
+- All settings changes take effect immediately. The user never needs to restart the app to see a settings change applied.
 
-### NF4: macOS-First Experience
+### NF4: Settings Isolation
 
-- The app uses Tauri's `hide_on_close` behavior (standard macOS convention).
-- The window title bar is visible and functional.
-- No platform-specific #[cfg] blocks in Phase 1 (architecture is platform-agnostic, even if build is macOS-only).
+- Settings are stored per-app at the Tauri-standard path (`~/Library/Application Support/com.markable.app/`). They do not conflict with other apps.
 
-### NF5: Atomic File Writes
+### NF5: Graceful Degradation
 
-- All `write_file` operations use the temp-file-swap pattern.
-- If a write is interrupted (process kill, power failure), the original file remains uncorrupted.
-
-### NF6: Error Handling
-
-- All errors from Rust are returned to TypeScript with descriptive messages.
-- No panics in production code; all `Result` types are handled.
-
----
-
-## Edge Case Inventory
-
-> Every item below must be covered by a test or explicit handling. This list is the Code Reviewer's mandatory checklist for Phase 1.
-
-| # | Edge Case | Expected Behavior |
-|---|---|---|
-| EC-1 | Build with `CI=true` on non-macOS platform | Build succeeds but is skipped/documented as macOS-only. |
-| EC-2 | Build with missing `signingIdentity` in `tauri.conf.json` | Build fails with clear error message pointing to config file. |
-| EC-3 | DMG build fails even with `CI=true` | Fallback script provided; build instructions document this scenario. |
-| EC-4 | App is unsigned (no code signature) | Running `spctl --assess` returns `rejected`; documentation explains next steps. |
-| EC-5 | File path passed to `read_file` does not exist | Return error: `"File not found: <path>"`. |
-| EC-6 | File path passed to `read_file` points to a directory | Return error: `"Is a directory: <path>"`. |
-| EC-7 | User lacks read permission on file | Return error: `"Permission denied: <path>"`. |
-| EC-8 | File being read is deleted mid-operation | Return error: `"File not found: <path>"`. |
-| EC-9 | Disk is full during `write_file` | Return error: `"Disk full: insufficient space to write <path>"`; original file untouched. |
-| EC-10 | User lacks write permission on target directory | Return error: `"Permission denied: <path>"`. |
-| EC-11 | Write operation is killed/interrupted mid-swap | Original file remains uncorrupted (temp file may be orphaned). |
-| EC-12 | File path contains invalid UTF-8 sequences | Behavior is platform-dependent; document assumptions (Rust String handles UTF-8 paths on macOS). |
-| EC-13 | Temp file swap atomic rename fails on macOS | Return error: `"Write failed: atomic swap could not complete"`. |
-| EC-14 | File Open dialog is cancelled by user | Return error or empty string; TypeScript handles gracefully (no-op). |
-| EC-15 | File Save As dialog is cancelled by user | Return error; TypeScript handles gracefully (no-op). |
-| EC-16 | Multiple simultaneous `read_file` calls on the same file | All succeed (reads are concurrent and non-blocking). |
-| EC-17 | Simultaneous `read_file` and `write_file` on the same file | Read may get old or new content; no crash or corruption. |
-| EC-18 | CodeMirror initialization fails (missing DOM element) | Console error with clear message; app does not panic. |
-| EC-19 | CodeMirror fails to load markdown language plugin | Fallback to plaintext mode; console warning. |
-| EC-20 | Tauri permissions are misconfigured | Operations fail with "Permission denied" or similar; error messages guide user. |
+- If settings.json is corrupt (invalid JSON), fall back to all defaults, log a warning to console, and overwrite the corrupt file with fresh defaults on next save.
+- If settings.json is missing, create it with defaults silently.
+- The app never crashes due to settings-related errors.
 
 ---
 
 ## Technical Constraints
 
-### C1: Tauri v2 (Not v1)
-- All code must target Tauri v2 APIs.
-- No legacy Tauri v1 patterns or plugins.
+### TC-1: Rust Owns Settings I/O
 
-### C2: TypeScript Strict Mode
-- `tsconfig.json` must have `"strict": true`.
-- No implicit `any` types.
+- All settings file reads and writes happen in Rust. The frontend never directly touches the filesystem for settings.
+- Two new Tauri commands: `get_settings` (returns JSON) and `save_settings` (accepts JSON, writes atomically).
 
-### C3: Rust Edition 2021
-- Use Rust 2021 edition syntax.
-- Dependencies must support Rust 1.70+.
+### TC-2: Atomic Writes (Reuse Existing Pattern)
 
-### C4: macOS 13+
-- Target macOS 13 (Ventura) or later.
-- Do not use APIs newer than macOS 13.
+- Reuse the temp-file-swap pattern from `commands/io.rs` for settings writes.
 
-### C5: Atomic Saves are Mandatory
-- **Every** file write must use temp-file-swap pattern.
-- No direct `std::fs::write()` calls to the target file.
+### TC-3: Debounced Window State Saves
 
-### C6: Code Signing is Mandatory
-- All macOS builds must be code-signed.
-- Unsigned apps will fail Gatekeeper verification on Tahoe+.
+- Window move/resize events trigger a save, but debounced at 1000ms. The debounce timer lives on the frontend side; it calls `save_settings` via the bridge.
 
-### C7: No TODO Comments in Source
-- Deferred work must be logged in architecture spec files (`docs/specs/`), not in comments.
+### TC-4: Schema Versioning
 
-### C8: No base64 Image Embedding
-- Images are always referenced by path.
-- Tauri's `asset://` protocol will be used in Phase 2.
+- The `"version"` field is an integer. Migrations are sequential functions: `migrate_v1_to_v2()`, `migrate_v2_to_v3()`, etc.
+
+### TC-5: Settings Read Before Window Show
+
+- The existing no-flash pattern (`visible: false` -> init -> `window.show()`) must include settings read. The sequence is:
+  1. Rust reads settings from disk.
+  2. Frontend calls `get_settings` to receive the settings object.
+  3. Frontend applies settings (theme, font size, content width).
+  4. Frontend calls `window.show()`.
+
+### TC-6: Responsive Padding in CSS Only
+
+- Breakpoint-based padding is implemented with CSS media queries (or container queries), not JavaScript resize listeners. The `contentMaxWidth` setting is applied via a CSS custom property set by JavaScript.
+
+### TC-7: Serde Deserialization in Rust
+
+- Use `serde` and `serde_json` (already in Cargo.toml) for settings serialization/deserialization. Define a Rust struct with `#[derive(Serialize, Deserialize)]` that mirrors the JSON schema.
+
+### TC-8: Application Support Directory
+
+- Use Tauri's `app_data_dir()` resolver (or equivalent) to get `~/Library/Application Support/com.markable.app/`. Do not hardcode the path.
 
 ---
 
-## Acceptance Criteria
+## Scope Boundaries
 
-All of the following must be true before Phase 1 is complete:
+### In Scope (This Phase)
 
-### Build & Execution
-- [ ] `npm install` succeeds without errors or warnings.
-- [ ] `npm run tauri dev` launches a Tauri window with a working editor.
-- [ ] Hot reload works for TypeScript changes.
-- [ ] `CI=true npm run tauri build` produces a working macOS DMG (no "Damaged" errors).
-- [ ] The built app opens without Gatekeeper warnings.
-- [ ] Code signing is verified: `spctl --assess --verbose /path/to/Markable.app` returns `accepted`.
+- `settings.json` file creation, reading, writing (atomic), and schema migration.
+- Window state persistence (position, size, fullscreen, maximized).
+- Content width persistence and responsive padding breakpoints.
+- Base font size persistence with proportional heading scaling.
+- Recent files list (max 10, `Cmd-Opt-O` to reopen last, File menu submenu).
+- Theme name persistence with fallback chain (active -> fallback -> bundled default).
+- Settings panel UI (content width, font size, theme selection, clear recent files, reset to defaults).
+- Debounced window state saving (1000ms).
+- Schema versioned migration (add new keys with defaults, never overwrite user values).
+- Corrupt/missing settings file recovery.
 
-### File I/O
-- [ ] `read_file` Rust command is implemented and callable from TypeScript.
-- [ ] `write_file` Rust command is implemented with atomic swap pattern.
-- [ ] A test file can be opened via dialog and read successfully.
-- [ ] A test file can be saved via dialog and verified on disk.
-- [ ] Atomic write is tested: interrupt a write and verify original file is uncorrupted.
+### Deferred (NOT in this phase)
 
-### CodeMirror 6
-- [ ] CodeMirror 6 editor is visible and editable in the Tauri window.
-- [ ] Markdown syntax highlighting works (headings, bold, italic, code fences, links).
-- [ ] Editing text updates highlighting in real-time.
-- [ ] No console errors related to CodeMirror or Tauri.
+- **Keybinding customization** (keybindings.json, keybinding editor UI) -- deferred to Phase 2.
+- **Theme directory scanning** (listing themes from ~/Library/Application Support/Markable/themes/) -- assumed to be handled by the theming phase. This phase persists the theme name only.
+- **Settings import/export** -- not required.
+- **Settings sync across devices** -- not required.
+- **Auto-save toggle in settings** -- deferred to auto-save plugin phase.
+- **Per-document settings** (e.g., different font size per file) -- not required.
 
-### Permissions & Dialogs
-- [ ] File Open dialog appears and allows file selection.
-- [ ] File Save As dialog appears and allows filename entry.
-- [ ] `fs` and `dialog` permission scopes are configured.
+---
+
+## Edge Case Inventory
+
+> Every item below must be covered by a test or explicit handling. This list is the Code Reviewer's mandatory test checklist.
+
+| # | Edge Case | Expected Behavior |
+|---|---|---|
+| EC-1 | `settings.json` does not exist (first launch) | Create with all defaults. App launches normally. |
+| EC-2 | `settings.json` is empty (0 bytes) | Treat as corrupt. Fall back to all defaults, log warning, overwrite on next save. |
+| EC-3 | `settings.json` contains invalid JSON | Treat as corrupt. Fall back to all defaults, log warning, overwrite on next save. |
+| EC-4 | `settings.json` is valid JSON but missing keys (e.g., no `theme` field) | Merge: add missing keys with defaults, preserve existing values. |
+| EC-5 | `settings.json` has unknown/extra keys (from a newer app version or manual edit) | Preserve extra keys. Do not strip them. Forward compatibility. |
+| EC-6 | `settings.json` version is higher than app knows | Use the file as-is (best effort). Log a warning. Do not downgrade. |
+| EC-7 | `settings.json` version is lower than current | Run sequential migration. Add new keys, never overwrite user values. |
+| EC-8 | Application Support directory does not exist | Create the directory (and parents) before writing. |
+| EC-9 | Application Support directory is not writable (permissions) | Log error. Use all defaults in memory. App still launches. Settings changes are in-memory only for that session. |
+| EC-10 | Window position saved on external monitor that is now disconnected | Detect off-screen position. Reset to default: 50% primary width, 100% height, centered. |
+| EC-11 | Window position saved as negative coordinates (partially off-screen) | If less than 50px of the window is visible on any screen, reset to defaults. |
+| EC-12 | Fullscreen state saved but user changed display arrangement | Restore fullscreen on the primary display. |
+| EC-13 | Rapid window move/resize (100+ events per second) | Debounce at 1000ms. Only the final position is saved. No filesystem thrashing. |
+| EC-14 | Recent files list contains a path that no longer exists | Show grayed out in menu. If user clicks it, show notification "File not found", remove from list. |
+| EC-15 | Recent files list contains duplicate paths (data corruption) | Deduplicate on load. Keep most recent occurrence only. |
+| EC-16 | Recent files path is a directory (not a file) | Skip it. Do not display directories in recent files. |
+| EC-17 | Theme specified in `theme.active` does not exist | Fall back to `theme.fallback`. If that also fails, use bundled default. |
+| EC-18 | Theme CSS file exists but is corrupt (parse error) | Fall back to `theme.fallback`. Log warning. |
+| EC-19 | Both `theme.active` and `theme.fallback` are invalid | Use hardcoded bundled default theme. Log warning. App never crashes. |
+| EC-20 | `baseFontSize` set to extreme value (e.g., 0, -5, or 999) | Clamp to valid range on load: min 10px, max 28px. Log warning if clamping occurred. |
+| EC-21 | `contentMaxWidth` set to extreme value (e.g., 0 or 99999) | Clamp to valid range on load: min 500px, max 1400px. Log warning if clamping occurred. |
+| EC-22 | `Cmd-Opt-O` pressed with empty recent files list | No-op. Do nothing. |
+| EC-23 | Settings save fails (disk full, permissions) | Log error. Settings remain in memory. Retry on next trigger. Do not crash. |
+| EC-24 | Two settings saves triggered within debounce window | Only the final state is written. |
+| EC-25 | App crashes during settings write | Atomic write ensures either old or new file exists -- never a partial write. On next launch, whichever file survived is loaded. |
+| EC-26 | Settings panel opened while no file is open | All controls work normally. "Recent Files" section may show empty state. |
+| EC-27 | User manually edits `settings.json` with a text editor while app is running | App does not watch the file. Changes take effect on next launch. |
+| EC-28 | `Cmd-,` pressed while settings panel is already open | No-op or toggle (close the panel). Do not stack multiple panels. |
+
+---
+
+## Acceptance Criteria Summary
+
+All of the following must be true before this phase is complete:
+
+### Settings I/O
+- [ ] `settings.json` is created on first launch at the correct Application Support path.
+- [ ] `get_settings` Tauri command returns the settings object.
+- [ ] `save_settings` Tauri command writes atomically.
+- [ ] Corrupt settings file triggers fallback to defaults (no crash).
+- [ ] Missing settings file triggers creation with defaults.
+
+### Window State
+- [ ] Window position and size persist across launches.
+- [ ] Fullscreen state persists across launches.
+- [ ] Off-screen window position resets to centered defaults.
+- [ ] Window state saves are debounced at 1000ms.
+
+### Editor Settings
+- [ ] Content max-width persists and applies on launch.
+- [ ] Responsive padding breakpoints work at all window sizes.
+- [ ] Base font size persists and applies on launch.
+- [ ] Heading sizes scale proportionally from base font size.
+
+### Recent Files
+- [ ] Recently opened files appear in the File menu submenu.
+- [ ] `Cmd-Opt-O` reopens the most recently opened file.
+- [ ] List never exceeds 10 entries.
+- [ ] Stale entries are handled gracefully (grayed, removed on click).
+
+### Theme
+- [ ] Active theme name persists and loads on launch.
+- [ ] Fallback chain works: active -> fallback -> bundled default.
+- [ ] App never crashes due to theme errors.
+
+### Settings Panel
+- [ ] `Cmd-,` opens the settings panel.
+- [ ] Content width, font size, and theme are adjustable.
+- [ ] Changes apply immediately (no restart).
+- [ ] "Reset to Defaults" works.
+- [ ] Panel is dismissible via Escape or click-outside.
+
+### Schema Migration
+- [ ] Version field exists and is checked on load.
+- [ ] Migration adds new keys without overwriting user values.
+- [ ] Migration writes atomically.
 
 ### Code Quality
-- [ ] All Rust code compiles with no warnings (or documented allowances).
-- [ ] All TypeScript code passes `tsc --noEmit` (strict mode).
+- [ ] All Rust code compiles with no warnings.
+- [ ] All TypeScript code passes `tsc --noEmit`.
 - [ ] No TODO comments in source files.
-
-### Documentation
-- [ ] `docs/build-notes/macos-dmg-workaround.md` exists and is complete.
-- [ ] `tauri.conf.json` has comments explaining critical fields (signing, permissions).
-- [ ] `package.json` documents how to run dev and build commands.
+- [ ] All 28 edge cases are covered by tests or explicit handling.
 
 ---
 
-## Out of Scope for Phase 1
+## Files Expected to be Created or Modified
 
-Explicitly deferred (do NOT implement):
-
-- Live preview mode (hiding Markdown syntax) — Phase 2.
-- Multi-file tabs — Phase 2 (basic scaffolding only).
-- Settings and persistence — Phase 2.
-- Theming — Phase 2.
-- Menu system — Phase 2.
-- Export/Import — Phase 2.
-- Auto-save — Phase 2.
-- Any editor features beyond basic syntax highlighting.
-- Plugin system or architecture — Phase 2+.
-
----
-
-## Dependencies & Constraints
-
-### Required Tools
-- **Node.js** 18+ (for Vite and npm).
-- **Rust** 1.70+ (for Tauri CLI).
-- **macOS 13+** (build target; development can be on macOS 12 but targeting is 13+).
-- **Apple Developer ID** (for code signing; personal account is acceptable for development).
-- **Xcode Command Line Tools** (for code signing utilities).
-
-### Tauri Crate Versions
-- `tauri` v2.x
-- `tauri-build` v2.x
-- All other Tauri crates follow v2.x.
-
-### npm Packages
-- `@tauri-apps/api` — latest v2.x
-- `@codemirror/view`, `@codemirror/state`, `@codemirror/basic-setup`, `@codemirror/lang-markdown` — latest stable versions.
-- `vite` — latest v5.x
-
-### Known Limitations
-- **Sequoia/Tahoe DMG Compiler:** No official Tauri patch exists as of 2026-04-04. The `CI=true` workaround is the primary solution; fallback is manual `.app` + `create-dmg`.
-- **Code Signing:** Developer must have an Apple Developer ID. Temporary certificate workarounds are not supported for Phase 1 production builds.
+| File | Change |
+|---|---|
+| `src-tauri/src/commands/settings.rs` | New: Rust settings I/O (get, save, migrate, defaults) |
+| `src-tauri/src/commands/mod.rs` | Modified: export settings commands |
+| `src-tauri/src/lib.rs` | Modified: register settings commands in handler |
+| `src-tauri/capabilities/default.json` | Modified: add any needed permissions (path access) |
+| `src/lib/settings.ts` | New: TypeScript settings bridge (get, save, types) |
+| `src/settings/settings-panel.ts` | New: Settings panel UI component |
+| `src/settings/settings-panel.css` | New: Settings panel styles |
+| `src/main.ts` | Modified: load settings on init, apply before window show |
+| `src/styles.css` | Modified: responsive padding breakpoints, CSS custom properties for settings |
+| `src/editor/extensions.ts` | Modified: accept dynamic font size / content width |
+| `index.html` | Modified: settings panel DOM structure (if not injected via JS) |
+| `tests/settings.test.ts` | New: frontend settings tests |
 
 ---
 
-## Handoff to Phase 2
+## Visual Verification Checklist (for user sign-off)
 
-**Upon completion of Phase 1, the following artifacts exist:**
-
-1. **Working Tauri v2 project** with dev and build pipelines functional.
-2. **Rust command bridge** (`read_file`, `write_file`) with atomic saves.
-3. **File dialog integration** (Open, Save As).
-4. **CodeMirror 6 editor** with Markdown syntax highlighting.
-5. **Build documentation** (`docs/build-notes/macos-dmg-workaround.md`).
-6. **Test infrastructure** (basis for TDD in Phase 2).
-
-**Phase 2 builds on Phase 1 by adding:**
-- Multi-file tab support.
-- Live preview (Typora-style syntax hiding).
-- Settings and state persistence.
-- Theming.
-- Menu system.
-- Menu-driven export/import.
+- [ ] Settings panel opens via Cmd-, and looks clean (Whispr Flow style)
+- [ ] Content width slider changes editor layout in real time
+- [ ] Font size slider changes all text proportionally in real time
+- [ ] Theme selector shows available themes and switching is instant
+- [ ] Settings panel respects current theme (dark/light)
+- [ ] Close and relaunch: window reopens at same position and size
+- [ ] Close and relaunch: font size and content width are remembered
+- [ ] Close and relaunch: theme is remembered (no flash of wrong theme)
+- [ ] Recent files appear in File menu after opening files
+- [ ] Cmd-Opt-O reopens the last file
+- [ ] Disconnect external monitor, relaunch: window centers on primary display
 
 ---
 
-## Summary
-
-Phase 1 is the **infrastructure and build foundation** for Markable 2.0. It establishes a working Tauri v2 + Vite + TypeScript environment, solves the critical macOS Tahoe DMG compiler incompatibility, and provides a functional file I/O bridge from TypeScript to Rust. By the end of Phase 1, developers have a solid platform to build the editor features in Phase 2.
-
-**Phase 1 does not deliver the editor experience**; it delivers the platform on which the editor will be built.
-
----
-
-**Next step:** Activate `@software-architect` and provide this document as context for architecture design.
+**Next step:** Activate @software-architect and provide this document as context for architecture design.

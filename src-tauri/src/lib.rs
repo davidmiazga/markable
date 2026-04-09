@@ -4,7 +4,7 @@ use serde_json::json;
 mod commands;
 mod menu;
 
-pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file};
+pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file, get_settings, save_settings};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -20,7 +20,9 @@ pub fn run() {
         .on_menu_event(|app_handle, event| {
             let id = event.id().as_ref();
             match id {
-                "file-new" | "file-open" | "file-save" | "file-save-as"
+                "app-settings"
+                | "file-new" | "file-open" | "file-save" | "file-save-as"
+                | "file-reopen-last"
                 | "view-toggle-preview"
                 | "theme-next" | "theme-prev"
                 | "theme-light" | "theme-dark" | "theme-system" => {
@@ -40,7 +42,9 @@ pub fn run() {
             open_file_dialog,
             read_file,
             save_file_dialog,
-            write_file
+            write_file,
+            get_settings,
+            save_settings
         ])
         .on_window_event(|window, event| {
             // Hide-on-close: intercept the close request and hide the window

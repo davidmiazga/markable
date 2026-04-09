@@ -12,7 +12,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::about(handle, Some("About Markable"), None)?,
             &MenuItem::with_id(handle, "app-updates", "Check for Updates...", false, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "app-settings", "Settings", false, Some("CmdOrCtrl+Comma"))?,
+            &MenuItem::with_id(handle, "app-settings", "Settings", true, Some("CmdOrCtrl+Comma"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -31,6 +31,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         &[
             &MenuItem::with_id(handle, "file-new", "New", true, Some("CmdOrCtrl+N"))?,
             &MenuItem::with_id(handle, "file-open", "Open...", true, Some("CmdOrCtrl+O"))?,
+            &MenuItem::with_id(handle, "file-reopen-last", "Reopen Last", true, Some("CmdOrCtrl+Alt+O"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,

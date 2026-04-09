@@ -27,6 +27,10 @@
   --traffic-light-offset: 80px;
   --preview-max-width: 720px;
   --preview-padding: 40px;
+
+  /* Settings-driven variables (set by JavaScript) */
+  --settings-content-max-width: 900px;
+  --settings-base-font-size: 16px;
   
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -177,7 +181,7 @@ body {
    Preview Mode -- Typography & Layout
    ============================================================ */
 .preview-mode .cm-content {
-  max-width: var(--preview-max-width);
+  max-width: var(--settings-content-max-width);
   margin: 0 auto;
   padding: 24px var(--preview-padding);
 }
@@ -451,4 +455,37 @@ body {
   border: none;
   border-top: 1px solid var(--hr-color);
   margin: 16px 0;
+}
+
+/* ============================================================
+   Responsive Padding Breakpoints (R3 / TC-6)
+   Applied only in preview mode. Uses window-width media queries.
+   ============================================================ */
+
+@media (max-width: 639px) {
+  .preview-mode .cm-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 767px) {
+  .preview-mode .cm-content {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .preview-mode .cm-content {
+    padding-left: 64px;
+    padding-right: 64px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .preview-mode .cm-content {
+    padding-left: 64px;
+    padding-right: 64px;
+  }
 }

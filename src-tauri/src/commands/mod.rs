@@ -5,6 +5,8 @@
 
 pub mod dialogs;
 pub mod io;
+pub mod settings;
 
 pub use dialogs::{open_file_dialog, save_file_dialog};
 pub use io::{read_file, write_file};
+pub use settings::{get_settings, save_settings};

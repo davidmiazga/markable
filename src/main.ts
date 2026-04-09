@@ -29,6 +29,19 @@ import {
   openFileDialog,
   saveFileDialog,
 } from "./lib/bridge";
+import {
+  loadSettings,
+  applyWindowSettings,
+  applyEditorSettings,
+  updateSettingsInMemory,
+  updateSettings,
+  getCurrentSettings,
+  saveSettingsDebounced,
+  addRecentFile,
+  removeRecentFile,
+  getMostRecentFile,
+} from "./lib/settings";
+import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import "@fontsource/inter/400.css";
@@ -42,14 +55,7 @@ import "./styles.css";
 let editor: ReturnType<typeof createEditor> = null;
 let currentFilePath: string | null = null;
 let previewEnabled = true;
-let currentTheme: "light" | "dark" | "system" = "system";
 
-/**
- * Extract just the filename from a full path.
- *
- * @param path - Full file path (e.g., "/Users/me/docs/notes.md")
- * @returns Just the filename (e.g., "notes.md")
- */
 function getFileName(path: string): string {
   return path.split("/").pop() || path;
 }
@@ -62,25 +68,96 @@ function updateTitleBar() {
   }
 }
 
-function setTheme(theme: "light" | "dark" | "system") {
-  currentTheme = theme;
-  if (theme === "system") {
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
-  } else {
-    document.documentElement.setAttribute("data-theme", theme);
+// --- Theme system with persistence and fallback chain ---
+
+const BUNDLED_DEFAULT = "default-dark";
+
+function tryApplyTheme(themeName: string): boolean {
+  try {
+    const themeMap: Record<string, string> = {
+      "light": "light",
+      "default-light": "light",
+      "dark": "dark",
+      "default-dark": "dark",
+    };
+
+    if (themeName === "system") {
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
+      return true;
+    }
+
+    const dataTheme = themeMap[themeName];
+    if (dataTheme === undefined) {
+      console.warn(`Unknown theme: "${themeName}"`);
+      return false;
+    }
+
+    document.documentElement.setAttribute("data-theme", dataTheme);
+    return true;
+  } catch (err) {
+    console.error(`Error applying theme "${themeName}":`, err);
+    return false;
   }
-  console.log(`Theme: ${theme}`);
 }
 
-const themeOrder: Array<"light" | "dark" | "system"> = ["light", "dark", "system"];
+async function setTheme(themeName: string, persist = true): Promise<void> {
+  const success = tryApplyTheme(themeName);
+
+  if (success) {
+    if (persist) {
+      await updateSettings((s) => ({
+        ...s,
+        theme: { active: themeName, fallback: themeName },
+      }));
+    }
+    console.log(`Theme applied: ${themeName}`);
+    return;
+  }
+
+  // Fallback chain
+  const settings = getCurrentSettings();
+  const fallbackName = settings.theme.fallback;
+
+  if (fallbackName && fallbackName !== themeName) {
+    const fallbackSuccess = tryApplyTheme(fallbackName);
+    if (fallbackSuccess) {
+      if (persist) {
+        await updateSettings((s) => ({
+          ...s,
+          theme: { ...s.theme, active: fallbackName },
+        }));
+      }
+      console.log(`Fallback theme applied: ${fallbackName}`);
+      return;
+    }
+  }
+
+  // Both failed — use bundled default
+  console.warn(`Using bundled default theme.`);
+  tryApplyTheme(BUNDLED_DEFAULT);
+  if (persist) {
+    await updateSettings((s) => ({
+      ...s,
+      theme: { active: BUNDLED_DEFAULT, fallback: BUNDLED_DEFAULT },
+    }));
+  }
+}
+
+const themeOrder: string[] = ["default-light", "default-dark", "system"];
 
 function nextTheme() {
-  setTheme(themeOrder[(themeOrder.indexOf(currentTheme) + 1) % themeOrder.length]);
+  const current = getCurrentSettings().theme.active;
+  const idx = themeOrder.indexOf(current);
+  const next = themeOrder[(idx + 1) % themeOrder.length];
+  setTheme(next);
 }
 
 function prevTheme() {
-  setTheme(themeOrder[(themeOrder.indexOf(currentTheme) - 1 + themeOrder.length) % themeOrder.length]);
+  const current = getCurrentSettings().theme.active;
+  const idx = themeOrder.indexOf(current);
+  const prev = themeOrder[(idx - 1 + themeOrder.length) % themeOrder.length];
+  setTheme(prev);
 }
 
 function togglePreview() {
@@ -142,6 +219,7 @@ async function openFile() {
   // Update current file and title bar
   currentFilePath = path;
   updateTitleBar();
+  await addRecentFile(path);
 
   console.log(`File loaded: ${path}`);
 }
@@ -175,6 +253,7 @@ async function saveFile() {
 
   console.log(`File saved: ${currentFilePath}`);
   updateTitleBar();
+  await addRecentFile(currentFilePath);
 }
 
 /**
@@ -211,6 +290,7 @@ async function saveFileAs() {
   // Update current file path and title bar
   currentFilePath = path;
   updateTitleBar();
+  await addRecentFile(path);
 
   console.log(`File saved: ${path}`);
 }
@@ -236,11 +316,73 @@ async function showWindow() {
   }
 }
 
+async function reopenLastFile(): Promise<void> {
+  const path = getMostRecentFile();
+  if (!path) {
+    console.log("No recent files to reopen.");
+    return;
+  }
+
+  const result = await readFile(path);
+  if (!result.ok) {
+    console.warn(`Recent file not found: ${path}`);
+    await removeRecentFile(path);
+    return;
+  }
+
+  if (editor) {
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: result.value },
+    });
+  }
+  currentFilePath = path;
+  updateTitleBar();
+  console.log(`Reopened: ${path}`);
+}
+
+async function setupWindowStateListeners(): Promise<void> {
+  const appWindow = getCurrentWebviewWindow();
+
+  await appWindow.onMoved(async (event) => {
+    const pos = event.payload;
+    updateSettingsInMemory((s) => ({
+      ...s,
+      window: { ...s.window, x: pos.x, y: pos.y },
+    }));
+    saveSettingsDebounced();
+  });
+
+  await appWindow.onResized(async (event) => {
+    const sz = event.payload;
+    const isMaximized = await appWindow.isMaximized();
+    const isFullscreen = await appWindow.isFullscreen();
+
+    updateSettingsInMemory((s) => ({
+      ...s,
+      window: {
+        ...s.window,
+        width: sz.width,
+        height: sz.height,
+        maximized: isMaximized,
+        fullscreen: isFullscreen,
+      },
+    }));
+    saveSettingsDebounced();
+  });
+}
+
 /**
  * Initialize the application
  */
 async function initApp() {
   console.log("Initializing Markable 2.0...");
+
+  // Load settings from disk before any UI (TC-5: read before show)
+  const settings = await loadSettings();
+  console.log("Settings loaded, schema version:", settings.version);
+
+  // Apply window position/size before anything is visible
+  await applyWindowSettings(settings.window);
 
   // Get editor container
   const editorContainer = document.getElementById("editor");
@@ -256,18 +398,30 @@ async function initApp() {
     return;
   }
 
+  // Apply editor settings (content width + font size)
+  applyEditorSettings(settings.editor);
+
   // Preview mode starts ON — hide line numbers
   editorContainer.classList.add("preview-mode");
 
   // Auto-focus the editor so the cursor is blinking immediately
   editor.focus();
 
-  // Default to system theme
-  setTheme("system");
+  // Apply persisted theme before window.show() (no-flash)
+  await setTheme(settings.theme.active, false);
+
+  // Create settings panel (DOM injection, hidden by default)
+  createSettingsPanel((name) => setTheme(name));
+
+  // Track window move/resize for settings persistence
+  await setupWindowStateListeners();
 
   // Listen for menu events from Rust
   await listen<{ action: string }>("menu-event", (event) => {
     switch (event.payload.action) {
+      case "app-settings":
+        toggleSettingsPanel();
+        break;
       case "file-new":
         newFile();
         break;
@@ -280,6 +434,9 @@ async function initApp() {
       case "file-save-as":
         saveFileAs();
         break;
+      case "file-reopen-last":
+        reopenLastFile();
+        break;
       case "view-toggle-preview":
         togglePreview();
         break;
@@ -290,10 +447,10 @@ async function initApp() {
         prevTheme();
         break;
       case "theme-light":
-        setTheme("light");
+        setTheme("default-light");
         break;
       case "theme-dark":
-        setTheme("dark");
+        setTheme("default-dark");
         break;
       case "theme-system":
         setTheme("system");
@@ -324,6 +481,13 @@ async function initApp() {
   // Re-focus editor when window regains focus
   window.addEventListener("focus", () => {
     if (editor) editor.focus();
+  });
+
+  // Respond to OS dark/light mode changes when "system" theme is active
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (getCurrentSettings().theme.active === "system") {
+      tryApplyTheme("system");
+    }
   });
 
   updateTitleBar();
