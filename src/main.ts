@@ -24,7 +24,8 @@ import {
   indentLines,
   outdentLines,
   clearFormatting,
-  insertLink,
+  copyAsPlainText,
+  copyAsHtml,
 } from "./editor/format";
 import {
   readFile,
@@ -628,6 +629,8 @@ async function initApp() {
       case "format-outdent": if (editor) outdentLines(editor); break;
       case "format-hr": if (editor) insertHorizontalRule(editor); break;
       case "format-clear": if (editor) clearFormatting(editor); break;
+      case "edit-copy-plain": if (editor) copyAsPlainText(editor); break;
+      case "edit-copy-html": if (editor) copyAsHtml(editor); break;
 
       // EC-1: guard against editor / findWidget not yet initialized
       case "edit-find":

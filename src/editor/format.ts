@@ -7,6 +7,7 @@
 
 import { EditorView, type KeyBinding } from "@codemirror/view";
 import { EditorSelection, Prec } from "@codemirror/state";
+import { marked } from "marked";
 
 /**
  * Toggle a heading level on the current line(s).
@@ -534,7 +535,43 @@ export const formatKeymap: KeyBinding[] = [
   // AC-M1/AC-M2: Opt-Up/Down move the selected line block up or down one line.
   { key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } },
   { key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } },
+  // Cmd-Alt-C: copy as HTML; Cmd-Alt-T: copy as plain text.
+  { key: "Meta-Alt-c", mac: "Meta-Alt-c", run: (v) => { copyAsHtml(v); return true; } },
+  { key: "Meta-Alt-t", mac: "Meta-Alt-t", run: (v) => { copyAsPlainText(v); return true; } },
 ];
+
+/**
+ * Copy selected text (or full document if no selection) as plain text.
+ * Converts Markdown → HTML via marked, then strips tags via DOM textContent.
+ */
+export function copyAsPlainText(view: EditorView): void {
+  const { from, to } = view.state.selection.main;
+  const markdown = from === to
+    ? view.state.doc.toString()
+    : view.state.doc.sliceString(from, to);
+  const html = marked.parse(markdown) as string;
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  const plain = (tmp.textContent ?? tmp.innerText ?? "").trim();
+  navigator.clipboard.writeText(plain).catch((err) => {
+    console.warn("copyAsPlainText: clipboard write failed", err);
+  });
+}
+
+/**
+ * Copy selected text (or full document if no selection) as rendered HTML.
+ * Uses marked for Markdown → HTML conversion.
+ */
+export function copyAsHtml(view: EditorView): void {
+  const { from, to } = view.state.selection.main;
+  const markdown = from === to
+    ? view.state.doc.toString()
+    : view.state.doc.sliceString(from, to);
+  const html = marked.parse(markdown) as string;
+  navigator.clipboard.writeText(html).catch((err) => {
+    console.warn("copyAsHtml: clipboard write failed", err);
+  });
+}
 
 /** Remove all markdown formatting from selected lines. */
 export function clearFormatting(view: EditorView) {

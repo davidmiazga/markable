@@ -189,6 +189,8 @@ pub fn run() {
                 // frontend hide() call fires via the standard menu-event pathway.
                 | "file-close-all"
                 | "edit-paste-link"
+                | "edit-copy-plain"
+                | "edit-copy-html"
                 | "view-toggle-preview"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"

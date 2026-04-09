@@ -65,6 +65,8 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::cut(handle, None)?,
             &PredefinedMenuItem::copy(handle, None)?,
+            &MenuItem::with_id(handle, "edit-copy-plain", "Copy As Plain Text", true, Some("CmdOrCtrl+Alt+T"))?,
+            &MenuItem::with_id(handle, "edit-copy-html", "Copy As HTML", true, Some("CmdOrCtrl+Alt+C"))?,
             &PredefinedMenuItem::paste(handle, None)?,
             &MenuItem::with_id(handle, "edit-paste-link", "Paste Link", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(handle)?,
