@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod commands;
 mod menu;
 
-pub use commands::{open_file_dialog, read_file, save_file_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
+pub use commands::{open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -184,7 +184,7 @@ pub fn run() {
             let id = event.id().as_ref();
             let forward = match id {
                 "app-settings"
-                | "file-new" | "file-open" | "file-save" | "file-save-as"
+                | "file-new" | "file-open" | "file-save" | "file-save-as" | "file-export"
                 | "view-toggle-preview"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"
@@ -213,6 +213,7 @@ pub fn run() {
             open_file_dialog,
             read_file,
             save_file_dialog,
+            save_html_dialog,
             write_file,
             get_settings,
             save_settings,

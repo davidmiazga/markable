@@ -49,6 +49,7 @@ import {
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
+import { exportAsHtml } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import "@fontsource/inter/400.css";
@@ -546,6 +547,12 @@ async function initApp() {
         break;
       case "file-save-as":
         saveFileAs();
+        break;
+      case "file-export":
+        // FR-2.2: void-prefix keeps the async call from producing an unhandled
+        // promise in the synchronous switch/event-listener context.
+        // AC-20: exportAsHtml never modifies currentFilePath.
+        void exportAsHtml(editor, currentFilePath);
         break;
       case "view-toggle-preview":
         togglePreview();

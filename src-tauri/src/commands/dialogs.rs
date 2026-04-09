@@ -80,3 +80,44 @@ pub async fn save_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, S
         format!("File dialog failed: {}", e)
     })
 }
+
+/// Save file dialog for exporting as HTML.
+///
+/// # Arguments
+/// * `app` - Tauri AppHandle for dialog access
+/// * `suggested_filename` - Pre-populated filename in the dialog (e.g. "notes.html")
+///
+/// # Returns
+/// * `Ok(Some(path))` - User selected save location (absolute path as string)
+/// * `Ok(None)` - User cancelled the dialog
+/// * `Err(String)` - Dialog failed (rare)
+///
+/// # Dialog Behavior
+/// - Starts in user's home directory
+/// - Default filename: value of `suggested_filename`
+/// - Primary filter: HTML Files (.html, .htm)
+/// - Secondary filter: All Files (*)
+#[tauri::command]
+pub async fn save_html_dialog(
+    app: tauri::AppHandle,
+    suggested_filename: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = mpsc::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("HTML Files", &["html", "htm"])
+        .add_filter("All Files", &["*"])
+        .set_file_name(&suggested_filename)
+        .save_file(move |path| {
+            let path_string = path.map(|p| p.to_string());
+            let _ = tx.send(path_string);
+        });
+
+    rx.recv().map_err(|e| {
+        eprintln!("save_html_dialog error: {}", e);
+        format!("File dialog failed: {}", e)
+    })
+}

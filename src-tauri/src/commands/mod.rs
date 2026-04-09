@@ -8,7 +8,7 @@ pub mod io;
 pub mod settings;
 pub mod themes;
 
-pub use dialogs::{open_file_dialog, save_file_dialog};
+pub use dialogs::{open_file_dialog, save_file_dialog, save_html_dialog};
 pub use io::{read_file, write_file};
 pub use settings::{get_settings, save_settings};
 pub use themes::{list_themes, read_theme_css};

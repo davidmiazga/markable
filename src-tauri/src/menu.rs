@@ -44,7 +44,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "file-save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "file-export", "Export", false, Some("CmdOrCtrl+Alt+E"))?,
+            &MenuItem::with_id(handle, "file-export", "Export as HTML...", true, Some("CmdOrCtrl+Alt+E"))?,
             &MenuItem::with_id(handle, "file-import", "Import", false, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::close_window(handle, Some("Close"))?,

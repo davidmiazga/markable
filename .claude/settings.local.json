@@ -68,7 +68,10 @@
       "Bash(npm ls:*)",
       "Bash(npm info:*)",
       "Bash(python3:*)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "WebFetch(domain:marked.js.org)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(grep '\"\"marked\"\"' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/package.json)"
     ]
   }
 }
