@@ -300,6 +300,54 @@ function handleOrderedItem(
   }
 }
 
+function handleLink(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  decorations: Range<Decoration>[]
+) {
+  const cursor = node.node.cursor();
+  if (!cursor.firstChild()) return;
+
+  // Walk children collecting LinkMark positions and URL range
+  let openBracket: { from: number; to: number } | null = null;
+  let closeBracket: { from: number; to: number } | null = null;
+  let urlEnd = -1;
+
+  do {
+    if (cursor.name === "LinkMark") {
+      const ch = state.doc.sliceString(cursor.from, cursor.to);
+      if (ch === "[" && !openBracket) {
+        openBracket = { from: cursor.from, to: cursor.to };
+      } else if (ch === "]" && !closeBracket) {
+        closeBracket = { from: cursor.from, to: cursor.to };
+      } else {
+        // "(" or ")" — hide
+        decorations.push(Decoration.replace({}).range(cursor.from, cursor.to));
+      }
+    } else if (cursor.name === "URL" || cursor.name === "LinkTitle") {
+      if (urlEnd < cursor.to) urlEnd = cursor.to;
+      decorations.push(Decoration.replace({}).range(cursor.from, cursor.to));
+    }
+  } while (cursor.nextSibling());
+
+  if (!openBracket || !closeBracket) return;
+
+  // Hide the opening [
+  decorations.push(Decoration.replace({}).range(openBracket.from, openBracket.to));
+
+  // Hide from closing ] to end of (...) — covers ](url) together
+  const hideFrom = closeBracket.from;
+  const hideTo = urlEnd > 0 ? node.to : closeBracket.to;
+  decorations.push(Decoration.replace({}).range(hideFrom, hideTo));
+
+  // Style the link text
+  const textFrom = openBracket.to;
+  const textTo = closeBracket.from;
+  if (textFrom < textTo) {
+    decorations.push(Decoration.mark({ class: "cm-live-link" }).range(textFrom, textTo));
+  }
+}
+
 function handleHorizontalRule(
   node: SyntaxNodeRef,
   state: EditorState,
@@ -355,6 +403,9 @@ function buildDecorations(view: EditorView): DecorationSet {
           } else {
             handleBulletItem(node, state, decorations);
           }
+        } else if (name === "Link") {
+          handleLink(node, state, decorations);
+          return false; // don't descend into link children
         } else if (name === "HorizontalRule") {
           handleHorizontalRule(node, state, decorations);
         } else if (name === "FencedCode") {

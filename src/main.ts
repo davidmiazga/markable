@@ -601,13 +601,24 @@ async function initApp() {
       case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
       case "format-highlight": if (editor) toggleInlineWrap(editor, "=="); break;
       case "format-link":
-        // AC-L6: menu path calls the same insertLink function as the Cmd-K keymap.
-        // EC-L6: guard ensures the editor is initialised before calling.
-        // void prefix: insertLink returns Promise<void>; we do not await it in the
-        // synchronous event listener (same pattern as file-export above).
+      case "edit-paste-link": {
         if (!editor) break;
-        void insertLink(editor);
+        const { from, to } = editor.state.selection.main;
+        if (from !== to) {
+          const label = editor.state.doc.sliceString(from, to);
+          const insert = `[${label}]()`;
+          editor.dispatch({
+            changes: { from, to, insert },
+            selection: { anchor: from + insert.length - 1 },
+          });
+        } else {
+          editor.dispatch({
+            changes: { from, to, insert: `[]()` },
+            selection: { anchor: from + 1 },
+          });
+        }
         break;
+      }
       case "format-code-fence": if (editor) insertCodeFence(editor); break;
       case "format-quote": if (editor) toggleLinePrefix(editor, "> "); break;
       case "format-bullet-list": if (editor) toggleLinePrefix(editor, "- "); break;

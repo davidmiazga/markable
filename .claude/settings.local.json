@@ -72,7 +72,8 @@
       "WebFetch(domain:marked.js.org)",
       "WebFetch(domain:www.npmjs.com)",
       "Bash(grep '\"\"marked\"\"' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/package.json)",
-      "Bash(grep -n \"EditorView\\\\|makeView\\\\|EditorState\" tests/*.test.ts)"
+      "Bash(grep -n \"EditorView\\\\|makeView\\\\|EditorState\" tests/*.test.ts)",
+      "Bash(git log:*)"
     ]
   }
 }

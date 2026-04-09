@@ -314,6 +314,12 @@ body {
   text-decoration: line-through;
 }
 
+.cm-live-link {
+  color: var(--link-color);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .cm-live-highlight {
   background-color: hsla(55, 97%, 60%, 0.4);
   border-radius: 3px;

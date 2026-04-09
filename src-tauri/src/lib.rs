@@ -188,6 +188,7 @@ pub fn run() {
                 // AC-C1/AC-C3: file-close-all is explicitly forwarded so the
                 // frontend hide() call fires via the standard menu-event pathway.
                 | "file-close-all"
+                | "edit-paste-link"
                 | "view-toggle-preview"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"

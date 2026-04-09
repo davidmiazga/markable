@@ -6,6 +6,7 @@
  */
 
 import { EditorView, type KeyBinding } from "@codemirror/view";
+import { EditorSelection, Prec } from "@codemirror/state";
 
 /**
  * Toggle a heading level on the current line(s).
@@ -294,9 +295,6 @@ export function outdentLines(view: EditorView) {
  * @returns Promise that resolves after the transaction is dispatched.
  */
 export async function insertLink(view: EditorView): Promise<void> {
-  // Regex accepts http:// and https:// URLs; anything else is treated as plain text.
-  const URL_RE = /^https?:\/\/\S+/;
-
   let url = "";
   try {
     const raw = await navigator.clipboard.readText();
@@ -352,6 +350,43 @@ export async function insertLink(view: EditorView): Promise<void> {
 
   view.focus();
 }
+
+/** URL regex shared by insertLink and pasteURLHandler. */
+const URL_RE = /^https?:\/\/\S+/;
+
+/**
+ * CM6 paste interceptor at highest priority.
+ *
+ * Must run BEFORE CM6's built-in paste handler (which calls doPaste()
+ * and would overwrite our transaction). Prec.highest ensures this.
+ * preventDefault() stops CM6's handler from also firing.
+ */
+export const pasteURLHandler = Prec.highest(
+  EditorView.domEventHandlers({
+    paste(event: ClipboardEvent, view: EditorView) {
+      const data = event.clipboardData;
+      if (!data) return false;
+      const text = (data.getData("text/plain") || "").trim();
+      if (!URL_RE.test(text)) return false;
+
+      const { from, to } = view.state.selection.main;
+      if (from === to) return false;
+
+      event.preventDefault();
+      const label = view.state.doc.sliceString(from, to);
+      const inserted = `[${label}](${text})`;
+      const endPos = from + inserted.length;
+
+      view.dispatch({
+        changes: { from, to, insert: inserted },
+        selection: EditorSelection.cursor(endPos),
+        userEvent: "input.paste",
+        scrollIntoView: true,
+      });
+      return true;
+    },
+  })
+);
 
 /**
  * Move the line(s) covered by the primary selection one position upward.
@@ -478,8 +513,24 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },
   { key: "Meta-Shift-\\", mac: "Meta-Shift-\\", run: (v) => { clearFormatting(v); return true; } },
-  // AC-L1–AC-L4: Cmd-K triggers insertLink for all four selection/clipboard cases. The void prefix satisfies CM6's synchronous run contract (async clipboard read).
-  { key: "Meta-k", mac: "Meta-k", run: (v) => { void insertLink(v); return true; } },
+  // Cmd-K: wrap selection with [](), cursor between parens for URL paste.
+  { key: "Meta-k", mac: "Meta-k", run: (v) => {
+    const { from, to } = v.state.selection.main;
+    if (from !== to) {
+      const label = v.state.doc.sliceString(from, to);
+      const insert = `[${label}]()`;
+      v.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length - 1 },
+      });
+    } else {
+      v.dispatch({
+        changes: { from, to, insert: `[]()` },
+        selection: { anchor: from + 1 },
+      });
+    }
+    return true;
+  }},
   // AC-M1/AC-M2: Opt-Up/Down move the selected line block up or down one line.
   { key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } },
   { key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } },

@@ -14,7 +14,7 @@ import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { search, searchKeymap } from "@codemirror/search";
 import { livePreviewExtension } from "./live-preview";
-import { formatKeymap } from "./format";
+import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
@@ -119,6 +119,7 @@ export function buildExtensions(): Extension[] {
 
   extensions.push(EditorView.lineWrapping);
   extensions.push(Prec.high(keymap.of(formatKeymap)));
+  extensions.push(pasteURLHandler);
 
   // TC-2: search() registers the searchState StateField required by
   // setSearchQuery, findNext, findPrevious, replaceNext, replaceAll.

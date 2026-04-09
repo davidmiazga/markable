@@ -66,6 +66,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::cut(handle, None)?,
             &PredefinedMenuItem::copy(handle, None)?,
             &PredefinedMenuItem::paste(handle, None)?,
+            &MenuItem::with_id(handle, "edit-paste-link", "Paste Link", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::select_all(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -104,11 +105,6 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "format-underline", "Underline", true, Some("CmdOrCtrl+U"))?,
             &MenuItem::with_id(handle, "format-strikethrough", "Strikethrough", true, Some("CmdOrCtrl+Shift+X"))?,
             &MenuItem::with_id(handle, "format-highlight", "Highlight", true, Some("CmdOrCtrl+Shift+H"))?,
-            &PredefinedMenuItem::separator(handle)?,
-            // AC-L5: "Insert Link..." appears in the Format menu with CmdOrCtrl+K accelerator.
-            // The "format-link" event ID is automatically forwarded by the
-            // `starts_with("format-")` catch-all arm in lib.rs on_menu_event.
-            &MenuItem::with_id(handle, "format-link", "Insert Link...", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "format-code-fence", "Code Fence", true, Some("CmdOrCtrl+Shift+C"))?,
             &MenuItem::with_id(handle, "format-quote", "Quote", true, Some("CmdOrCtrl+Shift+."))?,
