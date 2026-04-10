@@ -353,6 +353,35 @@ async function openFile() {
 }
 
 /**
+ * Load a file by absolute path (no dialog).
+ * Used when Rust opens the file dialog itself (hidden-window case)
+ * and sends the selected path via the "open-file-path" event.
+ */
+async function openFileByPath(path: string): Promise<void> {
+  const readResult = await readFile(path);
+  if (!readResult.ok) {
+    alert(`Error opening file: ${readResult.error.message}`);
+    return;
+  }
+
+  if (editor) {
+    findWidget?.close();
+    findWidget?.clearQuery();
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: readResult.value },
+      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
+    });
+  }
+
+  isReadOnly = false;
+  currentFilePath = path;
+  updateTitleBar();
+  await addRecentFile(path);
+  await refreshRecentFilesMenu();
+  console.log(`File loaded (by path): ${path}`);
+}
+
+/**
  * Save editor contents to file
  */
 async function saveFile() {
@@ -517,7 +546,10 @@ function handleAction(action: string): void {
     case "file-open":       void openFile();          break;
     case "file-save":       void saveFile();          break;
     case "file-save-as":    void saveFileAs();        break;
-    case "file-close-all":  void getCurrentWebviewWindow().hide(); break;
+    case "file-close-all":
+      // Clear editor state. Rust already hid the window before emitting this.
+      newFile();
+      break;
     case "file-import":     void openFile();          break;
     case "file-export":     void exportAsHtml(editor, currentFilePath); break;
     case "view-toggle-preview": togglePreview();      break;
@@ -670,8 +702,15 @@ async function initApp() {
   await setupWindowStateListeners();
 
   // Listen for menu events from Rust
-  await listen<{ action: string }>("menu-event", (event) => {
-    handleAction(event.payload.action);
+  await listen<{ action: string; path?: string }>("menu-event", (event) => {
+    const { action, path } = event.payload;
+    // "open-file-path" is emitted by Rust when it opens the file dialog itself
+    // (hidden-window case) and the user selects a file.
+    if (action === "open-file-path" && path) {
+      void openFileByPath(path);
+    } else {
+      handleAction(action);
+    }
   });
 
   // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom

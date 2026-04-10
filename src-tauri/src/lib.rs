@@ -6,6 +6,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod commands;
 mod menu;
 
+/// Set the macOS NSWindow alpha (opacity). 0.0 = invisible, 1.0 = fully opaque.
+/// Used to hide the window from the user while macOS/rfd force it on-screen
+/// during file dialog presentation.
+#[cfg(target_os = "macos")]
+fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: f64) {
+    if let Ok(ptr) = window.ns_window() {
+        unsafe {
+            let ns_window = ptr as *const objc2_app_kit::NSWindow;
+            (*ns_window).setAlphaValue(alpha as _);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
+
 pub use commands::{open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
 
 /// Read a bundled help resource file by filename.
@@ -217,15 +233,56 @@ pub fn run() {
                 }
             };
             if forward {
-                // Ensure the window is visible before emitting — the JS listener
-                // won't receive events if the webview is hidden (macOS hide-on-close).
+                let mut handled = false;
+
                 if let Some(window) = app_handle.get_webview_window("main") {
-                    if !window.is_visible().unwrap_or(true) {
+                    let is_hidden = !window.is_visible().unwrap_or(true);
+
+                    // Special case: file-open / file-import while window is hidden.
+                    // macOS + rfd's FocusManager will force our window on-screen when
+                    // NSOpenPanel is presented. We counter this by setting the window's
+                    // alpha to 0 (invisible) before opening the dialog.
+                    if is_hidden && (id == "file-open" || id == "file-import") {
+                        use tauri_plugin_dialog::DialogExt;
+
+                        set_window_alpha(&window, 0.0);
+
+                        let app_clone = app_handle.clone();
+                        app_clone.dialog()
+                            .file()
+                            .add_filter("Markdown", &["md"])
+                            .add_filter("Text", &["txt"])
+                            .add_filter("All Files", &["*"])
+                            .pick_file(move |path| {
+                                if let Some(w) = app_clone.get_webview_window("main") {
+                                    if let Some(p) = path {
+                                        // File selected → restore, show, load
+                                        set_window_alpha(&w, 1.0);
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                        let _ = app_clone.emit("menu-event",
+                                            json!({ "action": "open-file-path", "path": p.to_string() }));
+                                    } else {
+                                        // Cancelled → restore alpha, re-hide
+                                        set_window_alpha(&w, 1.0);
+                                        let _ = w.hide();
+                                    }
+                                }
+                            });
+                        handled = true;
+                    }
+
+                    // Normal path: show window before emitting — JS listener
+                    // won't receive events if the webview is hidden.
+                    if !handled && is_hidden {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
                 }
-                let _ = app_handle.emit("menu-event", json!({ "action": id }));
+
+                if !handled {
+                    let _ = app_handle.emit("menu-event", json!({ "action": id }));
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -250,20 +307,16 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                // Tell JS to clear the editor so it's blank if the window reappears
+                let _ = window.app_handle().emit("menu-event", json!({ "action": "file-close-all" }));
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            // Handle macOS dock icon re-activation:
-            // When the app is "resumed" (dock icon clicked while all windows hidden),
-            // find the main window and show it.
-            if let tauri::RunEvent::Resumed = event {
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
+        .run(|_app_handle, _event| {
+            // Resumed / Reopen: do nothing. The window stays hidden until the
+            // user explicitly opens a file (File > Open) or creates one (File > New).
+            // The macOS menu bar is always accessible without a visible window.
         });
 }
 
