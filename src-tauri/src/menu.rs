@@ -45,7 +45,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-export", "Export as HTML...", true, Some("CmdOrCtrl+Alt+E"))?,
-            &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, None::<&str>)?,
+            &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, Some("CmdOrCtrl+Alt+I"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::close_window(handle, Some("Close"))?,
             // AC-C2: "Close All" sits directly below "Close" with CmdOrCtrl+Shift+W.
