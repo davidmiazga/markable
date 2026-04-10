@@ -14,7 +14,7 @@ import { HighlightExtension } from "./highlight-ext";
 import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { search, searchKeymap } from "@codemirror/search";
-import { livePreviewExtension } from "./live-preview";
+import { livePreviewExtension, tablePreviewField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 
@@ -76,7 +76,7 @@ const themeHighlight = HighlightStyle.define([
 ]);
 
 /** All preview-mode extensions bundled together. */
-export const previewExtensions: Extension = [livePreviewExtension, previewTheme];
+export const previewExtensions: Extension = [livePreviewExtension, tablePreviewField, previewTheme];
 
 /** Compartment that holds the live preview extensions (toggleable). */
 export const previewCompartment = new Compartment();

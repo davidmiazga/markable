@@ -6,9 +6,10 @@ import {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { EditorState, Range } from "@codemirror/state";
+import { EditorState, Range, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNodeRef } from "@lezer/common";
+import { marked } from "marked";
 
 class CheckboxWidget extends WidgetType {
   constructor(private checked: boolean) {
@@ -46,6 +47,54 @@ class HorizontalRuleWidget extends WidgetType {
 }
 
 
+
+class TableWidget extends WidgetType {
+  constructor(private markdown: string) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const lines = this.markdown.split("\n").filter((l) => l.trim().length > 0);
+    const isDelim = (line: string) => /^[\|\s:\-]+$/.test(line.trim());
+    const parseCells = (line: string): string[] => {
+      const parts = line.split("|");
+      if (parts[0].trim() === "") parts.shift();
+      if (parts.length && parts[parts.length - 1].trim() === "") parts.pop();
+      return parts;
+    };
+
+    const table = document.createElement("table");
+    table.className = "cm-live-table";
+    let thead: HTMLTableSectionElement | null = null;
+    let tbody: HTMLTableSectionElement | null = null;
+    let inHeader = true;
+
+    for (const line of lines) {
+      if (isDelim(line)) { inHeader = false; continue; }
+      const cells = parseCells(line);
+      const tr = document.createElement("tr");
+      for (const cell of cells) {
+        const td = inHeader ? document.createElement("th") : document.createElement("td");
+        td.innerHTML = marked.parseInline(cell.trim()) as string;
+        tr.appendChild(td);
+      }
+      if (inHeader) {
+        if (!thead) { thead = document.createElement("thead"); table.appendChild(thead); }
+        thead.appendChild(tr);
+      } else {
+        if (!tbody) { tbody = document.createElement("tbody"); table.appendChild(tbody); }
+        tbody.appendChild(tr);
+      }
+    }
+    return table;
+  }
+
+  eq(other: TableWidget): boolean {
+    return this.markdown === other.markdown;
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
 
 class CopyButtonWidget extends WidgetType {
   constructor(private code: string) {
@@ -350,6 +399,40 @@ function handleLink(
   }
 }
 
+
+function buildTableDecorations(state: EditorState): DecorationSet {
+  const activeLines = getActiveLines(state);
+  const decorations: Range<Decoration>[] = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "Table") return;
+      const startLine = state.doc.lineAt(node.from).number;
+      const endLine = state.doc.lineAt(node.to).number;
+      for (let ln = startLine; ln <= endLine; ln++) {
+        if (activeLines.has(ln)) return;
+      }
+      const markdown = state.doc.sliceString(node.from, node.to);
+      decorations.push(
+        Decoration.replace({ widget: new TableWidget(markdown), block: true })
+          .range(node.from, node.to)
+      );
+      return false;
+    },
+  });
+  return Decoration.set(decorations, true);
+}
+
+export const tablePreviewField = StateField.define<DecorationSet>({
+  create(state) { return buildTableDecorations(state); },
+  update(deco, tr) {
+    if (tr.docChanged || tr.selection ||
+        syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+      return buildTableDecorations(tr.state);
+    }
+    return deco.map(tr.changes);
+  },
+  provide(f) { return EditorView.decorations.from(f); },
+});
 
 function handleHorizontalRule(
   node: SyntaxNodeRef,

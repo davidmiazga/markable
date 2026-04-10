@@ -513,12 +513,11 @@ body {
   border: 1px solid var(--border-color);
   padding: 5px 12px;
   text-align: left;
-  vertical-align: top;
 }
 
 .cm-live-table th {
-  font-weight: 600;
   background: var(--code-bg);
+  font-weight: 600;
 }
 
 /* ============================================================
