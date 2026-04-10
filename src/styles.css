@@ -326,6 +326,18 @@ body {
   padding: 1px 0;
 }
 
+.cm-live-superscript {
+  vertical-align: super;
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.cm-live-subscript {
+  vertical-align: sub;
+  font-size: 0.75em;
+  line-height: 0;
+}
+
 [data-theme="dark"] .cm-live-highlight {
   background-color: hsla(55, 80%, 40%, 0.35);
 }

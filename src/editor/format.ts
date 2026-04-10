@@ -621,6 +621,10 @@ export const formatKeymap: KeyBinding[] = [
   // Cmd-Alt-C: copy as HTML; Cmd-Alt-T: copy as plain text.
   { key: "Meta-Alt-c", mac: "Meta-Alt-c", run: (v) => { copyAsHtml(v); return true; } },
   { key: "Meta-Alt-t", mac: "Meta-Alt-t", run: (v) => { copyAsPlainText(v); return true; } },
+  // Superscript (^), Subscript (~), Inline Math ($), Block Math ($$).
+  { key: "Meta-Shift-6", mac: "Meta-Shift-6", run: (v) => { toggleInlineWrap(v, "^"); return true; } },
+  { key: "Meta-Shift-9", mac: "Meta-Shift-9", run: (v) => { toggleInlineWrap(v, "~"); return true; } },
+  { key: "Meta-Shift-m", mac: "Meta-Shift-m", run: (v) => { insertInlineMath(v); return true; } },
 ];
 
 /**
@@ -693,4 +697,37 @@ export function clearFormatting(view: EditorView) {
     view.dispatch({ changes });
     view.focus();
   }
+}
+
+/** Wrap selection (or cursor) with inline math: $...$. Cursor placed inside. */
+export function insertInlineMath(view: EditorView): void {
+  const { from, to } = view.state.selection.main;
+  if (from !== to) {
+    const sel = view.state.doc.sliceString(from, to);
+    const insert = `$${sel}$`;
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: from + insert.length - 1 },
+    });
+  } else {
+    view.dispatch({
+      changes: { from, to, insert: "$$" },
+      selection: { anchor: from + 1 },
+    });
+  }
+  view.focus();
+}
+
+/** Insert a block math fence: $$\n\n$$. Cursor placed on inner blank line. */
+export function insertMathBlock(view: EditorView): void {
+  const { from } = view.state.selection.main;
+  const line = view.state.doc.lineAt(from);
+  const onEmpty = line.text.trim() === "";
+  const insert = onEmpty ? "$$\n\n$$\n" : "\n$$\n\n$$\n";
+  const pos = onEmpty ? line.from : from;
+  view.dispatch({
+    changes: { from: pos, to: pos, insert },
+    selection: { anchor: pos + insert.indexOf("\n") + 1 },
+  });
+  view.focus();
 }

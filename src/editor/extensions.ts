@@ -9,6 +9,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
+import { Superscript, Subscript } from "@lezer/markdown";
 import { HighlightExtension } from "./highlight-ext";
 import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -112,7 +113,7 @@ export function buildExtensions(): Extension[] {
   const extensions: Extension[] = [];
 
   try {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [HighlightExtension] }));
+    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [HighlightExtension, Superscript, Subscript] }));
   } catch (error) {
     console.warn("Failed to load Markdown extension:", error);
   }

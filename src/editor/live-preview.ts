@@ -126,7 +126,7 @@ function handleInlineMarkers(
   const cursor = node.node.cursor();
   if (cursor.firstChild()) {
     do {
-      if (cursor.name === "EmphasisMark" || cursor.name === "CodeMark" || cursor.name === "StrikethroughMark" || cursor.name === "HighlightMark") {
+      if (cursor.name === "EmphasisMark" || cursor.name === "CodeMark" || cursor.name === "StrikethroughMark" || cursor.name === "HighlightMark" || cursor.name === "SuperscriptMark" || cursor.name === "SubscriptMark") {
         marks.push({ from: cursor.from, to: cursor.to });
       }
     } while (cursor.nextSibling());
@@ -392,6 +392,10 @@ function buildDecorations(view: EditorView): DecorationSet {
           handleInlineMarkers(node, decorations, "cm-live-strikethrough");
         } else if (name === "Highlight") {
           handleInlineMarkers(node, decorations, "cm-live-highlight");
+        } else if (name === "Superscript") {
+          handleInlineMarkers(node, decorations, "cm-live-superscript");
+        } else if (name === "Subscript") {
+          handleInlineMarkers(node, decorations, "cm-live-subscript");
         } else if (name === "Blockquote") {
           handleBlockquote(node, state, activeLines, decorations);
           return false; // don't descend, we handle children ourselves
