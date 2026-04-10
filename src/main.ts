@@ -27,6 +27,8 @@ import {
   copyAsPlainText,
   copyAsHtml,
   pasteWithoutFormatting,
+  insertImage,
+  insertTable,
 } from "./editor/format";
 import {
   readFile,
@@ -602,6 +604,8 @@ async function initApp() {
       case "format-underline": if (editor) toggleInlineWrap(editor, "__"); break;
       case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
       case "format-highlight": if (editor) toggleInlineWrap(editor, "=="); break;
+      case "format-image": if (editor) insertImage(editor); break;
+      case "format-table": if (editor) insertTable(editor); break;
       case "format-link":
       case "edit-paste-link": {
         if (!editor) break;

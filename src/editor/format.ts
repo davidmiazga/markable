@@ -43,7 +43,10 @@ export function toggleHeading(view: EditorView, level: number) {
   }
 
   if (changes.length > 0) {
+    const lastLineNum = state.doc.lineAt(state.selection.main.to).number;
     view.dispatch({ changes });
+    const newEnd = view.state.doc.line(lastLineNum).to;
+    view.dispatch({ selection: { anchor: newEnd } });
     view.focus();
   }
 }
@@ -123,7 +126,10 @@ export function toggleLinePrefix(view: EditorView, prefix: string) {
   }
 
   if (changes.length > 0) {
+    const lastLineNum = state.doc.lineAt(state.selection.main.to).number;
     view.dispatch({ changes });
+    const newEnd = view.state.doc.line(lastLineNum).to;
+    view.dispatch({ selection: { anchor: newEnd } });
     view.focus();
   }
 }
@@ -164,7 +170,10 @@ export function toggleOrderedList(view: EditorView) {
   }
 
   if (changes.length > 0) {
+    const lastLineNum = state.doc.lineAt(state.selection.main.to).number;
     view.dispatch({ changes });
+    const newEnd = view.state.doc.line(lastLineNum).to;
+    view.dispatch({ selection: { anchor: newEnd } });
     view.focus();
   }
 }
@@ -199,7 +208,10 @@ export function toggleTaskList(view: EditorView) {
   }
 
   if (changes.length > 0) {
+    const lastLineNum = state.doc.lineAt(state.selection.main.to).number;
     view.dispatch({ changes });
+    const newEnd = view.state.doc.line(lastLineNum).to;
+    view.dispatch({ selection: { anchor: newEnd } });
     view.focus();
   }
 }
@@ -225,14 +237,28 @@ export function insertCodeFence(view: EditorView) {
   view.focus();
 }
 
-/** Insert a horizontal rule below the current line. */
+/** Insert a horizontal rule with correct blank-line separation. */
 export function insertHorizontalRule(view: EditorView) {
   const state = view.state;
   const line = state.doc.lineAt(state.selection.main.from);
-  const insert = "\n\n---\n\n";
+
+  let pos: number;
+  let insert: string;
+
+  if (line.text.trim() !== "") {
+    // Cursor on a line with content — split at cursor, blank line before ---
+    pos = state.selection.main.from;
+    insert = "\n\n---\n";
+  } else {
+    // Cursor on empty line — check previous line
+    const prevHasContent = line.number > 1 && state.doc.line(line.number - 1).text.trim() !== "";
+    pos = line.from;
+    insert = prevHasContent ? "\n---\n" : "---\n";
+  }
+
   view.dispatch({
-    changes: { from: line.to, to: line.to, insert },
-    selection: { anchor: line.to + insert.length },
+    changes: { from: pos, to: pos, insert },
+    selection: { anchor: pos + insert.length },
   });
   view.focus();
 }
@@ -350,6 +376,39 @@ export async function insertLink(view: EditorView): Promise<void> {
     }
   }
 
+  view.focus();
+}
+
+/** Insert an image scaffold ![]() at cursor, or wrap selection as alt text. */
+export function insertImage(view: EditorView): void {
+  const { from, to } = view.state.selection.main;
+  if (from !== to) {
+    const alt = view.state.doc.sliceString(from, to);
+    const insert = `![${alt}]()`;
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: from + insert.length - 1 },
+    });
+  } else {
+    view.dispatch({
+      changes: { from, to, insert: `![]()` },
+      selection: { anchor: from + 2 },
+    });
+  }
+  view.focus();
+}
+
+/** Insert a 3-column Markdown table template, cursor at first data cell. */
+export function insertTable(view: EditorView): void {
+  const state = view.state;
+  const line = state.doc.lineAt(state.selection.main.from);
+  const prefix = line.text.trim() === "" ? "" : "\n\n";
+  const table = `${prefix}| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n| | | |\n`;
+  const cursorPos = line.to + prefix.length + table.indexOf("| |") + 2;
+  view.dispatch({
+    changes: { from: line.to, to: line.to, insert: table },
+    selection: { anchor: cursorPos },
+  });
   view.focus();
 }
 
@@ -525,10 +584,10 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-Shift-x", mac: "Meta-Shift-x", run: (v) => { toggleInlineWrap(v, "~~"); return true; } },
   { key: "Meta-Shift-h", mac: "Meta-Shift-h", run: (v) => { toggleInlineWrap(v, "=="); return true; } },
   { key: "Meta-Shift-c", mac: "Meta-Shift-c", run: (v) => { insertCodeFence(v); return true; } },
-  { key: "Meta-Shift-.", mac: "Meta-Shift-.", run: (v) => { toggleLinePrefix(v, "> "); return true; } },
-  { key: "Meta-Shift-l", mac: "Meta-Shift-l", run: (v) => { toggleLinePrefix(v, "- "); return true; } },
-  { key: "Meta-Shift-o", mac: "Meta-Shift-o", run: (v) => { toggleOrderedList(v); return true; } },
-  { key: "Meta-Shift-t", mac: "Meta-Shift-t", run: (v) => { toggleTaskList(v); return true; } },
+  { key: "Meta->", mac: "Meta->", run: (v) => { toggleLinePrefix(v, "> "); return true; } },
+  { key: "Meta-Shift--", mac: "Meta-Shift--", run: (v) => { toggleLinePrefix(v, "- "); return true; } },
+  { key: "Meta-Shift-1", mac: "Meta-Shift-1", run: (v) => { toggleOrderedList(v); return true; } },
+  { key: "Meta-Shift-;", mac: "Meta-Shift-;", run: (v) => { toggleTaskList(v); return true; } },
   { key: "Meta-]", mac: "Meta-]", run: (v) => { indentLines(v); return true; } },
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },
@@ -554,6 +613,9 @@ export const formatKeymap: KeyBinding[] = [
   // AC-M1/AC-M2: Opt-Up/Down move the selected line block up or down one line.
   { key: "Alt-ArrowUp",   mac: "Alt-ArrowUp",   run: (v) => { moveLineUp(v);   return true; } },
   { key: "Alt-ArrowDown", mac: "Alt-ArrowDown",  run: (v) => { moveLineDown(v); return true; } },
+  // Cmd-Shift-I: insert image scaffold. Cmd-Shift-T: insert table.
+  { key: "Meta-Shift-i", mac: "Meta-Shift-i", run: (v) => { insertImage(v); return true; } },
+  { key: "Meta-Shift-t", mac: "Meta-Shift-t", run: (v) => { insertTable(v); return true; } },
   // Cmd-Shift-V: paste without formatting (plain text only, ignores HTML/RTF).
   { key: "Meta-Alt-v", mac: "Meta-Alt-v", run: (v) => { pasteWithoutFormatting(v); return true; } },
   // Cmd-Alt-C: copy as HTML; Cmd-Alt-T: copy as plain text.
