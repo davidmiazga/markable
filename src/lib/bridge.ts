@@ -49,6 +49,14 @@ export async function readFile(path: string): Promise<FileResult<string>> {
 }
 
 /**
+ * Read a bundled help resource file by bare filename (e.g. "quickstart.md").
+ * Throws if the file cannot be read.
+ */
+export async function readResourceFile(name: string): Promise<string> {
+  return invoke<string>("read_resource_file", { name });
+}
+
+/**
  * Write file contents atomically.
  *
  * Uses temp-file-swap pattern to ensure data safety.

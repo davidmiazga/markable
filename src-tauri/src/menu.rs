@@ -189,8 +189,10 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "Help",
         true,
         &[
-            &MenuItem::with_id(handle, "help-quickstart", "Quickstart", false, None::<&str>)?,
-            &MenuItem::with_id(handle, "help-cheatsheet", "Markdown Cheatsheet", false, None::<&str>)?,
+            &MenuItem::with_id(handle, "help-quickstart", "Quickstart", true, None::<&str>)?,
+            &MenuItem::with_id(handle, "help-help", "Help", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "help-cheatsheet", "Markdown Cheatsheet", true, None::<&str>)?,
         ],
     )?;
 

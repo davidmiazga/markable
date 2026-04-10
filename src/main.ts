@@ -9,8 +9,9 @@
  * 5. Shows the window after frontend renders (no-flash pattern)
  */
 
+import { EditorView } from "@codemirror/view";
 import { createEditor } from "./editor/editor";
-import { previewCompartment, previewExtensions } from "./editor/extensions";
+import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import {
@@ -36,6 +37,7 @@ import {
 import {
   readFile,
   writeFile,
+  readResourceFile,
   openFileDialog,
   saveFileDialog,
   updateRecentFilesMenu,
@@ -71,6 +73,8 @@ import "./styles.css";
 let editor: ReturnType<typeof createEditor> = null;
 let currentFilePath: string | null = null;
 let previewEnabled = true;
+/** Set to true when a read-only help file is loaded; cleared on any editable file open. */
+let isReadOnly = false;
 /** Floating find/replace widget. Initialized in initApp() after editor is ready. */
 let findWidget: FindWidget | null = null;
 
@@ -78,9 +82,9 @@ function getFileName(path: string): string {
   return path.split("/").pop() || path;
 }
 
-function updateTitleBar() {
+function updateTitleBar(override?: string) {
   const titleEl = document.getElementById("titlebar-title");
-  const displayName = currentFilePath ? getFileName(currentFilePath) : "Untitled";
+  const displayName = override ?? (currentFilePath ? getFileName(currentFilePath) : "Untitled");
   if (titleEl) {
     titleEl.textContent = displayName;
   }
@@ -269,10 +273,36 @@ function newFile() {
     findWidget?.clearQuery();
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: "" },
+      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
     });
   }
   currentFilePath = null;
+  isReadOnly = false;
   updateTitleBar();
+}
+
+/**
+ * Open a bundled help resource file read-only inside the editor.
+ * @param filename  Bare filename, e.g. "quickstart.md"
+ * @param title     Title bar label, e.g. "Quickstart"
+ */
+async function openHelpFile(filename: string, title: string) {
+  if (!editor) return;
+  try {
+    const content = await readResourceFile(filename);
+    findWidget?.close();
+    findWidget?.clearQuery();
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: content },
+      effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
+    });
+    currentFilePath = null;
+    isReadOnly = true;
+    updateTitleBar(title);
+  } catch (e) {
+    console.error("openHelpFile error:", e);
+    alert(`Could not open help file: ${filename}\n\n${String(e)}`);
+  }
 }
 
 async function openFile() {
@@ -305,17 +335,14 @@ async function openFile() {
     // remain visible without this explicit clear.
     findWidget?.close();
     findWidget?.clearQuery();
-    const transaction = editor.state.update({
-      changes: {
-        from: 0,
-        to: editor.state.doc.length,
-        insert: content,
-      },
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: content },
+      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
     });
-    editor.dispatch(transaction);
   }
 
   // Update current file and title bar
+  isReadOnly = false;
   currentFilePath = path;
   updateTitleBar();
   await addRecentFile(path);
@@ -328,6 +355,7 @@ async function openFile() {
  * Save editor contents to file
  */
 async function saveFile() {
+  if (isReadOnly) return;
   // If no current file, use save-as dialog
   if (!currentFilePath) {
     return saveFileAs();
@@ -694,6 +722,15 @@ async function initApp() {
         }
         break;
       }
+      case "help-quickstart":
+        void openHelpFile("quickstart.md", "Quickstart");
+        break;
+      case "help-help":
+        void openHelpFile("help.md", "Help");
+        break;
+      case "help-cheatsheet":
+        void openHelpFile("markdown-cheatsheet.md", "Markdown Cheatsheet");
+        break;
     }
   });
 

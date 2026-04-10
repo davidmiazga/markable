@@ -8,6 +8,18 @@ mod menu;
 
 pub use commands::{open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
 
+/// Read a bundled help resource file by filename.
+/// Files are embedded at compile time — no AppHandle, no path resolution, cannot fail.
+#[tauri::command]
+fn read_resource_file(name: String) -> Result<String, String> {
+    match name.as_str() {
+        "quickstart.md" => Ok(include_str!("../help/quickstart.md").to_string()),
+        "help.md" => Ok(include_str!("../help/help.md").to_string()),
+        "markdown-cheatsheet.md" => Ok(include_str!("../help/markdown-cheatsheet.md").to_string()),
+        _ => Err(format!("Unknown help file: {}", name)),
+    }
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -197,7 +209,7 @@ pub fn run() {
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"
                 | "theme-light" | "theme-dark" | "theme-system" => true,
-                _ if id.starts_with("format-") || id.starts_with("recent-file-") => true,
+                _ if id.starts_with("format-") || id.starts_with("recent-file-") || id.starts_with("help-") => true,
                 _ => {
                     #[cfg(debug_assertions)]
                     eprintln!("Unhandled menu event: {}", id);
@@ -220,6 +232,7 @@ pub fn run() {
             greet,
             open_file_dialog,
             read_file,
+            read_resource_file,
             save_file_dialog,
             save_html_dialog,
             write_file,

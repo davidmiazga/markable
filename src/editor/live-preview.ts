@@ -46,6 +46,7 @@ class HorizontalRuleWidget extends WidgetType {
 }
 
 
+
 class CopyButtonWidget extends WidgetType {
   constructor(private code: string) {
     super();
@@ -348,6 +349,7 @@ function handleLink(
     decorations.push(Decoration.mark({ class: "cm-live-link" }).range(textFrom, textTo));
   }
 }
+
 
 function handleHorizontalRule(
   node: SyntaxNodeRef,

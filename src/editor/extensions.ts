@@ -81,6 +81,9 @@ export const previewExtensions: Extension = [livePreviewExtension, previewTheme]
 /** Compartment that holds the live preview extensions (toggleable). */
 export const previewCompartment = new Compartment();
 
+/** Compartment that controls editor editability (toggled for read-only help files). */
+export const editableCompartment = new Compartment();
+
 /**
  * FR-2.2 / TC-2: Suppress the CM6 built-in search panel DOM entirely.
  *
@@ -146,6 +149,7 @@ export function buildExtensions(): Extension[] {
   extensions.push(searchTheme);
   extensions.push(syntaxHighlighting(themeHighlight));
   extensions.push(previewCompartment.of(previewExtensions));
+  extensions.push(editableCompartment.of(EditorView.editable.of(true)));
 
   return extensions;
 }

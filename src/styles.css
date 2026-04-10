@@ -499,6 +499,29 @@ body {
 }
 
 /* ============================================================
+   Live Preview -- Table
+   ============================================================ */
+.cm-live-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: inherit;
+}
+
+.cm-live-table th,
+.cm-live-table td {
+  border: 1px solid var(--border-color);
+  padding: 5px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.cm-live-table th {
+  font-weight: 600;
+  background: var(--code-bg);
+}
+
+/* ============================================================
    Live Preview -- Horizontal Rule
    ============================================================ */
 .cm-line:has(.cm-live-hr) {
