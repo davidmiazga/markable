@@ -146,6 +146,8 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                     &MenuItem::with_id(handle, "format-image", "Insert Image", true, Some("CmdOrCtrl+Shift+I"))?,
                     &MenuItem::with_id(handle, "format-table", "Insert Table", true, Some("CmdOrCtrl+Shift+T"))?,
                     &PredefinedMenuItem::separator(handle)?,
+                    &MenuItem::with_id(handle, "format-front-matter", "Insert Front Matter", true, Some("CmdOrCtrl+Shift+F"))?,
+                    &PredefinedMenuItem::separator(handle)?,
                     &MenuItem::with_id(handle, "format-math-inline", "Insert Math", true, Some("CmdOrCtrl+Shift+M"))?,
                     &MenuItem::with_id(handle, "format-math-block", "Insert Math Block", true, None::<&str>)?,
                 ],

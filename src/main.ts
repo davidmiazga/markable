@@ -31,6 +31,7 @@ import {
   insertTable,
   insertInlineMath,
   insertMathBlock,
+  insertFrontMatter,
 } from "./editor/format";
 import {
   readFile,
@@ -610,6 +611,7 @@ async function initApp() {
       case "format-subscript": if (editor) toggleInlineWrap(editor, "~"); break;
       case "format-math-inline": if (editor) insertInlineMath(editor); break;
       case "format-math-block": if (editor) insertMathBlock(editor); break;
+      case "format-front-matter": if (editor) insertFrontMatter(editor); break;
       case "format-image": if (editor) insertImage(editor); break;
       case "format-table": if (editor) insertTable(editor); break;
       case "format-link":

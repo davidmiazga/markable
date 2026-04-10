@@ -326,6 +326,20 @@ body {
   padding: 1px 0;
 }
 
+/* ============================================================
+   Live Preview -- YAML Front Matter
+   ============================================================ */
+.cm-live-frontmatter-mark {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.cm-live-frontmatter {
+  color: var(--text-secondary);
+  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-size: 0.85em;
+}
+
 .cm-live-superscript {
   vertical-align: super;
   font-size: 0.75em;

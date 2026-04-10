@@ -360,11 +360,33 @@ function handleHorizontalRule(
   }).range(line.from, line.to));
 }
 
+/** Detect YAML front matter. Returns the closing fence line number, or -1 if none. */
+function detectFrontMatter(state: EditorState): number {
+  if (state.doc.lines < 3 || state.doc.line(1).text !== "---") return -1;
+  for (let i = 2; i <= state.doc.lines; i++) {
+    const t = state.doc.line(i).text;
+    if (t === "---" || t === "...") return i;
+    if (i === 2 && t === "") return -1; // empty second line → not front matter
+  }
+  return -1;
+}
+
 function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const activeLines = getActiveLines(state);
   const decorations: Range<Decoration>[] = [];
   const tree = syntaxTree(state);
+
+  // Front matter decorations (applied before the syntax tree walk)
+  const fmEnd = detectFrontMatter(state);
+  if (fmEnd > 0) {
+    for (let i = 1; i <= fmEnd; i++) {
+      if (activeLines.has(i)) continue;
+      const ln = state.doc.line(i);
+      const cls = (i === 1 || i === fmEnd) ? "cm-live-frontmatter-mark" : "cm-live-frontmatter";
+      decorations.push(Decoration.line({ class: cls }).range(ln.from));
+    }
+  }
 
   for (const { from, to } of view.visibleRanges) {
     tree.iterate({
@@ -411,6 +433,9 @@ function buildDecorations(view: EditorView): DecorationSet {
           handleLink(node, state, decorations);
           return false; // don't descend into link children
         } else if (name === "HorizontalRule") {
+          // Skip HR rendering for front matter fence lines (line 1 and closing line).
+          const lineNum = line.number;
+          if (lineNum === 1 || lineNum === fmEnd) return;
           handleHorizontalRule(node, state, decorations);
         } else if (name === "FencedCode") {
           // For multi-line blocks, check if cursor is on ANY line in the block

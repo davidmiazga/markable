@@ -625,6 +625,8 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-Shift-6", mac: "Meta-Shift-6", run: (v) => { toggleInlineWrap(v, "^"); return true; } },
   { key: "Meta-Shift-9", mac: "Meta-Shift-9", run: (v) => { toggleInlineWrap(v, "~"); return true; } },
   { key: "Meta-Shift-m", mac: "Meta-Shift-m", run: (v) => { insertInlineMath(v); return true; } },
+  // YAML front matter.
+  { key: "Meta-Shift-f", mac: "Meta-Shift-f", run: (v) => { insertFrontMatter(v); return true; } },
 ];
 
 /**
@@ -728,6 +730,34 @@ export function insertMathBlock(view: EditorView): void {
   view.dispatch({
     changes: { from: pos, to: pos, insert },
     selection: { anchor: pos + insert.indexOf("\n") + 1 },
+  });
+  view.focus();
+}
+
+/**
+ * Insert a YAML front matter block at the top of the document.
+ * If front matter already exists, moves the cursor to the first content line inside it.
+ */
+export function insertFrontMatter(view: EditorView): void {
+  const state = view.state;
+
+  // If front matter already present, move cursor inside it.
+  if (state.doc.lines >= 1 && state.doc.line(1).text === "---") {
+    for (let i = 2; i <= state.doc.lines; i++) {
+      const t = state.doc.line(i).text;
+      if (t === "---" || t === "...") {
+        const inside = state.doc.line(Math.min(2, i - 1));
+        view.dispatch({ selection: { anchor: inside.from } });
+        view.focus();
+        return;
+      }
+    }
+  }
+
+  // Prepend front matter; cursor lands on the blank content line.
+  view.dispatch({
+    changes: { from: 0, to: 0, insert: "---\n\n---\n" },
+    selection: { anchor: 4 }, // position of line 2 (after "---\n")
   });
   view.focus();
 }
