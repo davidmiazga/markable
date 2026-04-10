@@ -45,6 +45,7 @@ class HorizontalRuleWidget extends WidgetType {
   }
 }
 
+
 class CopyButtonWidget extends WidgetType {
   constructor(private code: string) {
     super();
@@ -361,12 +362,11 @@ function handleHorizontalRule(
 }
 
 /** Detect YAML front matter. Returns the closing fence line number, or -1 if none. */
-function detectFrontMatter(state: EditorState): number {
+export function detectFrontMatter(state: EditorState): number {
   if (state.doc.lines < 3 || state.doc.line(1).text !== "---") return -1;
   for (let i = 2; i <= state.doc.lines; i++) {
     const t = state.doc.line(i).text;
     if (t === "---" || t === "...") return i;
-    if (i === 2 && t === "") return -1; // empty second line → not front matter
   }
   return -1;
 }
@@ -380,11 +380,28 @@ function buildDecorations(view: EditorView): DecorationSet {
   // Front matter decorations (applied before the syntax tree walk)
   const fmEnd = detectFrontMatter(state);
   if (fmEnd > 0) {
+    // Check if cursor is anywhere inside the front matter block
+    let cursorInFM = false;
     for (let i = 1; i <= fmEnd; i++) {
-      if (activeLines.has(i)) continue;
-      const ln = state.doc.line(i);
-      const cls = (i === 1 || i === fmEnd) ? "cm-live-frontmatter-mark" : "cm-live-frontmatter";
-      decorations.push(Decoration.line({ class: cls }).range(ln.from));
+      if (activeLines.has(i)) { cursorInFM = true; break; }
+    }
+
+    if (cursorInFM) {
+      // Cursor is in the block — show raw lines with subtle styling
+      for (let i = 1; i <= fmEnd; i++) {
+        if (activeLines.has(i)) continue; // active line: show plain (no decoration)
+        const ln = state.doc.line(i);
+        const cls = (i === 1 || i === fmEnd) ? "cm-live-frontmatter-mark" : "cm-live-frontmatter";
+        decorations.push(Decoration.line({ class: cls }).range(ln.from));
+      }
+    } else {
+      // Cursor is outside — hide all front matter lines via CSS display:none.
+      // CM6's height map won't update, but front matter is always at the top
+      // so cursor-click misalignment is not a practical concern.
+      for (let i = 1; i <= fmEnd; i++) {
+        const ln = state.doc.line(i);
+        decorations.push(Decoration.line({ class: "cm-live-frontmatter-hide" }).range(ln.from));
+      }
     }
   }
 
@@ -395,6 +412,8 @@ function buildDecorations(view: EditorView): DecorationSet {
       enter(node): false | void {
         const line = state.doc.lineAt(node.from);
         if (activeLines.has(line.number)) return;
+        // Skip all syntax decorations for nodes within the front matter block
+        if (fmEnd > 0 && state.doc.lineAt(node.to).number <= fmEnd) return;
 
         const name = node.name;
 
@@ -433,9 +452,6 @@ function buildDecorations(view: EditorView): DecorationSet {
           handleLink(node, state, decorations);
           return false; // don't descend into link children
         } else if (name === "HorizontalRule") {
-          // Skip HR rendering for front matter fence lines (line 1 and closing line).
-          const lineNum = line.number;
-          if (lineNum === 1 || lineNum === fmEnd) return;
           handleHorizontalRule(node, state, decorations);
         } else if (name === "FencedCode") {
           // For multi-line blocks, check if cursor is on ANY line in the block

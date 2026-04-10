@@ -626,7 +626,7 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-Shift-9", mac: "Meta-Shift-9", run: (v) => { toggleInlineWrap(v, "~"); return true; } },
   { key: "Meta-Shift-m", mac: "Meta-Shift-m", run: (v) => { insertInlineMath(v); return true; } },
   // YAML front matter.
-  { key: "Meta-Shift-f", mac: "Meta-Shift-f", run: (v) => { insertFrontMatter(v); return true; } },
+  { key: "Meta-Shift-y", mac: "Meta-Shift-y", run: (v) => { insertFrontMatter(v); return true; } },
 ];
 
 /**

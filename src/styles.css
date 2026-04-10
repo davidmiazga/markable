@@ -329,6 +329,12 @@ body {
 /* ============================================================
    Live Preview -- YAML Front Matter
    ============================================================ */
+/* Collapsed state: front matter hidden when cursor is outside the block */
+.cm-line.cm-live-frontmatter-hide {
+  display: none;
+}
+
+/* Expanded state: individual line classes shown when cursor is in the block */
 .cm-live-frontmatter-mark {
   color: var(--text-secondary);
   opacity: 0.5;
