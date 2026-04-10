@@ -563,6 +563,9 @@ async function initApp() {
         // synchronous event listener.
         void getCurrentWebviewWindow().hide();
         break;
+      case "file-import":
+        openFile();
+        break;
       case "file-export":
         // FR-2.2: void-prefix keeps the async call from producing an unhandled
         // promise in the synchronous switch/event-listener context.
