@@ -30,6 +30,8 @@ export interface MarkableSettings {
   recentFiles: string[];
   /** TC-6: optional field — null means use default position (upper-right). */
   findWidget: FindWidgetPosition | null;
+  /** Custom keybinding overrides. Maps command-id → key string (e.g. "Cmd-Shift-O"). Absent = use default. */
+  keybindings?: Record<string, string>;
 }
 
 export interface WindowSettings {
@@ -76,6 +78,7 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
   recentFiles: [],
   /** FR-8.1: null means use default position (upper-right, below title bar). */
   findWidget: null,
+  keybindings: {},
 };
 
 // --- Window state helpers ---

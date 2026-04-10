@@ -1,0 +1,227 @@
+/* Keybindings panel reuses all settings panel styles */
+@import "../settings/settings-panel.css";
+
+#keybindings-overlay .settings-panel {
+  width: 560px;
+  height: min(80vh, 640px);  /* fixed — panel size doesn't change when filter reduces results */
+}
+
+/* --- Search bar (sits between header and scrollable body) --- */
+
+.kb-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kb-search-input {
+  flex: 1;
+  font-size: 13px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--code-bg);
+  color: var(--text-primary);
+  outline: none;
+  min-width: 0;
+}
+
+.kb-search-input:focus {
+  border-color: var(--link-color);
+}
+
+/* Key mode: styled as a key-capture badge, not a free-text field */
+.kb-search-input.kb-key-mode {
+  font-family: -apple-system, "SF Pro Display", sans-serif;
+  text-align: center;
+  cursor: default;
+  caret-color: transparent;
+  letter-spacing: 0.02em;
+}
+
+/* --- Mode toggle group (Name / Key) --- */
+
+.kb-mode-group {
+  display: flex;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.kb-mode-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.kb-mode-btn + .kb-mode-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.kb-mode-btn.active {
+  background: var(--link-color);
+  color: #fff;
+}
+
+/* --- Clear filter button --- */
+
+.kb-search-clear {
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.kb-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.kb-search-clear.hidden {
+  display: none;
+}
+
+/* --- Sections --- */
+
+.kb-section {
+  margin-bottom: 20px;
+}
+
+.kb-section-header {
+  margin: 0 0 8px 0;
+}
+
+/* --- Empty state --- */
+
+.kb-empty {
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* --- Rows --- */
+
+.kb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+}
+
+.kb-section > .kb-row:last-child {
+  border-bottom: none;
+}
+
+.kb-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.kb-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* --- Key badge --- */
+
+.kb-badge {
+  display: inline-block;
+  font-family: -apple-system, "SF Pro Display", sans-serif;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.kb-badge.kb-recording-placeholder {
+  color: var(--link-color);
+  font-style: italic;
+  min-width: 130px;
+  opacity: 0.8;
+}
+
+/* --- Conflict icon --- */
+
+.kb-conflict-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  color: #e6a817;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.kb-conflict-icon:hover {
+  color: #c48a0a;
+}
+
+.kb-row.kb-recording .kb-conflict-icon {
+  display: none;
+}
+
+/* --- Reset button --- */
+
+.kb-reset-btn {
+  font-size: 14px;
+  padding: 1px 7px;
+  line-height: 1.2;
+}
+
+/* --- Edit button --- */
+
+.kb-edit-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+}
+
+/* --- Recording state --- */
+
+.kb-row.kb-recording {
+  background: rgba(0, 120, 215, 0.05);
+  border-radius: 4px;
+  padding-left: 4px;
+  padding-right: 4px;
+  margin: 0 -4px;
+}
+
+/* --- Save/Cancel button group --- */
+
+.kb-btn-group {
+  display: flex;
+  gap: 6px;
+}
+
+.kb-save-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  background: var(--link-color);
+  color: #fff;
+  border-color: var(--link-color);
+}
+
+.kb-cancel-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+}

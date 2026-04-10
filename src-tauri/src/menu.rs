@@ -13,6 +13,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "app-updates", "Check for Updates...", false, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "app-settings", "Settings", true, Some("CmdOrCtrl+Comma"))?,
+            &MenuItem::with_id(handle, "app-keybindings", "Keyboard Shortcuts", true, Some("CmdOrCtrl+Alt+Shift+K"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -45,7 +46,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-export", "Export as HTML...", true, Some("CmdOrCtrl+Alt+E"))?,
-            &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, Some("CmdOrCtrl+Alt+I"))?,
+            &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, Some("CmdOrCtrl+Alt+Shift+I"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::close_window(handle, Some("Close"))?,
             // AC-C2: "Close All" sits directly below "Close" with CmdOrCtrl+Shift+W.

@@ -59,6 +59,7 @@ import {
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
+import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
 import { exportAsHtml } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -505,6 +506,105 @@ async function setupWindowStateListeners(): Promise<void> {
 }
 
 /**
+ * Central action dispatcher — shared by the native menu-event listener and
+ * the custom keybinding document keydown handler.
+ */
+function handleAction(action: string): void {
+  switch (action) {
+    case "app-settings":    toggleSettingsPanel();    break;
+    case "app-keybindings": toggleKeybindingsPanel(); break;
+    case "file-new":        newFile();                break;
+    case "file-open":       void openFile();          break;
+    case "file-save":       void saveFile();          break;
+    case "file-save-as":    void saveFileAs();        break;
+    case "file-close-all":  void getCurrentWebviewWindow().hide(); break;
+    case "file-import":     void openFile();          break;
+    case "file-export":     void exportAsHtml(editor, currentFilePath); break;
+    case "view-toggle-preview": togglePreview();      break;
+    case "theme-next":      nextTheme();              break;
+    case "theme-prev":      prevTheme();              break;
+    case "theme-light":     void setTheme("default-light"); break;
+    case "theme-dark":      void setTheme("default-dark");  break;
+    case "theme-system":    void setTheme("system");        break;
+    case "view-zoom-in":    void zoomIn();   break;
+    case "view-zoom-out":   void zoomOut();  break;
+    case "view-zoom-reset": void zoomReset(); break;
+    case "format-h1": if (editor) toggleHeading(editor, 1); break;
+    case "format-h2": if (editor) toggleHeading(editor, 2); break;
+    case "format-h3": if (editor) toggleHeading(editor, 3); break;
+    case "format-h4": if (editor) toggleHeading(editor, 4); break;
+    case "format-h5": if (editor) toggleHeading(editor, 5); break;
+    case "format-h6": if (editor) toggleHeading(editor, 6); break;
+    case "format-bold":          if (editor) toggleInlineWrap(editor, "**"); break;
+    case "format-italic":        if (editor) toggleInlineWrap(editor, "*");  break;
+    case "format-underline":     if (editor) toggleInlineWrap(editor, "__"); break;
+    case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
+    case "format-highlight":     if (editor) toggleInlineWrap(editor, "=="); break;
+    case "format-superscript":   if (editor) toggleInlineWrap(editor, "^");  break;
+    case "format-subscript":     if (editor) toggleInlineWrap(editor, "~");  break;
+    case "format-math-inline":   if (editor) insertInlineMath(editor);   break;
+    case "format-math-block":    if (editor) insertMathBlock(editor);    break;
+    case "format-front-matter":  if (editor) insertFrontMatter(editor);  break;
+    case "format-image":         if (editor) insertImage(editor);        break;
+    case "format-table":         if (editor) insertTable(editor);        break;
+    case "format-code-fence":    if (editor) insertCodeFence(editor);    break;
+    case "format-quote":         if (editor) toggleLinePrefix(editor, "> ");  break;
+    case "format-bullet-list":   if (editor) toggleLinePrefix(editor, "- ");  break;
+    case "format-ordered-list":  if (editor) toggleOrderedList(editor);       break;
+    case "format-task-list":     if (editor) toggleTaskList(editor);          break;
+    case "format-indent":        if (editor) indentLines(editor);   break;
+    case "format-outdent":       if (editor) outdentLines(editor);  break;
+    case "format-hr":            if (editor) insertHorizontalRule(editor); break;
+    case "format-clear":         if (editor) clearFormatting(editor);     break;
+    case "edit-paste-plain": if (editor) pasteWithoutFormatting(editor); break;
+    case "edit-copy-plain":  if (editor) copyAsPlainText(editor); break;
+    case "edit-copy-html":   if (editor) copyAsHtml(editor);      break;
+    case "format-link":
+    case "edit-paste-link": {
+      if (!editor) break;
+      const { from, to } = editor.state.selection.main;
+      if (from !== to) {
+        const label = editor.state.doc.sliceString(from, to);
+        const insert = `[${label}]()`;
+        editor.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length - 1 } });
+      } else {
+        editor.dispatch({ changes: { from, to, insert: `[]()` }, selection: { anchor: from + 1 } });
+      }
+      break;
+    }
+    case "edit-find":
+      if (!editor || !findWidget) break;
+      {
+        const sel = editor.state.selection.main;
+        if (sel.from !== sel.to) findWidget.setPreFill(editor.state.sliceDoc(sel.from, sel.to));
+        findWidget.open("find");
+      }
+      break;
+    case "edit-find-replace":
+      if (!editor || !findWidget) break;
+      {
+        const sel = editor.state.selection.main;
+        if (sel.from !== sel.to) findWidget.setPreFill(editor.state.sliceDoc(sel.from, sel.to));
+        findWidget.open("replace");
+      }
+      break;
+    case "help-quickstart": void openHelpFile("quickstart.md", "Quickstart"); break;
+    case "help-help":       void openHelpFile("help.md", "Help");             break;
+    case "help-cheatsheet": void openHelpFile("markdown-cheatsheet.md", "Markdown Cheatsheet"); break;
+    default: {
+      if (action.startsWith("recent-file-")) {
+        const idx = parseInt(action.replace("recent-file-", ""), 10);
+        const files = getCurrentSettings().recentFiles;
+        if (idx >= 0 && idx < files.length) void openRecentFileByPath(files[idx]);
+      } else if (action.startsWith("custom:")) {
+        void setTheme(action);
+      }
+      break;
+    }
+  }
+}
+
+/**
  * Initialize the application
  */
 async function initApp() {
@@ -560,6 +660,9 @@ async function initApp() {
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel((name) => setTheme(name), customThemes);
 
+  // Create keybindings panel (DOM injection, hidden by default)
+  createKeybindingsPanel();
+
   // Populate the native Open Recent submenu with persisted files
   await refreshRecentFilesMenu();
 
@@ -568,170 +671,7 @@ async function initApp() {
 
   // Listen for menu events from Rust
   await listen<{ action: string }>("menu-event", (event) => {
-    switch (event.payload.action) {
-      case "app-settings":
-        toggleSettingsPanel();
-        break;
-      case "file-new":
-        newFile();
-        break;
-      case "file-open":
-        openFile();
-        break;
-      case "file-save":
-        saveFile();
-        break;
-      case "file-save-as":
-        saveFileAs();
-        break;
-      case "file-close-all":
-        // AC-C1: hide the window rather than destroying it.
-        // EC-C2: Tauri hide() is safe on an already-hidden window (no-op).
-        // void prefix: hide() returns Promise<void>; not awaited in this
-        // synchronous event listener.
-        void getCurrentWebviewWindow().hide();
-        break;
-      case "file-import":
-        openFile();
-        break;
-      case "file-export":
-        // FR-2.2: void-prefix keeps the async call from producing an unhandled
-        // promise in the synchronous switch/event-listener context.
-        // AC-20: exportAsHtml never modifies currentFilePath.
-        void exportAsHtml(editor, currentFilePath);
-        break;
-      case "view-toggle-preview":
-        togglePreview();
-        break;
-      case "theme-next":
-        nextTheme();
-        break;
-      case "theme-prev":
-        prevTheme();
-        break;
-      case "theme-light":
-        setTheme("default-light");
-        break;
-      case "theme-dark":
-        setTheme("default-dark");
-        break;
-      case "theme-system":
-        setTheme("system");
-        break;
-      case "view-zoom-in":
-        zoomIn();
-        break;
-      case "view-zoom-out":
-        zoomOut();
-        break;
-      case "view-zoom-reset":
-        zoomReset();
-        break;
-      case "format-h1": if (editor) toggleHeading(editor, 1); break;
-      case "format-h2": if (editor) toggleHeading(editor, 2); break;
-      case "format-h3": if (editor) toggleHeading(editor, 3); break;
-      case "format-h4": if (editor) toggleHeading(editor, 4); break;
-      case "format-h5": if (editor) toggleHeading(editor, 5); break;
-      case "format-h6": if (editor) toggleHeading(editor, 6); break;
-      case "format-bold": if (editor) toggleInlineWrap(editor, "**"); break;
-      case "format-italic": if (editor) toggleInlineWrap(editor, "*"); break;
-      case "format-underline": if (editor) toggleInlineWrap(editor, "__"); break;
-      case "format-strikethrough": if (editor) toggleInlineWrap(editor, "~~"); break;
-      case "format-highlight": if (editor) toggleInlineWrap(editor, "=="); break;
-      case "format-superscript": if (editor) toggleInlineWrap(editor, "^"); break;
-      case "format-subscript": if (editor) toggleInlineWrap(editor, "~"); break;
-      case "format-math-inline": if (editor) insertInlineMath(editor); break;
-      case "format-math-block": if (editor) insertMathBlock(editor); break;
-      case "format-front-matter": if (editor) insertFrontMatter(editor); break;
-      case "format-image": if (editor) insertImage(editor); break;
-      case "format-table": if (editor) insertTable(editor); break;
-      case "format-link":
-      case "edit-paste-link": {
-        if (!editor) break;
-        const { from, to } = editor.state.selection.main;
-        if (from !== to) {
-          const label = editor.state.doc.sliceString(from, to);
-          const insert = `[${label}]()`;
-          editor.dispatch({
-            changes: { from, to, insert },
-            selection: { anchor: from + insert.length - 1 },
-          });
-        } else {
-          editor.dispatch({
-            changes: { from, to, insert: `[]()` },
-            selection: { anchor: from + 1 },
-          });
-        }
-        break;
-      }
-      case "format-code-fence": if (editor) insertCodeFence(editor); break;
-      case "format-quote": if (editor) toggleLinePrefix(editor, "> "); break;
-      case "format-bullet-list": if (editor) toggleLinePrefix(editor, "- "); break;
-      case "format-ordered-list": if (editor) toggleOrderedList(editor); break;
-      case "format-task-list": if (editor) toggleTaskList(editor); break;
-      case "format-indent": if (editor) indentLines(editor); break;
-      case "format-outdent": if (editor) outdentLines(editor); break;
-      case "format-hr": if (editor) insertHorizontalRule(editor); break;
-      case "format-clear": if (editor) clearFormatting(editor); break;
-      case "edit-paste-plain": if (editor) pasteWithoutFormatting(editor); break;
-      case "edit-copy-plain": if (editor) copyAsPlainText(editor); break;
-      case "edit-copy-html": if (editor) copyAsHtml(editor); break;
-
-      // EC-1: guard against editor / findWidget not yet initialized
-      case "edit-find":
-        if (!editor || !findWidget) break;
-        {
-          // FR-5.1 / FR-5.2: Pre-fill the find input with the current selection
-          // if one exists. This spares the user from having to retype the term.
-          const sel = editor.state.selection.main;
-          if (sel.from !== sel.to) {
-            const selectedText = editor.state.sliceDoc(sel.from, sel.to);
-            // FR-5.3 / EC-13: Truncate multi-line selections to the first line
-            // so the find input stays single-line and the SearchQuery is valid.
-            findWidget.setPreFill(selectedText);
-          }
-          findWidget.open("find");
-        }
-        break;
-
-      // EC-16: guard against editor / findWidget not yet initialized
-      case "edit-find-replace":
-        if (!editor || !findWidget) break;
-        {
-          // FR-5.1 / FR-5.2: Same pre-fill logic as edit-find.
-          const sel = editor.state.selection.main;
-          if (sel.from !== sel.to) {
-            const selectedText = editor.state.sliceDoc(sel.from, sel.to);
-            // FR-5.3 / EC-13: First line only for multi-line selections.
-            findWidget.setPreFill(selectedText);
-          }
-          findWidget.open("replace");
-        }
-        break;
-
-      default: {
-        const action = event.payload.action;
-        if (action.startsWith("recent-file-")) {
-          const idx = parseInt(action.replace("recent-file-", ""), 10);
-          const files = getCurrentSettings().recentFiles;
-          if (idx >= 0 && idx < files.length) {
-            openRecentFileByPath(files[idx]);
-          }
-        } else if (action.startsWith("custom:")) {
-          setTheme(action);
-        }
-        break;
-      }
-      case "help-quickstart":
-        void openHelpFile("quickstart.md", "Quickstart");
-        break;
-      case "help-help":
-        void openHelpFile("help.md", "Help");
-        break;
-      case "help-cheatsheet":
-        void openHelpFile("markdown-cheatsheet.md", "Markdown Cheatsheet");
-        break;
-    }
+    handleAction(event.payload.action);
   });
 
   // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom
@@ -744,6 +684,19 @@ async function initApp() {
   // By listening on `document` at the capture phase we intercept the keydown
   // before it reaches the CM6 editor and before searchKeymap fires.
   document.addEventListener("keydown", (e: KeyboardEvent) => {
+    // Custom keybinding overrides — fire before any default handler
+    if (!e.defaultPrevented) {
+      const custom = getCurrentSettings().keybindings ?? {};
+      for (const [actionId, keyStr] of Object.entries(custom)) {
+        if (eventMatchesKey(e, keyStr)) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleAction(actionId);
+          return;
+        }
+      }
+    }
+
     if (!editor || !findWidget) return;
 
     // On macOS, Command key sets e.metaKey. Cmd-F opens find; Cmd-Opt-F opens
