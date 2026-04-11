@@ -35,6 +35,8 @@ import {
   insertInlineMath,
   insertMathBlock,
   insertFrontMatter,
+  duplicateLine,
+  deleteLine,
 } from "./editor/format";
 import {
   readFile,
@@ -62,7 +64,7 @@ import {
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
-import { exportAsHtml } from "./lib/export";
+import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import "@fontsource/inter/400.css";
@@ -555,6 +557,94 @@ async function setupWindowStateListeners(): Promise<void> {
 }
 
 /**
+ * Print the current document.
+ * Injects a rendered HTML overlay + print-only stylesheet, calls window.print(),
+ * then removes the overlay. The @media print rules hide the editor and show
+ * only the rendered content.
+ */
+function printDocument(): void {
+  if (!editor) return;
+  const html = markdownToHtml(editor.state.doc.toString());
+
+  // Inject print-only stylesheet
+  const style = document.createElement("style");
+  style.id = "markable-print-style";
+  style.textContent = `
+    @media print {
+      body > *:not(#markable-print-overlay) { display: none !important; }
+      #markable-print-overlay {
+        display: block !important;
+        position: static !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Inject rendered content overlay (hidden on screen, visible in print)
+  const overlay = document.createElement("div");
+  overlay.id = "markable-print-overlay";
+  overlay.style.cssText = "display:none";
+  overlay.innerHTML = `<style>${MINIMAL_CSS}</style><div class="content">${html}</div>`;
+  document.body.appendChild(overlay);
+
+  window.print();
+
+  // Clean up after print dialog closes
+  style.remove();
+  overlay.remove();
+}
+
+/** Currently open Go to Line overlay (null if none). */
+let gotoLineOverlay: HTMLElement | null = null;
+
+/** Show a small overlay asking for a line number, then scroll to it. */
+function showGoToLineOverlay(): void {
+  if (!editor) return;
+  if (gotoLineOverlay) { gotoLineOverlay.remove(); gotoLineOverlay = null; }
+
+  const overlay = document.createElement("div");
+  overlay.className = "goto-line-overlay";
+
+  const label = document.createElement("span");
+  label.textContent = "Go to Line:";
+
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "1";
+  input.max = String(editor.state.doc.lines);
+  input.placeholder = `1–${editor.state.doc.lines}`;
+
+  const btn = document.createElement("button");
+  btn.textContent = "Go";
+
+  overlay.append(label, input, btn);
+  document.body.appendChild(overlay);
+  gotoLineOverlay = overlay;
+  input.focus();
+
+  function go() {
+    const num = parseInt(input.value, 10);
+    if (!editor || isNaN(num)) { dismiss(); return; }
+    const clamped = Math.max(1, Math.min(num, editor.state.doc.lines));
+    const line = editor.state.doc.line(clamped);
+    editor.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+    dismiss();
+    editor.focus();
+  }
+
+  function dismiss() {
+    overlay.remove();
+    gotoLineOverlay = null;
+  }
+
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); go(); }
+    if (e.key === "Escape") { e.preventDefault(); dismiss(); editor?.focus(); }
+  });
+  btn.addEventListener("click", go);
+}
+
+/**
  * Central action dispatcher — shared by the native menu-event listener and
  * the custom keybinding document keydown handler.
  */
@@ -582,6 +672,7 @@ function handleAction(action: string): void {
       break;
     case "file-import":     void openFile();          break;
     case "file-export":     void exportAsHtml(editor, currentFilePath); break;
+    case "file-print":      printDocument(); break;
     case "view-toggle-preview": togglePreview();      break;
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
@@ -621,6 +712,10 @@ function handleAction(action: string): void {
     case "edit-paste-plain": if (editor) pasteWithoutFormatting(editor); break;
     case "edit-copy-plain":  if (editor) copyAsPlainText(editor); break;
     case "edit-copy-html":   if (editor) copyAsHtml(editor);      break;
+    case "edit-duplicate-line": if (editor) duplicateLine(editor); break;
+    case "edit-delete-line":    if (editor) deleteLine(editor);    break;
+    case "edit-goto-line":      showGoToLineOverlay();             break;
+    case "format-comment":      if (editor) toggleInlineWrap(editor, "%%"); break;
     case "format-link":
     case "edit-paste-link": {
       if (!editor) break;
@@ -785,6 +880,14 @@ async function initApp() {
           return;
         }
       }
+    }
+
+    // Ctrl+G: Go to Line (intercept before CM6 processes it)
+    if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key === "g") {
+      e.preventDefault();
+      e.stopPropagation();
+      showGoToLineOverlay();
+      return;
     }
 
     if (!editor || !findWidget) return;

@@ -570,6 +570,49 @@ export function moveLineDown(view: EditorView): void {
   view.focus();
 }
 
+/** Duplicate the current line or selected block below. Cursor moves to the copy. */
+export function duplicateLine(view: EditorView): void {
+  const state = view.state;
+  const main = state.selection.main;
+  const firstLine = state.doc.lineAt(main.from);
+  const lastLine = state.doc.lineAt(main.to);
+  const blockText = state.doc.sliceString(firstLine.from, lastLine.to);
+
+  view.dispatch({
+    changes: { from: lastLine.to, insert: "\n" + blockText },
+    selection: {
+      anchor: lastLine.to + 1 + (main.anchor - firstLine.from),
+      head: lastLine.to + 1 + (main.head - firstLine.from),
+    },
+  });
+  view.focus();
+}
+
+/** Delete the current line or selected block. Cursor moves to the next line. */
+export function deleteLine(view: EditorView): void {
+  const state = view.state;
+  const main = state.selection.main;
+  const firstLine = state.doc.lineAt(main.from);
+  const lastLine = state.doc.lineAt(main.to);
+
+  let from: number, to: number;
+  if (lastLine.to < state.doc.length) {
+    from = firstLine.from;
+    to = lastLine.to + 1;
+  } else if (firstLine.from > 0) {
+    from = firstLine.from - 1;
+    to = lastLine.to;
+  } else {
+    from = 0;
+    to = state.doc.length;
+  }
+
+  view.dispatch({ changes: { from, to } });
+  const newPos = Math.min(firstLine.from, view.state.doc.length);
+  view.dispatch({ selection: { anchor: newPos } });
+  view.focus();
+}
+
 /** CodeMirror keybindings for all formatting commands (macOS). */
 export const formatKeymap: KeyBinding[] = [
   { key: "Meta-1", mac: "Meta-1", run: (v) => { toggleHeading(v, 1); return true; } },
@@ -591,7 +634,7 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-]", mac: "Meta-]", run: (v) => { indentLines(v); return true; } },
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },
-  { key: "Meta-Shift-\\", mac: "Meta-Shift-\\", run: (v) => { clearFormatting(v); return true; } },
+  { key: "Meta-\\", mac: "Meta-\\", run: (v) => { clearFormatting(v); return true; } },
   // Cmd-K: wrap selection with [](), cursor between parens for URL paste.
   { key: "Meta-k", mac: "Meta-k", run: (v) => {
     const { from, to } = v.state.selection.main;
@@ -627,6 +670,12 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-Shift-m", mac: "Meta-Shift-m", run: (v) => { insertInlineMath(v); return true; } },
   // YAML front matter.
   { key: "Meta-Shift-y", mac: "Meta-Shift-y", run: (v) => { insertFrontMatter(v); return true; } },
+  // Toggle comment (%%...%%).
+  { key: "Meta-Shift-\\", mac: "Meta-Shift-\\", run: (v) => { toggleInlineWrap(v, "%%"); return true; } },
+  // Duplicate line / selection block.
+  { key: "Meta-d", mac: "Meta-d", run: (v) => { duplicateLine(v); return true; } },
+  // Delete line / selection block.
+  { key: "Meta-Alt-Shift-Backspace", mac: "Meta-Alt-Shift-Backspace", run: (v) => { deleteLine(v); return true; } },
 ];
 
 /**

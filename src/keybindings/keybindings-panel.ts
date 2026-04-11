@@ -21,6 +21,7 @@ const COMMANDS: CommandDef[] = [
   { id: "file-export",     label: "Export as HTML",         defaultKey: "Cmd-Alt-E",       section: "File" },
   { id: "file-import",     label: "Import",                 defaultKey: "Cmd-Alt-Shift-I", section: "File" },
   { id: "file-close-all",  label: "Close All",              defaultKey: "Cmd-Shift-W",     section: "File" },
+  { id: "file-print",      label: "Print",                  defaultKey: "Cmd-P",           section: "File" },
   // Edit
   { id: "edit-find",           label: "Find",                     defaultKey: "Cmd-F",     section: "Edit" },
   { id: "edit-find-replace",   label: "Find & Replace",           defaultKey: "Cmd-Alt-F", section: "Edit" },
@@ -28,6 +29,9 @@ const COMMANDS: CommandDef[] = [
   { id: "edit-paste-link",     label: "Paste Link",               defaultKey: "Cmd-K",     section: "Edit" },
   { id: "edit-copy-plain",     label: "Copy as Plain Text",       defaultKey: "Cmd-Alt-T", section: "Edit" },
   { id: "edit-copy-html",      label: "Copy as HTML",             defaultKey: "Cmd-Alt-C", section: "Edit" },
+  { id: "edit-duplicate-line", label: "Duplicate Line",           defaultKey: "Cmd-D",     section: "Edit" },
+  { id: "edit-delete-line",    label: "Delete Line",              defaultKey: "Cmd-Alt-Shift-Backspace", section: "Edit" },
+  { id: "edit-goto-line",      label: "Go to Line",              defaultKey: "Ctrl-G",    section: "Edit" },
   // View
   { id: "view-toggle-preview", label: "Toggle Preview", defaultKey: "Cmd-E",  section: "View" },
   { id: "view-zoom-in",        label: "Zoom In",        defaultKey: "Cmd-=",  section: "View" },
@@ -45,7 +49,8 @@ const COMMANDS: CommandDef[] = [
   { id: "format-ordered-list",  label: "Ordered List",     defaultKey: "Cmd-Shift-1",  section: "Format" },
   { id: "format-task-list",     label: "Task List",        defaultKey: "Cmd-Shift-;",  section: "Format" },
   { id: "format-hr",            label: "Horizontal Rule",  defaultKey: "Cmd-Shift-R",  section: "Format" },
-  { id: "format-clear",         label: "Clear Formatting", defaultKey: "Cmd-Shift-\\", section: "Format" },
+  { id: "format-clear",         label: "Clear Formatting", defaultKey: "Cmd-\\",       section: "Format" },
+  { id: "format-comment",       label: "Comment",          defaultKey: "Cmd-Shift-\\", section: "Format" },
 ];
 
 const SECTIONS = ["File", "Edit", "View", "Format"];

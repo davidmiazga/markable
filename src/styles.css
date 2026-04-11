@@ -655,3 +655,51 @@ body {
   font-weight: 600;
   margin-right: 4px;
 }
+
+/* --- Go to Line Overlay --- */
+.goto-line-overlay {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.goto-line-overlay span {
+  white-space: nowrap;
+}
+.goto-line-overlay input {
+  width: 80px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.goto-line-overlay input:focus {
+  border-color: var(--link-color);
+}
+.goto-line-overlay button {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.goto-line-overlay button:hover {
+  background: var(--border-color);
+}

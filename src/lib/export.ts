@@ -27,7 +27,7 @@ marked.use(markedFootnote());
 
 // FR-6.1: Fixed, self-contained minimal stylesheet for exported HTML documents.
 // FR-6.3: No @import, no external url() references. All values are self-contained.
-const MINIMAL_CSS = `
+export const MINIMAL_CSS = `
 *, *::before, *::after { box-sizing: border-box; }
 body {
   margin: 0;

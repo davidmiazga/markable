@@ -48,6 +48,8 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "file-export", "Export as HTML...", true, Some("CmdOrCtrl+Alt+E"))?,
             &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, Some("CmdOrCtrl+Alt+Shift+I"))?,
             &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "file-print", "Print...", true, Some("CmdOrCtrl+P"))?,
+            &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::close_window(handle, Some("Close"))?,
             // AC-C2: "Close All" sits directly below "Close" with CmdOrCtrl+Shift+W.
             // In the single-window architecture this hides the window just as "Close" does,
@@ -74,6 +76,10 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::select_all(handle, None)?,
             &MenuItem::with_id(handle, "edit-select-none", "Select None", true, Some("CmdOrCtrl+Shift+D"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "edit-duplicate-line", "Duplicate Line", true, Some("CmdOrCtrl+D"))?,
+            &MenuItem::with_id(handle, "edit-delete-line", "Delete Line", true, Some("CmdOrCtrl+Alt+Shift+Backspace"))?,
+            &MenuItem::with_id(handle, "edit-goto-line", "Go to Line...", true, Some("Ctrl+G"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "edit-find", "Find...", true, Some("CmdOrCtrl+F"))?,
             &MenuItem::with_id(handle, "edit-find-replace", "Find and Replace...", true, Some("CmdOrCtrl+Alt+F"))?,
@@ -120,6 +126,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "format-highlight", "Highlight", true, Some("CmdOrCtrl+Shift+H"))?,
             &MenuItem::with_id(handle, "format-superscript", "Superscript", true, Some("CmdOrCtrl+Shift+6"))?,
             &MenuItem::with_id(handle, "format-subscript", "Subscript", true, Some("CmdOrCtrl+Shift+9"))?,
+            &MenuItem::with_id(handle, "format-comment", "Comment", true, Some("CmdOrCtrl+Shift+\\"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "format-code-fence", "Code Fence", true, Some("CmdOrCtrl+Shift+C"))?,
             &MenuItem::with_id(handle, "format-quote", "Callout", true, Some("CmdOrCtrl+Shift+."))?,
@@ -155,7 +162,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 ],
             )?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "format-clear", "Clear All Formatting", true, Some("CmdOrCtrl+Shift+\\"))?,
+            &MenuItem::with_id(handle, "format-clear", "Clear All Formatting", true, Some("CmdOrCtrl+\\"))?,
         ],
     )?;
 
