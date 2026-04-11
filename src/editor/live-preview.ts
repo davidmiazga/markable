@@ -724,6 +724,11 @@ function buildDecorations(view: EditorView): DecorationSet {
           } else {
             handleBulletItem(node, state, decorations);
           }
+        } else if (name === "Autolink") {
+          // Style bare URLs (https://..., www....) as clickable links
+          decorations.push(
+            Decoration.mark({ class: "cm-live-link cm-live-autolink" }).range(node.from, node.to)
+          );
         } else if (name === "Image") {
           handleImage(node, state, decorations);
           return false;

@@ -9,7 +9,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import { Superscript, Subscript } from "@lezer/markdown";
+import { Autolink, Superscript, Subscript } from "@lezer/markdown";
 import { HighlightExtension } from "./highlight-ext";
 import { CommentExtension } from "./comment-ext";
 import { FootnoteExtension } from "./footnote-ext";
@@ -118,7 +118,7 @@ export function buildExtensions(): Extension[] {
   const extensions: Extension[] = [];
 
   try {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [HighlightExtension, CommentExtension, FootnoteExtension, Superscript, Subscript] }));
+    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [Autolink, HighlightExtension, CommentExtension, FootnoteExtension, Superscript, Subscript] }));
   } catch (error) {
     console.warn("Failed to load Markdown extension:", error);
   }
