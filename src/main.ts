@@ -64,6 +64,8 @@ import {
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
+import { createPluginsPanel, togglePluginsPanel } from "./plugins/plugins-panel";
+import { enableWordCount, disableWordCount, scheduleUpdate as scheduleWordCount } from "./plugins/word-count";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -644,6 +646,80 @@ function showGoToLineOverlay(): void {
   btn.addEventListener("click", go);
 }
 
+// --- FC2 toggle state ---
+let statusBarVisible = false;
+let wordCountEnabled = false;
+let focusModeEnabled = false;
+let typewriterModeEnabled = false;
+
+/** Get current plugin on/off states for the plugins panel. */
+function getPluginStates(): Record<string, boolean> {
+  return {
+    wordCount: wordCountEnabled,
+    statusBar: statusBarVisible,
+    focusMode: focusModeEnabled,
+    typewriterMode: typewriterModeEnabled,
+  };
+}
+
+/** Called by the plugins panel when a toggle switch is flipped. */
+function handlePluginToggle(pluginId: string, enabled: boolean): void {
+  switch (pluginId) {
+    case "wordCount": {
+      wordCountEnabled = enabled;
+      const centerZone = document.querySelector(".statusbar-center") as HTMLElement | null;
+      if (enabled && centerZone) {
+        enableWordCount(centerZone);
+        // Auto-show status bar when word count is on
+        statusBarVisible = true;
+        document.getElementById("statusbar")?.classList.remove("hidden");
+        // Trigger an immediate count
+        if (editor) {
+          const sel = editor.state.selection.main;
+          scheduleWordCount(editor.state.doc.toString(), sel.from, sel.to);
+        }
+      } else {
+        disableWordCount();
+        // Hide status bar if no other plugins use it
+        // (For now, only word count populates the bar)
+        statusBarVisible = false;
+        document.getElementById("statusbar")?.classList.add("hidden");
+      }
+      void updateSettings((s) => ({ ...s, wordCount: enabled, statusBar: { visible: statusBarVisible } }));
+      break;
+    }
+    case "statusBar":
+      statusBarVisible = enabled;
+      document.getElementById("statusbar")?.classList.toggle("hidden", !enabled);
+      void updateSettings((s) => ({ ...s, statusBar: { visible: enabled } }));
+      break;
+    case "focusMode":
+      focusModeEnabled = enabled;
+      // TODO: dispatch setFocusMode effect (Checkpoint 2B)
+      void updateSettings((s) => ({ ...s, focusMode: enabled }));
+      break;
+    case "typewriterMode":
+      typewriterModeEnabled = enabled;
+      // TODO: dispatch setTypewriterMode effect (Checkpoint 3B)
+      void updateSettings((s) => ({ ...s, typewriterMode: enabled }));
+      break;
+  }
+}
+
+function toggleStatusBar() {
+  handlePluginToggle("statusBar", !statusBarVisible);
+}
+
+function toggleFocusMode() {
+  if (!editor) return;
+  handlePluginToggle("focusMode", !focusModeEnabled);
+}
+
+function toggleTypewriterMode() {
+  if (!editor) return;
+  handlePluginToggle("typewriterMode", !typewriterModeEnabled);
+}
+
 /**
  * Central action dispatcher — shared by the native menu-event listener and
  * the custom keybinding document keydown handler.
@@ -652,6 +728,7 @@ function handleAction(action: string): void {
   switch (action) {
     case "app-settings":    toggleSettingsPanel();    break;
     case "app-keybindings": toggleKeybindingsPanel(); break;
+    case "app-plugins":     togglePluginsPanel(getPluginStates()); break;
     case "edit-select-none":
       if (editor) {
         // Collapse selection to remove highlight, then enter view mode
@@ -673,7 +750,10 @@ function handleAction(action: string): void {
     case "file-import":     void openFile();          break;
     case "file-export":     void exportAsHtml(editor, currentFilePath); break;
     case "file-print":      printDocument(); break;
-    case "view-toggle-preview": togglePreview();      break;
+    case "view-toggle-preview":    togglePreview();      break;
+    case "view-toggle-statusbar":  toggleStatusBar();    break;
+    case "view-toggle-focus":      toggleFocusMode();    break;
+    case "view-toggle-typewriter": toggleTypewriterMode(); break;
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
     case "theme-light":     void setTheme("default-light"); break;
@@ -794,12 +874,33 @@ async function initApp() {
   // Preview mode starts ON — hide line numbers
   editorContainer.classList.add("preview-mode");
 
-  // Attach dirty-state tracking to the editor via updateListener.
+  // Restore FC2 toggle states from settings
+  statusBarVisible = settings.statusBar?.visible ?? false;
+  const statusBarEl = document.getElementById("statusbar");
+  if (statusBarEl) statusBarEl.classList.toggle("hidden", !statusBarVisible);
+  wordCountEnabled = settings.wordCount ?? false;
+  if (wordCountEnabled) {
+    const centerZone = document.querySelector(".statusbar-center") as HTMLElement | null;
+    if (centerZone) {
+      enableWordCount(centerZone);
+      statusBarVisible = true;
+      statusBarEl?.classList.remove("hidden");
+    }
+  }
+  focusModeEnabled = settings.focusMode ?? false;
+  typewriterModeEnabled = settings.typewriterMode ?? false;
+
+  // Attach dirty-state tracking + word count to the editor via updateListener.
   editor.dispatch({
     effects: StateEffect.appendConfig.of(
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !isReadOnly) {
           setDirty(true);
+        }
+        // Feed word count on doc change or selection change
+        if (update.docChanged || update.selectionSet) {
+          const sel = update.state.selection.main;
+          scheduleWordCount(update.state.doc.toString(), sel.from, sel.to);
         }
       })
     ),
@@ -830,6 +931,9 @@ async function initApp() {
 
   // Create keybindings panel (DOM injection, hidden by default)
   createKeybindingsPanel();
+
+  // Create plugins panel (DOM injection, hidden by default)
+  createPluginsPanel(handlePluginToggle);
 
   // Populate the native Open Recent submenu with persisted files
   await refreshRecentFilesMenu();

@@ -32,6 +32,14 @@ export interface MarkableSettings {
   findWidget: FindWidgetPosition | null;
   /** Custom keybinding overrides. Maps command-id → key string (e.g. "Cmd-Shift-O"). Absent = use default. */
   keybindings?: Record<string, string>;
+  /** Status bar visibility. */
+  statusBar?: { visible: boolean };
+  /** Word count plugin enabled. */
+  wordCount?: boolean;
+  /** Focus mode (dim non-active paragraphs). */
+  focusMode?: boolean;
+  /** Typewriter mode (cursor always vertically centered). */
+  typewriterMode?: boolean;
 }
 
 export interface WindowSettings {

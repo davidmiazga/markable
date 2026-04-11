@@ -37,6 +37,9 @@ const COMMANDS: CommandDef[] = [
   { id: "view-zoom-in",        label: "Zoom In",        defaultKey: "Cmd-=",  section: "View" },
   { id: "view-zoom-out",       label: "Zoom Out",       defaultKey: "Cmd--",  section: "View" },
   { id: "view-zoom-reset",     label: "Reset Zoom",     defaultKey: "Cmd-0",  section: "View" },
+  { id: "view-toggle-statusbar",  label: "Status Bar",      defaultKey: "",       section: "View" },
+  { id: "view-toggle-focus",      label: "Focus Mode",      defaultKey: "",       section: "View" },
+  { id: "view-toggle-typewriter", label: "Typewriter Mode", defaultKey: "",       section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },

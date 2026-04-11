@@ -14,6 +14,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "app-settings", "Settings", true, Some("CmdOrCtrl+Comma"))?,
             &MenuItem::with_id(handle, "app-keybindings", "Keyboard Shortcuts", true, Some("CmdOrCtrl+Alt+Shift+K"))?,
+            &MenuItem::with_id(handle, "app-plugins", "Plugins", true, Some("CmdOrCtrl+Shift+P"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -96,6 +97,10 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "view-zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?,
             &MenuItem::with_id(handle, "view-zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
             &MenuItem::with_id(handle, "view-zoom-reset", "Reset Zoom", true, Some("CmdOrCtrl+0"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "view-toggle-statusbar", "Status Bar", true, None::<&str>)?,
+            &MenuItem::with_id(handle, "view-toggle-focus", "Focus Mode", true, None::<&str>)?,
+            &MenuItem::with_id(handle, "view-toggle-typewriter", "Typewriter Mode", true, None::<&str>)?,
         ],
     )?;
 

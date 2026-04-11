@@ -1,0 +1,108 @@
+/* ============================================================
+   Plugins Panel -- Centered Modal (reuses settings-overlay base)
+   ============================================================ */
+@import "../settings/settings-panel.css";
+
+/* --- List View --- */
+
+.plugin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.plugin-row:last-child {
+  border-bottom: none;
+}
+
+.plugin-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.plugin-name-clickable {
+  cursor: pointer;
+  flex: 1;
+}
+.plugin-name-clickable:hover {
+  color: var(--link-color);
+}
+
+/* --- Toggle Switch --- */
+
+.plugin-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-left: 16px;
+}
+.plugin-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.plugin-toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--border-color);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.plugin-toggle input:checked + .plugin-toggle-track {
+  background: var(--link-color);
+}
+.plugin-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+  pointer-events: none;
+}
+.plugin-toggle input:checked ~ .plugin-toggle-thumb {
+  transform: translateX(16px);
+}
+
+/* --- Detail View --- */
+
+.plugin-back-btn {
+  display: inline-block;
+  padding: 4px 0;
+  margin-bottom: 12px;
+  border: none;
+  background: none;
+  color: var(--link-color);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.plugin-back-btn:hover {
+  text-decoration: underline;
+}
+
+.plugin-detail {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.plugin-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-color);
+}
+.plugin-detail-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}

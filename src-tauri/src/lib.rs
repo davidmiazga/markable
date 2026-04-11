@@ -212,7 +212,7 @@ pub fn run() {
         .on_menu_event(|app_handle, event| {
             let id = event.id().as_ref();
             let forward = match id {
-                "app-settings" | "app-keybindings"
+                "app-settings" | "app-keybindings" | "app-plugins"
                 | "file-new" | "file-open" | "file-save" | "file-save-as" | "file-export" | "file-import" | "file-print"
                 // AC-C1/AC-C3: file-close-all is explicitly forwarded so the
                 // frontend hide() call fires via the standard menu-event pathway.
@@ -222,7 +222,7 @@ pub fn run() {
                 | "edit-copy-plain"
                 | "edit-copy-html"
                 | "edit-select-none" | "edit-duplicate-line" | "edit-delete-line" | "edit-goto-line"
-                | "view-toggle-preview"
+                | "view-toggle-preview" | "view-toggle-statusbar" | "view-toggle-focus" | "view-toggle-typewriter"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"
                 | "theme-light" | "theme-dark" | "theme-system" => true,
