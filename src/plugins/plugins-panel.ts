@@ -72,6 +72,7 @@ export function createPluginsPanel(
     <div class="settings-panel" tabindex="-1">
       <div class="settings-header">
         <h2 class="settings-title" id="plugins-title">Plugins</h2>
+        <button class="settings-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="settings-body" id="plugins-body"></div>
     </div>
@@ -83,6 +84,8 @@ export function createPluginsPanel(
   titleElement = overlay.querySelector("#plugins-title");
 
   overlay.querySelector(".settings-backdrop")
+    ?.addEventListener("click", closePluginsPanel);
+  overlay.querySelector(".settings-close-btn")
     ?.addEventListener("click", closePluginsPanel);
 
   document.addEventListener("keydown", (e: KeyboardEvent) => {

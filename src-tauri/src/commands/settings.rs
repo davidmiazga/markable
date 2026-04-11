@@ -309,29 +309,94 @@ fn write_settings_to_disk(
     Ok(())
 }
 
+fn write_raw_settings_to_disk(
+    app: &tauri::AppHandle,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let path = settings_path(app)?;
+
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+        }
+    }
+
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = path.with_extension(format!("tmp.{}", timestamp));
+
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| format!("Failed to create temp settings file: {}", e))?;
+
+    file.write_all(json.as_bytes()).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to write settings: {}", e)
+    })?;
+
+    file.sync_all().map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to sync settings to disk: {}", e)
+    })?;
+
+    std::fs::rename(&temp_path, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Atomic settings write failed: {}", e)
+    })?;
+
+    Ok(())
+}
+
 // --- Tauri Commands ---
 
 #[tauri::command]
 pub fn get_settings(app: tauri::AppHandle) -> Result<String, String> {
-    let settings = read_settings_from_disk(&app);
-
-    // Write defaults on first launch (best-effort)
     let path = settings_path(&app)?;
+
+    // First launch: write defaults and return them
     if !path.exists() {
-        if let Err(e) = write_settings_to_disk(&app, &settings) {
+        let defaults = MarkableSettings::default();
+        if let Err(e) = write_settings_to_disk(&app, &defaults) {
             eprintln!("Failed to write default settings: {}", e);
         }
+        return serde_json::to_string(&defaults)
+            .map_err(|e| format!("Failed to serialize settings: {}", e));
     }
 
-    serde_json::to_string(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))
+    // Read the raw JSON so frontend-only fields (sizeW, sizeH, contentWidth, etc.)
+    // are preserved through the round-trip.
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Cannot read settings file: {}", e))?;
+
+    if content.trim().is_empty() {
+        let defaults = MarkableSettings::default();
+        return serde_json::to_string(&defaults)
+            .map_err(|e| format!("Failed to serialize settings: {}", e));
+    }
+
+    // Validate it's valid JSON, then return as-is
+    let _: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Settings file contains invalid JSON: {}", e))?;
+
+    Ok(content)
 }
 
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, settings: String) -> Result<(), String> {
-    let parsed: MarkableSettings = serde_json::from_str(&settings)
+    // Validate the JSON is a valid object, but write the raw value to preserve
+    // frontend-only fields (sizeW, sizeH, contentWidth, wordCount, focusMode, etc.)
+    // that aren't in the Rust MarkableSettings struct.
+    let raw: serde_json::Value = serde_json::from_str(&settings)
         .map_err(|e| format!("Invalid settings JSON: {}", e))?;
-    write_settings_to_disk(&app, &parsed)
+    if !raw.is_object() {
+        return Err("Settings must be a JSON object".to_string());
+    }
+    write_raw_settings_to_disk(&app, &raw)
 }
 
 // --- Tests ---

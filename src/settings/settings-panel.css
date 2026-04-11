@@ -23,7 +23,7 @@
 
 .settings-panel {
   position: relative;
-  width: 420px;
+  width: 440px;
   max-width: 90vw;
   max-height: 80vh;
   background: var(--bg-primary);
@@ -41,6 +41,30 @@
 
 .settings-header {
   padding: 20px 24px 0;
+  position: relative;
+}
+
+.settings-close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.settings-close-btn:hover {
+  background: var(--code-bg, rgba(0,0,0,0.06));
+  color: var(--text-primary);
 }
 
 .settings-title {
@@ -70,76 +94,17 @@
   margin-bottom: 8px;
 }
 
+.settings-sub-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
 .settings-description {
   font-size: 12px;
   color: var(--text-secondary);
-  margin: 0 0 8px 0;
-}
-
-/* Theme Buttons */
-.settings-theme-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.settings-theme-custom {
-  margin-top: 4px;
-}
-
-.settings-theme-btn {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.settings-theme-btn:hover {
-  background: var(--code-bg);
-}
-
-.settings-theme-btn.active {
-  border-color: var(--link-color);
-  color: var(--link-color);
-  background: rgba(0, 120, 215, 0.08);
-}
-
-/* Slider Row */
-.settings-slider-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.settings-slider {
-  flex: 1;
-  -webkit-appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border-color);
-  outline: none;
-}
-
-.settings-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--link-color);
-  cursor: pointer;
-}
-
-.settings-value {
-  min-width: 48px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
-  font-size: 12px;
+  margin: 8px 0 0 0;
 }
 
 /* Buttons */
@@ -166,6 +131,101 @@
 .settings-btn-reset {
   width: 100%;
   color: var(--text-secondary);
+}
+
+/* Maximize checkbox row */
+.settings-maximize-row {
+  margin-bottom: 12px;
+}
+.settings-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--link-color);
+  cursor: pointer;
+}
+
+/* Disabled state for size controls when maximize is on */
+#settings-size-controls.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Window Size Row */
+.settings-window-size-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.settings-window-size-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.settings-window-size-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 14px;
+}
+
+/* Select dropdown */
+.settings-select {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23999'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+.settings-select:focus {
+  border-color: var(--link-color);
+}
+
+/* Content Width Row */
+.settings-content-width-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+.settings-input:focus {
+  border-color: var(--link-color);
+}
+.settings-input-wide {
+  flex: 1;
+}
+.settings-btn-inline {
+  flex-shrink: 0;
+}
+.settings-description-tight {
+  margin-top: 4px;
 }
 
 /* Footer */

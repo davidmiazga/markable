@@ -1,65 +1,79 @@
 import {
   getCurrentSettings,
   updateSettings,
-  updateSettingsInMemory,
   applyEditorSettings,
+  applyWindowSettings,
   clearRecentFiles,
-  EDITOR_CONSTRAINTS,
   DEFAULT_SETTINGS,
 } from "../lib/settings";
+import type { WindowSizeMode } from "../lib/settings";
 import { updateRecentFilesMenu } from "../lib/bridge";
-import type { ThemeEntry } from "../lib/bridge";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
 let isOpen = false;
-let onSetTheme: ((name: string) => void) | null = null;
 
-export function createSettingsPanel(
-  setThemeFn: (name: string) => void,
-  customThemes: ThemeEntry[] = [],
-): void {
-  onSetTheme = setThemeFn;
-
+export function createSettingsPanel(): void {
   const overlay = document.createElement("div");
   overlay.id = "settings-overlay";
   overlay.className = "settings-overlay hidden";
   overlay.setAttribute("aria-hidden", "true");
-
-  const c = EDITOR_CONSTRAINTS;
-
-  // Build custom theme buttons HTML
-  const customButtons = customThemes
-    .map((t) => `<button class="settings-theme-btn" data-theme="custom:${t.filename}">${t.name}</button>`)
-    .join("\n            ");
 
   overlay.innerHTML = `
     <div class="settings-backdrop"></div>
     <div class="settings-panel" role="dialog" aria-label="Settings" tabindex="-1">
       <div class="settings-header">
         <h2 class="settings-title">Settings</h2>
+        <button class="settings-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="settings-body">
         <div class="settings-section">
-          <label class="settings-label">Theme</label>
-          <div class="settings-theme-options" id="settings-theme-group">
-            <button class="settings-theme-btn" data-theme="default-light">Light</button>
-            <button class="settings-theme-btn" data-theme="default-dark">Dark</button>
-            <button class="settings-theme-btn" data-theme="system">System</button>
+          <label class="settings-label">Window &amp; Content</label>
+
+          <div class="settings-maximize-row">
+            <label class="settings-checkbox-label">
+              <input type="checkbox" id="settings-launch-maximized" />
+              <span>Maximize on Launch</span>
+            </label>
           </div>
-          ${customThemes.length > 0 ? `
-          <div class="settings-theme-options settings-theme-custom" id="settings-theme-custom-group">
-            ${customButtons}
-          </div>` : ""}
-        </div>
-        <div class="settings-section">
-          <label class="settings-label">Content Width</label>
-          <div class="settings-slider-row">
-            <input type="range" class="settings-slider" id="settings-content-width"
-              min="${c.contentMaxWidth.min}" max="${c.contentMaxWidth.max}" step="${c.contentMaxWidth.step}" />
-            <span class="settings-value" id="settings-content-width-value"></span>
+
+          <div id="settings-size-controls">
+            <div class="settings-sub-label">Window Size</div>
+            <div class="settings-window-size-row">
+              <div class="settings-window-size-field">
+                <span class="settings-window-size-label">W</span>
+                <select class="settings-select" id="settings-window-w">
+                  <option value="50%">50%</option>
+                  <option value="65%">65%</option>
+                  <option value="80%">80%</option>
+                  <option value="100%">100%</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </div>
+              <div class="settings-window-size-field">
+                <span class="settings-window-size-label">H</span>
+                <select class="settings-select" id="settings-window-h">
+                  <option value="50%">50%</option>
+                  <option value="65%">65%</option>
+                  <option value="80%">80%</option>
+                  <option value="100%">100%</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-sub-label" style="margin-top: 12px;">Content Width</div>
+            <div class="settings-content-width-row">
+              <input type="text" class="settings-input settings-input-wide" id="settings-content-width-input"
+                placeholder="900px" />
+              <button class="settings-btn settings-btn-secondary settings-btn-inline" id="settings-content-width-reset">Reset</button>
+            </div>
+            <p class="settings-description settings-description-tight">Supports px (e.g. 900px) or % (e.g. 80%). Default: 900px.</p>
           </div>
+
+          <p class="settings-description">Preset sizes apply immediately and center the window. Manual remembers your last size &amp; position. Maximize overrides all.</p>
         </div>
+
         <div class="settings-section">
           <label class="settings-label">Recent Files</label>
           <p class="settings-description" id="settings-recent-count"></p>
@@ -70,7 +84,7 @@ export function createSettingsPanel(
       </div>
       <div class="settings-footer">
         <button class="settings-btn settings-btn-reset" id="settings-reset-defaults">
-          Reset to Defaults
+          Reset All
         </button>
       </div>
     </div>
@@ -83,11 +97,8 @@ export function createSettingsPanel(
 }
 
 export function toggleSettingsPanel(): void {
-  if (isOpen) {
-    closeSettingsPanel();
-  } else {
-    openSettingsPanel();
-  }
+  if (isOpen) closeSettingsPanel();
+  else openSettingsPanel();
 }
 
 export function openSettingsPanel(): void {
@@ -96,8 +107,7 @@ export function openSettingsPanel(): void {
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;
-  const panel = panelElement.querySelector(".settings-panel") as HTMLElement;
-  panel?.focus();
+  (panelElement.querySelector(".settings-panel") as HTMLElement)?.focus();
 }
 
 export function closeSettingsPanel(): void {
@@ -111,10 +121,36 @@ export function isSettingsPanelOpen(): boolean {
   return isOpen;
 }
 
+/** Parse a content width value like "900px" or "80%" into a CSS string. */
+function parseContentWidth(raw: string): string | null {
+  const trimmed = raw.trim();
+  // Match "900px" or "900"
+  const pxMatch = trimmed.match(/^(\d+)\s*(px)?$/);
+  if (pxMatch) {
+    const val = parseInt(pxMatch[1], 10);
+    if (val >= 200 && val <= 4000) return `${val}px`;
+    return null;
+  }
+  // Match "80%"
+  const pctMatch = trimmed.match(/^(\d+)\s*%$/);
+  if (pctMatch) {
+    const val = parseInt(pctMatch[1], 10);
+    if (val >= 10 && val <= 100) return `${val}%`;
+    return null;
+  }
+  return null;
+}
+
+function applyContentWidth(cssValue: string): void {
+  document.documentElement.style.setProperty("--settings-content-max-width", cssValue);
+}
+
 function wireEvents(): void {
   if (!panelElement) return;
 
   panelElement.querySelector(".settings-backdrop")
+    ?.addEventListener("click", closeSettingsPanel);
+  panelElement.querySelector(".settings-close-btn")
     ?.addEventListener("click", closeSettingsPanel);
 
   document.addEventListener("keydown", (e) => {
@@ -124,43 +160,63 @@ function wireEvents(): void {
     }
   });
 
-  // Theme buttons (both bundled and custom groups use event delegation)
-  const handleThemeClick = (e: Event) => {
-    const btn = (e.target as HTMLElement).closest("[data-theme]");
-    if (!btn) return;
-    const themeName = btn.getAttribute("data-theme");
-    if (themeName && onSetTheme) {
-      onSetTheme(themeName);
-      syncThemeButtons(themeName);
-    }
-  };
-
-  panelElement.querySelector("#settings-theme-group")
-    ?.addEventListener("click", handleThemeClick);
-  panelElement.querySelector("#settings-theme-custom-group")
-    ?.addEventListener("click", handleThemeClick);
-
-  // Content width slider — live update on input
-  const widthSlider = panelElement.querySelector("#settings-content-width") as HTMLInputElement;
-  widthSlider?.addEventListener("input", (e) => {
-    const value = parseInt((e.target as HTMLInputElement).value, 10);
-    const display = panelElement?.querySelector("#settings-content-width-value");
-    if (display) display.textContent = `${value}px`;
-    updateSettingsInMemory((s) => ({
-      ...s,
-      editor: { ...s.editor, contentMaxWidth: value },
-    }));
-    applyEditorSettings(getCurrentSettings().editor);
-  });
-
-  // Content width — persist on release
-  widthSlider?.addEventListener("change", async () => {
-    const value = parseInt(widthSlider.value, 10);
+  // Maximize checkbox
+  const maxCheck = panelElement.querySelector("#settings-launch-maximized") as HTMLInputElement;
+  maxCheck?.addEventListener("change", async () => {
     await updateSettings((s) => ({
       ...s,
-      editor: { ...s.editor, contentMaxWidth: value },
+      window: { ...s.window, launchMaximized: maxCheck.checked },
     }));
+    updateSizeControlsDisabled(maxCheck.checked);
+    if (maxCheck.checked) {
+      void applyWindowSettings(getCurrentSettings().window);
+    }
   });
+
+  // Window size dropdowns — apply immediately
+  const wSelect = panelElement.querySelector("#settings-window-w") as HTMLSelectElement;
+  const hSelect = panelElement.querySelector("#settings-window-h") as HTMLSelectElement;
+  wSelect?.addEventListener("change", async () => {
+    await updateSettings((s) => ({
+      ...s,
+      window: { ...s.window, sizeW: wSelect.value as WindowSizeMode },
+    }));
+    void applyWindowSettings(getCurrentSettings().window);
+  });
+  hSelect?.addEventListener("change", async () => {
+    await updateSettings((s) => ({
+      ...s,
+      window: { ...s.window, sizeH: hSelect.value as WindowSizeMode },
+    }));
+    void applyWindowSettings(getCurrentSettings().window);
+  });
+
+  // Content width input — apply on Enter or blur
+  const cwInput = panelElement.querySelector("#settings-content-width-input") as HTMLInputElement;
+  const applyCW = async () => {
+    const parsed = parseContentWidth(cwInput.value);
+    if (!parsed) return;
+    applyContentWidth(parsed);
+    await updateSettings((s) => ({
+      ...s,
+      editor: { ...s.editor, contentWidth: parsed },
+    }));
+  };
+  cwInput?.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); void applyCW(); }
+  });
+  cwInput?.addEventListener("blur", () => void applyCW());
+
+  // Content width reset
+  panelElement.querySelector("#settings-content-width-reset")
+    ?.addEventListener("click", async () => {
+      if (cwInput) cwInput.value = "900px";
+      applyContentWidth("900px");
+      await updateSettings((s) => ({
+        ...s,
+        editor: { ...s.editor, contentWidth: "900px" },
+      }));
+    });
 
   // Clear recent files
   panelElement.querySelector("#settings-clear-recent")
@@ -175,30 +231,43 @@ function wireEvents(): void {
     ?.addEventListener("click", async () => {
       await updateSettings(() => structuredClone(DEFAULT_SETTINGS));
       applyEditorSettings(DEFAULT_SETTINGS.editor);
-      if (onSetTheme) onSetTheme(DEFAULT_SETTINGS.theme.active);
+      applyContentWidth("900px");
       syncPanelToSettings();
     });
+}
+
+function updateSizeControlsDisabled(maximized: boolean): void {
+  const controls = panelElement?.querySelector("#settings-size-controls") as HTMLElement;
+  if (controls) {
+    controls.classList.toggle("disabled", maximized);
+    controls.querySelectorAll("select, input, button").forEach((el) => {
+      (el as HTMLInputElement | HTMLSelectElement | HTMLButtonElement).disabled = maximized;
+    });
+  }
 }
 
 function syncPanelToSettings(): void {
   const settings = getCurrentSettings();
 
-  syncThemeButtons(settings.theme.active);
+  // Maximize
+  const maxCheck = document.querySelector("#settings-launch-maximized") as HTMLInputElement;
+  if (maxCheck) maxCheck.checked = settings.window.launchMaximized ?? false;
+  updateSizeControlsDisabled(settings.window.launchMaximized ?? false);
 
-  const widthSlider = document.querySelector("#settings-content-width") as HTMLInputElement;
-  if (widthSlider) widthSlider.value = String(settings.editor.contentMaxWidth);
-  const widthValue = document.querySelector("#settings-content-width-value");
-  if (widthValue) widthValue.textContent = `${settings.editor.contentMaxWidth}px`;
+  // Window size dropdowns
+  const wSelect = document.querySelector("#settings-window-w") as HTMLSelectElement;
+  const hSelect = document.querySelector("#settings-window-h") as HTMLSelectElement;
+  if (wSelect) wSelect.value = settings.window.sizeW ?? "50%";
+  if (hSelect) hSelect.value = settings.window.sizeH ?? "50%";
+
+  // Content width — use new contentWidth field, fall back to old contentMaxWidth
+  const cwInput = document.querySelector("#settings-content-width-input") as HTMLInputElement;
+  if (cwInput) {
+    const cw = (settings.editor as any).contentWidth ?? `${settings.editor.contentMaxWidth}px`;
+    cwInput.value = cw;
+  }
 
   syncRecentFilesCount();
-}
-
-function syncThemeButtons(activeTheme: string): void {
-  // Check both built-in and custom theme button groups
-  const buttons = document.querySelectorAll("#settings-theme-group .settings-theme-btn, #settings-theme-custom-group .settings-theme-btn");
-  buttons.forEach((btn) => {
-    btn.classList.toggle("active", btn.getAttribute("data-theme") === activeTheme);
-  });
 }
 
 function syncRecentFilesCount(): void {

@@ -424,6 +424,7 @@ export function createKeybindingsPanel(): void {
     <div class="settings-panel" role="dialog" aria-label="Keyboard Shortcuts" tabindex="-1">
       <div class="settings-header">
         <h2 class="settings-title">Keyboard Shortcuts</h2>
+        <button class="settings-close-btn" aria-label="Close">&times;</button>
         <p class="settings-description">Changes take effect immediately. Menu labels update on next launch.</p>
       </div>
       <div class="kb-search-bar">
@@ -446,6 +447,7 @@ export function createKeybindingsPanel(): void {
   setupSearchBar(searchBar);
 
   overlay.querySelector(".settings-backdrop")!.addEventListener("click", closeKeybindingsPanel);
+  overlay.querySelector(".settings-close-btn")?.addEventListener("click", closeKeybindingsPanel);
   overlay.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeKeybindingsPanel();
   });

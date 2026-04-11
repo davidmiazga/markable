@@ -42,6 +42,9 @@ export interface MarkableSettings {
   typewriterMode?: boolean;
 }
 
+/** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */
+export type WindowSizeMode = "50%" | "65%" | "80%" | "100%" | "manual";
+
 export interface WindowSettings {
   x: number;
   y: number;
@@ -49,12 +52,20 @@ export interface WindowSettings {
   height: number;
   fullscreen: boolean;
   maximized: boolean;
+  /** Width mode. "manual" = remember last width. */
+  sizeW?: WindowSizeMode;
+  /** Height mode. "manual" = remember last height. */
+  sizeH?: WindowSizeMode;
+  /** Always maximize on launch — overrides sizeW/sizeH. */
+  launchMaximized?: boolean;
 }
 
 export interface EditorSettings {
   contentMaxWidth: number;
   contentPadding: string;
   baseFontSize: number;
+  /** Content width as CSS value, e.g. "900px" or "80%". Overrides contentMaxWidth if set. */
+  contentWidth?: string;
 }
 
 export interface ThemeSettings {
@@ -73,6 +84,8 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     height: 0,
     fullscreen: false,
     maximized: false,
+    sizeW: "50%",
+    sizeH: "50%",
   },
   editor: {
     contentMaxWidth: 900,
@@ -111,42 +124,65 @@ export function isWindowOffScreen(
 export async function applyWindowSettings(settings: WindowSettings): Promise<void> {
   const appWindow = getCurrentWebviewWindow();
 
-  if (settings.width <= 0 || settings.height <= 0) {
-    await appWindow.center();
+  // Launch maximized overrides everything
+  if (settings.launchMaximized) {
+    try { await appWindow.maximize(); } catch {}
     return;
   }
 
-  const screenWidth = window.screen.width;
-  const screenHeight = window.screen.height;
+  const modeW = settings.sizeW ?? "50%";
+  const modeH = settings.sizeH ?? "50%";
+  const scaleFactor = window.devicePixelRatio || 1;
+  const screenW = window.screen.width * scaleFactor;
+  const screenH = window.screen.height * scaleFactor;
 
-  if (isWindowOffScreen(settings.x, settings.y, settings.width, settings.height, screenWidth, screenHeight)) {
-    console.warn("Saved window position is off-screen. Centering on primary display.");
-    await appWindow.center();
-    return;
+  // Resolve width
+  let w: number;
+  if (modeW === "manual" && settings.width > 0) {
+    w = settings.width;
+  } else {
+    const pct = modeW === "manual" ? 50 : parseInt(modeW, 10);
+    w = Math.round(screenW * pct / 100);
+  }
+
+  // Resolve height
+  let h: number;
+  if (modeH === "manual" && settings.height > 0) {
+    h = settings.height;
+  } else {
+    const pct = modeH === "manual" ? 50 : parseInt(modeH, 10);
+    h = Math.round(screenH * pct / 100);
+  }
+
+  // Resolve position: if both axes are manual and we have a saved position, use it.
+  // Otherwise center on screen.
+  let x: number, y: number;
+  if (modeW === "manual" && modeH === "manual" && settings.width > 0 && settings.height > 0) {
+    x = settings.x;
+    y = settings.y;
+    // Validate not off-screen
+    if (isWindowOffScreen(x, y, w, h, window.screen.width, window.screen.height)) {
+      x = Math.round((screenW - w) / 2);
+      y = Math.round((screenH - h) / 2);
+    }
+  } else {
+    x = Math.round((screenW - w) / 2);
+    y = Math.round((screenH - h) / 2);
   }
 
   try {
-    await appWindow.setSize(new PhysicalSize(settings.width, settings.height));
-    await appWindow.setPosition(new PhysicalPosition(settings.x, settings.y));
+    await appWindow.setSize(new PhysicalSize(w, h));
+    await appWindow.setPosition(new PhysicalPosition(x, y));
   } catch (err) {
-    console.error("Failed to restore window position/size:", err);
+    console.error("Failed to apply window size:", err);
     await appWindow.center();
   }
 
   if (settings.fullscreen) {
-    try {
-      await appWindow.setFullscreen(true);
-    } catch (err) {
-      console.error("Failed to restore fullscreen:", err);
-    }
+    try { await appWindow.setFullscreen(true); } catch {}
   }
-
   if (settings.maximized && !settings.fullscreen) {
-    try {
-      await appWindow.maximize();
-    } catch (err) {
-      console.error("Failed to restore maximized state:", err);
-    }
+    try { await appWindow.maximize(); } catch {}
   }
 }
 
@@ -223,7 +259,8 @@ export const EDITOR_CONSTRAINTS = {
 
 export function applyEditorSettings(editor: EditorSettings): void {
   const root = document.documentElement;
-  root.style.setProperty("--settings-content-max-width", `${editor.contentMaxWidth}px`);
+  const cw = editor.contentWidth ?? `${editor.contentMaxWidth}px`;
+  root.style.setProperty("--settings-content-max-width", cw);
   root.style.setProperty("--settings-base-font-size", `${editor.baseFontSize}px`);
 }
 

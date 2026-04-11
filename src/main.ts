@@ -927,7 +927,7 @@ async function initApp() {
   findWidget = createFindWidget(editor);
 
   // Create settings panel (DOM injection, hidden by default)
-  createSettingsPanel((name) => setTheme(name), customThemes);
+  createSettingsPanel();
 
   // Create keybindings panel (DOM injection, hidden by default)
   createKeybindingsPanel();
