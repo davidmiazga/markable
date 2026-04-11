@@ -14,8 +14,12 @@
  */
 
 import { marked } from "marked";
+import markedFootnote from "marked-footnote";
 import { EditorView } from "@codemirror/view";
 import { saveHtmlDialog, writeFile } from "./bridge";
+
+// Register the footnote extension globally so all marked.parse() calls support [^1] syntax.
+marked.use(markedFootnote());
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -101,6 +105,19 @@ hr {
 }
 img { max-width: 100%; height: auto; }
 input[type="checkbox"] { margin-right: 0.4em; }
+.callout {
+  border-left: 4px solid #388bfd;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: 4px;
+  background: rgba(56, 139, 253, 0.06);
+}
+.callout-title { font-weight: 600; margin: 0 0 0.25rem; }
+.callout-warning, .callout-caution, .callout-attention { border-left-color: #e6a817; background: rgba(230, 168, 23, 0.06); }
+.callout-danger, .callout-error, .callout-bug { border-left-color: #da3633; background: rgba(218, 54, 51, 0.06); }
+.callout-tip, .callout-hint, .callout-important, .callout-success, .callout-check, .callout-done { border-left-color: #2ea043; background: rgba(46, 160, 67, 0.06); }
+.callout-question, .callout-help, .callout-faq, .callout-example { border-left-color: #a371f7; background: rgba(163, 113, 247, 0.06); }
+.callout-quote, .callout-cite { border-left-color: #888; background: rgba(128, 128, 128, 0.06); }
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -240,10 +257,41 @@ export function enforceHtmlExtension(path: string): string {
  * @returns HTML fragment string produced by marked
  */
 export function markdownToHtml(markdown: string): string {
-  // The `as string` cast is safe because we never set async: true.
-  // marked.parse() returns string | Promise<string> in its type overloads, but
-  // the synchronous default (no options or async: false) always returns string.
-  return marked.parse(markdown) as string;
+  // Strip Obsidian-style %%comments%% before conversion
+  let cleaned = markdown.replace(/%%[\s\S]*?%%/g, "");
+
+  // Convert Obsidian-style callouts to HTML before marked processes them.
+  // Callouts use blockquote syntax: > [!TYPE] Title\n> content
+  // We replace them with <div> blocks so marked doesn't wrap them in <blockquote>.
+  cleaned = cleaned.replace(
+    /^(> *\[!(\w+)\] *(.*)\n(?:> .*\n?)*)/gm,
+    (_match) => {
+      const lines = _match.split("\n").filter((l) => l.trim());
+      const firstLine = lines[0];
+      const typeMatch = firstLine.match(/\[!(\w+)\]\s*(.*)/);
+      if (!typeMatch) return _match;
+      const type = typeMatch[1].toLowerCase();
+      const title = typeMatch[2] || type.charAt(0).toUpperCase() + type.slice(1);
+      const body = lines.slice(1).map((l) => l.replace(/^>\s?/, "")).join("\n");
+      return `<div class="callout callout-${type}"><p class="callout-title">${escapeHtml(title)}</p>\n\n${body}\n\n</div>\n\n`;
+    }
+  );
+
+  // Custom renderer: parse image dimensions from alt text (Obsidian-style "alt|WxH")
+  const renderer = new marked.Renderer();
+  renderer.image = function ({ href, text }: { href: string; text: string }) {
+    const dimMatch = text.match(/^(.*?)\s*\|\s*(\d+)\s*(?:[x×]\s*(\d+))?\s*$/);
+    if (dimMatch) {
+      const alt = escapeHtml(dimMatch[1].trim());
+      const w = dimMatch[2];
+      const h = dimMatch[3];
+      const style = h ? `width:${w}px;height:${h}px` : `width:${w}px;height:auto`;
+      return `<img src="${href}" alt="${alt}" style="${style}" />`;
+    }
+    return `<img src="${href}" alt="${escapeHtml(text)}" />`;
+  };
+
+  return marked.parse(cleaned, { renderer }) as string;
 }
 
 /**

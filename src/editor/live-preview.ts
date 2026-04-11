@@ -6,10 +6,51 @@ import {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { EditorState, Range, StateField } from "@codemirror/state";
+import { EditorState, Range, StateEffect, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNodeRef } from "@lezer/common";
 import { marked } from "marked";
+import { convertFileSrc } from "@tauri-apps/api/core";
+
+// --- View Mode: all lines render in preview (no active line) ---
+// Entering view mode: dispatch setViewMode.of(true)
+// Exiting view mode: any selection change (click, arrow keys) auto-exits
+
+/** Effect to enter or exit view mode. */
+export const setViewMode = StateEffect.define<boolean>();
+
+/** True = all lines in preview (no active/editable line). */
+export const viewModeField = StateField.define<boolean>({
+  create() { return false; },
+  update(value, tr) {
+    // Check for explicit view mode toggle first
+    let explicitSet = false;
+    for (const e of tr.effects) {
+      if (e.is(setViewMode)) { value = e.value; explicitSet = true; }
+    }
+    if (explicitSet) return value;
+    // Any user-initiated selection change exits view mode
+    if (value && tr.selection) return false;
+    return value;
+  },
+});
+
+/** Current file path — set by main.ts so image widgets can resolve relative paths. */
+let _currentFilePath: string | null = null;
+export function setLivePreviewFilePath(path: string | null) { _currentFilePath = path; }
+
+function resolveImageSrc(src: string): string {
+  // Already a URL (http, https, data)
+  if (/^(https?:|data:)/.test(src)) return src;
+  // Absolute path
+  if (src.startsWith("/")) return convertFileSrc(src);
+  // Relative path — resolve against current file's directory
+  if (_currentFilePath) {
+    const dir = _currentFilePath.replace(/\/[^/]*$/, "");
+    return convertFileSrc(`${dir}/${src}`);
+  }
+  return src;
+}
 
 class CheckboxWidget extends WidgetType {
   constructor(private checked: boolean) {
@@ -47,6 +88,86 @@ class HorizontalRuleWidget extends WidgetType {
 }
 
 
+
+class CalloutTitleWidget extends WidgetType {
+  constructor(private title: string) { super(); }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-live-callout-title";
+    span.textContent = this.title;
+    return span;
+  }
+
+  eq(other: CalloutTitleWidget): boolean { return this.title === other.title; }
+}
+
+class ImageWidget extends WidgetType {
+  constructor(private src: string, private alt: string, private width?: number, private height?: number) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const img = document.createElement("img");
+    img.src = resolveImageSrc(this.src);
+    img.alt = this.alt;
+    img.className = "cm-live-image";
+    if (this.width) img.style.width = `${this.width}px`;
+    if (this.height) img.style.height = `${this.height}px`;
+    if (this.width && !this.height) img.style.height = "auto";
+    return img;
+  }
+
+  eq(other: ImageWidget): boolean {
+    return this.src === other.src && this.alt === other.alt &&
+           this.width === other.width && this.height === other.height;
+  }
+
+  ignoreEvent(): boolean { return true; }
+}
+
+function handleImage(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  decorations: Range<Decoration>[]
+) {
+  const cursor = node.node.cursor();
+  if (!cursor.firstChild()) return;
+
+  let alt = "";
+  let url = "";
+
+  do {
+    if (cursor.name === "URL") {
+      url = state.doc.sliceString(cursor.from, cursor.to);
+    }
+  } while (cursor.nextSibling());
+
+  // Extract alt text from between ! [ and ]
+  const fullText = state.doc.sliceString(node.from, node.to);
+  const altMatch = fullText.match(/^!\[([^\]]*)\]/);
+  if (altMatch) alt = altMatch[1];
+
+  if (!url) return;
+
+  // Parse optional dimensions from alt text: "alt|100x200" or "alt|100"
+  // Tolerates optional spaces around | and accepts both x and × (Unicode multiply)
+  let cleanAlt = alt;
+  let width: number | undefined;
+  let height: number | undefined;
+  const dimMatch = alt.match(/^(.*?)\s*\|\s*(\d+)\s*(?:[x×]\s*(\d+))?\s*$/);
+  if (dimMatch) {
+    cleanAlt = dimMatch[1].trim();
+    width = parseInt(dimMatch[2], 10);
+    if (dimMatch[3]) height = parseInt(dimMatch[3], 10);
+  }
+
+  decorations.push(
+    Decoration.replace({
+      widget: new ImageWidget(url, cleanAlt, width, height),
+    }).range(node.from, node.to)
+  );
+}
 
 class TableWidget extends WidgetType {
   constructor(private markdown: string) {
@@ -127,6 +248,7 @@ class CopyButtonWidget extends WidgetType {
 }
 
 function getActiveLines(state: EditorState): Set<number> {
+  if (state.field(viewModeField, false)) return new Set();
   const active = new Set<number>();
   for (const range of state.selection.ranges) {
     const startLine = state.doc.lineAt(range.from).number;
@@ -177,7 +299,7 @@ function handleInlineMarkers(
   const cursor = node.node.cursor();
   if (cursor.firstChild()) {
     do {
-      if (cursor.name === "EmphasisMark" || cursor.name === "CodeMark" || cursor.name === "StrikethroughMark" || cursor.name === "HighlightMark" || cursor.name === "SuperscriptMark" || cursor.name === "SubscriptMark") {
+      if (cursor.name === "EmphasisMark" || cursor.name === "CodeMark" || cursor.name === "StrikethroughMark" || cursor.name === "HighlightMark" || cursor.name === "SuperscriptMark" || cursor.name === "SubscriptMark" || cursor.name === "CommentMark") {
         marks.push({ from: cursor.from, to: cursor.to });
       }
     } while (cursor.nextSibling());
@@ -250,6 +372,9 @@ function handleFencedCode(
   );
 }
 
+/** Matches `> [!type]` or `> [!type] Title` on the first line of a blockquote. */
+const CALLOUT_RE = /^>\s*\[!(\w+)\]\s*(.*)/;
+
 function handleBlockquote(
   node: SyntaxNodeRef,
   state: EditorState,
@@ -259,6 +384,58 @@ function handleBlockquote(
   const startLine = state.doc.lineAt(node.from);
   const endLine = state.doc.lineAt(node.to);
 
+  // Check if this blockquote is a callout
+  const firstLineText = startLine.text;
+  const calloutMatch = firstLineText.match(CALLOUT_RE);
+
+  if (calloutMatch) {
+    // It's a callout — style as admonition
+    const type = calloutMatch[1].toLowerCase();
+    const title = calloutMatch[2] || type.charAt(0).toUpperCase() + type.slice(1);
+
+    for (let ln = startLine.number; ln <= endLine.number; ln++) {
+      if (activeLines.has(ln)) continue;
+      const line = state.doc.line(ln);
+      let cls = `cm-live-callout cm-live-callout-${type}`;
+      if (ln === startLine.number) cls += " cm-live-callout-first";
+      if (ln === endLine.number) cls += " cm-live-callout-last";
+      decorations.push(Decoration.line({ class: cls }).range(line.from));
+
+      // Hide the "> " prefix on all lines
+      const prefixMatch = line.text.match(/^>\s?/);
+      if (prefixMatch) {
+        decorations.push(Decoration.replace({}).range(line.from, line.from + prefixMatch[0].length));
+      }
+
+      // On the first line, also hide the [!TYPE] marker and restyle the title
+      if (ln === startLine.number) {
+        const markerMatch = line.text.match(/^>\s*(\[!\w+\]\s*)/);
+        if (markerMatch) {
+          const markerEnd = line.from + markerMatch[0].length;
+          // Hide from after "> " prefix to end of "[!TYPE] "
+          const prefixLen = prefixMatch ? prefixMatch[0].length : 0;
+          decorations.push(Decoration.replace({}).range(line.from + prefixLen, markerEnd));
+          // Style the remaining title text
+          if (markerEnd < line.to) {
+            decorations.push(
+              Decoration.mark({ class: "cm-live-callout-title" }).range(markerEnd, line.to)
+            );
+          } else if (!calloutMatch[2]) {
+            // No title provided — insert the default type name as a widget
+            decorations.push(
+              Decoration.widget({
+                widget: new CalloutTitleWidget(title),
+                side: 1,
+              }).range(line.from + prefixLen)
+            );
+          }
+        }
+      }
+    }
+    return; // handled as callout, skip normal blockquote styling
+  }
+
+  // Normal blockquote (not a callout)
   for (let ln = startLine.number; ln <= endLine.number; ln++) {
     if (activeLines.has(ln)) continue;
     const line = state.doc.line(ln);
@@ -522,6 +699,20 @@ function buildDecorations(view: EditorView): DecorationSet {
           handleInlineMarkers(node, decorations, "cm-live-superscript");
         } else if (name === "Subscript") {
           handleInlineMarkers(node, decorations, "cm-live-subscript");
+        } else if (name === "Comment") {
+          // Hide the entire comment (marks + content) in preview mode
+          decorations.push(Decoration.replace({}).range(node.from, node.to));
+        } else if (name === "FootnoteRef") {
+          // Replace entire [^id] with a clickable superscript widget
+          const text = state.doc.sliceString(node.from, node.to);
+          const idMatch = text.match(/^\[\^(.+)\]$/);
+          if (idMatch) {
+            decorations.push(
+              Decoration.replace({
+                widget: new FootnoteRefWidget(idMatch[1]),
+              }).range(node.from, node.to)
+            );
+          }
         } else if (name === "Blockquote") {
           handleBlockquote(node, state, activeLines, decorations);
           return false; // don't descend, we handle children ourselves
@@ -533,6 +724,9 @@ function buildDecorations(view: EditorView): DecorationSet {
           } else {
             handleBulletItem(node, state, decorations);
           }
+        } else if (name === "Image") {
+          handleImage(node, state, decorations);
+          return false;
         } else if (name === "Link") {
           handleLink(node, state, decorations);
           return false; // don't descend into link children
@@ -553,7 +747,76 @@ function buildDecorations(view: EditorView): DecorationSet {
     });
   }
 
+  // Footnote definitions: [^id]: text — style as small, muted text
+  // These aren't parsed as special nodes by lezer, so we scan lines directly.
+  for (let ln = 1; ln <= state.doc.lines; ln++) {
+    if (activeLines.has(ln)) continue;
+    const line = state.doc.line(ln);
+    const fnMatch = line.text.match(/^\[\^([^\]]+)\]:\s/);
+    if (fnMatch) {
+      // Style the entire line as a footnote definition
+      decorations.push(Decoration.line({ class: "cm-live-footnote-def" }).range(line.from));
+      // Hide the [^id]: prefix, show only the definition text
+      const prefixEnd = line.from + fnMatch[0].length;
+      decorations.push(Decoration.replace({
+        widget: new FootnoteDefMarkerWidget(fnMatch[1]),
+      }).range(line.from, prefixEnd));
+    }
+  }
+
   return Decoration.set(decorations, true);
+}
+
+class FootnoteRefWidget extends WidgetType {
+  constructor(private id: string) { super(); }
+
+  toDOM(view: EditorView): HTMLElement {
+    const sup = document.createElement("sup");
+    sup.className = "cm-live-footnote-ref";
+    sup.textContent = this.id;
+    sup.title = `Jump to footnote ${this.id}`;
+    sup.style.cursor = "pointer";
+    sup.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Find the line starting with [^id]: and scroll to it without moving cursor
+      const doc = view.state.doc;
+      const pattern = `[^${this.id}]:`;
+      for (let ln = 1; ln <= doc.lines; ln++) {
+        const line = doc.line(ln);
+        if (line.text.startsWith(pattern)) {
+          // Use requestAnimationFrame to scroll after CM6 processes the event
+          requestAnimationFrame(() => {
+            const coords = view.coordsAtPos(line.from);
+            if (coords) {
+              view.scrollDOM.scrollTo({
+                top: view.scrollDOM.scrollTop + coords.top - view.scrollDOM.getBoundingClientRect().top - 100,
+                behavior: "smooth",
+              });
+            }
+          });
+          return;
+        }
+      }
+    });
+    return sup;
+  }
+
+  eq(other: FootnoteRefWidget): boolean { return this.id === other.id; }
+  ignoreEvent(): boolean { return false; } // allow click events to reach the widget
+}
+
+class FootnoteDefMarkerWidget extends WidgetType {
+  constructor(private id: string) { super(); }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-live-footnote-def-marker";
+    span.textContent = `${this.id}. `;
+    return span;
+  }
+
+  eq(other: FootnoteDefMarkerWidget): boolean { return this.id === other.id; }
 }
 
 class LivePreviewPlugin {

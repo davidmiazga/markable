@@ -10,8 +10,10 @@
  */
 
 import { EditorView } from "@codemirror/view";
+import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
+import { setLivePreviewFilePath, setViewMode } from "./editor/live-preview";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import {
@@ -78,6 +80,8 @@ let previewEnabled = true;
 let isReadOnly = false;
 /** Floating find/replace widget. Initialized in initApp() after editor is ready. */
 let findWidget: FindWidget | null = null;
+/** True when the document has unsaved changes. */
+let isDirty = false;
 
 function getFileName(path: string): string {
   return path.split("/").pop() || path;
@@ -85,10 +89,22 @@ function getFileName(path: string): string {
 
 function updateTitleBar(override?: string) {
   const titleEl = document.getElementById("titlebar-title");
-  const displayName = override ?? (currentFilePath ? getFileName(currentFilePath) : "Untitled");
+  const baseName = override ?? (currentFilePath ? getFileName(currentFilePath) : "Untitled");
   if (titleEl) {
-    titleEl.textContent = displayName;
+    titleEl.textContent = isDirty ? `${baseName} •` : baseName;
   }
+}
+
+function setDirty(dirty: boolean) {
+  if (isDirty === dirty) return;
+  isDirty = dirty;
+  updateTitleBar();
+}
+
+function setCurrentFile(path: string | null) {
+  currentFilePath = path;
+  setLivePreviewFilePath(path);
+  updateTitleBar();
 }
 
 async function refreshRecentFilesMenu(): Promise<void> {
@@ -277,9 +293,9 @@ function newFile() {
       effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
     });
   }
-  currentFilePath = null;
+  setCurrentFile(null);
   isReadOnly = false;
-  updateTitleBar();
+  setDirty(false);
 }
 
 /**
@@ -293,12 +309,13 @@ async function openHelpFile(filename: string, title: string) {
     const content = await readResourceFile(filename);
     findWidget?.close();
     findWidget?.clearQuery();
+    isReadOnly = true;
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: content },
       effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
     });
-    currentFilePath = null;
-    isReadOnly = true;
+    setCurrentFile(null);
+    setDirty(false);
     updateTitleBar(title);
   } catch (e) {
     console.error("openHelpFile error:", e);
@@ -327,25 +344,23 @@ async function openFile() {
     return;
   }
 
+  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
+  isReadOnly = false;
+  setCurrentFile(path);
+
   // Load into editor
   if (editor) {
     const content = readResult.value;
-    // FR-11.1 / EC-12: Close the FindWidget and clear CM6 search state before
-    // replacing the document. A changes-only transaction does not reset
-    // StateField values, so stale highlights from the previous file would
-    // remain visible without this explicit clear.
     findWidget?.close();
     findWidget?.clearQuery();
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: content },
       effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
     });
+    editor.dispatch({ effects: setViewMode.of(true) });
+    editor.contentDOM.blur();
   }
-
-  // Update current file and title bar
-  isReadOnly = false;
-  currentFilePath = path;
-  updateTitleBar();
+  setDirty(false);
   await addRecentFile(path);
   await refreshRecentFilesMenu();
 
@@ -364,6 +379,10 @@ async function openFileByPath(path: string): Promise<void> {
     return;
   }
 
+  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
+  isReadOnly = false;
+  setCurrentFile(path);
+
   if (editor) {
     findWidget?.close();
     findWidget?.clearQuery();
@@ -371,11 +390,12 @@ async function openFileByPath(path: string): Promise<void> {
       changes: { from: 0, to: editor.state.doc.length, insert: readResult.value },
       effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
     });
+    // Enter view mode — all lines render in preview until the user clicks
+    editor.dispatch({ effects: setViewMode.of(true) });
+    editor.contentDOM.blur();
   }
 
-  isReadOnly = false;
-  currentFilePath = path;
-  updateTitleBar();
+  setDirty(false);
   await addRecentFile(path);
   await refreshRecentFilesMenu();
   console.log(`File loaded (by path): ${path}`);
@@ -410,7 +430,7 @@ async function saveFile() {
   }
 
   console.log(`File saved: ${currentFilePath}`);
-  updateTitleBar();
+  setDirty(false);
   await addRecentFile(currentFilePath);
   await refreshRecentFilesMenu();
 }
@@ -447,8 +467,8 @@ async function saveFileAs() {
   }
 
   // Update current file path and title bar
-  currentFilePath = path;
-  updateTitleBar();
+  setCurrentFile(path);
+  setDirty(false);
   await addRecentFile(path);
   await refreshRecentFilesMenu();
 
@@ -485,19 +505,19 @@ async function openRecentFileByPath(path: string): Promise<void> {
     return;
   }
 
+  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
+  setCurrentFile(path);
+
   if (editor) {
-    // FR-11.1 / EC-12: Close the FindWidget and clear CM6 search state before
-    // replacing the document. Changes-only transactions do not reset StateField
-    // values, so stale highlights from the previous file would remain visible
-    // without this explicit clear.
     findWidget?.close();
     findWidget?.clearQuery();
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: result.value },
     });
+    editor.dispatch({ effects: setViewMode.of(true) });
+    editor.contentDOM.blur();
   }
-  currentFilePath = path;
-  updateTitleBar();
+  setDirty(false);
   await addRecentFile(path);
   await refreshRecentFilesMenu();
   console.log(`Opened recent: ${path}`);
@@ -542,6 +562,16 @@ function handleAction(action: string): void {
   switch (action) {
     case "app-settings":    toggleSettingsPanel();    break;
     case "app-keybindings": toggleKeybindingsPanel(); break;
+    case "edit-select-none":
+      if (editor) {
+        // Collapse selection to remove highlight, then enter view mode
+        editor.dispatch({
+          selection: { anchor: 0 },
+          effects: setViewMode.of(true),
+        });
+        editor.contentDOM.blur();
+      }
+      break;
     case "file-new":        newFile();                break;
     case "file-open":       void openFile();          break;
     case "file-save":       void saveFile();          break;
@@ -669,6 +699,17 @@ async function initApp() {
   // Preview mode starts ON — hide line numbers
   editorContainer.classList.add("preview-mode");
 
+  // Attach dirty-state tracking to the editor via updateListener.
+  editor.dispatch({
+    effects: StateEffect.appendConfig.of(
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged && !isReadOnly) {
+          setDirty(true);
+        }
+      })
+    ),
+  });
+
   // Auto-focus the editor so the cursor is blinking immediately
   editor.focus();
 
@@ -711,6 +752,16 @@ async function initApp() {
     } else {
       handleAction(action);
     }
+  });
+
+  // Drag & drop: open .md / .txt files dropped onto the window
+  await getCurrentWebviewWindow().onDragDropEvent(async (event) => {
+    if (event.payload.type !== "drop") return;
+    const paths = event.payload.paths.filter(
+      (p) => p.endsWith(".md") || p.endsWith(".txt")
+    );
+    if (paths.length === 0) return;
+    await openFileByPath(paths[0]);
   });
 
   // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom

@@ -221,6 +221,7 @@ pub fn run() {
                 | "edit-paste-link"
                 | "edit-copy-plain"
                 | "edit-copy-html"
+                | "edit-select-none"
                 | "view-toggle-preview"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"

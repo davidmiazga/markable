@@ -77,7 +77,17 @@
       "Bash(xargs ls:*)",
       "Bash(git checkout:*)",
       "Bash(gh issue:*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(curl -sL \"https://obsidian.md/help/obsidian-flavored-markdown\")",
+      "Bash(curl:*)",
+      "Bash(grep -r \"asset_protocol\\\\|assetProtocol\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-utils-2*/src/config/)",
+      "Bash(grep -rn \"asset_protocol\\\\|AssetProtocol\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-utils-2*/src/)",
+      "WebFetch(domain:discuss.codemirror.net)",
+      "WebFetch(domain:forum.obsidian.md)",
+      "WebFetch(domain:keyboardshortcuts.org)",
+      "WebFetch(domain:codemirror.net)",
+      "WebFetch(domain:support.typora.io)",
+      "WebFetch(domain:defkey.com)"
     ]
   }
 }

@@ -11,10 +11,12 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { Superscript, Subscript } from "@lezer/markdown";
 import { HighlightExtension } from "./highlight-ext";
+import { CommentExtension } from "./comment-ext";
+import { FootnoteExtension } from "./footnote-ext";
 import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { search, searchKeymap } from "@codemirror/search";
-import { livePreviewExtension, tablePreviewField } from "./live-preview";
+import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 
@@ -116,7 +118,7 @@ export function buildExtensions(): Extension[] {
   const extensions: Extension[] = [];
 
   try {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [HighlightExtension, Superscript, Subscript] }));
+    extensions.push(markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [HighlightExtension, CommentExtension, FootnoteExtension, Superscript, Subscript] }));
   } catch (error) {
     console.warn("Failed to load Markdown extension:", error);
   }
@@ -148,6 +150,7 @@ export function buildExtensions(): Extension[] {
   // and match highlights.
   extensions.push(searchTheme);
   extensions.push(syntaxHighlighting(themeHighlight));
+  extensions.push(viewModeField);
   extensions.push(previewCompartment.of(previewExtensions));
   extensions.push(editableCompartment.of(EditorView.editable.of(true)));
 

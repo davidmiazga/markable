@@ -73,6 +73,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &MenuItem::with_id(handle, "edit-paste-link", "Paste Link", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::select_all(handle, None)?,
+            &MenuItem::with_id(handle, "edit-select-none", "Select None", true, Some("CmdOrCtrl+Shift+D"))?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "edit-find", "Find...", true, Some("CmdOrCtrl+F"))?,
             &MenuItem::with_id(handle, "edit-find-replace", "Find and Replace...", true, Some("CmdOrCtrl+Alt+F"))?,
