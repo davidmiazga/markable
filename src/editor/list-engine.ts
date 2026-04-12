@@ -289,12 +289,15 @@ export function inferListStyle(
   precedingLine: string | null,
   fallbackStyle: ListStyle,
 ): ListStyle {
-  // Layer 1: metadata comment override
+  // Layer 1: metadata comment override — check preceding line AND first line of block
+  const commentRe = /<!--\s*list:\s*(standard|alphanumeric|decimal|steps)\s*-->/;
   if (precedingLine) {
-    const commentMatch = precedingLine.match(/<!--\s*list:\s*(standard|alphanumeric|decimal|steps)\s*-->/);
-    if (commentMatch) {
-      return commentMatch[1] as ListStyle;
-    }
+    const m = precedingLine.match(commentRe);
+    if (m) return m[1] as ListStyle;
+  }
+  if (lines.length > 0) {
+    const m = lines[0].match(commentRe);
+    if (m) return m[1] as ListStyle;
   }
 
   // Layer 2: auto-inference from markers

@@ -557,6 +557,69 @@ describe("decimal outline full sequence", () => {
   });
 });
 
+describe("steps Tab flow simulation", () => {
+  it("simulates Enter → Tab → Enter → Tab through all 3 levels", () => {
+    // Start: user typed "1. Step one" with <!-- list: steps --> above
+    const docLines = ["<!-- list: steps -->", "1. Step one"];
+
+    // === Enter on "1. Step one" ===
+    const line1Info = detectListLine("1. Step one")!;
+    expect(line1Info).not.toBeNull();
+    expect(line1Info.markerType).toBe("decimal");
+    const nextMark1 = incrementMarker(line1Info); // "2. "
+    expect(nextMark1).toBe("2. ");
+    // New line: "2. "
+    docLines.push("2. ");
+
+    // === Tab on "2. " (should become "  a. ") ===
+    const line2Info = detectListLine("2. ")!;
+    expect(line2Info).not.toBeNull();
+    expect(line2Info.markerType).toBe("decimal");
+    expect(line2Info.depth).toBe(0);
+
+    // Infer style from block
+    const block2 = findListBlockRange(docLines, 2)!;
+    expect(block2).toEqual({ start: 0, end: 2 });
+    const blockLines2 = docLines.slice(block2.start, block2.end + 1);
+    const style2 = inferListStyle(blockLines2, null, "standard");
+    expect(style2).toBe("steps");
+
+    const newMarker2 = firstMarkerForDepth("steps", 1); // depth 0+1=1
+    expect(newMarker2).toBe("a. ");
+    // Line becomes "  a. "
+    docLines[2] = "  a. ";
+
+    // === Type "right", then Enter on "  a. right" ===
+    docLines[2] = "  a. right";
+    const line3Info = detectListLine("  a. right")!;
+    expect(line3Info).not.toBeNull();
+    expect(line3Info.markerType).toBe("alpha-lower");
+    expect(line3Info.depth).toBe(1);
+    expect(line3Info.ordinal).toBe(1);
+    const nextMark3 = incrementMarker(line3Info); // "b. "
+    expect(nextMark3).toBe("b. ");
+    // New line: "  b. "
+    docLines.push("  b. ");
+
+    // === Tab on "  b. " (should become "    - ") ===
+    const line4Info = detectListLine("  b. ")!;
+    expect(line4Info).not.toBeNull();
+    expect(line4Info.markerType).toBe("alpha-lower");
+    expect(line4Info.depth).toBe(1);
+
+    const block4 = findListBlockRange(docLines, 3)!;
+    expect(block4).not.toBeNull();
+    const blockLines4 = docLines.slice(block4.start, block4.end + 1);
+    const style4 = inferListStyle(blockLines4, null, "standard");
+    expect(style4).toBe("steps");
+
+    const newMarker4 = firstMarkerForDepth("steps", 2); // depth 1+1=2
+    expect(newMarker4).toBe("- ");
+    // Line becomes "    - "
+    // SUCCESS: third level is a bullet
+  });
+});
+
 describe("steps style full sequence", () => {
   it("produces correct markers at each depth", () => {
     // Depth 0: 1. 2. 3.

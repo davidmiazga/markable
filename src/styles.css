@@ -334,6 +334,11 @@ body {
   display: none;
 }
 
+/* HTML comments (<!-- ... -->) hidden when cursor is elsewhere */
+.cm-line.cm-live-html-comment-hide {
+  display: none;
+}
+
 /* Expanded state: individual line classes shown when cursor is in the block */
 .cm-live-frontmatter-mark {
   color: var(--text-secondary);

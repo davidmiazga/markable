@@ -10,18 +10,20 @@ import { EditorSelection, Prec } from "@codemirror/state";
 import { marked } from "marked";
 import { readClipboardText } from "../lib/bridge";
 import { detectListLine, inferListStyle, firstMarkerForDepth, findListBlockRange, type ListStyle } from "./list-engine";
+import { getCurrentSettings } from "../lib/settings";
 
 /** Infer the list style for the block containing the given line index (0-based). */
 function inferStyleForLine(view: EditorView, lineIndex: number): ListStyle {
+  const fallback = (getCurrentSettings().listStyle as ListStyle) ?? "standard";
   const lines: string[] = [];
   for (let i = 1; i <= view.state.doc.lines; i++) {
     lines.push(view.state.doc.line(i).text);
   }
   const block = findListBlockRange(lines, lineIndex);
-  if (!block) return "standard";
+  if (!block) return fallback;
   const blockLines = lines.slice(block.start, block.end + 1);
   const precedingLine = block.start > 0 ? lines[block.start - 1] : null;
-  return inferListStyle(blockLines, precedingLine, "standard");
+  return inferListStyle(blockLines, precedingLine, fallback);
 }
 
 /**

@@ -90,7 +90,10 @@
       "WebFetch(domain:defkey.com)",
       "WebFetch(domain:spec.commonmark.org)",
       "WebFetch(domain:pandoc.org)",
-      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")"
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(grep -l Tab /Users/davidmiazga/Documents/_code-workArea/markable-2.0/node_modules/codemirror/dist/*.js)",
+      "Bash(SETTINGS_FILE=\"$HOME/Library/Application Support/com.markable.app/settings.json\")",
+      "Read(//Users/davidmiazga/Documents/_code-workArea/markable-2.0/**)"
     ]
   }
 }

@@ -1,7 +1,7 @@
 /**
  * List Keybindings — CM6 keymap for Enter, Tab, Shift-Tab, Backspace in lists.
  *
- * Registered at Prec.high so it runs before default handlers.
+ * Registered at Prec.highest so it runs before all other handlers.
  * Only intercepts keypresses when the cursor is on a list line.
  * Non-list lines fall through to default CM6 behavior.
  */
@@ -14,8 +14,9 @@ import {
   inferListStyle,
   firstMarkerForDepth,
   findListBlockRange,
-  type ListLineInfo,
+  type ListStyle,
 } from "./list-engine";
+import { getCurrentSettings } from "../lib/settings";
 
 // --- Helpers ---
 
@@ -24,14 +25,6 @@ function getCurrentLine(view: EditorView): { text: string; from: number; to: num
   const pos = view.state.selection.main.head;
   const line = view.state.doc.lineAt(pos);
   return { text: line.text, from: line.from, to: line.to, number: line.number };
-}
-
-/** Check if the cursor is at or after the marker on the current line. */
-function cursorIsInListContent(view: EditorView, info: ListLineInfo): boolean {
-  const pos = view.state.selection.main.head;
-  const line = view.state.doc.lineAt(pos);
-  const markerEnd = line.from + info.indent.length + info.marker.length;
-  return pos >= markerEnd;
 }
 
 /** Get all lines in the document as an array of strings (0-indexed). */
@@ -43,14 +36,19 @@ function getDocLines(view: EditorView): string[] {
   return lines;
 }
 
+/** Get the global fallback list style from settings. */
+function getGlobalListStyle(): ListStyle {
+  return (getCurrentSettings().listStyle as ListStyle) ?? "standard";
+}
+
 /** Infer the list style for the block containing the given line index (0-based). */
-function inferStyleForLine(view: EditorView, lineIndex: number): ReturnType<typeof inferListStyle> {
+function inferStyleForLine(view: EditorView, lineIndex: number): ListStyle {
   const docLines = getDocLines(view);
   const block = findListBlockRange(docLines, lineIndex);
-  if (!block) return "standard";
+  if (!block) return getGlobalListStyle();
   const blockLines = docLines.slice(block.start, block.end + 1);
   const precedingLine = block.start > 0 ? docLines[block.start - 1] : null;
-  return inferListStyle(blockLines, precedingLine, "standard");
+  return inferListStyle(blockLines, precedingLine, getGlobalListStyle());
 }
 
 // --- Enter handler ---
@@ -62,7 +60,6 @@ function handleEnter(view: EditorView): boolean {
 
   // If the line content after the marker is empty, remove the marker (exit list)
   if (info.content.trim() === "") {
-    // Replace the entire line with just the indent (or nothing if at depth 0)
     if (info.depth > 0) {
       // Outdent: remove marker, keep reduced indent
       const newIndent = "  ".repeat(info.depth - 1);
@@ -84,7 +81,7 @@ function handleEnter(view: EditorView): boolean {
   const nextMark = incrementMarker(info);
   const newLineText = info.indent + nextMark;
 
-  // Insert newline + indent + next marker
+  // Insert newline + indent + next marker at cursor position
   const pos = view.state.selection.main.head;
   view.dispatch({
     changes: { from: pos, insert: "\n" + newLineText },
@@ -101,9 +98,6 @@ function handleTab(view: EditorView): boolean {
   const info = detectListLine(line.text);
   if (!info) return false; // Not a list line
 
-  // Don't indent if cursor is before the marker content
-  if (!cursorIsInListContent(view, info)) return false;
-
   // Infer the list style for this block
   const style = inferStyleForLine(view, line.number - 1);
   const newDepth = info.depth + 1;
@@ -112,13 +106,12 @@ function handleTab(view: EditorView): boolean {
   const newMarker = firstMarkerForDepth(style, newDepth);
   const newIndent = info.indent + "  ";
 
-  // Replace indent + old marker with new indent + new marker
-  const oldPrefix = info.indent + info.marker;
-  const newPrefix = newIndent + newMarker;
+  // Replace the entire line (indent + marker + content) with new version
+  const newLine = newIndent + newMarker + info.content;
 
   view.dispatch({
-    changes: { from: line.from, to: line.from + oldPrefix.length, insert: newPrefix },
-    selection: { anchor: line.from + newPrefix.length + info.content.length },
+    changes: { from: line.from, to: line.to, insert: newLine },
+    selection: { anchor: line.from + newIndent.length + newMarker.length + info.content.length },
   });
 
   return true;
@@ -143,13 +136,12 @@ function handleShiftTab(view: EditorView): boolean {
   const spacesToRemove = Math.min(2, info.indent.length);
   const newIndent = info.indent.slice(spacesToRemove);
 
-  // Replace indent + old marker with new indent + new marker
-  const oldPrefix = info.indent + info.marker;
-  const newPrefix = newIndent + newMarker;
+  // Replace the entire line
+  const newLine = newIndent + newMarker + info.content;
 
   view.dispatch({
-    changes: { from: line.from, to: line.from + oldPrefix.length, insert: newPrefix },
-    selection: { anchor: line.from + newPrefix.length + info.content.length },
+    changes: { from: line.from, to: line.to, insert: newLine },
+    selection: { anchor: line.from + newIndent.length + newMarker.length + info.content.length },
   });
 
   return true;
@@ -180,7 +172,7 @@ function handleBackspace(view: EditorView): boolean {
 
 // --- Public keymap extension ---
 
-export const listKeymap: Extension = Prec.high(
+export const listKeymap: Extension = Prec.highest(
   keymap.of([
     { key: "Enter", run: handleEnter },
     { key: "Tab", run: handleTab },

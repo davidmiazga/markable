@@ -40,6 +40,8 @@ export interface MarkableSettings {
   focusMode?: boolean;
   /** Typewriter mode (cursor always vertically centered). */
   typewriterMode?: boolean;
+  /** Active list style for ambiguous markers (e.g. "1."). */
+  listStyle?: "standard" | "alphanumeric" | "decimal" | "steps";
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */

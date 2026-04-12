@@ -702,6 +702,13 @@ function buildDecorations(view: EditorView): DecorationSet {
         } else if (name === "Comment") {
           // Hide the entire comment (marks + content) in preview mode
           decorations.push(Decoration.replace({}).range(node.from, node.to));
+        } else if (name === "CommentBlock") {
+          // Hide HTML comments (<!-- ... -->) when cursor is not on the line
+          const cbLine = state.doc.lineAt(node.from);
+          if (!activeLines.has(cbLine.number)) {
+            decorations.push(Decoration.replace({}).range(cbLine.from, cbLine.to));
+            decorations.push(Decoration.line({ class: "cm-live-html-comment-hide" }).range(cbLine.from));
+          }
         } else if (name === "FootnoteRef") {
           // Replace entire [^id] with a clickable superscript widget
           const text = state.doc.sliceString(node.from, node.to);
