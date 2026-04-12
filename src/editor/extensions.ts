@@ -21,6 +21,7 @@ import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 import { focusModeExtension } from "./focus-mode";
 import { typewriterModeExtension } from "./typewriter-mode";
+import { listKeymap } from "./list-keybindings";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
 const baseTheme = EditorView.theme({
@@ -153,6 +154,26 @@ export function buildExtensions(): Extension[] {
   extensions.push(searchTheme);
   extensions.push(syntaxHighlighting(themeHighlight));
   extensions.push(viewModeField);
+  extensions.push(listKeymap);
+  // Tab/Shift-Tab fallback for non-list lines. List lines are handled by
+  // listKeymap above at Prec.high. These insert/remove 2 spaces.
+  extensions.push(keymap.of([
+    {
+      key: "Tab",
+      run: (view) => {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({ changes: { from, to, insert: "  " }, selection: { anchor: from + 2 } });
+        return true;
+      },
+      shift: (view) => {
+        const line = view.state.doc.lineAt(view.state.selection.main.head);
+        const spaces = line.text.match(/^ {1,2}/);
+        if (!spaces) return false;
+        view.dispatch({ changes: { from: line.from, to: line.from + spaces[0].length, insert: "" } });
+        return true;
+      },
+    },
+  ]));
   extensions.push(focusModeExtension);
   extensions.push(typewriterModeExtension);
   extensions.push(previewCompartment.of(previewExtensions));

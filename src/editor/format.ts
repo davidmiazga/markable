@@ -9,6 +9,20 @@ import { EditorView, type KeyBinding } from "@codemirror/view";
 import { EditorSelection, Prec } from "@codemirror/state";
 import { marked } from "marked";
 import { readClipboardText } from "../lib/bridge";
+import { detectListLine, inferListStyle, firstMarkerForDepth, findListBlockRange, type ListStyle } from "./list-engine";
+
+/** Infer the list style for the block containing the given line index (0-based). */
+function inferStyleForLine(view: EditorView, lineIndex: number): ListStyle {
+  const lines: string[] = [];
+  for (let i = 1; i <= view.state.doc.lines; i++) {
+    lines.push(view.state.doc.line(i).text);
+  }
+  const block = findListBlockRange(lines, lineIndex);
+  if (!block) return "standard";
+  const blockLines = lines.slice(block.start, block.end + 1);
+  const precedingLine = block.start > 0 ? lines[block.start - 1] : null;
+  return inferListStyle(blockLines, precedingLine, "standard");
+}
 
 /**
  * Toggle a heading level on the current line(s).
@@ -263,7 +277,7 @@ export function insertHorizontalRule(view: EditorView) {
   view.focus();
 }
 
-/** Indent selected lines by 2 spaces. */
+/** Indent selected lines by 2 spaces. On list lines, also swaps the marker to the correct type for the new depth. */
 export function indentLines(view: EditorView) {
   const state = view.state;
   const changes: { from: number; to: number; insert: string }[] = [];
@@ -273,7 +287,19 @@ export function indentLines(view: EditorView) {
     const lineEnd = state.doc.lineAt(range.to);
     for (let i = lineStart.number; i <= lineEnd.number; i++) {
       const line = state.doc.line(i);
-      changes.push({ from: line.from, to: line.from, insert: "  " });
+      const info = detectListLine(line.text);
+      if (info) {
+        // List line: indent + swap marker
+        const style = inferStyleForLine(view, i - 1);
+        const newDepth = info.depth + 1;
+        const newMarker = firstMarkerForDepth(style, newDepth);
+        const oldPrefix = info.indent + info.marker;
+        const newPrefix = info.indent + "  " + newMarker;
+        changes.push({ from: line.from, to: line.from + oldPrefix.length, insert: newPrefix });
+      } else {
+        // Non-list line: just add 2 spaces
+        changes.push({ from: line.from, to: line.from, insert: "  " });
+      }
     }
   }
 
@@ -283,7 +309,7 @@ export function indentLines(view: EditorView) {
   }
 }
 
-/** Outdent selected lines by up to 2 spaces. */
+/** Outdent selected lines by up to 2 spaces. On list lines, also swaps the marker to the correct type for the new depth. */
 export function outdentLines(view: EditorView) {
   const state = view.state;
   const changes: { from: number; to: number; insert: string }[] = [];
@@ -293,9 +319,22 @@ export function outdentLines(view: EditorView) {
     const lineEnd = state.doc.lineAt(range.to);
     for (let i = lineStart.number; i <= lineEnd.number; i++) {
       const line = state.doc.line(i);
-      const match = line.text.match(/^( {1,2})/);
-      if (match) {
-        changes.push({ from: line.from, to: line.from + match[1].length, insert: "" });
+      const info = detectListLine(line.text);
+      if (info && info.depth > 0) {
+        // List line: outdent + swap marker
+        const style = inferStyleForLine(view, i - 1);
+        const newDepth = info.depth - 1;
+        const newMarker = firstMarkerForDepth(style, newDepth);
+        const spacesToRemove = Math.min(2, info.indent.length);
+        const oldPrefix = info.indent + info.marker;
+        const newPrefix = info.indent.slice(spacesToRemove) + newMarker;
+        changes.push({ from: line.from, to: line.from + oldPrefix.length, insert: newPrefix });
+      } else {
+        // Non-list line or depth 0: just remove spaces
+        const match = line.text.match(/^( {1,2})/);
+        if (match) {
+          changes.push({ from: line.from, to: line.from + match[1].length, insert: "" });
+        }
       }
     }
   }

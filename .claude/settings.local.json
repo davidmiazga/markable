@@ -87,7 +87,10 @@
       "WebFetch(domain:keyboardshortcuts.org)",
       "WebFetch(domain:codemirror.net)",
       "WebFetch(domain:support.typora.io)",
-      "WebFetch(domain:defkey.com)"
+      "WebFetch(domain:defkey.com)",
+      "WebFetch(domain:spec.commonmark.org)",
+      "WebFetch(domain:pandoc.org)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")"
     ]
   }
 }
