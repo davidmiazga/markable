@@ -96,7 +96,13 @@
       "Read(//Users/davidmiazga/Documents/_code-workArea/markable-2.0/**)",
       "Bash(ls /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/*.test.*)",
       "Bash(git stash:*)",
-      "Bash(ls /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/editor/*.ts)"
+      "Bash(ls /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/editor/*.ts)",
+      "Bash(grep -r vi.mock.*bridge /Users/davidmiazga/Documents/_code-workArea/markable-2.0/tests/)",
+      "Bash(grep -c \"__markablePlugin__\" /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src-tauri/plugins/core/*.js)",
+      "Bash(ls:*)",
+      "Bash(grep -rn \"plugin-types\\\\|user-plugin-types\\\\|buildUserPluginAPI\\\\|PluginContext\\\\|UserPluginAPI\\\\|UserPlugin\\\\b\\\\|PluginDef\\\\b\\\\|UserPluginDef\\\\b\\\\|statusBar\\\\?\\\\|wordCount\\\\?\\\\|focusMode\\\\?\\\\|typewriterMode\\\\?\\\\|userPlugins\\\\?\" src/ --include=*.ts)",
+      "Bash(grep -rn \"TODO\\\\|FIXME\\\\|HACK\\\\|XXX\" /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/ --include=*.ts)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

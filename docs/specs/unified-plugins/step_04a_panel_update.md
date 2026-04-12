@@ -1,3 +1,136 @@
+# step_04a — Panel Update: Core/User Sections, Version Badges, Reload Wiring
+
+**Chunk:** 4
+**Prerequisite:** Chunk 3 approved (step_03a, step_03b, step_03c all merged and passing).
+**Status:** NOT STARTED
+
+---
+
+## Objective
+
+Rewrite `plugins-panel.ts` list view from a flat unsectioned list into two collapsible sections — "Core Plugins" and "User Plugins" — and wire the previously no-op Reload button to a new `reloadUserPlugins()` method on `PluginManager`. Also add:
+
+- A `v{version}` badge on each core plugin row in the list view.
+- A version line in the detail view for all loaded plugins.
+- The Reload button lives in the "User Plugins" section header.
+
+No new Rust commands are needed. The panel already receives `UnifiedPluginDef[]` with `kind`, `status`, and `version` fields from `pluginManager.getDefinitions()`. This step is purely TypeScript + CSS.
+
+---
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/plugins/plugins-panel/plugins-panel.ts` | Replace `showListView()` with sectioned rendering; wire `reloadPlugins` param; add version in detail view |
+| `src/plugins/plugins-panel/plugins-panel.css` | Add `.plugin-version-badge` rule; add `.plugin-section-body` collapsed state |
+| `src/plugins/index.ts` | Add `reloadUserPlugins(settings, statusBarZones)` method to `PluginManager` |
+| `src/main.ts` | Pass `reloadPlugins` callback to `createPluginsPanel()`; define the callback body |
+
+---
+
+## Design Decisions
+
+### Section split
+
+`getDefinitions()` returns one flat array in load order (core records first, then user records, within each group in lexicographic filename order). The panel splits this array into two groups at render time:
+
+- **Core section**: records where `kind === "core"`.
+- **User section**: records where `kind === "user"`.
+
+A core record with `status === "overridden"` appears in the Core section (not the User section) with the "Overridden" badge and toggle disabled. The user version of that file appears normally in the User section.
+
+### Collapsible behaviour
+
+Both sections open by default (`collapsed = false`). A chevron button in the section header toggles the body visibility. The collapsed state is per-session only (not persisted to settings).
+
+### Version badge placement
+
+In the list view, each loaded core plugin row shows `v{version}` as a small grey span after the plugin name. Overridden and failed core rows do not show a version badge (version is unknown for those slots).
+
+In the detail view, all loaded plugins (core and user) show a "Version: {version}" line below the description text.
+
+### Reload button
+
+The Reload button is in the "User Plugins" section header (right side). It is enabled only when a `reloadPlugins` callback was passed to `createPluginsPanel()`. During an in-progress reload it is disabled with `"Reloading..."` text to prevent double-click (EC-23).
+
+`reloadUserPlugins()` on `PluginManager` does a constrained rescan: it calls `listUserPlugins()`, evaluates any `.js` files not already in `_records` by filename, and calls `_enable` for plugins whose id appears in `settings.plugins` with `enabled: true`. It does NOT re-scan the core directory. Already-registered user plugin filenames are skipped (EC-23 idempotency). After completing, the panel calls `updateUserPluginDefs()` to re-render.
+
+---
+
+## Precise Code
+
+### 1. `src/plugins/index.ts` — add `reloadUserPlugins()`
+
+Add this method to the `PluginManager` class, after the existing `loadPlugins()` method. It takes the same `settings` and `statusBarZones` parameters as `loadPlugins()`.
+
+```typescript
+/**
+ * Rescan the user plugin directory and load any new plugins found since
+ * the last loadPlugins() call. Already-registered filenames are skipped
+ * (EC-23). Core plugins are not rescanned.
+ *
+ * Called from the panel's "Reload" button. Safe to call multiple times;
+ * the filename registration guard prevents duplicate loading.
+ *
+ * @param settings         Current application settings.
+ * @param statusBarZones   DOM references for the three status bar zones.
+ */
+async reloadUserPlugins(
+  settings: MarkableSettings,
+  statusBarZones: { left: HTMLElement; center: HTMLElement; right: HTMLElement },
+): Promise<void> {
+  let userFilenames: string[];
+  try {
+    const userResponse = await listUserPlugins();
+    userFilenames = userResponse.files;
+    if (userResponse.truncated.length > 0) {
+      console.warn(
+        "[Plugins] 50-plugin limit reached during reload. Ignored:",
+        userResponse.truncated.join(", "),
+      );
+    }
+  } catch (err) {
+    console.error("PluginManager.reloadUserPlugins: failed to list user plugins:", err);
+    return;
+  }
+
+  // Build the set of filenames already registered (any kind) to guard against
+  // re-evaluating a file that was loaded at startup (EC-23).
+  const registeredFilenames = new Set(this._records.map((r) => r.filename));
+  const registeredIds = new Set(
+    this._records.filter((r) => r.id !== null).map((r) => r.id as string),
+  );
+
+  for (const filename of userFilenames) {
+    if (registeredFilenames.has(filename)) continue;
+    registeredFilenames.add(filename);
+
+    const record = await this._loadPluginFile(
+      filename,
+      "user",
+      registeredIds,
+      statusBarZones,
+    );
+    this._records.push(record);
+    if (record.id !== null) registeredIds.add(record.id);
+
+    // Restore enabled state for newly-loaded plugins.
+    if (record.status === "loaded" && record.plugin && record.api) {
+      const saved = settings.plugins?.[record.plugin.id];
+      if (saved?.enabled === true) {
+        await this._enable(record);
+      }
+    }
+  }
+}
+```
+
+### 2. `src/plugins/plugins-panel/plugins-panel.ts` — full replacement
+
+Replace the entire file with the content below. All public exports are preserved (`createPluginsPanel`, `openPluginsPanel`, `closePluginsPanel`, `togglePluginsPanel`, `updatePluginStates`, `updateUserPluginDefs`). The `void reloadPlugins` placeholder is replaced by proper storage and use.
+
+```typescript
 /**
  * Plugins Panel — two collapsible sections: "Core Plugins" and "User Plugins".
  *
@@ -20,7 +153,6 @@ import type { UnifiedPluginDef } from "../index";
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
-/** The panel overlay element (null until createPluginsPanel is called). */
 let panelElement: HTMLElement | null = null;
 let bodyElement: HTMLElement | null = null;
 let titleElement: HTMLElement | null = null;
@@ -36,21 +168,7 @@ let onToggle: ((id: string, enabled: boolean) => Promise<void>) | null = null;
 /** Reload callback wired by createPluginsPanel (optional). */
 let onReload: (() => Promise<void>) | null = null;
 
-/**
- * Guard flag that prevents adding the Escape keydown listener more than once.
- *
- * LOW finding (code review): if createPluginsPanel() were ever called twice
- * (e.g. during hot-reload in development), each call would register a new
- * keydown handler. The handlers cannot be removed because they are anonymous
- * closures. The guard ensures at most one listener is registered per session,
- * regardless of how many times createPluginsPanel() is called.
- */
-let keydownListenerRegistered = false;
-
-/**
- * Per-section collapsed state (session-only, not persisted to settings).
- * Both sections start open (collapsed = false) on first load.
- */
+/** Per-section collapsed state (session-only, not persisted). */
 const sectionCollapsed: Record<"core" | "user", boolean> = {
   core: false,
   user: false,
@@ -60,13 +178,11 @@ const sectionCollapsed: Record<"core" | "user", boolean> = {
 
 /**
  * Inject the plugins panel into the DOM. Call once during initApp().
- * The panel is hidden by default; open it with togglePluginsPanel().
  *
  * @param defs          Unified plugin metadata from pluginManager.getDefinitions().
  * @param states        Current plugin states from pluginManager.getStates().
  * @param toggle        Called when user toggles a plugin (unified callback).
  * @param reloadPlugins Optional: called when user clicks "Reload" in User Plugins section.
- *                      When omitted the Reload button is rendered but disabled.
  */
 export function createPluginsPanel(
   defs: UnifiedPluginDef[],
@@ -107,30 +223,18 @@ export function createPluginsPanel(
   overlay.querySelector(".settings-close-btn")
     ?.addEventListener("click", closePluginsPanel);
 
-  // Guard against registering the Escape handler more than once if
-  // createPluginsPanel() is ever called multiple times in the same session
-  // (e.g. during dev hot-reload). Anonymous listeners cannot be removed, so
-  // a second registration would double-fire on every keydown event.
-  if (!keydownListenerRegistered) {
-    keydownListenerRegistered = true;
-    document.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        e.preventDefault();
-        if (currentView === "detail") {
-          showListView();
-        } else {
-          closePluginsPanel();
-        }
+  document.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape" && isOpen) {
+      e.preventDefault();
+      if (currentView === "detail") {
+        showListView();
+      } else {
+        closePluginsPanel();
       }
-    });
-  }
+    }
+  });
 }
 
-/**
- * Open the panel, seeding it with current plugin states.
- *
- * @param states  Map of plugin id → enabled boolean (unified).
- */
 export function openPluginsPanel(states: Record<string, boolean>): void {
   if (!panelElement) return;
   currentStates = { ...states };
@@ -141,7 +245,6 @@ export function openPluginsPanel(states: Record<string, boolean>): void {
   (panelElement.querySelector(".settings-panel") as HTMLElement)?.focus();
 }
 
-/** Close the plugins panel. */
 export function closePluginsPanel(): void {
   if (!panelElement) return;
   panelElement.classList.add("hidden");
@@ -150,11 +253,6 @@ export function closePluginsPanel(): void {
   currentView = "list";
 }
 
-/**
- * Toggle the plugins panel open/closed.
- *
- * @param states  Current plugin states (only used when opening).
- */
 export function togglePluginsPanel(states: Record<string, boolean>): void {
   if (isOpen) closePluginsPanel();
   else openPluginsPanel(states);
@@ -166,8 +264,6 @@ export function togglePluginsPanel(states: Record<string, boolean>): void {
  * toggles reflect the new state immediately.
  *
  * EC-10: Guards on panelElement — safe to call before createPluginsPanel has run.
- *
- * @param partial  Partial state update (merged into currentStates).
  */
 export function updatePluginStates(partial: Record<string, boolean>): void {
   if (!panelElement) return;
@@ -179,12 +275,8 @@ export function updatePluginStates(partial: Record<string, boolean>): void {
 
 /**
  * Update plugin definitions and states without closing the panel.
- *
  * Called by main.ts after a Reload completes to refresh the plugin list.
  * Safe to call before createPluginsPanel has been called (guard on panelElement).
- *
- * @param defs       New plugin definitions from pluginManager.getDefinitions().
- * @param states     New plugin states from pluginManager.getStates().
  */
 export function updateUserPluginDefs(
   defs: UnifiedPluginDef[],
@@ -199,17 +291,12 @@ export function updateUserPluginDefs(
 
 // ── List View ─────────────────────────────────────────────────────────────────
 
-/**
- * Render the two-section list view: "Core Plugins" then "User Plugins".
- * Each section is collapsible (session state in sectionCollapsed).
- */
 function showListView(): void {
   if (!bodyElement || !titleElement) return;
   currentView = "list";
   titleElement.textContent = "Plugins";
   bodyElement.innerHTML = "";
 
-  // Split the flat definitions array into core and user buckets.
   const coreDefs = definitions.filter((d) => d.kind === "core");
   const userDefs = definitions.filter((d) => d.kind === "user");
 
@@ -222,16 +309,8 @@ function showListView(): void {
 /**
  * Build a collapsible section element for the given kind and plugin list.
  *
- * Section layout:
- *   [header: chevron + label  |  (Reload button if user section)]
- *   [body: plugin rows or empty placeholder]
- *
- * The left portion of the header is clickable to toggle collapse.
- * The Reload button (user section only) stops event propagation so clicking
- * it does not also collapse/expand the section.
- *
  * @param kind     "core" | "user" — controls section id and collapse state key.
- * @param label    Human-readable section heading text.
+ * @param label    Human-readable section heading.
  * @param defs     Plugin definitions for this section.
  */
 function buildSection(
@@ -249,10 +328,9 @@ function buildSection(
   const leftGroup = document.createElement("div");
   leftGroup.className = "plugin-section-header-left";
 
-  // Chevron indicator: ▼ when expanded, ▶ when collapsed.
   const chevron = document.createElement("span");
   chevron.className = "plugin-section-chevron";
-  chevron.textContent = sectionCollapsed[kind] ? "\u25B6" : "\u25BC";
+  chevron.textContent = sectionCollapsed[kind] ? "\u25B6" : "\u25BC"; // ▶ or ▼
 
   const title = document.createElement("span");
   title.className = "plugin-section-title";
@@ -261,8 +339,7 @@ function buildSection(
   leftGroup.append(chevron, title);
   header.appendChild(leftGroup);
 
-  // Reload button lives only in the User Plugins section header (right side).
-  // It is disabled when no reloadPlugins callback was passed to createPluginsPanel.
+  // Reload button (user section only, enabled only when callback is wired)
   if (kind === "user") {
     const reloadBtn = document.createElement("button");
     reloadBtn.className = "plugin-reload-btn";
@@ -272,17 +349,14 @@ function buildSection(
       ? "Reload not available"
       : "Rescan the user plugins directory";
     reloadBtn.addEventListener("click", async (e) => {
-      // Prevent the click from also toggling the section collapse state.
-      e.stopPropagation();
+      e.stopPropagation(); // Do not toggle section collapse.
       if (!onReload) return;
-      // EC-23: disable the button during the async reload to prevent double-click.
       reloadBtn.disabled = true;
       reloadBtn.textContent = "Reloading\u2026";
       try {
         await onReload();
       } finally {
-        // showListView() will replace this button on re-render, but restore the
-        // text/state defensively in case the re-render does not occur immediately.
+        // Re-render will replace this button; but in case it doesn't, restore.
         reloadBtn.disabled = false;
         reloadBtn.textContent = "Reload";
       }
@@ -290,21 +364,21 @@ function buildSection(
     header.appendChild(reloadBtn);
   }
 
-  // Section body wraps all plugin rows. Hidden when the section is collapsed.
+  // Body element wraps all rows; hidden when section is collapsed.
   const body = document.createElement("div");
   body.className = "plugin-section-body";
   if (sectionCollapsed[kind]) {
     body.classList.add("plugin-section-body--collapsed");
   }
 
-  // Clicking the left group (chevron + label) toggles section collapse.
+  // Toggle collapse on left-group click.
   leftGroup.addEventListener("click", () => {
     sectionCollapsed[kind] = !sectionCollapsed[kind];
     chevron.textContent = sectionCollapsed[kind] ? "\u25B6" : "\u25BC";
     body.classList.toggle("plugin-section-body--collapsed", sectionCollapsed[kind]);
   });
 
-  // Populate rows, or show a per-section empty placeholder.
+  // Populate rows.
   if (defs.length === 0) {
     const placeholder = document.createElement("p");
     placeholder.className = "plugin-empty-placeholder";
@@ -323,12 +397,6 @@ function buildSection(
 
 // ── Row dispatcher ─────────────────────────────────────────────────────────────
 
-/**
- * Dispatch to the appropriate row builder based on status.
- *
- * @param def   Plugin definition to render.
- * @param kind  Section kind — passed to buildPluginRow for version badge logic.
- */
 function buildRow(def: UnifiedPluginDef, kind: "core" | "user"): HTMLElement {
   if (def.status === "failed") {
     return buildFailedRow(def);
@@ -346,15 +414,7 @@ function buildRow(def: UnifiedPluginDef, kind: "core" | "user"): HTMLElement {
 // ── Row builders ──────────────────────────────────────────────────────────────
 
 /**
- * Build a standard loaded plugin row: name (clickable → detail view),
- * optional version badge (core plugins only), and a toggle switch.
- *
- * The version badge is shown only for core plugins because user plugins may
- * not declare a version and its absence would be confusing in context.
- *
- * @param def      The plugin definition to render.
- * @param enabled  Whether the plugin is currently enabled.
- * @param kind     "core" | "user" — controls whether the version badge is shown.
+ * Standard loaded plugin row: name (clickable) + optional version badge + toggle.
  */
 function buildPluginRow(
   def: UnifiedPluginDef,
@@ -371,7 +431,7 @@ function buildPluginRow(
   nameText.textContent = def.name;
   nameEl.appendChild(nameText);
 
-  // Version badge: shown for core plugins that have a non-empty version string.
+  // Version badge for core plugins only.
   if (kind === "core" && def.version) {
     const versionBadge = document.createElement("span");
     versionBadge.className = "plugin-version-badge";
@@ -399,11 +459,6 @@ function buildPluginRow(
   return row;
 }
 
-/**
- * Build a failed-plugin row: name text + red "(failed)" badge.
- * Clicking opens the detail view showing the error text.
- * No toggle — the plugin cannot be enabled.
- */
 function buildFailedRow(def: UnifiedPluginDef): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-row plugin-row-failed";
@@ -425,10 +480,6 @@ function buildFailedRow(def: UnifiedPluginDef): HTMLElement {
   return row;
 }
 
-/**
- * Build a missing-plugin row: name text + grey "(missing)" badge.
- * No toggle and no click handler — the file no longer exists on disk.
- */
 function buildMissingRow(def: UnifiedPluginDef): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-row plugin-row-missing";
@@ -449,17 +500,6 @@ function buildMissingRow(def: UnifiedPluginDef): HTMLElement {
   return row;
 }
 
-/**
- * Build an overridden core-plugin row: name text + amber "(overridden)" badge.
- * No toggle — the core slot is superseded by a user file with the same filename.
- * The greyed text communicates that this row is inactive.
- *
- * FR-9: The badge tooltip must name the specific user file that is shadowing
- * this core slot so the user knows exactly which file to look at. The filename
- * is available on UnifiedPluginDef.filename (added in Chunk 4 review fix).
- *
- * @param def  The core plugin definition whose slot has been overridden.
- */
 function buildOverriddenRow(def: UnifiedPluginDef): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-row plugin-row-overridden";
@@ -473,9 +513,7 @@ function buildOverriddenRow(def: UnifiedPluginDef): HTMLElement {
   const badge = document.createElement("span");
   badge.className = "plugin-status-badge plugin-status-overridden";
   badge.textContent = "overridden";
-  // FR-9: include the specific filename so the user immediately knows which
-  // file in their user/ directory is shadowing this core slot.
-  badge.title = `Overridden by user plugin: ${def.filename}`;
+  badge.title = "A user plugin with the same filename overrides this core slot.";
 
   nameEl.append(nameText, badge);
   row.appendChild(nameEl);
@@ -484,15 +522,6 @@ function buildOverriddenRow(def: UnifiedPluginDef): HTMLElement {
 
 // ── Detail View ───────────────────────────────────────────────────────────────
 
-/**
- * Render the detail view for a single plugin: back button, description text,
- * optional version line (loaded plugins), and — for loaded plugins — a toggle.
- *
- * For failed plugins, shows the error text instead of a toggle.
- * For missing/overridden plugins, shows a status message.
- *
- * @param def  The plugin definition whose detail to display.
- */
 function showDetailView(def: UnifiedPluginDef): void {
   if (!bodyElement || !titleElement) return;
   currentView = "detail";
@@ -510,7 +539,7 @@ function showDetailView(def: UnifiedPluginDef): void {
 
   bodyElement.append(backBtn, detail);
 
-  // Version line shown for all loaded plugins (core and user) that have a version.
+  // Version line for loaded plugins.
   if (def.status === "loaded" && def.version) {
     const versionLine = document.createElement("div");
     versionLine.className = "plugin-detail-version";
@@ -518,7 +547,6 @@ function showDetailView(def: UnifiedPluginDef): void {
     bodyElement.appendChild(versionLine);
   }
 
-  // Failed plugins: show error text instead of a toggle.
   if (def.status === "failed") {
     const errorEl = document.createElement("div");
     errorEl.className = "plugin-detail-error";
@@ -527,7 +555,6 @@ function showDetailView(def: UnifiedPluginDef): void {
     return;
   }
 
-  // Missing plugins: no toggle — the file is gone.
   if (def.status === "missing") {
     const msgEl = document.createElement("div");
     msgEl.className = "plugin-detail-error";
@@ -537,7 +564,6 @@ function showDetailView(def: UnifiedPluginDef): void {
     return;
   }
 
-  // Overridden core slots: no toggle.
   if (def.status === "overridden") {
     const msgEl = document.createElement("div");
     msgEl.className = "plugin-detail-error";
@@ -547,7 +573,6 @@ function showDetailView(def: UnifiedPluginDef): void {
     return;
   }
 
-  // Loaded plugins: show a toggle in the detail view.
   const enabled = currentStates[def.id] ?? false;
 
   const toggleRow = document.createElement("div");
@@ -571,3 +596,109 @@ function showDetailView(def: UnifiedPluginDef): void {
 
   bodyElement.appendChild(toggleRow);
 }
+```
+
+### 3. `src/plugins/plugins-panel/plugins-panel.css` — add new rules
+
+Add these rules at the end of the file (before the closing of the file):
+
+```css
+/* ── Section body collapsed state ── */
+
+.plugin-section-body--collapsed {
+  display: none;
+}
+
+/* ── Version badge (core plugin list rows) ── */
+
+.plugin-version-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* ── Overridden row ── */
+
+.plugin-status-overridden {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.plugin-row-overridden .plugin-name {
+  color: var(--text-secondary);
+}
+
+/* ── Detail version line ── */
+
+.plugin-detail-version {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+```
+
+Note: `.plugin-status-overridden` styling already exists as a selector in the current CSS but without colour rules (it was a structure placeholder). These rules add the amber colour. Verify the file does not already contain a `.plugin-status-overridden` colour rule before adding to avoid duplication.
+
+### 4. `src/main.ts` — pass `reloadPlugins` callback and wire status bar zones
+
+Find the `createPluginsPanel(...)` call (around line 903) and extend it:
+
+```typescript
+// Before:
+createPluginsPanel(
+  pluginManager.getDefinitions(),
+  pluginManager.getStates(),
+  async (id, enabled) => {
+    if (editor) await pluginManager.toggle(id, enabled);
+  },
+);
+
+// After:
+createPluginsPanel(
+  pluginManager.getDefinitions(),
+  pluginManager.getStates(),
+  async (id, enabled) => {
+    if (editor) await pluginManager.toggle(id, enabled);
+  },
+  async () => {
+    await pluginManager.reloadUserPlugins(migratedSettings, statusBarZones);
+    updateUserPluginDefs(
+      pluginManager.getDefinitions(),
+      pluginManager.getStates(),
+    );
+  },
+);
+```
+
+Also verify that `updateUserPluginDefs` is imported from `plugins-panel`. Add it to the import if missing:
+
+```typescript
+import {
+  createPluginsPanel,
+  openPluginsPanel,
+  closePluginsPanel,
+  togglePluginsPanel,
+  updatePluginStates,
+  updateUserPluginDefs,
+} from "./plugins/plugins-panel/plugins-panel";
+```
+
+---
+
+## Verification Checklist
+
+- [ ] `npm test` passes with zero new failures (no test touches `reloadUserPlugins` yet — see step_04b for test additions).
+- [ ] `npm run tauri dev` launches without TypeScript errors.
+- [ ] Open Plugins panel: two sections visible ("Core Plugins", "User Plugins"), both open by default.
+- [ ] Click Core Plugins section header chevron: section collapses; click again: expands.
+- [ ] Each loaded core plugin row shows `v{version}` in small grey text after the name.
+- [ ] An overridden core plugin (place a same-named `.js` in `~/Library/.../plugins/user/` then reload app): the Core section row shows "overridden" amber badge; toggle is not present; User section shows the user version normally.
+- [ ] Click a loaded core plugin name: detail view shows "Version: {version}" line below description.
+- [ ] Click a loaded user plugin name: detail view shows "Version: {version}" line if plugin declares it.
+- [ ] Reload button is present in User Plugins section header.
+- [ ] Clicking Reload button: button shows "Reloading..." and is disabled during the async call; re-enables and shows "Reload" after.
+- [ ] After Reload, any newly added `.js` file in `~/Library/.../plugins/user/` appears in the User Plugins section without reopening the panel.
+- [ ] `updateUserPluginDefs([], {})` called before `createPluginsPanel` does not throw (EC-10 guard unchanged).

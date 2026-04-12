@@ -22,7 +22,14 @@ fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: 
 #[cfg(not(target_os = "macos"))]
 fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
 
-pub use commands::{open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file, get_settings, save_settings, list_themes, read_theme_css};
+pub use commands::{
+    open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file,
+    get_settings, save_settings,
+    list_themes, read_theme_css,
+    copy_core_plugins,
+    list_core_plugins,
+    list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
+};
 
 /// Read a bundled help resource file by filename.
 /// Files are embedded at compile time — no AppHandle, no path resolution, cannot fail.
@@ -298,6 +305,12 @@ pub fn run() {
             save_settings,
             list_themes,
             read_theme_css,
+            copy_core_plugins,
+            list_core_plugins,
+            list_user_plugins,
+            read_plugin_file,
+            read_plugin_settings,
+            write_plugin_settings,
             update_recent_files_menu,
             update_theme_menu
         ])

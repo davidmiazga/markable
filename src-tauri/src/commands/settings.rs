@@ -28,6 +28,19 @@ pub struct MarkableSettings {
     pub theme: ThemeSettings,
     #[serde(rename = "recentFiles")]
     pub recent_files: Vec<String>,
+    /// Version stamp written after a successful core plugin copy.
+    /// Format: semver string matching tauri.conf.json `version` (e.g. "0.1.0").
+    /// `None` means the copy has never been performed on this installation.
+    ///
+    /// EC-5 / EC-34: optional field — absent in old settings files; serde defaults
+    /// to `None` on deserialization when the key is missing, so existing settings
+    /// files continue to parse without error.
+    #[serde(
+        rename = "pluginsCopiedForVersion",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub plugins_copied_for_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +79,9 @@ impl Default for MarkableSettings {
             editor: EditorSettings::default(),
             theme: ThemeSettings::default(),
             recent_files: Vec::new(),
+            // None: copy has not been performed yet on a fresh install.
+            // The `copy_core_plugins` command writes the version stamp on first copy.
+            plugins_copied_for_version: None,
         }
     }
 }

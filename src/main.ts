@@ -48,6 +48,7 @@ import {
   listThemes,
   readThemeCss,
   updateThemeMenu,
+  copyCorePlugins,
 } from "./lib/bridge";
 import type { ThemeEntry } from "./lib/bridge";
 import {
@@ -64,11 +65,13 @@ import {
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
-import { createPluginsPanel, togglePluginsPanel } from "./plugins/plugins-panel/plugins-panel";
+import {
+  createPluginsPanel,
+  togglePluginsPanel,
+  updateUserPluginDefs,
+} from "./plugins/plugins-panel/plugins-panel";
 import { pluginManager } from "./plugins/index";
-import type { PluginContext } from "./plugins/plugin-types";
-import { ensureStatusBar, hideStatusBarIfUnused } from "./plugins/status-bar/status-bar";
-import { scheduleUpdate as scheduleWordCount } from "./plugins/word-count/word-count";
+import { migratePluginSettings } from "./plugins/settings-migration";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -651,29 +654,6 @@ function showGoToLineOverlay(): void {
 
 
 /**
- * Construct a PluginContext from the current editor and status bar DOM.
- *
- * Must only be called after `editor = createEditor(...)` has succeeded.
- * The status bar zone elements must exist in the DOM before this is called
- * (they are part of the static HTML, created at startup).
- *
- * EC-11: All call sites are guarded by `if (editor)` or appear after the
- * editor is known non-null (e.g. inside initApp() after createEditor).
- */
-function buildPluginContext(): PluginContext {
-  return {
-    editor: editor!,
-    statusBar: {
-      left: document.querySelector(".statusbar-left") as HTMLElement,
-      center: document.querySelector(".statusbar-center") as HTMLElement,
-      right: document.querySelector(".statusbar-right") as HTMLElement,
-    },
-    ensureStatusBar,
-    hideStatusBarIfUnused,
-  };
-}
-
-/**
  * Central action dispatcher — shared by the native menu-event listener and
  * the custom keybinding document keydown handler.
  */
@@ -681,7 +661,9 @@ function handleAction(action: string): void {
   switch (action) {
     case "app-settings":    toggleSettingsPanel();    break;
     case "app-keybindings": toggleKeybindingsPanel(); break;
-    case "app-plugins":     togglePluginsPanel(pluginManager.getStates()); break;
+    case "app-plugins":
+      togglePluginsPanel(pluginManager.getStates());
+      break;
     case "edit-select-none":
       if (editor) {
         // Collapse selection to remove highlight, then enter view mode
@@ -705,13 +687,13 @@ function handleAction(action: string): void {
     case "file-print":      printDocument(); break;
     case "view-toggle-preview":    togglePreview();      break;
     case "view-toggle-statusbar":
-      if (editor) pluginManager.toggle("statusBar", !pluginManager.getStates().statusBar, buildPluginContext());
+      if (editor) void pluginManager.toggle("status-bar", !pluginManager.getStates()["status-bar"]);
       break;
     case "view-toggle-focus":
-      if (editor) pluginManager.toggle("focusMode", !pluginManager.getStates().focusMode, buildPluginContext());
+      if (editor) void pluginManager.toggle("focus-mode", !pluginManager.getStates()["focus-mode"]);
       break;
     case "view-toggle-typewriter":
-      if (editor) pluginManager.toggle("typewriterMode", !pluginManager.getStates().typewriterMode, buildPluginContext());
+      if (editor) void pluginManager.toggle("typewriter-mode", !pluginManager.getStates()["typewriter-mode"]);
       break;
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
@@ -810,8 +792,32 @@ async function initApp() {
   const settings = await loadSettings();
   console.log("Settings loaded, schema version:", settings.version);
 
+  // Migrate old flat plugin settings keys (focusMode, typewriterMode, wordCount,
+  // statusBar.visible, userPlugins) into the unified plugins map introduced in
+  // step_03c. migratePluginSettings is idempotent: if settings.plugins is already
+  // non-empty it returns the input unchanged (EC-26/27/28).
+  const migratedSettings = migratePluginSettings(settings);
+
+  // Persist the migrated map so subsequent launches skip migration entirely.
+  // Fire-and-forget (void): if the write fails the migration re-runs next launch
+  // with the same idempotent result, so no data is lost.
+  if (!settings.plugins || Object.keys(settings.plugins).length === 0) {
+    void updateSettings(() => migratedSettings);
+  }
+
+  // Copy core plugin .js files from the app bundle to the user data directory.
+  // Non-fatal: in `tauri dev` mode the resource directory is absent and the command
+  // logs a message instead of copying. A Rust-side version stamp prevents redundant
+  // copies across launches (EC-5, EC-34). The await is required — loadPlugins
+  // must not run before the copy completes (EC-18 ordering).
+  try {
+    await copyCorePlugins();
+  } catch (err) {
+    console.warn("[init] copyCorePlugins failed (non-fatal):", err);
+  }
+
   // Apply window position/size before anything is visible
-  await applyWindowSettings(settings.window);
+  await applyWindowSettings(migratedSettings.window);
 
   // Get editor container
   const editorContainer = document.getElementById("editor");
@@ -827,28 +833,40 @@ async function initApp() {
     return;
   }
 
+  // Wire the PluginManager to the live EditorView so addExtensions/removeExtensions
+  // can dispatch Compartment.reconfigure effects. Must be called before restoreAll()
+  // so that any plugin calling api.addExtensions() in onEnable has a live view to
+  // dispatch against. EC-18: any pending extensions queued before this point are
+  // flushed here (empty under normal startup order).
+  pluginManager.setEditorView(editor);
+
   // Apply editor settings (content width + font size)
-  applyEditorSettings(settings.editor);
+  applyEditorSettings(migratedSettings.editor);
 
   // Preview mode starts ON — hide line numbers
   editorContainer.classList.add("preview-mode");
 
-  // Restore all plugin states from persisted settings.
-  // ctx is built here — after createEditor() — so editor is guaranteed non-null (EC-11).
-  const ctx = buildPluginContext();
-  pluginManager.restoreAll(settings, ctx);
+  // Build the status bar zone references for the unified plugin API.
+  // These are passed into loadPlugins so that buildMarkablePluginAPI can wire
+  // each plugin's statusBar property to the correct DOM elements.
+  const statusBarZones = {
+    left:   document.getElementById("statusbar-left")   as HTMLElement,
+    center: document.getElementById("statusbar-center") as HTMLElement,
+    right:  document.getElementById("statusbar-right")  as HTMLElement,
+  };
 
-  // Attach dirty-state tracking + word count to the editor via updateListener.
+  // Load all plugins (core + user) from disk. Must run after setEditorView()
+  // so any plugin calling api.addExtensions() in onEnable has a live view.
+  // Errors are isolated per-plugin — a failing plugin does not block the rest.
+  await pluginManager.loadPlugins(migratedSettings, statusBarZones);
+
+  // Attach dirty-state tracking to the editor via updateListener.
+  // The word-count plugin owns its own updateListener via api.addExtensions().
   editor.dispatch({
     effects: StateEffect.appendConfig.of(
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !isReadOnly) {
           setDirty(true);
-        }
-        // Feed word count on doc change or selection change
-        if (update.docChanged || update.selectionSet) {
-          const sel = update.state.selection.main;
-          scheduleWordCount(update.state.doc.toString(), sel.from, sel.to);
         }
       })
     ),
@@ -868,7 +886,7 @@ async function initApp() {
   }
 
   // Apply persisted theme before window.show() (no-flash)
-  await setTheme(settings.theme.active, false);
+  await setTheme(migratedSettings.theme.active, false);
 
   // Create the floating find/replace widget (appended to document.body, hidden by default).
   // Must be created after `editor` is confirmed non-null.
@@ -882,11 +900,27 @@ async function initApp() {
 
   // Create plugins panel (DOM injection, hidden by default).
   // Definitions come from PluginManager so the panel never needs to know about
-  // individual plugins — adding a 5th plugin requires zero changes here.
+  // individual plugins — adding a built-in plugin requires zero changes here.
   createPluginsPanel(
     pluginManager.getDefinitions(),
-    (id, enabled) => {
-      if (editor) pluginManager.toggle(id, enabled, buildPluginContext());
+    pluginManager.getStates(),
+    async (id, enabled) => {
+      if (editor) await pluginManager.toggle(id, enabled);
+    },
+    // Reload callback: rescans the user plugins directory for new .js files,
+    // enables any that were previously saved as enabled, then refreshes the panel.
+    //
+    // LOW finding (code review): use getCurrentSettings() rather than the
+    // captured `migratedSettings` snapshot. By the time the user clicks "Reload"
+    // the settings object may have been mutated (e.g. a plugin was toggled since
+    // launch). getCurrentSettings() always returns the live settings reference,
+    // ensuring the reload sees up-to-date plugin enable states.
+    async () => {
+      await pluginManager.reloadUserPlugins(getCurrentSettings(), statusBarZones);
+      updateUserPluginDefs(
+        pluginManager.getDefinitions(),
+        pluginManager.getStates(),
+      );
     },
   );
 

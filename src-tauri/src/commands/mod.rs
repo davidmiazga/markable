@@ -5,10 +5,19 @@
 
 pub mod dialogs;
 pub mod io;
+pub mod plugins;
 pub mod settings;
 pub mod themes;
 
 pub use dialogs::{open_file_dialog, save_file_dialog, save_html_dialog};
 pub use io::{read_file, write_file};
+pub use plugins::{
+    copy_core_plugins,
+    list_core_plugins,
+    list_user_plugins,
+    read_plugin_file,
+    read_plugin_settings,
+    write_plugin_settings,
+};
 pub use settings::{get_settings, save_settings};
 pub use themes::{list_themes, read_theme_css};

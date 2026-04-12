@@ -22,6 +22,18 @@ export interface FindWidgetPosition {
   y: number;
 }
 
+/**
+ * Per-plugin enable/disable state entry in the unified `plugins` map.
+ *
+ * `kind` distinguishes core plugins (shipped with the app) from user plugins
+ * (loaded from the user's plugins directory). It is stored so the panel can
+ * display the correct section without re-reading disk on each open.
+ */
+export interface PluginEnableRecord {
+  enabled: boolean;
+  kind: "core" | "user";
+}
+
 export interface MarkableSettings {
   version: number;
   window: WindowSettings;
@@ -32,16 +44,23 @@ export interface MarkableSettings {
   findWidget: FindWidgetPosition | null;
   /** Custom keybinding overrides. Maps command-id → key string (e.g. "Cmd-Shift-O"). Absent = use default. */
   keybindings?: Record<string, string>;
-  /** Status bar visibility. */
-  statusBar?: { visible: boolean };
-  /** Word count plugin enabled. */
-  wordCount?: boolean;
-  /** Focus mode (dim non-active paragraphs). */
-  focusMode?: boolean;
-  /** Typewriter mode (cursor always vertically centered). */
-  typewriterMode?: boolean;
   /** Active list style for ambiguous markers (e.g. "1."). */
   listStyle?: "standard" | "alphanumeric" | "decimal" | "steps";
+  /**
+   * Unified plugin enable/disable state map. Keys are plugin ids (kebab-case).
+   *
+   * This is the single authoritative source for plugin state as of Chunk 3.
+   * Populated from old flat fields by migratePluginSettings() on first run
+   * after upgrade. Existing settings.json files may still contain the old flat
+   * fields (focusMode, typewriterMode, wordCount, statusBar, userPlugins) —
+   * those are read by migratePluginSettings() and written back into this map,
+   * then ignored at the TypeScript layer. The Rust raw-JSON pass-through means
+   * removing them from this interface does not corrupt settings files.
+   *
+   * Absent key = never configured (treated as disabled on first run).
+   * Absent map = settings file pre-dates Chunk 3 (migratePluginSettings runs).
+   */
+  plugins?: Record<string, PluginEnableRecord>;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */

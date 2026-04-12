@@ -205,3 +205,140 @@ export async function readThemeCss(filename: string): Promise<string | null> {
     return null;
   }
 }
+
+// ── Core plugin copy ──────────────────────────────────────────────────────────
+
+/**
+ * Copy bundled core plugin `.js` files from the Tauri resource directory into
+ * the user data `plugins/core/` directory.
+ *
+ * No-op if the `pluginsCopiedForVersion` stamp in settings.json already matches
+ * the current app version (EC-34). On first install or version upgrade, all four
+ * core plugin files are copied (EC-1, EC-5).
+ *
+ * Non-fatal: if the bundled resource directory is absent (e.g. `tauri dev` mode),
+ * the command logs a message and writes the version stamp so re-checks are avoided
+ * on subsequent launches. The frontend wraps this call in a try/catch so any
+ * unexpected errors do not crash `initApp()`.
+ */
+export async function copyCorePlugins(): Promise<void> {
+  await invoke<void>("copy_core_plugins");
+}
+
+// ── User Plugin commands ──────────────────────────────────────────────────────
+
+/**
+ * Response shape returned by the Rust `list_user_plugins` command.
+ * `files` contains the accepted filenames (max 50, lexicographic order).
+ * `truncated` contains any filenames that were dropped because the cap was
+ * reached — used by the frontend to emit a user-visible warning (HF-2).
+ */
+export interface ListUserPluginsResponse {
+  files: string[];
+  truncated: string[];
+}
+
+/**
+ * List top-level .js filenames in the user plugins directory.
+ *
+ * Returns the Rust-structured response containing the accepted file list and
+ * any names that were dropped by the 50-plugin cap.  Returns
+ * `{ files: [], truncated: [] }` if the directory does not exist (Rust
+ * creates it on first call) or if the command fails.
+ *
+ * EC-1, EC-27, HF-2.
+ */
+export async function listUserPlugins(): Promise<ListUserPluginsResponse> {
+  try {
+    return await invoke<ListUserPluginsResponse>("list_user_plugins");
+  } catch (error) {
+    console.error("Failed to list user plugins:", error);
+    return { files: [], truncated: [] };
+  }
+}
+
+/**
+ * Discriminated union result from `readPluginFile`.
+ * `{ source }` on success; `{ error }` when Rust rejects the file with a
+ * human-readable reason (too large, binary, not found, path traversal).
+ * Using a discriminated union rather than `string | null` lets callers thread
+ * the rejection reason into `UserPluginRecord.failReason` (MF-1).
+ */
+export type ReadPluginFileResult = { source: string } | { error: string };
+
+/**
+ * List top-level .js filenames in the core plugins directory.
+ *
+ * Returns the Rust-structured response. The `truncated` array is always empty
+ * for core plugins (no cap). Returns `{ files: [], truncated: [] }` if the
+ * directory does not exist (e.g. dev mode where copy was skipped).
+ *
+ * EC-1: directory is created by copy_core_plugins, not by this command.
+ */
+export async function listCorePlugins(): Promise<ListUserPluginsResponse> {
+  try {
+    return await invoke<ListUserPluginsResponse>("list_core_plugins");
+  } catch (error) {
+    console.error("Failed to list core plugins:", error);
+    return { files: [], truncated: [] };
+  }
+}
+
+/**
+ * Read the source text of a plugin file.
+ *
+ * Returns `{ source }` on success, or `{ error: reason }` when Rust rejects
+ * the file. The caller should propagate the error string into the plugin
+ * record's `failReason` field so the panel can display a meaningful message.
+ *
+ * The `kind` parameter routes the read to the correct subdirectory:
+ *   - `"core"` → reads from `plugins/core/`
+ *   - `"user"` or omitted → reads from `plugins/user/`
+ *
+ * EC-11, EC-12, EC-13, MF-1.
+ */
+export async function readPluginFile(
+  filename: string,
+  kind?: "core" | "user",
+): Promise<ReadPluginFileResult> {
+  try {
+    const source = await invoke<string>("read_plugin_file", {
+      filename,
+      kind: kind ?? null,
+    });
+    return { source };
+  } catch (error) {
+    const reason = typeof error === "string" ? error : String(error);
+    console.warn(`Failed to read plugin file "${filename}":`, reason);
+    return { error: reason };
+  }
+}
+
+/**
+ * Read per-plugin settings JSON.
+ * Returns the parsed object, or null if no settings file exists yet (EC-23).
+ */
+export async function readPluginSettings(
+  pluginId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await invoke<string | null>("read_plugin_settings", { pluginId });
+    if (raw === null || raw === undefined) return null;
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    console.warn(`Failed to read settings for plugin "${pluginId}":`, error);
+    return null;
+  }
+}
+
+/**
+ * Write per-plugin settings JSON.
+ * Throws if data is not JSON-serialisable (EC-25 — Rust validates before write).
+ */
+export async function writePluginSettings(
+  pluginId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const json = JSON.stringify(data);
+  await invoke("write_plugin_settings", { pluginId, data: json });
+}

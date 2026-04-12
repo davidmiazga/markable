@@ -106,3 +106,163 @@
   color: var(--text-secondary);
   font-weight: 500;
 }
+
+/* ── Section headers ── */
+
+.plugin-section {
+  margin-bottom: 4px;
+}
+
+.plugin-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0 6px;
+  cursor: default;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+}
+
+.plugin-section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.plugin-section-chevron {
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.plugin-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+/* ── Reload button ── */
+
+.plugin-reload-btn {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.plugin-reload-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+.plugin-reload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Folder path label ── */
+
+.plugin-folder-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 4px 0 8px;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+/* ── Empty placeholder ── */
+
+.plugin-empty-placeholder {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 12px 0;
+  text-align: center;
+}
+
+/* ── Status badges ── */
+
+.plugin-status-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: help;
+}
+.plugin-status-failed {
+  background: #fde8e8;
+  color: #c0392b;
+}
+.plugin-status-missing {
+  background: var(--border-color);
+  color: var(--text-secondary);
+}
+
+/* ── Failed/missing rows ── */
+
+.plugin-row-failed .plugin-name {
+  color: var(--text-secondary);
+}
+.plugin-row-missing .plugin-name {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ── Detail error text ── */
+
+.plugin-detail-error {
+  font-size: 12px;
+  color: #c0392b;
+  background: #fde8e8;
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin-top: 8px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ── Section body collapsed state ── */
+
+.plugin-section-body--collapsed {
+  display: none;
+}
+
+/* ── Version badge (core plugin list rows) ── */
+
+.plugin-version-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* ── Overridden row — amber badge + greyed name text ── */
+
+.plugin-status-overridden {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.plugin-row-overridden .plugin-name {
+  color: var(--text-secondary);
+}
+
+/* ── Detail version line ── */
+
+.plugin-detail-version {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
