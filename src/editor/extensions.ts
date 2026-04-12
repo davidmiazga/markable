@@ -20,6 +20,7 @@ import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-p
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 import { focusModeExtension } from "./focus-mode";
+import { typewriterModeExtension } from "./typewriter-mode";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
 const baseTheme = EditorView.theme({
@@ -153,6 +154,7 @@ export function buildExtensions(): Extension[] {
   extensions.push(syntaxHighlighting(themeHighlight));
   extensions.push(viewModeField);
   extensions.push(focusModeExtension);
+  extensions.push(typewriterModeExtension);
   extensions.push(previewCompartment.of(previewExtensions));
   extensions.push(editableCompartment.of(EditorView.editable.of(true)));
 

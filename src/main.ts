@@ -15,6 +15,7 @@ import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
 import { setLivePreviewFilePath, setViewMode } from "./editor/live-preview";
 import { setFocusMode } from "./editor/focus-mode";
+import { setTypewriterMode } from "./editor/typewriter-mode";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import {
@@ -696,12 +697,14 @@ function handlePluginToggle(pluginId: string, enabled: boolean): void {
       break;
     case "focusMode":
       focusModeEnabled = enabled;
+      console.log("[FocusMode] toggle:", enabled, "editor:", !!editor);
       editor?.dispatch({ effects: setFocusMode.of(enabled) });
       void updateSettings((s) => ({ ...s, focusMode: enabled }));
       break;
     case "typewriterMode":
       typewriterModeEnabled = enabled;
-      // TODO: dispatch setTypewriterMode effect (Checkpoint 3B)
+      console.log("[TypewriterMode] toggle:", enabled, "editor:", !!editor);
+      editor?.dispatch({ effects: setTypewriterMode.of(enabled) });
       void updateSettings((s) => ({ ...s, typewriterMode: enabled }));
       break;
   }
@@ -893,6 +896,9 @@ async function initApp() {
     editor.dispatch({ effects: setFocusMode.of(true) });
   }
   typewriterModeEnabled = settings.typewriterMode ?? false;
+  if (typewriterModeEnabled) {
+    editor.dispatch({ effects: setTypewriterMode.of(true) });
+  }
 
   // Attach dirty-state tracking + word count to the editor via updateListener.
   editor.dispatch({
