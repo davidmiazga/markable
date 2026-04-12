@@ -741,8 +741,3 @@ body {
 .statusbar-center { justify-content: center; }
 .statusbar-right  { justify-content: flex-end; }
 
-/* --- Focus Mode --- */
-.cm-focus-dimmed {
-  opacity: 0.25;
-  transition: opacity 0.15s ease;
-}

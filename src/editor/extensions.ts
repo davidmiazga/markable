@@ -19,7 +19,7 @@ import { search, searchKeymap } from "@codemirror/search";
 import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
-import { focusModeExtension } from "./focus-mode";
+import { focusModeExtension } from "../plugins/focus-mode/focus-mode";
 import { typewriterModeExtension } from "./typewriter-mode";
 import { listKeymap } from "./list-keybindings";
 

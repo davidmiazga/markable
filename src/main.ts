@@ -14,7 +14,6 @@ import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
 import { setLivePreviewFilePath, setViewMode } from "./editor/live-preview";
-import { setFocusMode } from "./editor/focus-mode";
 import { setTypewriterMode } from "./editor/typewriter-mode";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
@@ -67,6 +66,8 @@ import {
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
 import { createPluginsPanel, togglePluginsPanel, updatePluginStates } from "./plugins/plugins-panel";
+import { pluginManager } from "./plugins/index";
+import type { PluginContext } from "./plugins/plugin-types";
 import { enableWordCount, disableWordCount, scheduleUpdate as scheduleWordCount } from "./plugins/word-count";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -649,9 +650,9 @@ function showGoToLineOverlay(): void {
 }
 
 // --- FC2 toggle state ---
+// focusModeEnabled removed — FocusModePlugin.isEnabled() is the source of truth.
 let statusBarVisible = false;
 let wordCountEnabled = false;
-let focusModeEnabled = false;
 let typewriterModeEnabled = false;
 
 /** Get current plugin on/off states for the plugins panel. */
@@ -659,7 +660,8 @@ function getPluginStates(): Record<string, boolean> {
   return {
     wordCount: wordCountEnabled,
     statusBar: statusBarVisible,
-    focusMode: focusModeEnabled,
+    // focusMode is now owned by FocusModePlugin; read from the manager.
+    focusMode: pluginManager.getStates().focusMode ?? false,
     typewriterMode: typewriterModeEnabled,
   };
 }
@@ -719,9 +721,8 @@ function handlePluginToggle(pluginId: string, enabled: boolean): void {
       void updateSettings((s) => ({ ...s, statusBar: { visible: enabled } }));
       break;
     case "focusMode":
-      focusModeEnabled = enabled;
-      editor?.dispatch({ effects: setFocusMode.of(enabled) });
-      void updateSettings((s) => ({ ...s, focusMode: enabled }));
+      // Delegated to PluginManager pilot. FocusModePlugin owns state + persistence.
+      if (editor) pluginManager.toggle("focusMode", enabled, buildPluginContext());
       break;
     case "typewriterMode":
       typewriterModeEnabled = enabled;
@@ -735,14 +736,32 @@ function toggleStatusBar() {
   handlePluginToggle("statusBar", !statusBarVisible);
 }
 
-function toggleFocusMode() {
-  if (!editor) return;
-  handlePluginToggle("focusMode", !focusModeEnabled);
-}
-
 function toggleTypewriterMode() {
   if (!editor) return;
   handlePluginToggle("typewriterMode", !typewriterModeEnabled);
+}
+
+/**
+ * Construct a PluginContext from the current editor and status bar DOM.
+ *
+ * Must only be called after `editor = createEditor(...)` has succeeded.
+ * The status bar zone elements must exist in the DOM before this is called
+ * (they are part of the static HTML, created at startup).
+ *
+ * EC-11: All call sites are guarded by `if (editor)` or appear after the
+ * editor is known non-null (e.g. inside initApp() after createEditor).
+ */
+function buildPluginContext(): PluginContext {
+  return {
+    editor: editor!,
+    statusBar: {
+      left: document.querySelector(".statusbar-left") as HTMLElement,
+      center: document.querySelector(".statusbar-center") as HTMLElement,
+      right: document.querySelector(".statusbar-right") as HTMLElement,
+    },
+    ensureStatusBar,
+    hideStatusBarIfUnused,
+  };
 }
 
 /**
@@ -777,7 +796,10 @@ function handleAction(action: string): void {
     case "file-print":      printDocument(); break;
     case "view-toggle-preview":    togglePreview();      break;
     case "view-toggle-statusbar":  toggleStatusBar();    break;
-    case "view-toggle-focus":      toggleFocusMode();    break;
+    case "view-toggle-focus":
+      // Inline toggle: read current state from PluginManager, flip it.
+      if (editor) pluginManager.toggle("focusMode", !pluginManager.getStates().focusMode, buildPluginContext());
+      break;
     case "view-toggle-typewriter": toggleTypewriterMode(); break;
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
@@ -900,6 +922,15 @@ async function initApp() {
   editorContainer.classList.add("preview-mode");
 
   // Restore FC2 toggle states from settings
+  // ctx is built here — after createEditor() — so editor is guaranteed non-null (EC-11).
+  const ctx = buildPluginContext();
+
+  // Focus mode is restored through PluginManager (Phase A pilot).
+  // The remaining 3 plugins (wordCount, statusBar, typewriterMode) are restored
+  // via legacy code below until Phase B wires them through PluginManager (Step 8).
+  pluginManager.restoreAll(settings, ctx);
+
+  // Legacy restore for wordCount, statusBar, typewriterMode (removed in Step 8)
   statusBarVisible = settings.statusBar?.visible ?? false;
   const statusBarEl = document.getElementById("statusbar");
   if (statusBarEl) statusBarEl.classList.toggle("hidden", !statusBarVisible);
@@ -911,10 +942,6 @@ async function initApp() {
       statusBarVisible = true;
       statusBarEl?.classList.remove("hidden");
     }
-  }
-  focusModeEnabled = settings.focusMode ?? false;
-  if (focusModeEnabled) {
-    editor.dispatch({ effects: setFocusMode.of(true) });
   }
   typewriterModeEnabled = settings.typewriterMode ?? false;
   if (typewriterModeEnabled) {
