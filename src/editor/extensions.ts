@@ -19,8 +19,11 @@ import { search, searchKeymap } from "@codemirror/search";
 import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
-import { focusModeExtension } from "../plugins/focus-mode/focus-mode";
-import { typewriterModeExtension } from "./typewriter-mode";
+import { pluginManager } from "../plugins/index";
+// NOTE: If a future plugin module ever imports from this file (extensions.ts),
+// a circular dependency would be introduced. Guard against this by checking
+// the dep graph when adding new plugins. See docs/specs/plugin-modularization/
+// step_05_phase_b_remaining.md § B7.
 import { listKeymap } from "./list-keybindings";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
@@ -174,8 +177,10 @@ export function buildExtensions(): Extension[] {
       },
     },
   ]));
-  extensions.push(focusModeExtension);
-  extensions.push(typewriterModeExtension);
+  // Push CM6 extensions contributed by all registered plugins.
+  // Currently provides focusModeExtension and typewriterModeExtension.
+  // Future plugins with getExtensions() are automatically included here.
+  extensions.push(...pluginManager.getExtensions());
   extensions.push(previewCompartment.of(previewExtensions));
   extensions.push(editableCompartment.of(EditorView.editable.of(true)));
 

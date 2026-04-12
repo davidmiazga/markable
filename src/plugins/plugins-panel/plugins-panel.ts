@@ -3,48 +3,18 @@
  *
  * List view: plugin name + toggle switch (no descriptions).
  * Detail view: click a plugin row to see full description + back button.
+ *
+ * The panel no longer owns the plugin definitions list. Definitions are
+ * injected via createPluginsPanel(definitions, toggleCallback) so the
+ * PluginManager remains the single source of truth (EC-16).
  */
 
 import "./plugins-panel.css";
-
-// --- Plugin definitions ---
-
-export interface PluginDef {
-  id: string;
-  name: string;
-  description: string;
-  detail: string;
-}
-
-const PLUGINS: PluginDef[] = [
-  {
-    id: "wordCount",
-    name: "Word Count",
-    description: "Word and character count in the status bar",
-    detail: "Displays a live word count and character count in the status bar. Updates as you type. Shows selection count when text is selected.",
-  },
-  {
-    id: "statusBar",
-    name: "Status Bar",
-    description: "Show a status bar at the bottom of the editor",
-    detail: "Adds a status bar at the bottom of the editor window. Other plugins (like Word Count) display their information here. The bar is hidden when no plugins use it.",
-  },
-  {
-    id: "focusMode",
-    name: "Focus Mode",
-    description: "Dim all content except the current paragraph",
-    detail: "Dims all lines except the paragraph containing your cursor, helping you focus on what you're writing. The active paragraph stays at full opacity while everything else fades. Works at the paragraph/block level — code fences and list items are treated as single blocks.",
-  },
-  {
-    id: "typewriterMode",
-    name: "Typewriter Mode",
-    description: "Keep the cursor line vertically centered",
-    detail: "Keeps the line you're typing on vertically centered in the viewport, like a typewriter. Allows blank space above and below at document edges so the cursor is always in the middle of the screen. Can be combined with Focus Mode.",
-  },
-];
+import type { PluginDef } from "../plugin-types";
 
 // --- State ---
 
+/** The panel overlay element (null until createPluginsPanel is called). */
 let panelElement: HTMLElement | null = null;
 let bodyElement: HTMLElement | null = null;
 let titleElement: HTMLElement | null = null;
@@ -53,11 +23,31 @@ let currentView: "list" | "detail" = "list";
 let currentStates: Record<string, boolean> = {};
 let onToggle: ((pluginId: string, enabled: boolean) => void) | null = null;
 
+/**
+ * Plugin definitions injected at createPluginsPanel() time.
+ * Stored module-level so showListView() can iterate them without
+ * needing to close over the createPluginsPanel call.
+ */
+let pluginDefinitions: PluginDef[] = [];
+
 // --- Public API ---
 
+/**
+ * Inject the plugins panel into the DOM. Call once during initApp().
+ * The panel is hidden by default; open it with togglePluginsPanel().
+ *
+ * EC-9: This function is always called before the panel is needed —
+ * pluginManager (module-level const) is initialized by ES module resolution
+ * before any importing code runs, so getDefinitions() is always ready.
+ *
+ * @param definitions     Plugin metadata array from pluginManager.getDefinitions().
+ * @param toggleCallback  Called when the user flips a toggle switch.
+ */
 export function createPluginsPanel(
+  definitions: PluginDef[],
   toggleCallback: (pluginId: string, enabled: boolean) => void,
 ): void {
+  pluginDefinitions = definitions;
   onToggle = toggleCallback;
 
   const overlay = document.createElement("div");
@@ -102,13 +92,17 @@ export function createPluginsPanel(
 
 // --- List View ---
 
+/**
+ * Render the list view: one row per plugin with a toggle switch.
+ * Iterates pluginDefinitions (injected at createPluginsPanel time).
+ */
 function showListView(): void {
   if (!bodyElement || !titleElement) return;
   currentView = "list";
   titleElement.textContent = "Plugins";
   bodyElement.innerHTML = "";
 
-  for (const plugin of PLUGINS) {
+  for (const plugin of pluginDefinitions) {
     const enabled = currentStates[plugin.id] ?? false;
 
     const row = document.createElement("div");
@@ -140,6 +134,12 @@ function showListView(): void {
 
 // --- Detail View ---
 
+/**
+ * Render the detail view for a single plugin: back button, description text,
+ * and a toggle switch with enabled/disabled label.
+ *
+ * @param plugin - The PluginDef whose detail to display.
+ */
 function showDetailView(plugin: PluginDef): void {
   if (!bodyElement || !titleElement) return;
   currentView = "detail";
@@ -180,6 +180,11 @@ function showDetailView(plugin: PluginDef): void {
 
 // --- Open / Close ---
 
+/**
+ * Open the plugins panel and seed it with the provided plugin states.
+ *
+ * @param states - Map of plugin id → enabled boolean from pluginManager.getStates().
+ */
 export function openPluginsPanel(states: Record<string, boolean>): void {
   if (!panelElement) return;
   currentStates = { ...states };
@@ -190,6 +195,7 @@ export function openPluginsPanel(states: Record<string, boolean>): void {
   (panelElement.querySelector(".settings-panel") as HTMLElement)?.focus();
 }
 
+/** Close the plugins panel. */
 export function closePluginsPanel(): void {
   if (!panelElement) return;
   panelElement.classList.add("hidden");
@@ -198,6 +204,11 @@ export function closePluginsPanel(): void {
   currentView = "list";
 }
 
+/**
+ * Toggle the plugins panel open/closed.
+ *
+ * @param states - Current plugin states (only used when opening).
+ */
 export function togglePluginsPanel(states: Record<string, boolean>): void {
   if (isOpen) closePluginsPanel();
   else openPluginsPanel(states);
@@ -206,9 +217,14 @@ export function togglePluginsPanel(states: Record<string, boolean>): void {
 /**
  * Update internal plugin states from outside (e.g. when a plugin auto-enables
  * the status bar). If the panel is currently showing the list view, re-render
- * it so toggles reflect the new state.
+ * it so toggles reflect the new state immediately.
+ *
+ * EC-10: Guards on panelElement — safe to call before createPluginsPanel has run.
+ *
+ * @param partial - Partial state update to merge into currentStates.
  */
 export function updatePluginStates(partial: Record<string, boolean>): void {
+  if (!panelElement) return;
   Object.assign(currentStates, partial);
   if (isOpen && currentView === "list") {
     showListView();

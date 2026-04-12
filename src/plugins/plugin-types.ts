@@ -115,6 +115,23 @@ export interface MarkablePlugin {
   restoreFromSettings?(settings: MarkableSettings, ctx: PluginContext): void;
 
   /**
+   * When true, PluginManager.toggle() skips its generic boolean persist call
+   * (`updateSettings({ [id]: enabled })`). The plugin is responsible for
+   * persisting its own settings in onEnable/onDisable.
+   *
+   * This flag exists to prevent settings corruption for plugins whose settings
+   * key holds a non-boolean value. The canonical example is StatusBarPlugin,
+   * whose key is `statusBar: { visible: boolean }`. If PluginManager wrote
+   * `{ statusBar: true }` after onEnable/onDisable, it would overwrite that
+   * object with a plain boolean, making `settings.statusBar?.visible` return
+   * `undefined` on the next launch and breaking restore.
+   *
+   * Set this to `true` only when the plugin's onEnable and onDisable already
+   * call updateSettings for every code path that changes enabled state.
+   */
+  readonly handlesOwnPersistence?: boolean;
+
+  /**
    * Returns the current enabled state of this plugin.
    * Reads from the module-level `_enabled` flag maintained by the plugin.
    * Used by `PluginManager.getStates()` and the panel's toggle reflection.

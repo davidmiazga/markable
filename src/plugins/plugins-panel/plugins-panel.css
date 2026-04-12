@@ -1,7 +1,7 @@
 /* ============================================================
    Plugins Panel -- Centered Modal (reuses settings-overlay base)
    ============================================================ */
-@import "../settings/settings-panel.css";
+@import "../../settings/settings-panel.css";
 
 /* --- List View --- */
 

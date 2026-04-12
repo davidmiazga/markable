@@ -1,7 +1,9 @@
 /**
  * Tests for PluginManager (src/plugins/index.ts).
  *
- * Tests cover the Phase A pilot state: only FocusModePlugin is registered.
+ * All four registered plugins are exercised: WordCountPlugin, StatusBarPlugin,
+ * FocusModePlugin, and TypewriterModePlugin.
+ *
  * These tests exercise every public method of PluginManager using a minimal
  * PluginContext stub — no real editor or DOM is required.
  *
@@ -106,6 +108,13 @@ describe("PluginManager class", () => {
       expect(fm).toBeDefined();
       expect(fm?.name).toBe("Focus Mode");
     });
+
+    it("returns exactly 4 plugin definitions (WordCount, StatusBar, FocusMode, TypewriterMode)", () => {
+      // Guard that no registration was forgotten and no accidental duplicate exists.
+      // Update this count when a new plugin is added to the manager.
+      const mgr = new PluginManager();
+      expect(mgr.getDefinitions().length).toBe(4);
+    });
   });
 
   describe("toggle()", () => {
@@ -162,6 +171,23 @@ describe("PluginManager class", () => {
     it("does not enable focusMode when settings.focusMode is undefined", () => {
       mgr.restoreAll(makeSettings({}), ctx);
       expect(mgr.getStates().focusMode).toBe(false);
+    });
+
+    it("enables StatusBarPlugin when settings.statusBar.visible is true", () => {
+      // StatusBarPlugin.restoreFromSettings reads settings.statusBar?.visible,
+      // not settings.statusBar directly (because it is a structured object).
+      // This test confirms PluginManager.restoreAll correctly delegates to the
+      // plugin's own restoreFromSettings rather than applying the generic boolean
+      // check, which would have read settings.statusBar (the object) !== true.
+      mgr.restoreAll(makeSettings({ statusBar: { visible: true } }), ctx);
+      expect(mgr.getStates().statusBar).toBe(true);
+    });
+
+    it("enables WordCountPlugin when settings.wordCount is true", () => {
+      // WordCountPlugin.restoreFromSettings checks settings.wordCount === true.
+      // This confirms restoreAll correctly delegates to the plugin's own method.
+      mgr.restoreAll(makeSettings({ wordCount: true }), ctx);
+      expect(mgr.getStates().wordCount).toBe(true);
     });
   });
 });

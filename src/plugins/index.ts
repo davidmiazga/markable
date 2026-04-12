@@ -23,18 +23,24 @@ import type { MarkablePlugin, PluginContext, PluginDef } from "./plugin-types";
 import type { MarkableSettings } from "../lib/settings";
 import { updateSettings } from "../lib/settings";
 
-// --- Plugin imports (add new plugins here in Phase B) ---
+// --- Plugin imports (add new plugins here for future plugins) ---
+import { WordCountPlugin } from "./word-count/index";
+import { StatusBarPlugin } from "./status-bar/index";
 import { FocusModePlugin } from "./focus-mode/index";
+import { TypewriterModePlugin } from "./typewriter-mode/index";
 
 export class PluginManager {
   private plugins: MarkablePlugin[];
 
   constructor() {
     // Registration order controls display order in the Plugins panel.
-    // Phase A pilot: FocusModePlugin only.
-    // Phase B (Step 6) extends this to all 4 plugins.
+    // Adding a new plugin requires only: create src/plugins/<name>/index.ts
+    // and add it to this array. Zero changes to main.ts.
     this.plugins = [
+      WordCountPlugin,
+      StatusBarPlugin,
       FocusModePlugin,
+      TypewriterModePlugin,
     ];
   }
 
@@ -58,12 +64,13 @@ export class PluginManager {
 
   /**
    * Enable or disable a plugin by id.
-   * Calls onEnable/onDisable and persists the new state via updateSettings.
+   * Calls onEnable/onDisable and — unless the plugin sets handlesOwnPersistence —
+   * persists the new state via a generic `{ [id]: boolean }` updateSettings call.
    *
-   * The call to updateSettings here persists the plugin's boolean toggle key
-   * (e.g. `{ focusMode: true }`). StatusBarPlugin's onEnable/onDisable will
-   * also call updateSettings for its nested `statusBar: { visible }` field —
-   * that override is intentional and takes precedence for that plugin.
+   * Plugins whose settings key holds a non-boolean value (e.g. StatusBarPlugin
+   * with `statusBar: { visible: boolean }`) must set `handlesOwnPersistence: true`
+   * so that this generic call is skipped and their own onEnable/onDisable persist
+   * logic runs without being overwritten.
    *
    * @param id      Plugin id — must match a registered plugin's id.
    * @param enabled Target enabled state.
@@ -81,8 +88,12 @@ export class PluginManager {
     } else {
       plugin.onDisable(ctx);
     }
-    // Persist the boolean toggle. Each plugin's lifecycle may also persist
-    // additional structured fields (e.g. statusBar.visible). This is additive.
+    // Skip the generic boolean persist when the plugin declares it handles its
+    // own persistence. This prevents overwriting a structured settings value
+    // (e.g. `statusBar: { visible: true }`) with a plain boolean
+    // (`statusBar: true`), which would cause `settings.statusBar?.visible` to
+    // return `undefined` on the next launch.
+    if (plugin.handlesOwnPersistence) return;
     void updateSettings((s) => ({
       ...s,
       [id]: enabled,
