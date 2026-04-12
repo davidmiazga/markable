@@ -66,7 +66,7 @@ import {
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
-import { createPluginsPanel, togglePluginsPanel } from "./plugins/plugins-panel";
+import { createPluginsPanel, togglePluginsPanel, updatePluginStates } from "./plugins/plugins-panel";
 import { enableWordCount, disableWordCount, scheduleUpdate as scheduleWordCount } from "./plugins/word-count";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -664,6 +664,35 @@ function getPluginStates(): Record<string, boolean> {
   };
 }
 
+/** Plugins that require the status bar to be visible. Add new IDs here. */
+const STATUS_BAR_PLUGINS = new Set(["wordCount"]);
+
+/**
+ * Ensure the status bar is visible. Call from any plugin that needs it.
+ * Also syncs the plugins panel's internal state so the Status Bar toggle
+ * reflects the auto-enable immediately.
+ */
+function ensureStatusBar(): void {
+  if (statusBarVisible) return;
+  statusBarVisible = true;
+  document.getElementById("statusbar")?.classList.remove("hidden");
+  updatePluginStates({ statusBar: true });
+  void updateSettings((s) => ({ ...s, statusBar: { visible: true } }));
+}
+
+/**
+ * Hide the status bar if no plugin currently needs it.
+ * Called when a status-bar-dependent plugin is disabled.
+ */
+function hideStatusBarIfUnused(): void {
+  const stillNeeded = (STATUS_BAR_PLUGINS.has("wordCount") && wordCountEnabled);
+  if (stillNeeded) return;
+  statusBarVisible = false;
+  document.getElementById("statusbar")?.classList.add("hidden");
+  updatePluginStates({ statusBar: false });
+  void updateSettings((s) => ({ ...s, statusBar: { visible: false } }));
+}
+
 /** Called by the plugins panel when a toggle switch is flipped. */
 function handlePluginToggle(pluginId: string, enabled: boolean): void {
   switch (pluginId) {
@@ -672,22 +701,16 @@ function handlePluginToggle(pluginId: string, enabled: boolean): void {
       const centerZone = document.querySelector(".statusbar-center") as HTMLElement | null;
       if (enabled && centerZone) {
         enableWordCount(centerZone);
-        // Auto-show status bar when word count is on
-        statusBarVisible = true;
-        document.getElementById("statusbar")?.classList.remove("hidden");
-        // Trigger an immediate count
+        ensureStatusBar();
         if (editor) {
           const sel = editor.state.selection.main;
           scheduleWordCount(editor.state.doc.toString(), sel.from, sel.to);
         }
       } else {
         disableWordCount();
-        // Hide status bar if no other plugins use it
-        // (For now, only word count populates the bar)
-        statusBarVisible = false;
-        document.getElementById("statusbar")?.classList.add("hidden");
+        hideStatusBarIfUnused();
       }
-      void updateSettings((s) => ({ ...s, wordCount: enabled, statusBar: { visible: statusBarVisible } }));
+      void updateSettings((s) => ({ ...s, wordCount: enabled }));
       break;
     }
     case "statusBar":
@@ -697,13 +720,11 @@ function handlePluginToggle(pluginId: string, enabled: boolean): void {
       break;
     case "focusMode":
       focusModeEnabled = enabled;
-      console.log("[FocusMode] toggle:", enabled, "editor:", !!editor);
       editor?.dispatch({ effects: setFocusMode.of(enabled) });
       void updateSettings((s) => ({ ...s, focusMode: enabled }));
       break;
     case "typewriterMode":
       typewriterModeEnabled = enabled;
-      console.log("[TypewriterMode] toggle:", enabled, "editor:", !!editor);
       editor?.dispatch({ effects: setTypewriterMode.of(enabled) });
       void updateSettings((s) => ({ ...s, typewriterMode: enabled }));
       break;

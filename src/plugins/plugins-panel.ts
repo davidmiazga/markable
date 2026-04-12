@@ -202,3 +202,15 @@ export function togglePluginsPanel(states: Record<string, boolean>): void {
   if (isOpen) closePluginsPanel();
   else openPluginsPanel(states);
 }
+
+/**
+ * Update internal plugin states from outside (e.g. when a plugin auto-enables
+ * the status bar). If the panel is currently showing the list view, re-render
+ * it so toggles reflect the new state.
+ */
+export function updatePluginStates(partial: Record<string, boolean>): void {
+  Object.assign(currentStates, partial);
+  if (isOpen && currentView === "list") {
+    showListView();
+  }
+}
