@@ -14,6 +14,7 @@ import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
 import { setLivePreviewFilePath, setViewMode } from "./editor/live-preview";
+import { setFocusMode } from "./editor/focus-mode";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import {
@@ -695,7 +696,7 @@ function handlePluginToggle(pluginId: string, enabled: boolean): void {
       break;
     case "focusMode":
       focusModeEnabled = enabled;
-      // TODO: dispatch setFocusMode effect (Checkpoint 2B)
+      editor?.dispatch({ effects: setFocusMode.of(enabled) });
       void updateSettings((s) => ({ ...s, focusMode: enabled }));
       break;
     case "typewriterMode":
@@ -888,6 +889,9 @@ async function initApp() {
     }
   }
   focusModeEnabled = settings.focusMode ?? false;
+  if (focusModeEnabled) {
+    editor.dispatch({ effects: setFocusMode.of(true) });
+  }
   typewriterModeEnabled = settings.typewriterMode ?? false;
 
   // Attach dirty-state tracking + word count to the editor via updateListener.

@@ -19,6 +19,7 @@ import { search, searchKeymap } from "@codemirror/search";
 import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
+import { focusModeExtension } from "./focus-mode";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
 const baseTheme = EditorView.theme({
@@ -151,6 +152,7 @@ export function buildExtensions(): Extension[] {
   extensions.push(searchTheme);
   extensions.push(syntaxHighlighting(themeHighlight));
   extensions.push(viewModeField);
+  extensions.push(focusModeExtension);
   extensions.push(previewCompartment.of(previewExtensions));
   extensions.push(editableCompartment.of(EditorView.editable.of(true)));
 
