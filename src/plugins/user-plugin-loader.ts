@@ -1,7 +1,7 @@
 /**
  * UserPluginLoader — evaluate, validate, and build API for user plugins.
  *
- * Evaluation strategy: new Function('api', '"use strict";\n' + source).
+ * Evaluation strategy: new Function('api', '"use strict";\n' + source + '\nreturn __markablePlugin__;').
  * See docs/specs/user-plugins/00_index.md §1 for full trade-off analysis.
  *
  * EC-14: window/document are accessible from within the plugin execution
@@ -169,7 +169,7 @@ export function evaluatePlugin(
     // Prepend strict mode. The plugin source is the function body.
     // The plugin must `return { id, name, ... }` at the top level of its source.
     // A stub api (null cast) is passed; the real api is injected at enable time.
-    const factory = new Function("api", `"use strict";\n${source}`);
+    const factory = new Function("api", `"use strict";\n${source}\nreturn __markablePlugin__;`);
     pluginObj = factory(null);
   } catch (err) {
     // EC-3: syntax error or runtime error during evaluation.

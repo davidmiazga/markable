@@ -82,8 +82,21 @@ async function buildPlugin(name, entryPath) {
         fileName: () => `${name}.js`,
       },
       rollupOptions: {
-        // EC-31: No externals. Every @codemirror/* package is bundled.
-        external: [],
+        // Bug #5 fix: mark all @codemirror/* packages as external.
+        //
+        // Previously every dependency was bundled (EC-31). Bundling CM6 into each
+        // plugin creates a separate StateField slot-ID namespace per IIFE, making
+        // plugin extensions invisible to the main editor's CM6 instance.
+        //
+        // The fix is a two-part coordination (see vite.plugins.config.ts comments
+        // and src/lib/cm-globals.ts for the full rationale):
+        //   1. main.ts exposes the main app's CM6 objects on window globals.
+        //   2. Plugin files access CM6 via those globals — no @codemirror/* imports.
+        //
+        // With this external rule, Rollup emits no import/require for @codemirror/*
+        // in the IIFE output. The plugins use plain window property accesses instead,
+        // which are safe inside the new Function() sandbox at runtime.
+        external: [/^@codemirror\//],
         output: {
           // Each plugin is a single file — no code splitting.
           inlineDynamicImports: false,

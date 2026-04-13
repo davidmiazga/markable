@@ -18,24 +18,42 @@
  * that cannot survive the IIFE sandbox at runtime. The source-of-truth logic in
  * focus-mode.ts is UNCHANGED.
  *
+ * Bug #2 fix: The original implementation wrapped the dimming logic in a StateField
+ * that defaulted to false and required a StateEffect to activate. PluginManager never
+ * dispatched that effect (step_04a was never reached), so the dimming never turned on.
+ *
+ * The fix removes the StateField/StateEffect toggle entirely. The compartment provided
+ * by PluginManager is the on/off mechanism: when the plugin is enabled, api.addExtensions
+ * installs the ViewPlugin; when disabled, api.removeExtensions removes it. The ViewPlugin
+ * therefore always applies decorations whenever it is present in the compartment.
+ *
  * EC-30: Vite build fails with non-zero exit if TypeScript or import errors exist.
  * EC-31: rollupOptions.external:[] in vite.plugins.config.ts ensures no require() calls.
  * EC-32: No app-internal imports; CSS injected via DOM — IIFE is fully self-contained.
  */
 
-import {
-  StateField,
-  StateEffect,
-  type Extension,
-  type EditorState,
-} from "@codemirror/state";
-import {
-  EditorView,
+// Bug #5 fix: DO NOT import from @codemirror/* directly. The build marks all
+// @codemirror/* packages as external. At runtime, main.ts assigns the real CM6
+// module objects to window globals (cm-globals.ts) before any plugin IIFE runs.
+// Destructuring from those globals ensures this plugin shares the SAME StateField
+// slot-ID namespace as the main editor — a bundled copy would create a disjoint set.
+//
+// Only destructure the names used as runtime values. Do NOT destructure EditorView —
+// it is only needed as a type annotation here, and naming it both as a const (from
+// the window cast) and as a type import would cause TypeScript to report that the
+// const is "used as a type" (TS2749). Import it type-only instead.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const {
   ViewPlugin,
   Decoration,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
+} = (window as any).__CM_VIEW__ as typeof import("@codemirror/view");
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+// Type-only imports are erased by tsc — safe to keep for IDE support.
+// EditorView is imported only as a type (not a value); Decoration is the runtime
+// value above; DecorationSet and ViewUpdate are types only.
+import type { EditorState } from "@codemirror/state";
+import type { EditorView, DecorationSet, ViewUpdate } from "@codemirror/view";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
 
 // ── Inline CSS ────────────────────────────────────────────────────────────────
@@ -67,25 +85,9 @@ function removeCSS(): void {
 // ── CM6 extension ─────────────────────────────────────────────────────────────
 // Duplicated from src/editor/focus-mode.ts to keep this IIFE fully self-contained.
 // The original file remains the source of truth and is not modified.
-
-/** StateEffect used to enable or disable focus mode via EditorView.dispatch. */
-const setFocusMode = StateEffect.define<boolean>();
-
-/**
- * StateField that tracks whether focus mode is active.
- * Defaults to false — dim nothing until the effect fires.
- * The effect is dispatched by PluginManager._enablePlugin in step_04a after
- * addExtensions registers the field in the compartment.
- */
-const focusModeField = StateField.define<boolean>({
-  create: () => false,
-  update(value, tr) {
-    for (const e of tr.effects) {
-      if (e.is(setFocusMode)) return e.value;
-    }
-    return value;
-  },
-});
+//
+// Bug #2 fix: No StateField or StateEffect. The ViewPlugin always applies dimming
+// when it is present in the compartment. The compartment is the on/off switch.
 
 /**
  * Determine the contiguous paragraph boundaries for the given document position.
@@ -130,10 +132,11 @@ const dimmedLine = Decoration.line({ class: "cm-focus-dimmed" });
 
 /**
  * ViewPlugin that applies the dimmedLine decoration to all lines outside the
- * current paragraph when focus mode is active.
+ * current paragraph.
  *
- * Re-runs on: document change, selection change, or focus mode toggle.
- * When focus mode is off (focusModeField === false), returns Decoration.none.
+ * Because the compartment is the on/off switch (the plugin is only present when
+ * focus mode is enabled), this ViewPlugin always applies dimming — there is no
+ * internal boolean guard. Re-runs on document change or selection change.
  */
 const focusModeViewPlugin = ViewPlugin.fromClass(
   class {
@@ -143,22 +146,18 @@ const focusModeViewPlugin = ViewPlugin.fromClass(
     }
     update(update: ViewUpdate) {
       // Rebuild decorations on any change that could shift the active paragraph.
-      if (
-        update.docChanged ||
-        update.selectionSet ||
-        update.startState.field(focusModeField) !==
-          update.state.field(focusModeField)
-      ) {
+      if (update.docChanged || update.selectionSet) {
         this.decorations = this.buildDecorations(update.view);
       }
     }
     buildDecorations(view: EditorView): DecorationSet {
-      const enabled = view.state.field(focusModeField);
-      if (!enabled) return Decoration.none;
       const head = view.state.selection.main.head;
       const { from: paraFrom, to: paraTo } = findParagraphRange(view.state, head);
       // Build a decoration for every line NOT inside the active paragraph.
-      const builder: { from: number; value: Decoration }[] = [];
+      // The `value` type is annotated as `ReturnType<typeof Decoration.line>` to
+      // avoid TS2749 — `Decoration` here is a runtime const from the window global,
+      // not a type import, so it cannot be used directly as a type annotation.
+      const builder: { from: number; value: ReturnType<typeof Decoration.line> }[] = [];
       const doc = view.state.doc;
       for (let i = 1; i <= doc.lines; i++) {
         const line = doc.line(i);
@@ -171,21 +170,14 @@ const focusModeViewPlugin = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations },
 );
 
-/**
- * Combined CM6 extension: the StateField (persists enabled state across
- * transactions) and the ViewPlugin (computes dimming decorations).
- */
-const focusModeExtension: Extension = [focusModeField, focusModeViewPlugin];
-
 // ── Plugin object ─────────────────────────────────────────────────────────────
 
 /**
  * UnifiedPlugin definition for Focus Mode.
  *
- * onEnable: injects CSS, registers the CM6 extension via the API.
- *   The StateField defaults to false (no dimming) until PluginManager._enablePlugin
- *   (step_04a) dispatches setFocusMode.of(true) through the EditorView after
- *   addExtensions completes. The IIFE itself does not hold an EditorView reference.
+ * onEnable: injects CSS, registers the focusModeViewPlugin via api.addExtensions().
+ *   The ViewPlugin immediately starts dimming non-paragraph lines — no effect
+ *   dispatch required. The compartment (managed by PluginManager) is the on/off switch.
  *
  * onDisable: removes CM6 extensions and cleans up the injected CSS.
  */
@@ -199,12 +191,9 @@ export default {
 
   onEnable(api: MarkablePluginAPI): void {
     injectCSS();
-    api.addExtensions([focusModeExtension]);
-    // The StateField defaults to false (dim nothing) after compartment registration.
-    // PluginManager._enablePlugin (step_04a) dispatches setFocusMode.of(true) through
-    // the live EditorView after this call returns, activating the dimming effect.
-    // In Chunk 2 the IIFE output is never executed at runtime (static path unchanged);
-    // this onEnable exists to verify the build pipeline is correct.
+    // Register only the ViewPlugin — no StateField needed. The compartment
+    // is the on/off switch (Bug #2 fix).
+    api.addExtensions([focusModeViewPlugin]);
   },
 
   onDisable(api: MarkablePluginAPI): void {

@@ -6,57 +6,59 @@
  *
  * Evaluated at runtime via: new Function(source + "\nreturn __markablePlugin__;")()
  *
- * Self-containment rules: only @codemirror/* imports allowed; no app-internal modules.
+ * Self-containment rules: only @codemirror/view import allowed; no app-internal modules.
  * No CSS to inject — typewriter mode controls editor layout via contentDOM padding.
  * The `import type` for MarkablePluginAPI is erased by tsc; no runtime code emitted.
  *
  * CM6 extension logic is duplicated from typewriter-mode.ts to keep the IIFE
  * fully self-contained. The original file remains unchanged.
  *
+ * Bug #2 fix: The original implementation wrapped the centering logic in a StateField
+ * that defaulted to false and required a StateEffect to activate. PluginManager never
+ * dispatched that effect (step_04a was never reached), so the cursor never centered.
+ *
+ * The fix removes the StateField/StateEffect toggle entirely. The compartment provided
+ * by PluginManager is the on/off mechanism: when the plugin is enabled, api.addExtensions
+ * installs the extensions; when disabled, api.removeExtensions removes them. The
+ * updateListener therefore always scrolls the cursor to center when installed.
+ *
  * EC-30, EC-31, EC-32: see focus-mode.plugin.ts for full EC rationale.
  */
 
-import {
-  StateField,
-  StateEffect,
-  type Extension,
-} from "@codemirror/state";
-import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+// Bug #5 fix: DO NOT import from @codemirror/* directly. The build marks all
+// @codemirror/* packages as external. At runtime, main.ts assigns the real CM6
+// module objects to window globals (cm-globals.ts) before any plugin IIFE runs.
+// Destructuring from those globals ensures this plugin shares the SAME ViewPlugin
+// and EditorView namespace as the main editor.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const {
+  EditorView,
+  ViewPlugin,
+} = (window as any).__CM_VIEW__ as typeof import("@codemirror/view");
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+// Type-only import — erased by tsc, safe for IDE support.
+import type { ViewUpdate } from "@codemirror/view";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
 
 // ── CM6 extension ─────────────────────────────────────────────────────────────
 // Duplicated from src/editor/typewriter-mode.ts. Original file is NOT modified.
-
-/** StateEffect that enables or disables typewriter mode. */
-const setTypewriterMode = StateEffect.define<boolean>();
-
-/**
- * StateField that tracks whether typewriter mode is active.
- * Defaults to false — no centering until the effect fires.
- * PluginManager._enablePlugin (step_04a) dispatches setTypewriterMode.of(true)
- * through the live EditorView after addExtensions completes.
- */
-const typewriterModeField = StateField.define<boolean>({
-  create: () => false,
-  update(value, tr) {
-    for (const e of tr.effects) {
-      if (e.is(setTypewriterMode)) return e.value;
-    }
-    return value;
-  },
-});
+//
+// Bug #2 fix: No StateField or StateEffect. The updateListener always scrolls
+// the cursor to center when the extension is present in the compartment.
+// The compartment is the on/off switch.
 
 /**
  * Adjust the contentDOM padding so the cursor line is vertically centered.
  *
- * When enabled: sets paddingTop and paddingBottom to half the editor height
- * so the first and last lines can scroll to the middle of the viewport.
- * When disabled: clears both padding values to restore normal layout.
+ * When called on enable: sets paddingTop and paddingBottom to half the editor
+ * height so the first and last lines can scroll to the middle of the viewport.
+ * When called on disable: clears both padding values to restore normal layout.
  *
  * @param view    - The live EditorView.
- * @param enabled - Whether typewriter mode is being turned on or off.
+ * @param enabled - True to apply centering padding; false to clear it.
  */
-function updatePadding(view: EditorView, enabled: boolean): void {
+function updatePadding(view: InstanceType<typeof EditorView>, enabled: boolean): void {
   const content = view.contentDOM;
   if (enabled) {
     // Half the editor container height gives the cursor room to reach center.
@@ -72,21 +74,15 @@ function updatePadding(view: EditorView, enabled: boolean): void {
 
 /**
  * UpdateListener that scrolls the cursor to vertical center on every edit or
- * selection change when typewriter mode is active. Also updates padding when
- * the mode is toggled on/off.
+ * selection change. Installed via api.addExtensions() so it only runs when the
+ * plugin is enabled (compartment is the on/off switch — Bug #2 fix).
+ *
+ * No internal boolean guard — if the extension is in the compartment, it runs.
  */
 const typewriterUpdateListener = EditorView.updateListener.of(
   (update: ViewUpdate) => {
-    const enabled = update.state.field(typewriterModeField);
-    const wasEnabled = update.startState.field(typewriterModeField);
-    // Update padding immediately when the mode flag changes.
-    if (enabled !== wasEnabled) {
-      updatePadding(update.view, enabled);
-    }
-    if (!enabled) return;
-    const modeToggled = enabled !== wasEnabled;
     // No need to scroll if nothing changed (avoids spurious dispatches).
-    if (!update.docChanged && !update.selectionSet && !modeToggled) return;
+    if (!update.docChanged && !update.selectionSet) return;
     // Scroll the cursor position to vertical center of the viewport.
     const head = update.state.selection.main.head;
     update.view.dispatch({
@@ -99,29 +95,40 @@ const typewriterUpdateListener = EditorView.updateListener.of(
  * ViewPlugin that watches for editor resize events and recalculates the padding
  * when the container changes size (e.g. window resize, panel open/close).
  *
+ * Applies centering padding immediately on construction so the layout is correct
+ * from the first frame after the plugin is enabled. Clears padding on destroy so
+ * the editor layout is restored cleanly when the plugin is disabled.
+ *
  * Uses ResizeObserver on the editor's host DOM element and cleans up the
  * observer in its destroy() hook to prevent memory leaks (EC-16).
  */
 const resizePlugin = ViewPlugin.define((view) => {
+  // Apply centering padding immediately when the plugin is installed.
+  updatePadding(view, true);
+
   const observer = new ResizeObserver(() => {
-    const enabled = view.state.field(typewriterModeField);
-    if (enabled) updatePadding(view, true);
+    // Recalculate half-height whenever the container resizes.
+    updatePadding(view, true);
   });
   observer.observe(view.dom);
+
   return {
     destroy() {
       observer.disconnect();
+      // Clear padding on teardown so the editor returns to normal layout.
+      updatePadding(view, false);
     },
   };
 });
 
 /**
- * Combined CM6 extension: StateField (tracks enabled state), updateListener
- * (scrolls cursor to center on each update), and resizePlugin (maintains
- * correct padding across container size changes).
+ * Combined CM6 extension: the updateListener (scrolls cursor to center on each
+ * edit/selection change) and the resizePlugin (maintains correct padding across
+ * container size changes and handles initial padding application/cleanup).
+ *
+ * No StateField needed — the compartment handles enable/disable (Bug #2 fix).
  */
-const typewriterModeExtension: Extension = [
-  typewriterModeField,
+const typewriterModeExtension = [
   typewriterUpdateListener,
   resizePlugin,
 ];
@@ -131,12 +138,12 @@ const typewriterModeExtension: Extension = [
 /**
  * UnifiedPlugin definition for Typewriter Mode.
  *
- * onEnable: registers the CM6 extension via the API.
- *   The StateField defaults to false (no centering) until PluginManager._enablePlugin
- *   (step_04a) dispatches setTypewriterMode.of(true) through the EditorView.
+ * onEnable: registers the CM6 extensions via api.addExtensions(). The resizePlugin
+ *   applies contentDOM padding immediately on construction. The updateListener
+ *   starts scrolling the cursor to center on every edit. No effect dispatch needed.
  *
- * onDisable: removes all CM6 extensions. The removeCSS step is not needed here
- *   because typewriter mode uses only inline padding on contentDOM — no CSS injection.
+ * onDisable: removes all CM6 extensions. The resizePlugin.destroy() hook clears
+ *   contentDOM padding, restoring the normal editor layout.
  */
 export default {
   id: "typewriter-mode",
@@ -147,13 +154,13 @@ export default {
     "Keeps the line you're typing on vertically centered in the viewport, like a typewriter. Allows blank space above and below at document edges so the cursor is always in the middle of the screen. Can be combined with Focus Mode.",
 
   onEnable(api: MarkablePluginAPI): void {
-    api.addExtensions([typewriterModeExtension]);
-    // The StateField defaults to false after compartment registration.
-    // PluginManager._enablePlugin (step_04a) dispatches setTypewriterMode.of(true)
-    // through the live EditorView after this call returns.
+    // Register the updateListener and resizePlugin. The compartment is the on/off
+    // switch — no StateField or StateEffect needed (Bug #2 fix).
+    api.addExtensions(typewriterModeExtension);
   },
 
   onDisable(api: MarkablePluginAPI): void {
+    // removeExtensions triggers resizePlugin.destroy(), which clears the padding.
     api.removeExtensions();
   },
 };

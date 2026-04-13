@@ -20,7 +20,12 @@
 
 import type { Extension } from "@codemirror/state";
 import { readPluginSettings, writePluginSettings } from "../lib/bridge";
-import { ensureStatusBar, hideStatusBarIfUnused } from "./status-bar/status-bar";
+import {
+  ensureStatusBar,
+  hideStatusBarIfUnused,
+  registerStatusBarDependent,
+  unregisterStatusBarDependent,
+} from "./status-bar/status-bar";
 import { pluginManager } from "./index";
 
 // ── Public API surface (FR-1) ─────────────────────────────────────────────────
@@ -61,6 +66,33 @@ export interface MarkablePluginAPI {
    * Call this in onDisable after removing status bar content.
    */
   hideStatusBarIfUnused(): void;
+
+  /**
+   * Register this plugin as a status bar dependent.
+   *
+   * Call in onEnable when the plugin writes content to any status bar zone.
+   * The STATUS_BAR_PLUGINS set in status-bar.ts tracks registered plugins so
+   * that hideStatusBarIfUnused() only hides the bar when the set is empty.
+   *
+   * Idempotent — Set semantics prevent duplicate registrations (EC-3).
+   *
+   * Bug #3/#4 fix: the original API was missing this method. Without it, calling
+   * hideStatusBarIfUnused() in onDisable would always hide the bar (the set was
+   * always empty), and ensureStatusBar() could not track which plugins depend on it.
+   */
+  registerStatusBarDependent(): void;
+
+  /**
+   * Unregister this plugin as a status bar dependent.
+   *
+   * Call in onDisable, before hideStatusBarIfUnused(), so the bar hides only
+   * when truly no plugin needs it. No-op if this plugin was not registered.
+   *
+   * Bug #3/#4 fix: counterpart to registerStatusBarDependent() — both are
+   * needed to maintain correct STATUS_BAR_PLUGINS set membership across
+   * toggle cycles.
+   */
+  unregisterStatusBarDependent(): void;
 
   /**
    * Load this plugin's persistent settings from disk.
@@ -191,6 +223,23 @@ export function buildMarkablePluginAPI(
     ensureStatusBar,
 
     hideStatusBarIfUnused,
+
+    /**
+     * Register this plugin in STATUS_BAR_PLUGINS so that hideStatusBarIfUnused()
+     * knows to keep the bar visible. The closure captures `pluginId`.
+     */
+    registerStatusBarDependent(): void {
+      registerStatusBarDependent(pluginId);
+    },
+
+    /**
+     * Unregister this plugin from STATUS_BAR_PLUGINS. After calling this,
+     * hideStatusBarIfUnused() will hide the bar if no other plugin is registered.
+     * The closure captures `pluginId`.
+     */
+    unregisterStatusBarDependent(): void {
+      unregisterStatusBarDependent(pluginId);
+    },
 
     /**
      * Loads plugin settings from disk. Returns null if none exist (EC-23) or

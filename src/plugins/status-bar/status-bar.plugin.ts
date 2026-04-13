@@ -25,12 +25,14 @@
 import type { MarkablePluginAPI } from "../markable-plugin-api";
 
 // ── Inline CSS ────────────────────────────────────────────────────────────────
-// Safety net in case this IIFE runs before the main app CSS is loaded.
-// The full, theme-aware CSS lives in status-bar.css in the main app bundle.
-// These rules are minimal — enough for the bar to display correctly at all times.
+// Full status-bar styles injected as a <style> tag at enable time.
+// status-bar.css in the plugin directory is not loaded by the main bundle
+// (it was extracted from styles.css but is only referenced here), so all
+// rules must live in this injection. Theme variables (--bg-titlebar,
+// --border-color, --text-secondary) are resolved from the app's theme CSS.
 
 /**
- * Inject the minimal status-bar CSS into the document <head>.
+ * Inject the status-bar CSS into the document <head>.
  * No-op if already injected (identified by the unique element id).
  */
 function injectCSS(): void {
@@ -38,14 +40,35 @@ function injectCSS(): void {
   if (document.getElementById(id)) return;
   const style = document.createElement("style");
   style.id = id;
-  // Only the structural rules needed for the bar to function.
-  // Theme variables (colors, fonts) come from the app bundle's status-bar.css.
   style.textContent = `
-    #statusbar { display: flex; align-items: center; height: 24px; }
+    #statusbar {
+      height: 24px;
+      min-height: 24px;
+      max-height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: var(--bg-titlebar);
+      border-top: 1px solid var(--border-color);
+      padding: 0 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 11px;
+      color: var(--text-secondary);
+      user-select: none;
+      -webkit-user-select: none;
+      flex-shrink: 0;
+    }
     #statusbar.hidden { display: none; }
-    .statusbar-left, .statusbar-center, .statusbar-right { flex: 1; }
-    .statusbar-center { text-align: center; }
-    .statusbar-right { text-align: right; }
+    .statusbar-left,
+    .statusbar-center,
+    .statusbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .statusbar-left   { justify-content: flex-start; }
+    .statusbar-center { justify-content: center; }
+    .statusbar-right  { justify-content: flex-end; }
   `;
   document.head.appendChild(style);
 }
@@ -74,10 +97,17 @@ export default {
 
   onEnable(api: MarkablePluginAPI): void {
     injectCSS();
+    // Register as a dependent before calling ensureStatusBar so the
+    // STATUS_BAR_PLUGINS set is non-empty when other plugins check it
+    // (Bug #3/#4 fix — registerStatusBarDependent was previously missing from API).
+    api.registerStatusBarDependent();
     api.ensureStatusBar();
   },
 
   onDisable(api: MarkablePluginAPI): void {
+    // Unregister first so STATUS_BAR_PLUGINS reflects this plugin's departure
+    // before hideStatusBarIfUnused() decides whether to hide the bar.
+    api.unregisterStatusBarDependent();
     api.hideStatusBarIfUnused();
   },
 };

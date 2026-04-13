@@ -81,15 +81,33 @@ function pluginConfig(
       },
 
       rollupOptions: {
-        // EC-31: Empty externals list — every dependency must be bundled.
-        // No @codemirror/* package should appear here. An externalized import
-        // generates a require() call that throws at eval time.
-        external: [],
+        // Bug #5 fix: mark all @codemirror/* packages as external.
+        //
+        // Previously EC-31 required bundling everything so there were no require()
+        // calls in the IIFE output. However, bundling CM6 into each plugin creates
+        // SEPARATE StateField slot-ID namespaces (one per IIFE), which are invisible
+        // to the main app's CM6 instance. The result is that plugin extensions appear
+        // registered but produce no observable effect.
+        //
+        // The fix is a two-part coordination:
+        //   1. main.ts imports cm-globals.ts, which assigns the main app's CM6 module
+        //      objects to window.__CM_STATE__ and window.__CM_VIEW__ before any plugin
+        //      IIFE is evaluated.
+        //   2. Plugin .plugin.ts files destructure from those globals instead of
+        //      importing from @codemirror/* directly.
+        //
+        // With this change, Rollup emits NO import/require for @codemirror/* — the
+        // plugin accesses the globals via `window.__CM_VIEW__` which is a plain
+        // property access in the IIFE body. No require() calls are generated.
+        external: [/^@codemirror\//],
 
         output: {
           // Disable code splitting — each plugin is a single self-contained file.
           // Dynamic imports are not supported inside the Function sandbox.
           inlineDynamicImports: false,
+          // No global variable mappings needed: plugins consume @codemirror exports
+          // via the window.__CM_STATE__ / window.__CM_VIEW__ property accesses in
+          // their source, not via bare @codemirror/* import specifiers in the bundle.
         },
       },
     },

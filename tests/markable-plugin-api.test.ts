@@ -49,11 +49,16 @@ vi.mock("../src/plugins/index", async (importOriginal) => {
 
 // ---------------------------------------------------------------------------
 // Mock status-bar helpers to avoid DOM side-effects in this test file.
+// Bug #3/#4 fix: registerStatusBarDependent and unregisterStatusBarDependent
+// are now part of the API — they must be present in the mock so the factory
+// can import them without error, and so delegation tests can assert on them.
 // ---------------------------------------------------------------------------
 
 vi.mock("../src/plugins/status-bar/status-bar", () => ({
   ensureStatusBar: vi.fn(),
   hideStatusBarIfUnused: vi.fn(),
+  registerStatusBarDependent: vi.fn(),
+  unregisterStatusBarDependent: vi.fn(),
   STATUS_BAR_PLUGINS: new Set(),
 }));
 
@@ -118,12 +123,23 @@ describe("buildMarkablePluginAPI() — returned object shape", () => {
     expect(typeof api.removeExtensions).toBe("function");
   });
 
-  it("has exactly the seven documented properties (no extras leaking through)", () => {
+  // Bug #3/#4 fix: two new API methods added for status bar dependency tracking.
+  it("exposes registerStatusBarDependent as a function", () => {
+    expect(typeof api.registerStatusBarDependent).toBe("function");
+  });
+
+  it("exposes unregisterStatusBarDependent as a function", () => {
+    expect(typeof api.unregisterStatusBarDependent).toBe("function");
+  });
+
+  it("has all nine documented properties (no extras leaking through)", () => {
     const keys = Object.keys(api);
     const expected = [
       "statusBar",
       "ensureStatusBar",
       "hideStatusBarIfUnused",
+      "registerStatusBarDependent",
+      "unregisterStatusBarDependent",
       "loadSettings",
       "saveSettings",
       "addExtensions",
@@ -177,6 +193,46 @@ describe("buildMarkablePluginAPI() — extension delegation", () => {
 
     expect(pluginManager.addExtensions).toHaveBeenCalledWith("plugin-a", extA);
     expect(pluginManager.addExtensions).toHaveBeenCalledWith("plugin-b", extB);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug #3/#4: registerStatusBarDependent / unregisterStatusBarDependent
+// These methods were missing from the original API. They delegate to the
+// status-bar module using the pluginId captured in the closure.
+// ---------------------------------------------------------------------------
+
+describe("buildMarkablePluginAPI() — status bar dependency registration (Bug #3/#4)", () => {
+  it("registerStatusBarDependent calls registerStatusBarDependent with the captured pluginId", async () => {
+    const { registerStatusBarDependent } = await import("../src/plugins/status-bar/status-bar");
+    const api = buildMarkablePluginAPI("reg-plugin", makeZones());
+
+    api.registerStatusBarDependent();
+
+    expect(registerStatusBarDependent).toHaveBeenCalledWith("reg-plugin");
+  });
+
+  it("unregisterStatusBarDependent calls unregisterStatusBarDependent with the captured pluginId", async () => {
+    const { unregisterStatusBarDependent } = await import("../src/plugins/status-bar/status-bar");
+    const api = buildMarkablePluginAPI("unreg-plugin", makeZones());
+
+    api.unregisterStatusBarDependent();
+
+    expect(unregisterStatusBarDependent).toHaveBeenCalledWith("unreg-plugin");
+  });
+
+  it("two API objects call registration with their respective ids", async () => {
+    const { registerStatusBarDependent } = await import("../src/plugins/status-bar/status-bar");
+    vi.mocked(registerStatusBarDependent).mockClear();
+
+    const apiA = buildMarkablePluginAPI("plugin-reg-a", makeZones());
+    const apiB = buildMarkablePluginAPI("plugin-reg-b", makeZones());
+
+    apiA.registerStatusBarDependent();
+    apiB.registerStatusBarDependent();
+
+    expect(registerStatusBarDependent).toHaveBeenCalledWith("plugin-reg-a");
+    expect(registerStatusBarDependent).toHaveBeenCalledWith("plugin-reg-b");
   });
 });
 

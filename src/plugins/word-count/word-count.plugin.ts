@@ -19,7 +19,19 @@
  * EC-30, EC-31, EC-32: see focus-mode.plugin.ts for full EC rationale.
  */
 
-import { EditorView, type ViewUpdate } from "@codemirror/view";
+// Bug #5 fix: DO NOT import from @codemirror/* directly. The build marks all
+// @codemirror/* packages as external. At runtime, main.ts assigns the real CM6
+// module objects to window globals (cm-globals.ts) before any plugin IIFE runs.
+// Destructuring from those globals ensures this plugin's EditorView.updateListener
+// is registered on the same CM6 instance as the main editor.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const {
+  EditorView,
+} = (window as any).__CM_VIEW__ as typeof import("@codemirror/view");
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+// Type-only import — erased by tsc, safe for IDE support.
+import type { ViewUpdate } from "@codemirror/view";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -124,6 +136,9 @@ export default {
   onEnable(api: MarkablePluginAPI): void {
     _enabled = true;
     _targetEl = api.statusBar.center;
+    // Register as a status bar dependent so hideStatusBarIfUnused() keeps the
+    // bar visible while this plugin is enabled (Bug #3/#4 fix).
+    api.registerStatusBarDependent();
     api.ensureStatusBar();
     api.addExtensions([wordCountListener]);
   },
@@ -137,6 +152,9 @@ export default {
       _debounceTimer = null;
     }
     api.removeExtensions();
+    // Unregister before hiding so the STATUS_BAR_PLUGINS set is correct when
+    // hideStatusBarIfUnused() checks whether to hide (Bug #3/#4 fix).
+    api.unregisterStatusBarDependent();
     api.hideStatusBarIfUnused();
   },
 };

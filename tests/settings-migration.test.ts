@@ -21,7 +21,7 @@ import type { MarkableSettings } from "../src/lib/settings";
  *
  * @param overrides  Fields to merge onto the base.
  */
-function makeSettings(overrides: Partial<MarkableSettings> = {}): MarkableSettings {
+function makeSettings(overrides: Record<string, unknown> = {}): MarkableSettings {
   return {
     version: 1,
     window: {
@@ -221,7 +221,7 @@ describe("migratePluginSettings — non-mutation and field preservation", () => 
     expect(result.recentFiles).toBe(settings.recentFiles);
     expect(result.keybindings).toBe(settings.keybindings);
     // focusMode is preserved (not deleted — backward compat).
-    expect(result.focusMode).toBe(true);
+    expect((result as Record<string, unknown>).focusMode).toBe(true);
   });
 });
 

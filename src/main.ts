@@ -9,6 +9,12 @@
  * 5. Shows the window after frontend renders (no-flash pattern)
  */
 
+// Bug #5 fix: expose CM6 packages as window globals BEFORE any plugin IIFE runs.
+// Plugin bundles mark @codemirror/* as external and reference these globals,
+// ensuring all StateField/ViewPlugin instances share the same slot-ID namespace
+// as the main editor. Must be the first import so globals exist at eval time.
+import "./lib/cm-globals";
+
 import { EditorView } from "@codemirror/view";
 import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
@@ -849,10 +855,14 @@ async function initApp() {
   // Build the status bar zone references for the unified plugin API.
   // These are passed into loadPlugins so that buildMarkablePluginAPI can wire
   // each plugin's statusBar property to the correct DOM elements.
+  //
+  // Bug #1 fix: the HTML uses class names (.statusbar-left / -center / -right),
+  // not id attributes, so getElementById() returns null. querySelector() correctly
+  // matches class selectors.
   const statusBarZones = {
-    left:   document.getElementById("statusbar-left")   as HTMLElement,
-    center: document.getElementById("statusbar-center") as HTMLElement,
-    right:  document.getElementById("statusbar-right")  as HTMLElement,
+    left:   document.querySelector(".statusbar-left")   as HTMLElement,
+    center: document.querySelector(".statusbar-center") as HTMLElement,
+    right:  document.querySelector(".statusbar-right")  as HTMLElement,
   };
 
   // Load all plugins (core + user) from disk. Must run after setEditorView()
