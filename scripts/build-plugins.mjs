@@ -42,6 +42,7 @@ const PLUGINS = [
   ["typewriter-mode", "src/plugins/typewriter-mode/typewriter-mode.plugin.ts"],
   ["word-count",      "src/plugins/word-count/word-count.plugin.ts"],
   ["status-bar",      "src/plugins/status-bar/status-bar.plugin.ts"],
+  ["auto-toc",        "src/plugins/auto-toc/auto-toc.plugin.ts"],
 ];
 
 /**
@@ -130,4 +131,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log("\n[build-plugins] All 4 core plugins built successfully.");
+console.log("\n[build-plugins] All 5 core plugins built successfully.");

@@ -170,7 +170,20 @@ export function evaluatePlugin(
     // The plugin must `return { id, name, ... }` at the top level of its source.
     // A stub api (null cast) is passed; the real api is injected at enable time.
     const factory = new Function("api", `"use strict";\n${source}\nreturn __markablePlugin__;`);
-    pluginObj = factory(null);
+    const raw = factory(null);
+
+    // ESModule interop: Rollup emits a namespace object ({ default, namedExport, … })
+    // when a plugin uses both named and default exports (e.g. `export function scanHeadings`
+    // + `export default { id, name, … }`). The namespace has __esModule: true set by
+    // Object.defineProperties. Unwrap to the .default value so the loader always receives
+    // the plain plugin object regardless of whether the source uses named exports.
+    pluginObj =
+      raw !== null &&
+      typeof raw === "object" &&
+      (raw as Record<string, unknown>).__esModule === true &&
+      "default" in (raw as Record<string, unknown>)
+        ? (raw as Record<string, unknown>).default
+        : raw;
   } catch (err) {
     // EC-3: syntax error or runtime error during evaluation.
     const message = err instanceof Error ? err.message : String(err);

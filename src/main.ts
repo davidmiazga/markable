@@ -846,6 +846,13 @@ async function initApp() {
   // flushed here (empty under normal startup order).
   pluginManager.setEditorView(editor);
 
+  // Expose the live EditorView instance on the window so IIFE plugins (e.g.
+  // auto-toc) can perform an initial build immediately in onEnable rather than
+  // waiting for the first user keystroke. This is a progressive enhancement —
+  // plugins that read this global must degrade gracefully when it is absent.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_EDITOR_VIEW__"] =
+    editor;
+
   // Apply editor settings (content width + font size)
   applyEditorSettings(migratedSettings.editor);
 

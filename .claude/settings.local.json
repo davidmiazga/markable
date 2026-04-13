@@ -102,7 +102,8 @@
       "Bash(ls:*)",
       "Bash(grep -rn \"plugin-types\\\\|user-plugin-types\\\\|buildUserPluginAPI\\\\|PluginContext\\\\|UserPluginAPI\\\\|UserPlugin\\\\b\\\\|PluginDef\\\\b\\\\|UserPluginDef\\\\b\\\\|statusBar\\\\?\\\\|wordCount\\\\?\\\\|focusMode\\\\?\\\\|typewriterMode\\\\?\\\\|userPlugins\\\\?\" src/ --include=*.ts)",
       "Bash(grep -rn \"TODO\\\\|FIXME\\\\|HACK\\\\|XXX\" /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/ --include=*.ts)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep:*)"
     ]
   }
 }

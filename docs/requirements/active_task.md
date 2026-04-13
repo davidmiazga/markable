@@ -1,15 +1,15 @@
-# Active Task: Unified Plugin System
+# Active Task: Auto TOC Plugin — Phase 1 (Sidebar Mode)
 
 **Status: VALIDATED**
-**Date: 2026-04-12**
-**Supersedes:** User Plugin System (now fully implemented and merged, see `docs/specs/user-plugins/00_index.md`)
-**Covers:** Collapsing the current two-tier plugin architecture (compiled TypeScript built-ins + dynamically-loaded user JS) into a single, unified loading system where every plugin — base and user — is a `.js` file on disk loaded by the same code path.
+**Date: 2026-04-13**
+**Supersedes:** Unified Plugin System task (now complete)
+**Scope:** Phase 1 of the Auto TOC plugin: sidebar-only. Phase 2 (left-margin dot/line mode) is explicitly out of scope and will be a separate work item.
 
 ---
 
 ## Summary
 
-As a Markable developer and power user, I want all plugins — whether they ship with the app or are written by users — to be loaded from disk using the same dynamic loading mechanism, so that base plugins can be iterated on independently of the app bundle and so that the plugin API surface is identical regardless of who wrote the plugin.
+As a Markable user, I want a Table of Contents sidebar on the right side of the editor that shows all headings in the current document, updates in real time as I type, highlights the section I am currently editing, and lets me jump to any heading with a single click — all controlled by the existing plugin toggle in the Plugins panel.
 
 ---
 
@@ -17,458 +17,258 @@ As a Markable developer and power user, I want all plugins — whether they ship
 
 The following facts are locked by existing code and are hard constraints for this feature.
 
-### What exists today
+### Plugin system (locked)
 
-**Current built-in plugins (compiled TypeScript, statically bundled):**
+- All plugins are IIFE `.js` files compiled from `src/plugins/<name>/<name>.plugin.ts` and output to `src-tauri/plugins/core/<name>.js`.
+- Every plugin receives a `MarkablePluginAPI` object in `onEnable` / `onDisable`. The raw `EditorView` is not exposed through the API.
+- CM6 extensions are registered via `api.addExtensions([...])` in `onEnable` and removed via `api.removeExtensions()` in `onDisable`.
+- CSS that cannot be imported from within the IIFE sandbox must be injected as a `<style>` tag in `onEnable` and removed in `onDisable` (see focus-mode.plugin.ts precedent).
+- The `MarkablePluginAPI` does not expose DOM references to the editor container or status bar beyond the three status bar zone elements. Any DOM the plugin needs beyond those zones must be created and appended directly to `document.body` or a suitable parent, and torn down on `onDisable`.
 
-| Plugin | Directory | CM6 involvement |
-|--------|-----------|-----------------|
-| Word Count | `src/plugins/word-count/` | None — DOM only |
-| Status Bar | `src/plugins/status-bar/` | None — DOM only |
-| Focus Mode | `src/plugins/focus-mode/` | `focusModeExtension` (StateField + StateEffect) |
-| Typewriter Mode | `src/plugins/typewriter-mode/` | `typewriterModeExtension` (StateField + StateEffect) |
+### CM6 access pattern (locked)
 
-These are imported statically in `src/plugins/index.ts` and hardcoded in `PluginManager`'s constructor. They currently call `getExtensions()` at editor-init time (before the `EditorView` exists), and their CM6 extensions are baked into the initial `EditorState` configuration.
+- CM6 packages are not bundled inside the IIFE. Plugins access them via `window.__CM_VIEW__` and `window.__CM_STATE__` globals assigned before any plugin runs.
+- To read document headings, the plugin must use the CM6 `EditorView.updateListener` extension (via `api.addExtensions`) to receive `ViewUpdate` events and iterate the document tree, OR use the lezer syntax tree via `syntaxTree(state)` from `@codemirror/language` accessed as `window.__CM_LANGUAGE__` (check whether this global is currently exposed — see Open Question OQ-1).
+- To scroll a heading into view after click, the plugin must call `view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "center" }) })` and also `view.dispatch({ selection: { anchor: pos } })`. The plugin accesses the live `EditorView` instance through `window.__CM_VIEW__` (already a pattern used by other parts of the codebase for the editor instance — see Open Question OQ-2).
 
-**Current user plugins (dynamic JS, loaded post-init):**
+### DOM layout (locked)
 
-- Loaded from `~/Library/Application Support/com.markable.app/plugins/` (currently a flat `plugins/` directory, no `user/` subdirectory yet — see PC-EXISTING-1 below)
-- Evaluated via `new Function('api', source)()` with a restricted `UserPluginAPI` object
-- Restricted to DOM-only access; `getExtensions()` and `EditorView` are intentionally absent from `UserPlugin` / `UserPluginAPI`
-- Implemented in: `src/plugins/user-plugin-loader.ts`, `src/plugins/user-plugin-types.ts`, `src/plugins/index.ts` (`loadUserPlugins` / `toggleUserPlugin` / etc.), `src-tauri/src/commands/plugins.rs`
+The current `#app` layout (from `index.html` + `styles.css`):
 
-**Current `PluginManager` (`src/plugins/index.ts`):**
+```
+body (flex-direction: column)
+  #titlebar  (height: 38px, flex-shrink: 0)
+  #app       (flex: 1, display: flex, flex-direction: column)
+    #editor  (flex: 1, overflow: hidden)
+    #statusbar (hidden unless a plugin uses it)
+```
 
-- Two separate plugin arrays: `this.plugins: MarkablePlugin[]` (built-ins, static) and `this.userPluginRecords: UserPluginRecord[]` (user, dynamic)
-- Two separate toggle methods: `toggle()` (built-ins) and `toggleUserPlugin()` (user)
-- Two separate panel data sources: `getDefinitions()` and `getUserDefinitions()`
-- Two separate state snapshots: `getStates()` and `getUserStates()`
-
-**Current interface split:**
-
-| Interface | File | CM6 access | `getExtensions()` |
-|-----------|------|-----------|-------------------|
-| `MarkablePlugin` | `plugin-types.ts` | Full (`EditorView` in `PluginContext`) | Yes (optional) |
-| `UserPlugin` | `user-plugin-types.ts` | None | No |
-| `PluginContext` | `plugin-types.ts` | `editor: EditorView` | — |
-| `UserPluginAPI` | `user-plugin-types.ts` | None | — |
-
-**Current Rust command surface (all in `src-tauri/src/commands/plugins.rs`):**
-
-- `list_user_plugins()` — scans `plugins/` top-level, returns `{ files, truncated }` (max 50, lexicographic)
-- `read_plugin_file(filename)` — reads a `.js` file, max 500 KB, path-confined
-- `read_plugin_settings(id, json)` — reads `plugins/<id>/settings.json`
-- `write_plugin_settings(id, json)` — writes `plugins/<id>/settings.json`
-
-**CM6 Compartment — does not exist yet.** The editor's extension set is built once in `buildExtensions()` and passed to `EditorState.create()`. There is no post-init reconfiguration mechanism.
-
-**`src-tauri/resources/`** — does not exist yet. Currently only `help/*` is listed under `bundle.resources` in `tauri.conf.json`.
-
-**PC-EXISTING-1 — Current user plugin directory is flat `plugins/`, not `plugins/user/`.** The implemented system uses `plugins/` directly. The new system introduces `plugins/core/` and `plugins/user/` subdirectories. A migration path is required for existing users who already have plugins in `plugins/`.
+Adding a sidebar requires changing `#app`'s flex-direction to `row` (or inserting a new row-flex wrapper inside it), then placing the TOC panel as a sibling to `#editor`. This is a layout-level change that affects the main app styles, not just the plugin's own CSS.
 
 ---
-
-## Knowns
-
-- All plugins (base and user) will be `.js` files on disk, evaluated via the same `new Function`-based loader.
-- Base plugins ship as `.js` files inside the Tauri app bundle (under `resources/plugins/core/`).
-- On first launch (or when the app version bumps), Rust copies `resources/plugins/core/` files to `~/Library/.../plugins/core/`. User files in `plugins/user/` are never touched by the copy step.
-- User plugins are placed in `~/Library/.../plugins/user/` (subdirectory, not the previous flat `plugins/`).
-- A user can override a base plugin by placing a same-named `.js` file in `plugins/user/`. The user version wins.
-- Base plugins show in a "Core Plugins" collapsible section; user plugins show in "User Plugins" collapsible section.
-- An overridden core plugin shows an "Overridden" badge in the Core Plugins section; the user version renders normally in the User Plugins section.
-- All plugins receive the same unified `MarkablePluginAPI` object. Base plugins get the same API as user plugins — the `PluginContext` / `UserPluginAPI` split is eliminated.
-- `getExtensions()` is restored to the unified API surface and is available to all plugins (base and user). CM6 extensions are injected post-init via a `Compartment`-based reconfiguration, not at editor-init time.
-- Plugin versioning: each plugin object declares a `version: string` field (semver string, e.g. `"1.0.0"`). There is no sidecar `.json` manifest file.
-- Base plugin auto-update: on app version bump, Rust overwrites `plugins/core/` files with the bundled versions. User files in `plugins/user/` are never overwritten.
-- Plugin enable/disable state continues to be persisted in `settings.json` under appropriate keys (details in FR-7).
-- The existing `loadSettings()` / `saveSettings()` per-plugin settings storage mechanism (`plugins/<id>/settings.json`) is retained.
-- The maximum plugin count (50 per directory, lexicographic) is retained for user plugins. Core plugins have no cap (they are under developer control).
-- The existing path-traversal guards and file-size limits (500 KB) are retained for the user plugin directory.
-
----
-
-## Resolved Decisions
-
-All six key technical decisions listed in the brief are resolved as follows.
-
-**Decision 1 — CM6 API surface for plugins (formerly PC-6, now reversed)**
-
-All plugins receive a `MarkablePluginAPI` object that includes:
-- `statusBar` zones (left/center/right `HTMLElement`)
-- `ensureStatusBar()` / `hideStatusBarIfUnused()`
-- `loadSettings()` / `saveSettings(data)` — per-plugin settings JSON
-- `addExtensions(exts: Extension[])` — injects CM6 extensions via the editor `Compartment` post-init
-- `removeExtensions()` — removes all extensions previously added by the calling plugin from the `Compartment` (all-or-nothing per plugin id)
-
-The raw `EditorView` instance is **not** exposed on `MarkablePluginAPI`. All CM6 interaction goes through the `addExtensions` / `removeExtensions` façade. This limits blast radius (plugins cannot call `editor.dispatch` with arbitrary transactions, access `editor.dom`, or read editor state directly) while enabling the full set of use cases (custom syntax highlighting, decorations, keymaps, state fields).
-
-Rationale: exposing `addExtensions`/`removeExtensions` only is substantially narrower than passing the raw `EditorView`. A plugin that needs to read document state can do so by registering a `StateField` via `addExtensions`; it does not need direct access to the view.
-
-**Decision 2 — Base plugin build pipeline**
-
-Each of the four existing TypeScript plugins is built as a standalone IIFE `.js` file using Vite in library mode. Each plugin file is self-contained: it bundles its own CM6 dependencies (tree-shaken from `@codemirror/*`). The built `.js` files are placed in `src-tauri/resources/plugins/core/`. Tauri picks them up via the `resources` bundle config. A new npm script (`build:plugins`) runs the per-plugin Vite builds and is invoked as part of the main `tauri build` pipeline.
-
-The IIFE wrapper convention for base plugins is identical to user plugin convention: the outermost expression must be `(function(api){ ... return pluginObject; })(api)` where `api` is the injected `MarkablePluginAPI`.
-
-**Decision 3 — Override detection**
-
-When loading core plugins, the loader checks whether a same-named `.js` file exists in `plugins/user/`. If it does, the user version is loaded and the core slot shows an "Overridden" badge. The core `.js` file in `plugins/core/` is not evaluated when overridden.
-
-Override matching is by **filename**, not by plugin `id`. A file named `focus-mode.js` in `plugins/user/` overrides `focus-mode.js` in `plugins/core/`. The overriding file may declare a different `id` — the override is purely filesystem-level.
-
-**Decision 4 — Plugin versioning**
-
-Each plugin object must declare `version: string` as a required field. Validation rejects any plugin that does not include a non-empty `version` string. The `version` field is displayed in the Plugins panel detail view. Semver is recommended but not enforced.
-
-**Decision 5 — First-launch vs app-update copy mechanism**
-
-The app stores its own version in a `pluginsCopiedForVersion` key in `settings.json` (a frontend-only key, preserved by the raw-JSON pass-through). On startup:
-
-1. Load settings. Read `pluginsCopiedForVersion` (may be absent on first launch).
-2. Read the current app version via the Tauri `app` plugin (`@tauri-apps/api/app` → `getVersion()`).
-3. If `pluginsCopiedForVersion !== currentAppVersion`, invoke a new Rust command `copy_core_plugins()` which copies all files from `resources/plugins/core/` into `~/Library/.../plugins/core/`, overwriting any existing files with the same name. Files in `plugins/user/` are not touched.
-4. After a successful copy, persist `{ pluginsCopiedForVersion: currentAppVersion }` to settings.
-
-This is a simple version-stamp check. It does not perform per-file version comparison — all core files are overwritten on every app update, which is safe because core files are never user-edited.
-
-**Decision 6 — Migration of existing `plugins/` flat directory**
-
-Existing user plugins sitting in the flat `plugins/` root (the current layout) must be migrated to `plugins/user/` on the first launch after this refactor ships. The `copy_core_plugins` Rust command also performs this one-time migration: before copying core files, it checks whether any `.js` files exist directly in `plugins/` (not in a subdirectory) and moves them to `plugins/user/`. This runs once because after migration the root contains only `core/` and `user/` subdirectories.
-
-**Decision 7 — Vite IIFE build output for core plugins: fully self-contained (U-1 resolved)**
-
-Each core plugin `.js` file bundles its own copy of all `@codemirror/*` dependencies. There is no shared runtime file. Each IIFE is fully self-contained. `@codemirror/*` packages are not listed as externals in the Vite library build config.
-
-Rationale: eliminates load-order complexity entirely. On a native desktop app the size overhead (~50 KB per plugin for `@codemirror/state` etc.) is negligible against the simplicity gain.
-
-**Decision 8 — `removeExtensions` granularity: all-or-nothing per plugin (U-2 resolved)**
-
-`removeExtensions()` takes no arguments and removes all CM6 extensions that the calling plugin registered via `addExtensions`. There is no partial removal. `PluginManager` stores a `Map<string, Extension[]>` (plugin id → array) to reconstruct the compartment after removal.
-
-Rationale: all four current base plugins each contribute a single logical extension set. Partial removal is not needed and reference-equality tracking across plugin calls adds unnecessary complexity.
 
 ## Functional Requirements
 
-### FR-1: Unified `MarkablePluginAPI` Interface
+### FR-1: Plugin identity
 
-Replace `PluginContext` (internal built-in interface) and `UserPluginAPI` (restricted user interface) with a single `MarkablePluginAPI` that all plugins receive at runtime.
+The plugin must be a core plugin conforming to the `UnifiedPlugin` interface:
 
-Required fields on `MarkablePluginAPI`:
+| Field | Value |
+|---|---|
+| `id` | `"auto-toc"` |
+| `name` | `"Auto TOC"` |
+| `version` | `"1.0.0"` |
+| `description` | `"Table of contents sidebar"` |
+| `detail` | Long-form description shown in the plugin panel detail view (see FR-2) |
 
-```typescript
-export interface MarkablePluginAPI {
-  statusBar: {
-    left: HTMLElement;
-    center: HTMLElement;
-    right: HTMLElement;
-  };
-  ensureStatusBar(): void;
-  hideStatusBarIfUnused(): void;
-  loadSettings(): Promise<Record<string, unknown> | null>;
-  saveSettings(data: Record<string, unknown>): Promise<void>;
-  addExtensions(extensions: Extension[]): void;
-  removeExtensions(): void;
-}
-```
+The plugin is compiled from `src/plugins/auto-toc/auto-toc.plugin.ts` and output to `src-tauri/plugins/core/auto-toc.js`.
 
-`addExtensions` registers extensions for the calling plugin and reconfigures the shared `Compartment`. `removeExtensions` removes **all** extensions previously registered by the calling plugin (all-or-nothing per plugin id) and reconfigures the `Compartment`. Both are no-ops if the editor has not yet been created (will not be called before the editor exists under the new startup sequence).
+### FR-2: Plugin panel detail text
 
-### FR-2: Unified `MarkablePlugin` Interface
+The `detail` field must describe what the plugin does, including the sidebar mode, real-time updates, active heading highlight, and click-to-jump behavior, in 2–3 sentences suitable for the Plugins panel detail view.
 
-Replace the `MarkablePlugin` (TypeScript built-in contract) and `UserPlugin` (JS runtime contract) with a single interface used for both:
+### FR-3: Sidebar DOM structure
 
-```typescript
-export interface MarkablePlugin {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  readonly detail?: string;
-  readonly version: string;
-  onEnable(api: MarkablePluginAPI): void | Promise<void>;
-  onDisable(api: MarkablePluginAPI): void | Promise<void>;
-}
-```
+When the plugin is enabled (`onEnable`), it must:
 
-Removed from the interface relative to the old `MarkablePlugin`:
-- `getExtensions()` — replaced by `addExtensions`/`removeExtensions` calls inside `onEnable`/`onDisable`
-- `restoreFromSettings(settings, ctx)` — replaced by a unified restore mechanism in `PluginManager` (FR-5)
-- `isEnabled()` — enabled state is now tracked entirely by `PluginManager`, not by each plugin module
-- `handlesOwnPersistence` — no longer needed; `PluginManager` handles all persistence uniformly
+1. Create a `<div id="toc-sidebar">` element.
+2. Append it as a sibling to `#editor` inside `#app` (on the right side).
+3. Apply `display: flex; flex-direction: row;` to `#app` (or the nearest suitable wrapper) so that `#editor` and `#toc-sidebar` sit side by side horizontally. The `#editor` element must shrink to fill remaining space (`flex: 1`); the sidebar must have a fixed width (see FR-5).
+4. Restore `#app` layout to its original state on `onDisable`.
 
-The `detail` field becomes optional (matching the existing `UserPlugin` convention). The `version` field is new and required.
+When the plugin is disabled (`onDisable`), it must:
 
-### FR-3: CM6 Compartment
+1. Remove `#toc-sidebar` from the DOM.
+2. Restore `#app` (or wrapper) to its original `flex-direction: column` layout so the editor occupies the full width again.
 
-A single `Compartment` is added to the editor's extension set during `buildExtensions()`. All plugin-contributed CM6 extensions live inside this compartment. On `addExtensions(exts)`, the `PluginManager` stores `exts` keyed by the calling plugin's `id` and dispatches a `Compartment.reconfigure([...allRegisteredExtensions])` effect on the live `EditorView`. On `removeExtensions()` (no argument), the `PluginManager` removes all extensions stored under the calling plugin's `id` and dispatches `Compartment.reconfigure([...remainingExtensions])`.
+### FR-4: Heading detection
 
-`PluginManager` maintains a `Map<string, Extension[]>` (plugin id → extension array) so it can reconstruct the full compartment contents on each add or remove call. All-or-nothing removal per plugin id is the only supported granularity — a plugin cannot partially remove individual extensions from its own registered set.
+The plugin must detect ATX headings at levels H1 through H6 (lines starting with one to six `#` characters followed by a space) from the CM6 document. Detection must parse the text content of the heading (the part after the `#` marks and the space).
 
-### FR-4: Base Plugin Build Pipeline
+- Headings are identified by iterating the CM6 document text line by line, not by injecting widgets or decorations into the editor viewport.
+- The heading list is rebuilt on every `ViewUpdate` where `update.docChanged` is true, debounced to avoid rebuilding on every keystroke (debounce interval: 200 ms is the recommended starting point — see Open Question OQ-3).
+- Setext headings (underline style: `===` / `---`) are out of scope for Phase 1.
 
-A new npm script `build:plugins` builds each of the four existing TypeScript plugins as standalone IIFE files:
+### FR-5: Sidebar dimensions
 
-- `src/plugins/focus-mode/` → `src-tauri/resources/plugins/core/focus-mode.js`
-- `src/plugins/typewriter-mode/` → `src-tauri/resources/plugins/core/typewriter-mode.js`
-- `src/plugins/word-count/` → `src-tauri/resources/plugins/core/word-count.js`
-- `src/plugins/status-bar/` → `src-tauri/resources/plugins/core/status-bar.js`
+- Width: fixed at `220px`. No resize handle.
+- Height: the sidebar fills the full height of `#app` minus the title bar.
+- The TOC item list inside the sidebar must overflow and scroll vertically (`overflow-y: auto`) when it is taller than the sidebar height.
+- The sidebar itself does not scroll horizontally.
 
-Each build uses Vite in library mode with `build.lib.entry` pointed at the plugin's `index.ts` and `build.lib.formats: ['iife']`. The IIFE global name is unused (the loader uses `new Function`, not a global). All `@codemirror/*` dependencies are bundled into the IIFE (not externalized), so the `.js` file is fully self-contained.
+### FR-6: TOC item rendering
 
-The `package.json` `tauri build` script must be updated to run `build:plugins` before `vite build`.
+Each heading in the document is rendered as one item in the TOC list. Items must:
 
-`src-tauri/tauri.conf.json` `bundle.resources` must include `"plugins/core/*"`.
+- Be displayed in document order (top to bottom).
+- Be visually indented by heading level: H1 has no indent; each level below H1 adds an indent increment (exact value: see Open Question OQ-4).
+- Show the plain text of the heading (Markdown syntax characters such as `**`, `_`, `[`, `]` are displayed as-is in Phase 1; no inline rendering required).
+- Be clickable (see FR-8).
 
-### FR-5: Unified `PluginManager`
+### FR-7: Active heading highlight
 
-`PluginManager` is refactored into a single-tier system:
+The "active heading" is defined as the last heading whose line number is less than or equal to the current cursor line. In other words, the cursor falls within that heading's section.
 
-- One record type (`PluginRecord`) covers both core and user plugins.
-- One `load()` method loads plugins from a directory path.
-- One `toggle(id, enabled)` method handles both core and user plugins.
-- One `getDefinitions()` / `getStates()` covers all plugins.
-- Core and user plugins are stored in separate arrays for panel-section rendering, but use the same record type.
+- The active heading item in the TOC list receives a distinct visual treatment (background color, left border accent, or similar — exact style: see Open Question OQ-4).
+- The active heading is recalculated on every `ViewUpdate` where `update.selectionSet` is true or `update.docChanged` is true.
+- If the cursor is above the first heading, no item is highlighted.
+- If the document has no headings, no item is highlighted (empty state — see FR-9).
 
-`PluginRecord`:
+### FR-8: Click-to-jump
 
-```typescript
-interface PluginRecord {
-  plugin: MarkablePlugin | null;
-  api: MarkablePluginAPI | null;
-  filename: string;
-  origin: "core" | "user";
-  status: "loaded" | "failed" | "missing" | "overridden";
-  failReason?: string;
-  _enabled: boolean;
-}
-```
+Clicking a TOC item must:
 
-The `"overridden"` status is new: it marks a core plugin slot whose filename has a same-named file in the user directory.
+1. Move the CM6 cursor to the first character of that heading's line.
+2. Scroll the editor viewport so the heading line is centered vertically (`y: "center"`).
+3. Refocus the editor after the jump (so the user can continue typing without an extra click).
 
-`PluginManager.restoreAll(settings)` — iterates over all loaded (non-failed, non-overridden) records and calls `onEnable(api)` for any plugin whose persisted enabled state is `true`. This is a unified path; there is no separate `restoreUserPlugins` step.
+The plugin accesses the live `EditorView` instance to dispatch the scroll/selection transaction (see Open Question OQ-2 for the exact global access pattern).
 
-### FR-6: Rust Command — `copy_core_plugins`
+### FR-9: Empty state
 
-New Rust command `copy_core_plugins(app: AppHandle) -> Result<(), String>`:
+When the document contains no headings (H1–H6), the TOC sidebar must display a non-interactive placeholder message. Exact text: "No headings" (centered, muted color). The placeholder disappears as soon as the user types the first heading.
 
-1. Resolves `resources/plugins/core/` using `app.path().resource_dir()`.
-2. Ensures `~/Library/.../plugins/core/` and `~/Library/.../plugins/user/` exist (create if absent).
-3. Performs the one-time migration: scans `plugins/` root for any `.js` files at the top level (not in subdirectories). If found, moves each to `plugins/user/`. Logs each moved file.
-4. Copies every `.js` file from the resolved resource path into `~/Library/.../plugins/core/`, overwriting existing files (base plugin update).
-5. Returns `Ok(())` on success; returns `Err(reason)` if any copy fails (caller treats this as a non-fatal warning — the app continues with whatever partial state resulted).
+### FR-10: Theme compatibility
 
-### FR-7: Settings Persistence for Unified System
+The sidebar must use CSS variables from the existing design token set (`--bg-primary`, `--bg-titlebar`, `--border-color`, `--text-primary`, `--text-secondary`, `--link-color`) so that it automatically adapts to light mode, dark mode, and custom CSS themes without any plugin-side logic.
 
-Plugin enable/disable state is unified under a single `plugins` key in `settings.json`:
+The sidebar background should use `--bg-titlebar` (same as the title bar) to visually separate it from the editor content area.
 
-```json
-{
-  "plugins": {
-    "focus-mode": { "enabled": true },
-    "typewriter-mode": { "enabled": false },
-    "word-count": { "enabled": true },
-    "status-bar": { "enabled": true },
-    "my-user-plugin": { "enabled": false }
-  }
-}
-```
+### FR-11: Enable / disable lifecycle
 
-This replaces both the flat boolean keys used by current built-in plugins (`focusMode: true`, `typewriterMode: false`, etc.) and the `userPlugins` key used by the current user plugin system.
+- `onEnable`: create sidebar DOM, inject CSS `<style>` tag, alter `#app` layout, register CM6 `updateListener` extension via `api.addExtensions`.
+- `onDisable`: call `api.removeExtensions()`, remove sidebar DOM, remove injected `<style>` tag, restore `#app` layout.
+- Toggle cycles (enable → disable → enable) must leave no orphaned DOM nodes, no duplicate `<style>` tags, and no stale CM6 extensions.
 
-A one-time migration must run at startup: if the old flat boolean keys (`focusMode`, `typewriterMode`, `wordCount`, `statusBar`) or the old `userPlugins` key are present in settings, they are migrated into the new `plugins` structure and the old keys are removed. The migration is performed on the frontend before `restoreAll()` is called.
+### FR-12: Settings stub
 
-`MarkableSettings` TypeScript type gains:
-```typescript
-plugins?: Record<string, { enabled: boolean }>;
-```
+The plugin must call `api.loadSettings()` in `onEnable` to retrieve any previously saved settings. In Phase 1, no user-facing settings are persisted; `loadSettings()` will return `null` on first run and the result is discarded. The call must be present so the architecture is forward-compatible with Phase 2 settings without an API change.
 
-The old fields (`focusMode?`, `typewriterMode?`, `wordCount?`, `statusBar?: { visible: boolean }`, `userPlugins?`) are kept in the type as deprecated optionals until the migration step removes them at runtime, then they can be removed from the type definition.
+### FR-13: Heading depth setting (Phase 1 default)
 
-### FR-8: Rust Command — `list_core_plugins` and Updated `list_user_plugins`
-
-Two separate Rust commands for directory scanning:
-
-- `list_core_plugins()` — scans `plugins/core/`, returns all `.js` filenames (no cap). Returns `[]` if the directory does not exist (handled by first-launch copy step which runs before this).
-- `list_user_plugins()` — updated to scan `plugins/user/` instead of `plugins/` root. Retains the 50-file cap and `{ files, truncated }` response shape. Returns `[]` if `plugins/user/` does not exist.
-
-`read_plugin_file(origin: "core" | "user", filename: string)` — updated signature to accept an `origin` parameter so the path-confinement logic routes to either `plugins/core/` or `plugins/user/` accordingly. The 500 KB size limit and path-traversal guard apply to both origins.
-
-### FR-9: Plugins Panel Updates
-
-The Plugins panel is updated to reflect the unified system:
-
-- "Core Plugins" collapsible section (replaces "Built-in Plugins") — shows base plugins loaded from `plugins/core/`. Overridden entries show an "Overridden" badge and a tooltip or note indicating which user file is overriding it. Overridden core plugin entries are non-toggleable (the user version in the User Plugins section is the active one).
-- "User Plugins" collapsible section — unchanged in behavior; shows plugins from `plugins/user/`.
-- Plugin detail view shows the `version` field.
-- A plugin's panel entry shows version as a secondary label (e.g. `v1.2.0` next to the name).
-
-### FR-10: Authoring Guide Update
-
-`docs/specs/user-plugins/authoring-guide.md` must be updated to document:
-
-- The new unified interface (`MarkablePlugin`, `MarkablePluginAPI`)
-- `version` field requirement
-- `addExtensions` / `removeExtensions` usage and the rule that extensions added in `onEnable` must be removed in `onDisable`
-- The `plugins/user/` directory location (updated from the old flat `plugins/` path)
-- Override mechanism: how to override a core plugin by filename
-- The retained convention-only sandbox limitation (EC-16 in this document)
+All six heading levels (H1–H6) are shown in Phase 1. No user-facing control for filtering heading depth is included in this phase.
 
 ---
 
-## Accepted Constraints
+## Layout Change Specification
 
-- **PC-1**: The unified `MarkablePlugin` interface is required for all plugins. Files that evaluate to a non-conforming object are rejected. `version` is a required field; its absence is a validation error.
-- **PC-2**: Plugin `id` values must be unique across all loaded plugins (core + user). A user plugin whose `id` collides with an already-loaded core plugin `id` is rejected. Override is by filename, not by id — a user file overriding a core file by the same filename may have the same or a different `id`; id collision is checked after override resolution.
-- **PC-3**: All plugins receive `MarkablePluginAPI`. The raw `EditorView`, `invoke`, `window.__TAURI_INTERNALS__`, and direct CM6 constructs beyond `addExtensions`/`removeExtensions` are not exposed. The convention-only nature of this boundary (same-process WebView) is documented and accepted.
-- **PC-4**: File I/O for user plugins (`plugins/user/`) retains all existing guards: path-confinement, 500 KB size limit, UTF-8 validation, path-traversal rejection. Core plugin files (`plugins/core/`) are written only by the Rust copy command, so user-supplied filenames are never used to read core files.
-- **PC-5**: Plugin enable/disable state is persisted under the `plugins` key in `settings.json` with a migration from old keys on first run post-upgrade.
-- **PC-6**: The `Compartment` shared by all plugins is a single instance managed by `PluginManager`. Plugins do not receive the `Compartment` object directly — they receive only the `addExtensions`/`removeExtensions` façade. `removeExtensions()` takes no arguments and removes all extensions the calling plugin registered. A plugin that calls `addExtensions` in `onEnable` must call `removeExtensions()` in `onDisable`. Failure to do so leaks extensions but does not crash the editor. `PluginManager` tracks extensions per plugin id via a `Map<string, Extension[]>`; individual extension references are never passed back to `removeExtensions`.
-- **PC-7**: Maximum 50 user plugins in `plugins/user/` (lexicographic, same as before). Core plugins have no cap.
-- **PC-8**: Base plugin `.js` files are built with Vite library mode (IIFE), fully self-contained (all `@codemirror` deps bundled). They must not reference `window.__markable` or any app global — they receive only the `api` parameter.
-- **PC-9**: Per-plugin settings (`plugins/<id>/settings.json`) are retained unchanged. The `read_plugin_settings` / `write_plugin_settings` Rust commands continue to operate on a path relative to the `plugins/` root, not `plugins/user/` specifically. Plugin `id` is the key, not the filename.
-- **PC-10**: "Reload Plugins" rescans `plugins/user/` only (not `plugins/core/`). Core plugins are loaded once at startup. Already-registered filenames are not re-evaluated on reload (same as before).
-- **PC-11**: The `build:plugins` npm script must be a declared prerequisite of `tauri build` so that the bundled core `.js` files are always fresh before packaging.
-- **PC-12**: The `copy_core_plugins` Rust command is non-fatal. If it fails (e.g. disk full, permissions error), the app continues with whatever state exists in `plugins/core/`. The error is logged to the console and a non-blocking notification may optionally be shown.
+The current `#app` element uses `flex-direction: column`. This must change to `flex-direction: row` when the sidebar is present so the editor and TOC sit side by side.
+
+The approach must not break the existing `#statusbar` behavior. The status bar is a direct child of `#app` and currently spans full width in the column layout. When the sidebar is enabled, the status bar must continue to span the full width below the editor+sidebar row.
+
+Recommended DOM structure when sidebar is active:
+
+```
+#app  (flex: column — unchanged outer structure)
+  .toc-editor-row  (flex: row — new wrapper or #app itself reused)
+    #editor        (flex: 1)
+    #toc-sidebar   (width: 220px, flex-shrink: 0)
+  #statusbar       (full width, unchanged)
+```
+
+The plugin must choose one of the following two layout strategies:
+
+**Strategy A (wrapper element):** Insert a new `<div class="toc-editor-row">` wrapper inside `#app`, move `#editor` into it, and append `#toc-sidebar` next to it. Reverse on disable by moving `#editor` back and removing the wrapper. This approach avoids modifying `#app`'s own CSS.
+
+**Strategy B (mutate #app):** Change `#app`'s `flex-direction` from `column` to `row` directly, append `#toc-sidebar`, and insert an inner column wrapper for the remaining children. Reverse on disable.
+
+The architect must choose one strategy and document the rationale. Strategy A is the recommended starting point because it requires fewer DOM mutations to reverse cleanly.
+
+---
+
+## Out of Scope (Phase 1)
+
+The following items are explicitly excluded from this specification. They must not be implemented in Phase 1, but the architecture must not preclude them being added later.
+
+| Item | Notes |
+|---|---|
+| Phase 2 dot/line mode (left margin) | Separate work item |
+| Sidebar resize handle | Not required in Phase 1 |
+| Setext heading detection (`===` / `---`) | Phase 1 uses ATX headings only |
+| Inline Markdown rendering in TOC items | Plain text only in Phase 1 |
+| Heading depth filter (show only H1–H3, etc.) | Phase 1 shows all levels |
+| Auto-scroll the TOC list to keep the active heading visible | Nice to have; Phase 1 may omit this |
+| Keyboard navigation within the TOC list | Phase 1 click-only |
+| "Collapse" / "expand" TOC entries with children | Phase 1 flat list only |
+| Persisted sidebar width | Phase 1 fixed width only |
+| Export integration (TOC in exported HTML) | Separate feature |
+| Multiple windows / multi-document | Markable is single-window in Phase 1 |
+
+---
+
+## Open Questions
+
+These must be answered by the Software Architect before implementation begins. If any are unresolvable from the codebase alone, the architect must document the decision taken and the rationale.
+
+**OQ-1 — Lezer syntax tree access in plugin IIFE:**
+Does `window.__CM_LANGUAGE__` (or equivalent) expose `syntaxTree()` from `@codemirror/language` to plugin IIFEs? If not, the heading parser must use plain string matching on `state.doc` lines (which is simpler and sufficient for ATX headings). The architect must confirm which approach is used and update the spec accordingly.
+
+**OQ-2 — Live EditorView access from plugin:**
+Plugin IIFEs do not receive `EditorView` through the API. The click-to-jump behavior (FR-8) requires dispatching a transaction on the live view. The current pattern used in other parts of the codebase is `window.__CM_VIEW__` for the module namespace, but the *live instance* (`EditorView` object) is a different thing. Confirm the correct global or accessor pattern for obtaining the live editor instance from within a plugin IIFE (e.g. `window.__MARKABLE_EDITOR_VIEW__` or similar).
+
+**OQ-3 — Debounce interval for heading rebuild:**
+200 ms is proposed. The word-count plugin uses 150 ms. Confirm whether 200 ms is acceptable or whether it should match 150 ms for consistency.
+
+**OQ-4 — Visual design tokens for the sidebar:**
+The following design details are left for the architect/designer to specify before implementation:
+- Indent increment per heading level (e.g. `12px` per level, so H2 = 12px, H3 = 24px, etc.)
+- Active heading highlight style (e.g. background `var(--selection-bg)` + left border `2px solid var(--link-color)`)
+- TOC item font size (e.g. `13px` to match the status bar / title bar)
+- TOC item line height and padding
+- Sidebar header label (e.g. "Contents" or no header at all)
 
 ---
 
 ## Edge Case Inventory
 
-All items below are mandatory verification items for the Code Reviewer.
+This list is the mandatory test checklist for the Code Reviewer. Every item must have a corresponding test or a documented reason it cannot be automated.
 
-| # | Edge Case | Failure Description |
-|---|-----------|---------------------|
-| EC-1 | `plugins/core/` and `plugins/user/` do not exist on first launch | `copy_core_plugins` creates both directories before copying; `list_user_plugins` autocreates `plugins/user/` if absent (same as before). |
-| EC-2 | `copy_core_plugins` Rust resource path cannot be resolved (corrupted app bundle) | Command returns `Err(reason)`; frontend logs a console warning; app continues; core plugins directory may be empty or stale. |
-| EC-3 | `copy_core_plugins` fails to copy one file (permission error) | Returns `Err` after the first failure; already-copied files remain; frontend logs warning and continues; partial core plugin set is loaded. |
-| EC-4 | User has a `.js` file in the old flat `plugins/` root at migration time | File is moved to `plugins/user/` by the migration step inside `copy_core_plugins`. If the move fails (e.g. name collision in `plugins/user/`), the file is left in place and a warning is logged. |
-| EC-5 | `pluginsCopiedForVersion` matches current app version on startup | `copy_core_plugins` is skipped; no files are copied; existing `plugins/core/` contents are used as-is. |
-| EC-6 | A core plugin file has been manually deleted from `plugins/core/` and `pluginsCopiedForVersion` matches (so no re-copy occurs) | The missing file is silently skipped during `list_core_plugins`. The Core Plugins panel section shows fewer entries. The plugin's entry in `plugins` settings remains; it is cleaned up only after the next app update that triggers a re-copy. |
-| EC-7 | A user `.js` file has the same filename as a core `.js` file | The core plugin slot is marked `"overridden"` and not evaluated. The user file is loaded normally in the User Plugins section. Both are shown in the panel. |
-| EC-8 | A user plugin overrides a core plugin but the user file fails validation | The core plugin slot shows `"overridden"` (it is still not loaded). The user plugin shows `"failed"` in the User Plugins section. Neither version of the plugin is active. |
-| EC-9 | A plugin file is empty or contains only whitespace | Rejected at evaluation; status set to `"failed"`; warning logged; other plugins load normally. |
-| EC-10 | A plugin file contains a syntax error | Caught per-plugin at `new Function` construction time; `"failed"` status; other plugins unaffected. |
-| EC-11 | Plugin evaluates without error but does not return a conforming object (missing `version`, `onEnable`, etc.) | Rejected at validation; missing field names included in warning; `"failed"` status. |
-| EC-12 | Two plugins (in the same or different directories) declare the same `id` | After override resolution, if two loaded plugins still share an `id`, the second one encountered (lexicographic order within each directory; core before user) is rejected with a collision error. |
-| EC-13 | `onEnable` throws synchronously | Exception caught; plugin `_enabled` stays `false`; error logged per-plugin; other plugins unaffected. |
-| EC-14 | `onEnable` returns a rejected Promise | Unhandled rejection caught via `try/await`; same outcome as EC-13. |
-| EC-15 | `onDisable` throws | Exception caught; `_enabled` forced to `false` via `finally`; error logged; other plugins continue. |
-| EC-16 | Plugin calls `addExtensions` in `onEnable` but does not call `removeExtensions()` in `onDisable` | The extensions remain active in the `Compartment` for the session. This is a plugin author bug. The runtime does not detect it. It is documented in the authoring guide as a mandatory contract. |
-| EC-17 | Plugin calls `removeExtensions()` when it has not previously called `addExtensions` (nothing registered) | `PluginManager` finds no entry in its `Map` for that plugin id; the `Compartment` is not reconfigured. No-op, no error. |
-| EC-18 | `addExtensions` is called from `onEnable` before the editor `Compartment` has been initialized | `addExtensions` must guard: if the `EditorView` does not yet exist, queue the extensions and apply them once the view is available. Under the new startup sequence (`buildExtensions` → `createEditor` → `restoreAll`) this should not occur, but the guard prevents crashes if the call order is ever violated. |
-| EC-19 | Path-traversal attempt in user plugin filename (e.g. `../evil.js`) | Rust `read_plugin_file` rejects the filename; plugin not loaded; other plugins unaffected. |
-| EC-20 | User plugin file exceeds 500 KB | Rejected before evaluation; warning logged; not registered. |
-| EC-21 | User plugin file contains invalid UTF-8 | Rust `read_to_string` error; `"failed"` status; other plugins load normally. |
-| EC-22 | Plugin `id` is an empty string or contains invalid characters (`/`, `\`, `.`, NUL) | Rejected at validation; warning logged. |
-| EC-23 | "Reload Plugins" is triggered and an already-registered user file is encountered again | Skipped (same as existing EC-21 behavior). |
-| EC-24 | "Reload Plugins" is triggered and a previously-failing user file has been corrected on disk | Not re-evaluated (same limitation as existing EC-22). Requires app relaunch. Documented. |
-| EC-25 | A user file overrides a core file, then the user file is deleted while the app is running | Core plugin slot remains `"overridden"` for the current session. On next app launch, no override is detected and the core version loads normally. |
-| EC-26 | Settings migration: old flat boolean keys (`focusMode`, `wordCount`, etc.) are absent (fresh install or already migrated) | Migration is a no-op; `plugins` key is initialized to `{}` if absent. |
-| EC-27 | Settings migration: `userPlugins` key exists from the previous user-plugin system | Entries are merged into `plugins` with the same `enabled` values; `userPlugins` key is removed from settings. |
-| EC-28 | Settings migration: both old flat key and `userPlugins` entry exist for the same logical plugin (inconsistent state from partial previous migration) | The `userPlugins` entry takes precedence; the flat key is discarded. |
-| EC-29 | `plugins/user/` contains more than 50 `.js` files | Files beyond the cap (lexicographic sort; first 50 loaded) are ignored with `console.warn` listing dropped names. |
-| EC-30 | `build:plugins` Vite build fails for one of the four core plugin TypeScript sources | Build is aborted; `tauri build` does not proceed; developer must fix the TypeScript error before packaging. |
-| EC-31 | A core plugin `.js` built by `build:plugins` references a CM6 symbol that is not bundled (e.g. `EditorView` used but left as an external) | The plugin will throw a ReferenceError at evaluation time. Caught per-plugin; `"failed"` status. Prevented by ensuring no externals in the Vite library build config. |
-| EC-32 | Two different core plugin IIFE builds accidentally share a bundled module instance via a global variable | IIFEs are self-contained and use local closures; no shared global pollution. Verified by the requirement that no IIFE uses a non-`api` global. |
-| EC-33 | `per-plugin settings` call (`loadSettings`/`saveSettings`) from a core plugin — `plugins/<id>/settings.json` path uses plugin `id`, not filename | Core plugins should use a stable `id` that does not change. If a core plugin's `id` changes between versions, its settings file becomes orphaned. This is a plugin authoring concern, not a runtime error. Documented in authoring guide. |
-| EC-34 | App update copies new core plugin files but `pluginsCopiedForVersion` update fails to persist (crash after copy, before settings write) | On next launch, `pluginsCopiedForVersion` still shows the old version; `copy_core_plugins` runs again and overwrites core files again. Idempotent — no data loss. |
+| # | Scenario | Expected behaviour |
+|---|---|---|
+| EC-1 | Document is empty (no text at all) | Sidebar shows empty-state placeholder "No headings" |
+| EC-2 | Document has text but no headings | Sidebar shows "No headings" placeholder |
+| EC-3 | Cursor is above the first heading | No TOC item is highlighted |
+| EC-4 | Document has only H1 headings (no deeper levels) | All items shown with no indent; all are highlighted correctly as cursor moves |
+| EC-5 | Document has only H6 headings (maximum depth) | Items shown at maximum indent level |
+| EC-6 | Heading text is empty (`# ` with no text after the space) | Empty-text heading is included in the TOC list as a blank item (not skipped); the line is still a valid jump target |
+| EC-7 | Heading text contains Markdown inline syntax (`**bold**`, `[link](url)`, etc.) | Displayed verbatim (raw Markdown) in Phase 1; no crash |
+| EC-8 | Two or more headings have identical text | Both appear as separate items; clicking each jumps to the correct line |
+| EC-9 | Document has more than 200 headings | TOC renders all of them without noticeable lag; list scrolls correctly |
+| EC-10 | Plugin is toggled off while the cursor is inside a heading section | Sidebar is removed cleanly; editor returns to full width; no orphaned DOM |
+| EC-11 | Plugin is toggled off then on (one full toggle cycle) | No duplicate `<style>` tags; no duplicate sidebar elements; no stale CM6 updateListener |
+| EC-12 | Plugin is toggled off then on rapidly (3+ cycles) | Each cycle is clean; the CM6 compartment is not corrupted |
+| EC-13 | User types a new heading at the top of the document | Within the debounce window, the TOC rebuilds and the new heading appears at the top |
+| EC-14 | User deletes a heading that was previously the active heading | After debounce, that item disappears from the TOC; the active highlight moves to the new active heading (or clears if no heading precedes cursor) |
+| EC-15 | User renames a heading while it is the active heading | After debounce, TOC item text updates; active highlight remains on the correct item |
+| EC-16 | Window is resized while sidebar is visible | Sidebar remains `220px` wide; editor flex-grows to fill remaining space |
+| EC-17 | Content width setting is changed while sidebar is visible | Editor content max-width is still respected within the narrower `#editor` flex cell |
+| EC-18 | Zoom (font size) is changed while sidebar is visible | Sidebar font size is independent of zoom; editor zoom does not distort sidebar |
+| EC-19 | Dark mode is active when plugin is enabled | Sidebar uses correct dark-mode CSS variable values via `--bg-titlebar`, `--text-primary`, etc. |
+| EC-20 | Custom CSS theme is active when plugin is enabled | Sidebar variables resolve from the custom theme correctly (inherits from `:root` overrides) |
+| EC-21 | Status bar is visible at the same time as the sidebar | Status bar still spans full width below the editor+sidebar row; not clipped or overlapped |
+| EC-22 | Heading on line 1 (very first line of document) | Jump works correctly; scroll-to-center works even when the heading is near the top of the file |
+| EC-23 | Heading on the last line of the document | Jump works correctly; scroll-to-center does not over-scroll |
+| EC-24 | `loadSettings()` returns `null` (first run, no settings file) | Plugin enables correctly; no error thrown or logged |
+| EC-25 | A line starts with `#` but is inside a fenced code block | This line must NOT be treated as a heading (see OQ-1 — if using plain string matching rather than the lezer tree, the architect must specify how code fence context is detected, or document that Phase 1 does not handle this case and accepts the false-positive) |
+| EC-26 | View Mode is active (all lines in preview-only mode) | Clicking a TOC item must still move the cursor and scroll correctly; view mode does not block dispatching transactions |
+| EC-27 | TOC sidebar is open and a new file is loaded | TOC list rebuilds immediately for the new document |
+| EC-28 | TOC sidebar is open and "Close All" (or new empty document) is triggered | TOC list clears to the "No headings" empty state |
 
 ---
 
-## Impact Analysis
+## Non-Functional Requirements
 
-### Frontend
-
-| File | Change | Reason |
-|------|--------|--------|
-| `src/plugins/plugin-types.ts` | Replace `MarkablePlugin` + `PluginContext`; add `MarkablePluginAPI`; remove `UserPlugin`, `UserPluginAPI` | Unified interface |
-| `src/plugins/user-plugin-types.ts` | Delete | Superseded by unified `plugin-types.ts` |
-| `src/plugins/user-plugin-loader.ts` | Refactor to handle unified `MarkablePlugin` validation (add `version` field check) | Unified validation |
-| `src/plugins/index.ts` | Rewrite `PluginManager` as unified single-tier system | Core requirement |
-| `src/plugins/focus-mode/index.ts` | Rewrite as IIFE-compatible plugin using `api.addExtensions` / `api.removeExtensions` | Base plugin migration |
-| `src/plugins/typewriter-mode/index.ts` | Same as above | Base plugin migration |
-| `src/plugins/word-count/index.ts` | Same as above | Base plugin migration |
-| `src/plugins/status-bar/index.ts` | Same as above | Base plugin migration |
-| `src/plugins/plugins-panel/plugins-panel.ts` | Rename "Built-in" to "Core"; add "Overridden" badge; show `version` in detail view | Panel updates |
-| `src/lib/settings.ts` | Add `plugins?: Record<string, { enabled: boolean }>` field; keep deprecated fields as optional for migration | Settings schema |
-| `src/main.ts` | Update startup sequence; add `copy_core_plugins` call; add migration step; remove split restore calls | Startup wiring |
-| `src/editor/extensions.ts` | Add plugin `Compartment` to extension set | CM6 compartment |
-| `src/lib/bridge.ts` | Add `copyCorePlugins()`, `listCorePlugins()` wrappers; update `listUserPlugins()` (path change); update `readPluginFile()` (origin parameter) | New Rust commands |
-| `package.json` | Add `build:plugins` script; update `tauri build` to depend on it | Build pipeline |
-
-### Rust
-
-| File | Change | Reason |
-|------|--------|--------|
-| `src-tauri/src/commands/plugins.rs` | Add `copy_core_plugins`, `list_core_plugins` commands; update `list_user_plugins` path to `plugins/user/`; update `read_plugin_file` with `origin` parameter | New commands + path changes |
-| `src-tauri/src/commands/mod.rs` | Re-export new commands | |
-| `src-tauri/src/lib.rs` | Register new commands in `generate_handler![]` | |
-| `src-tauri/tauri.conf.json` | Add `"plugins/core/*"` to `bundle.resources` | Bundle core plugin files |
-
-### New files
-
-| File | Purpose |
-|------|---------|
-| `src-tauri/resources/plugins/core/focus-mode.js` | Built output — core plugin |
-| `src-tauri/resources/plugins/core/typewriter-mode.js` | Built output — core plugin |
-| `src-tauri/resources/plugins/core/word-count.js` | Built output — core plugin |
-| `src-tauri/resources/plugins/core/status-bar.js` | Built output — core plugin |
-| `vite.plugins.config.ts` (or equivalent) | Vite config for `build:plugins` pipeline |
-
-### Files that do NOT change
-
-- `src/editor/focus-mode.ts`, `typewriter-mode.ts` — the TypeScript source files remain; only the plugin `index.ts` wrapper changes to use `addExtensions`/`removeExtensions`.
-- `src-tauri/capabilities/default.json` — no new permissions needed.
-- `src-tauri/src/commands/settings.rs`, `themes.rs`, `dialogs.rs`, `io.rs` — no changes.
+- **Performance:** Heading rebuild is debounced (FR-4). The `updateListener` callback must do minimal work in the hot path (only check `update.docChanged`; schedule rebuild via `setTimeout`).
+- **Accessibility:** TOC items are `<button>` or `<a>` elements (keyboard-focusable, announced by VoiceOver as interactive). Phase 1 minimum: each item must be reachable and activatable by keyboard after the TOC receives focus.
+- **No memory leaks:** All event listeners on TOC items are cleaned up in `onDisable` (or by removing the DOM subtree, which implicitly removes inline listeners — confirm which pattern is used).
+- **No app-internal imports:** The plugin IIFE must not import from `src/lib/bridge`, `src/lib/settings`, `src/main`, or any other app-internal module. Only `@codemirror/*` and window globals are permitted.
 
 ---
 
-## Resolved Unknowns
+## Proposed Constraints
 
-All unknowns from the analysis phase have been answered by the user.
-
-**U-1 — Vite build output for core plugins — RESOLVED: fully self-contained IIFEs**
-
-Each plugin `.js` file bundles its own copy of `@codemirror/*`. No shared runtime. See Decision 7.
-
-**U-2 — `removeExtensions` granularity — RESOLVED: all-or-nothing per plugin**
-
-`removeExtensions()` takes no arguments and removes all extensions for the calling plugin. See Decision 8.
-
----
-
-## Definition of Done
-
-Requirements phase:
-- [x] All resolved decisions documented above.
-- [x] Edge Case Inventory (EC-1 through EC-34) complete.
-- [x] Two Unknowns (U-1, U-2) identified for user input.
-- [x] User answers U-1 and U-2.
-- [x] User explicitly states: "Requirements approved. Activate Architect."
-- [x] This document updated; status set to "Validated."
-
-Implementation phase (for Lead Developer):
-- [ ] `build:plugins` script builds all four core plugins as IIFE `.js` files into `src-tauri/resources/plugins/core/`.
-- [ ] `tauri.conf.json` includes `"plugins/core/*"` in `bundle.resources`.
-- [ ] `copy_core_plugins` Rust command copies core files on version bump; migrates flat `plugins/*.js` to `plugins/user/`.
-- [ ] `list_core_plugins` scans `plugins/core/`; `list_user_plugins` scans `plugins/user/`.
-- [ ] `read_plugin_file` accepts `origin` parameter and routes to the correct directory.
-- [ ] Unified `MarkablePlugin` interface with required `version` field enforced at validation.
-- [ ] Unified `MarkablePluginAPI` with `addExtensions`/`removeExtensions` backed by a `Compartment`.
-- [ ] Single `PluginManager` with one record type, one toggle method, one restore pass.
-- [ ] Override detection: core plugin filename match against user directory; `"overridden"` status.
-- [ ] Settings migration from old flat keys + `userPlugins` to `plugins` runs once at startup.
-- [ ] All 34 edge cases in the Edge Case Inventory verified by Code Reviewer.
-- [ ] Authoring guide updated (FR-10).
-- [ ] All existing tests continue to pass; new tests cover EC items.
-
----
-
-## Decisions Deferred to Architecture Phase
-
-- Exact Vite library mode configuration for the `build:plugins` pipeline (entry points, output directory, no externals — all `@codemirror/*` deps bundled per Decision 7).
-- `Compartment` initialization timing relative to `buildExtensions()` call in `extensions.ts` — does the compartment start empty and get populated during `restoreAll`, or does it start populated with the enabled plugins' extensions?
-- Whether `buildPluginContext()` / `buildPluginAPI()` in `main.ts` constructs one `MarkablePluginAPI` object shared by all plugins, or a per-plugin instance (relevant for `loadSettings`/`saveSettings` which need the plugin's `id` to construct the correct path).
-- Whether the `PluginManager` `Compartment` reference is passed in at construction time (after editor creation) or set via a `setEditor(view)` method called after `createEditor()`.
-- Exact startup sequence ordering: `copy_core_plugins` → `list_core_plugins` → `list_user_plugins` → evaluate all → `restoreAll` — the Architect must validate this against the existing `initApp()` flow.
-- Whether the four existing TypeScript plugin `index.ts` files are rewritten in-place (source of truth is TypeScript, IIFE is the build output) or replaced by hand-authored JS files (simpler for the build pipeline but loses TypeScript safety).
+- **PC-1:** The sidebar must not use `position: fixed` or `position: absolute`. It must participate in the normal document flow as a flex child so that the editor content area shrinks correctly (no overlay behaviour).
+- **PC-2:** The plugin must not access `document.getElementById("editor")` and mutate the `#editor` element's own styles. It may only alter `#app`'s layout (or insert a wrapper). The `#editor` element's `flex: 1` rule handles its own width automatically.
+- **PC-3:** The `<style>` tag injected by the plugin must use a unique `id` attribute (e.g. `__markable_auto_toc_css__`) and the injection function must guard against duplicate insertion (same pattern as `focus-mode.plugin.ts` — see `injectCSS()` guard).
+- **PC-4:** Heading detection in Phase 1 must not introduce a dependency on `@codemirror/language`'s `syntaxTree` unless OQ-1 confirms the global is available. A regex-based line scanner is a valid and preferred fallback for ATX headings.
+- **PC-5:** The plugin's `onDisable` must restore `#app`'s layout to exactly the state it was in before `onEnable` ran, regardless of any intermediate window resize or theme change events.
