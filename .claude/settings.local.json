@@ -103,7 +103,12 @@
       "Bash(grep -rn \"plugin-types\\\\|user-plugin-types\\\\|buildUserPluginAPI\\\\|PluginContext\\\\|UserPluginAPI\\\\|UserPlugin\\\\b\\\\|PluginDef\\\\b\\\\|UserPluginDef\\\\b\\\\|statusBar\\\\?\\\\|wordCount\\\\?\\\\|focusMode\\\\?\\\\|typewriterMode\\\\?\\\\|userPlugins\\\\?\" src/ --include=*.ts)",
       "Bash(grep -rn \"TODO\\\\|FIXME\\\\|HACK\\\\|XXX\" /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/ --include=*.ts)",
       "Bash(echo \"exit: $?\")",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(awk '/^export function movePanel/,0' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)",
+      "Bash(awk 'NR>=366,NR<=463' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)",
+      "Bash(awk:*)",
+      "Bash(awk 'NR>=366,NR<=413' src/sidebar/sidebar-manager.ts)",
+      "Bash(awk 'NR>=366,NR<=413' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)"
     ]
   }
 }

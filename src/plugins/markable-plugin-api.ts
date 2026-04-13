@@ -27,6 +27,15 @@ import {
   unregisterStatusBarDependent,
 } from "./status-bar/status-bar";
 import { pluginManager } from "./index";
+import {
+  registerSidebarPanel as _registerSidebarPanel,
+  unregisterSidebarPanel as _unregisterSidebarPanel,
+} from "../sidebar";
+import type { SidebarPanelDescriptor } from "../sidebar";
+
+// Re-export for plugin author convenience — plugins can import the type
+// directly from this module without knowing the internal sidebar/ path.
+export type { SidebarPanelDescriptor } from "../sidebar";
 
 // ── Public API surface (FR-1) ─────────────────────────────────────────────────
 
@@ -145,6 +154,33 @@ export interface MarkablePluginAPI {
    * Call this from onDisable.
    */
   removeExtensions(): void;
+
+  /**
+   * Register a sidebar panel for this plugin. Call in onEnable.
+   *
+   * The panel appears in the sidebar slot specified by descriptor.side.
+   * Idempotent: calling again with the same id logs a warning and is rejected
+   * (the first registration stays active) — EC-12.
+   *
+   * descriptor.render(container) is called immediately after registration.
+   * If render throws, an error placeholder is shown inside the container — EC-13.
+   *
+   * @param descriptor  Panel configuration. The id must be unique across all
+   *                    registered panels in the session.
+   */
+  registerSidebarPanel(descriptor: SidebarPanelDescriptor): void;
+
+  /**
+   * Unregister the sidebar panel with the given id. Call in onDisable.
+   *
+   * Calls descriptor.destroy(container) before removing the panel DOM.
+   * If destroy throws, the error is logged but DOM removal still proceeds — EC-14.
+   *
+   * No-op if panelId was not registered by this plugin — EC-19.
+   *
+   * @param panelId  The id from the original SidebarPanelDescriptor.
+   */
+  unregisterSidebarPanel(panelId: string): void;
 }
 
 // ── Plugin interface (FR-2) ───────────────────────────────────────────────────
@@ -182,6 +218,16 @@ export interface UnifiedPlugin {
   readonly description: string;
   readonly detail?: string;
   readonly version: string;
+  /**
+   * ID of the sidebar panel this plugin registers via api.registerSidebarPanel().
+   *
+   * When present, the Plugins Panel detail view renders a Left / Right assignment
+   * toggle that lets the user reassign the panel to either sidebar slot.
+   *
+   * Omit this field for plugins that do not register a sidebar panel — the
+   * detail view will simply not show the sidebar assignment section.
+   */
+  readonly sidebarPanelId?: string;
   onEnable(api: MarkablePluginAPI): void | Promise<void>;
   onDisable(api: MarkablePluginAPI): void | Promise<void>;
 }
@@ -276,6 +322,23 @@ export function buildMarkablePluginAPI(
      */
     removeExtensions(): void {
       pluginManager.removeExtensions(pluginId);
+    },
+
+    /**
+     * Delegates to SidebarManager.register(), capturing pluginId in the
+     * closure so the manager can enforce ownership on unregister (EC-19).
+     */
+    registerSidebarPanel(descriptor: SidebarPanelDescriptor): void {
+      _registerSidebarPanel(pluginId, descriptor);
+    },
+
+    /**
+     * Delegates to SidebarManager.unregister(), passing pluginId for
+     * ownership verification — only the registering plugin may unregister
+     * its own panels (EC-19).
+     */
+    unregisterSidebarPanel(panelId: string): void {
+      _unregisterSidebarPanel(pluginId, panelId);
     },
   };
 }

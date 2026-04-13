@@ -40,6 +40,8 @@ const COMMANDS: CommandDef[] = [
   { id: "view-toggle-statusbar",  label: "Status Bar",      defaultKey: "",       section: "View" },
   { id: "view-toggle-focus",      label: "Focus Mode",      defaultKey: "",       section: "View" },
   { id: "view-toggle-typewriter", label: "Typewriter Mode", defaultKey: "",       section: "View" },
+  { id: "sidebar.toggleLeft",  label: "Toggle Left Sidebar",  defaultKey: "Cmd-Shift-[", section: "View" },
+  { id: "sidebar.toggleRight", label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },
@@ -89,6 +91,30 @@ function captureKeyFromEvent(e: KeyboardEvent): string | null {
  * Returns true if the KeyboardEvent matches the stored key string
  * (e.g. "Cmd-Shift-O"). Exported for use in main.ts custom dispatch.
  */
+/**
+ * Resolve which action ID a keyboard event should fire, checking custom
+ * bindings first and falling back to each command's defaultKey.
+ *
+ * Returns the action id string, or null if no command matches.
+ * Used by the document keydown handler in main.ts so default bindings fire
+ * even when the user has not customized them.
+ */
+export function resolveAction(
+  e: KeyboardEvent,
+  custom: Record<string, string>,
+): string | null {
+  // 1. User-customized binding takes priority.
+  for (const [actionId, keyStr] of Object.entries(custom)) {
+    if (eventMatchesKey(e, keyStr)) return actionId;
+  }
+  // 2. Fall back to default binding for any command NOT overridden by the user.
+  for (const cmd of COMMANDS) {
+    if (cmd.id in custom) continue; // already checked above
+    if (eventMatchesKey(e, cmd.defaultKey)) return cmd.id;
+  }
+  return null;
+}
+
 export function eventMatchesKey(e: KeyboardEvent, key: string): boolean {
   const parts = key.split("-");
   const letter = parts[parts.length - 1];

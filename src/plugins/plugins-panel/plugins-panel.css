@@ -266,3 +266,48 @@
   color: var(--text-secondary);
   margin-bottom: 16px;
 }
+
+/* ── Sidebar assignment section (detail view) ── */
+
+/*
+ * Shown only for plugins that declare sidebarPanelId. Allows the user to
+ * assign the plugin's sidebar panel to either the left or right sidebar slot
+ * using the Left / Right toggle buttons.
+ */
+.plugin-detail-sidebar-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.plugin-detail-sidebar-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.plugin-detail-sidebar-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s, color 0.1s;
+}
+
+.plugin-detail-sidebar-btn:hover:not(.active) {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.plugin-detail-sidebar-btn.active {
+  background: var(--link-color);
+  color: #fff;
+  border-color: var(--link-color);
+}

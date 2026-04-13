@@ -16,10 +16,12 @@
  *   then rebuilds the sidebar DOM via rebuildTOC(). Clicking a TOC item
  *   dispatches a CM6 selection + scrollIntoView effect, then focuses the editor.
  *
- * Layout strategy (Strategy A — wrapper element):
- *   onEnable wraps #editor in a .toc-editor-row flex container and appends
- *   #toc-sidebar as a sibling. onDisable reverses this exactly, leaving #app
- *   in the identical state as before enable ran.
+ * Layout strategy (Sidebar Panel System):
+ *   onEnable registers a sidebar panel via api.registerSidebarPanel().
+ *   SidebarManager owns the slot, wrapper, header, and content container.
+ *   The plugin's render() callback populates the container with .toc-list DOM.
+ *   onDisable calls api.unregisterSidebarPanel() which calls destroy() before
+ *   removing the DOM — no direct layout manipulation in the plugin.
  *
  * Test-environment note:
  *   The CM6 globals (window.__CM_VIEW__) are NOT accessed at module-evaluation
@@ -80,14 +82,12 @@ let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
  */
 let _lastEntries: HeadingEntry[] = [];
 
-/** The .toc-list div inside #toc-sidebar. Null when the plugin is disabled. */
+/**
+ * The .toc-list div inside the sidebar panel content container.
+ * Null when the plugin is disabled or the render() callback has not run.
+ * Set by the render() callback; nulled by the destroy() callback.
+ */
 let _tocList: HTMLElement | null = null;
-
-/** The .toc-editor-row wrapper div. Null when the plugin is disabled. */
-let _tocEditorRow: HTMLDivElement | null = null;
-
-/** The #toc-sidebar root div. Null when the plugin is disabled. */
-let _tocSidebar: HTMLDivElement | null = null;
 
 // ── CM6 globals accessor ──────────────────────────────────────────────────────
 
@@ -118,31 +118,15 @@ function getCmEditorView(): typeof EditorViewType {
 // ── CSS constant ──────────────────────────────────────────────────────────────
 
 /**
- * Sidebar CSS injected as a <style> tag in onEnable and removed in onDisable.
+ * Content-area CSS injected as a <style> tag in onEnable and removed in
+ * onDisable. Contains only .toc-list / .toc-item / .toc-item-active / .toc-empty
+ * styles — the sidebar chrome (slot dimensions, header, tab bar) is now owned
+ * by sidebar.css and is NOT repeated here.
  *
- * All colours use CSS variables so the sidebar automatically adopts the active
- * theme (EC-19, EC-20). Font sizes are hard-coded in px and are independent
- * of the editor zoom level (EC-18).
+ * All colours use CSS variables so the TOC automatically adopts the active
+ * theme. Font sizes are hard-coded in px and are independent of editor zoom.
  */
-const TOC_CSS = `
-.toc-editor-row {
-  display: flex;
-  flex-direction: row;
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
-}
-
-#toc-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-titlebar);
-  border-left: 1px solid var(--border-color);
-  overflow: hidden;
-}
-
+const TOC_CONTENT_CSS = `
 .toc-list {
   flex: 1;
   overflow-y: auto;
@@ -308,7 +292,7 @@ export function findActiveIndex(entries: HeadingEntry[], cursorPos: number): num
 // ── CSS lifecycle helpers ─────────────────────────────────────────────────────
 
 /**
- * Inject the sidebar <style> tag into <head>.
+ * Inject the content-area <style> tag into <head>.
  *
  * Guarded by the element id so repeated onEnable calls (from rapid toggle
  * cycles) never insert duplicate <style> tags (EC-11, EC-12).
@@ -318,111 +302,16 @@ function injectCSS(): void {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
-  style.textContent = TOC_CSS;
+  style.textContent = TOC_CONTENT_CSS;
   document.head.appendChild(style);
 }
 
 /**
- * Remove the sidebar <style> tag injected by injectCSS().
+ * Remove the content-area <style> tag injected by injectCSS().
  * No-op if the tag is not present (e.g. onDisable called before onEnable).
  */
 function removeCSS(): void {
   document.getElementById("__markable_auto_toc_css__")?.remove();
-}
-
-// ── DOM lifecycle helpers ─────────────────────────────────────────────────────
-
-/**
- * Create the #toc-sidebar element and its inner .toc-list child.
- *
- * Does NOT insert the sidebar into the document — that is done by enableLayout().
- * Sets the module-level _tocList reference so that rebuildTOC() can write to it.
- *
- * @returns The newly created sidebar root div.
- */
-function createSidebar(): HTMLDivElement {
-  const sidebar = document.createElement("div");
-  sidebar.id = "toc-sidebar";
-
-  const list = document.createElement("div");
-  list.className = "toc-list";
-  sidebar.appendChild(list);
-
-  // Store a reference so rebuildTOC() can populate it without re-querying.
-  _tocList = list;
-
-  return sidebar;
-}
-
-/**
- * Insert the .toc-editor-row wrapper into #app and move #editor into it.
- *
- * Layout after this call:
- *   #app (flex: column)
- *     .toc-editor-row (flex: row; flex: 1)
- *       #editor  (flex: 1)
- *       #toc-sidebar (width: 220px)
- *     #statusbar (full width; unchanged)
- *
- * The statusbar remains a direct child of #app, so it spans full width (EC-21).
- *
- * @param sidebar - The #toc-sidebar element returned by createSidebar().
- */
-function enableLayout(sidebar: HTMLDivElement): void {
-  const app = document.getElementById("app")!;
-  const editor = document.getElementById("editor")!;
-  const statusbar = document.getElementById("statusbar");
-
-  const row = document.createElement("div");
-  row.className = "toc-editor-row";
-  _tocEditorRow = row;
-
-  // Insert the wrapper before the statusbar so the statusbar stays full-width.
-  // If there is no statusbar, append to the end of #app.
-  if (statusbar) {
-    app.insertBefore(row, statusbar);
-  } else {
-    app.appendChild(row);
-  }
-
-  // Move #editor from #app into the row wrapper.
-  row.appendChild(editor);
-  // Append the sidebar as the right-side sibling of #editor.
-  row.appendChild(sidebar);
-}
-
-/**
- * Reverse the layout changes made by enableLayout().
- *
- * After this call #app is in exactly the same state as before onEnable ran:
- *   #app (flex: column)
- *     #editor
- *     #statusbar
- *
- * Also nulls out _tocEditorRow, _tocSidebar, and _tocList so they can be
- * garbage-collected and do not leak across toggle cycles (EC-11, EC-12).
- */
-function disableLayout(): void {
-  const app = document.getElementById("app")!;
-  const editor = document.getElementById("editor")!;
-  const statusbar = document.getElementById("statusbar");
-
-  // Move #editor back to #app before the statusbar (same position as before enable).
-  if (statusbar) {
-    app.insertBefore(editor, statusbar);
-  } else {
-    app.appendChild(editor);
-  }
-
-  // Remove the wrapper from the DOM. The sidebar is a child of the row, so
-  // removing the row removes the sidebar in the same operation. Calling
-  // _tocSidebar?.remove() separately would be a no-op here (the sidebar is
-  // already gone when the row is removed) and would create fragile ordering.
-  _tocEditorRow?.remove();
-
-  _tocSidebar = null;
-  _tocEditorRow = null;
-  _tocList = null;
 }
 
 // ── DOM render helper ─────────────────────────────────────────────────────────
@@ -568,18 +457,17 @@ function buildTocUpdateListener() {
  *
  * onEnable sequence:
  *   1. Set _enabled flag.
- *   2. Inject CSS <style> tag (idempotent).
- *   3. Create #toc-sidebar and enable layout wrapper.
- *   4. Build and register CM6 updateListener via api.addExtensions().
- *   5. Trigger an initial TOC build from the current document state so the
- *      sidebar is populated immediately without waiting for a user keystroke.
+ *   2. Inject content CSS <style> tag (idempotent).
+ *   3. Build and register CM6 updateListener via api.addExtensions().
+ *   4. Register sidebar panel via api.registerSidebarPanel(). The render()
+ *      callback creates .toc-list DOM and triggers the initial TOC build.
  *
  * onDisable sequence (exact reversal):
  *   1. Clear _enabled flag.
  *   2. Cancel any pending debounce.
  *   3. Remove CM6 extension via api.removeExtensions().
- *   4. Dismantle layout wrapper and remove sidebar.
- *   5. Remove CSS <style> tag.
+ *   4. Unregister sidebar panel (SidebarManager calls destroy() before DOM removal).
+ *   5. Remove content CSS <style> tag.
  *   6. Reset all module-level state to initial values.
  */
 export default {
@@ -587,6 +475,12 @@ export default {
   name: "Auto TOC",
   version: "1.0.0",
   description: "Table of contents sidebar",
+  /**
+   * Declares that this plugin registers the "auto-toc" sidebar panel via
+   * api.registerSidebarPanel(). The Plugins Panel detail view reads this field
+   * to decide whether to render the Left / Right sidebar assignment toggle.
+   */
+  sidebarPanelId: "auto-toc",
   detail:
     "Displays a real-time table of contents in a right-side sidebar, listing all headings in the document. The active heading is highlighted as you move the cursor through the document. Click any heading to jump to it instantly.",
 
@@ -601,49 +495,62 @@ export default {
     // rejection is impossible (FR-12).
     void api.loadSettings();
 
+    // Inject content-area CSS (layout CSS is now owned by sidebar.css).
     injectCSS();
-    _tocSidebar = createSidebar();
-    enableLayout(_tocSidebar);
 
     // Build the CM6 listener here (not at module level) so getCmEditorView() is
     // only called in a real runtime context where window.__CM_VIEW__ exists.
     api.addExtensions([buildTocUpdateListener()]);
 
-    // Initial build: populate the TOC immediately when the plugin is first enabled
-    // rather than waiting for the next document change or cursor movement.
-    //
-    // This reads from window.__MARKABLE_EDITOR_VIEW__ — a global set in main.ts
-    // after the editor is created. If this global is absent (e.g. in test contexts
-    // or if the app sequence changes), the sidebar shows the empty state and the
-    // updateListener populates it on the first CM6 transaction.
-    //
-    // Architecture note: the MarkablePluginAPI design (Decision 1 in
-    // markable-plugin-api.ts) intentionally omits the raw EditorView from the
-    // plugin API surface. This global is an explicit, documented deviation from
-    // that constraint — accepted for Phase 1 because the alternative (waiting for
-    // the first keystroke) produces a visible empty-state flash on every enable.
-    // The global exposes the EditorView to all plugins loaded in the same WebView.
-    // For a local first-party desktop app this is acceptable. This deviation is
-    // tracked in docs/specs/auto-toc/00_index.md deferred items for future audit.
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const liveView = (window as any).__MARKABLE_EDITOR_VIEW__ as
-      | EditorViewType
-      | undefined;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
+    // Register the sidebar panel. SidebarManager owns the slot, wrapper, and
+    // accordion header. The render() callback creates .toc-list DOM inside the
+    // provided container and triggers the initial TOC build.
+    api.registerSidebarPanel({
+      id: "auto-toc",
+      title: "Table of Contents",
+      side: "right",
+      defaultWidth: 220,
 
-    if (liveView) {
-      _view = liveView;
-      _lastEntries = scanHeadings(liveView.state.doc.toString());
-      const activeIdx = findActiveIndex(
-        _lastEntries,
-        liveView.state.selection.main.head,
-      );
-      rebuildTOC(_lastEntries, activeIdx);
-    } else {
-      // No editor view available yet — render the empty state.
-      // The updateListener will trigger a full rebuild on the next transaction.
-      rebuildTOC([], -1);
-    }
+      render(container: HTMLElement): void {
+        // Create and attach the .toc-list element inside the sidebar container.
+        const list = document.createElement("div");
+        list.className = "toc-list";
+        container.appendChild(list);
+        _tocList = list;
+
+        // Perform the initial TOC build.
+        // EC-22: if __MARKABLE_EDITOR_VIEW__ is absent, render empty state;
+        // the updateListener will populate on the first transaction.
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        const liveView = (window as any).__MARKABLE_EDITOR_VIEW__ as
+          | EditorViewType
+          | undefined;
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+
+        if (liveView) {
+          _view = liveView;
+          _lastEntries = scanHeadings(liveView.state.doc.toString());
+          const activeIdx = findActiveIndex(
+            _lastEntries,
+            liveView.state.selection.main.head,
+          );
+          rebuildTOC(_lastEntries, activeIdx);
+        } else {
+          rebuildTOC([], -1);
+        }
+      },
+
+      destroy(_container: HTMLElement): void {
+        // Cancel any in-flight debounce (EC-6, EC-7).
+        if (_debounceTimer) {
+          clearTimeout(_debounceTimer);
+          _debounceTimer = null;
+        }
+        // Null the list reference. The container's DOM is removed by the
+        // infrastructure after this callback returns.
+        _tocList = null;
+      },
+    });
   },
 
   onDisable(api: MarkablePluginAPI): void {
@@ -656,17 +563,21 @@ export default {
     }
 
     // Remove the CM6 extension from the editor's Compartment.
+    // Must run before unregisterSidebarPanel so no further TOC rebuilds can
+    // fire after _tocList is about to be nulled by the destroy() callback.
     api.removeExtensions();
 
-    // Dismantle the sidebar and restore the original #app layout.
-    disableLayout();
+    // Unregister the sidebar panel. SidebarManager calls destroy() before
+    // removing the DOM, so the debounce cancel above runs before _tocList
+    // is invalidated.
+    api.unregisterSidebarPanel("auto-toc");
 
-    // Remove the injected CSS.
+    // Remove the injected content CSS.
     removeCSS();
 
     // Reset all module-level state so the next onEnable call starts clean.
     _view = null;
     _lastEntries = [];
-    // _tocList, _tocEditorRow, _tocSidebar are already nulled by disableLayout().
+    // _tocList is already nulled by the destroy() callback above.
   },
 };

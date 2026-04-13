@@ -70,7 +70,7 @@ import {
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
-import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey } from "./keybindings/keybindings-panel";
+import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey, resolveAction } from "./keybindings/keybindings-panel";
 import {
   createPluginsPanel,
   togglePluginsPanel,
@@ -78,6 +78,11 @@ import {
 } from "./plugins/plugins-panel/plugins-panel";
 import { pluginManager } from "./plugins/index";
 import { migratePluginSettings } from "./plugins/settings-migration";
+import {
+  initSidebar,
+  restoreSidebarFromSettings,
+  toggleSidebarSide,
+} from "./sidebar";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -701,6 +706,12 @@ function handleAction(action: string): void {
     case "view-toggle-typewriter":
       if (editor) void pluginManager.toggle("typewriter-mode", !pluginManager.getStates()["typewriter-mode"]);
       break;
+    case "sidebar.toggleLeft":
+      toggleSidebarSide("left");
+      break;
+    case "sidebar.toggleRight":
+      toggleSidebarSide("right");
+      break;
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
     case "theme-light":     void setTheme("default-light"); break;
@@ -872,10 +883,21 @@ async function initApp() {
     right:  document.querySelector(".statusbar-right")  as HTMLElement,
   };
 
+  // Initialize the sidebar infrastructure before plugins are loaded.
+  // initSidebar() creates #app-row and moves #editor into it so that any
+  // plugin calling api.registerSidebarPanel() in onEnable finds the wrapper
+  // already present. Must run after editor creation and setEditorView().
+  initSidebar();
+
   // Load all plugins (core + user) from disk. Must run after setEditorView()
   // so any plugin calling api.addExtensions() in onEnable has a live view.
   // Errors are isolated per-plugin — a failing plugin does not block the rest.
   await pluginManager.loadPlugins(migratedSettings, statusBarZones);
+
+  // Restore persisted sidebar state (open/closed, active tab) after all
+  // plugins have been loaded. EC-23: this runs after loadPlugins so we only
+  // restore "open" state if at least one panel was actually registered.
+  restoreSidebarFromSettings();
 
   // Attach dirty-state tracking to the editor via updateListener.
   // The word-count plugin owns its own updateListener via api.addExtensions().
@@ -979,16 +1001,15 @@ async function initApp() {
   // By listening on `document` at the capture phase we intercept the keydown
   // before it reaches the CM6 editor and before searchKeymap fires.
   document.addEventListener("keydown", (e: KeyboardEvent) => {
-    // Custom keybinding overrides — fire before any default handler
+    // Resolve action from custom bindings first, then defaults.
     if (!e.defaultPrevented) {
       const custom = getCurrentSettings().keybindings ?? {};
-      for (const [actionId, keyStr] of Object.entries(custom)) {
-        if (eventMatchesKey(e, keyStr)) {
-          e.preventDefault();
-          e.stopPropagation();
-          handleAction(actionId);
-          return;
-        }
+      const actionId = resolveAction(e, custom);
+      if (actionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleAction(actionId);
+        return;
       }
     }
 

@@ -60,6 +60,15 @@ export interface UnifiedPluginDef {
   kind: "core" | "user";
   status: "loaded" | "failed" | "missing" | "overridden";
   failReason?: string;
+  /**
+   * ID of the sidebar panel this plugin registers via api.registerSidebarPanel().
+   *
+   * Populated from UnifiedPlugin.sidebarPanelId when the plugin carries that
+   * field. The Plugins Panel detail view reads this field to decide whether to
+   * render the Left / Right sidebar assignment toggle. Undefined for plugins
+   * that do not register a sidebar panel.
+   */
+  sidebarPanelId?: string;
 }
 
 /**
@@ -564,6 +573,10 @@ export class PluginManager {
       kind: r.kind,
       status: r.status,
       failReason: r.failReason,
+      // Forward the plugin's sidebarPanelId (if any) so the Plugins Panel detail
+      // view can render the Left / Right sidebar assignment toggle for plugins
+      // that register a sidebar panel. Undefined for plugins without a panel.
+      sidebarPanelId: r.plugin?.sidebarPanelId,
     }));
   }
 

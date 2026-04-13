@@ -17,6 +17,8 @@
 
 import "./plugins-panel.css";
 import type { UnifiedPluginDef } from "../index";
+import { getCurrentSettings } from "../../lib/settings";
+import { movePanelToSide } from "../../sidebar";
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
@@ -570,4 +572,68 @@ function showDetailView(def: UnifiedPluginDef): void {
   });
 
   bodyElement.appendChild(toggleRow);
+
+  // ── Sidebar assignment section ──────────────────────────────────────────
+  // Only rendered when the plugin declares a sidebarPanelId — i.e. it
+  // registers a sidebar panel. Plugins that don't use the sidebar simply
+  // don't have this section at all (not hidden, just not present).
+  if (def.sidebarPanelId) {
+    const panelId = def.sidebarPanelId;
+
+    // Read the persisted side override from settings. When no override exists
+    // we don't know the current side without asking SidebarManager, so we
+    // default to "right" (the most common default in plugin descriptors).
+    //
+    // Declared as `let` (not `const`) so click handlers can update it after
+    // the user moves the panel. A `const` would keep the stale initial value
+    // for the rest of the detail-view session, silently ignoring moves back
+    // to the original side because the guard `activeSide !== side` would
+    // always evaluate to false after the first successful click.
+    let activeSide: "left" | "right" =
+      getCurrentSettings().sidebar?.panelSides?.[panelId] ?? "right";
+
+    // Container row: label on the left, two toggle buttons on the right.
+    const sideSection = document.createElement("div");
+    sideSection.className = "plugin-detail-sidebar-section";
+
+    const label = document.createElement("span");
+    label.className = "plugin-detail-sidebar-label";
+    label.textContent = "Sidebar";
+
+    const btnLeft = document.createElement("button");
+    btnLeft.className =
+      "plugin-detail-sidebar-btn" + (activeSide === "left" ? " active" : "");
+    btnLeft.textContent = "Left";
+
+    const btnRight = document.createElement("button");
+    btnRight.className =
+      "plugin-detail-sidebar-btn" + (activeSide === "right" ? " active" : "");
+    btnRight.textContent = "Right";
+
+    // Clicking a button moves the panel to the selected side, updates
+    // activeSide so subsequent clicks resolve the correct direction, and
+    // reflects the new active state on both buttons immediately.
+    btnLeft.addEventListener("click", () => {
+      if (activeSide !== "left") {
+        movePanelToSide(panelId, "left");
+        activeSide = "left";
+        btnLeft.classList.add("active");
+        btnRight.classList.remove("active");
+      }
+    });
+
+    btnRight.addEventListener("click", () => {
+      if (activeSide !== "right") {
+        movePanelToSide(panelId, "right");
+        activeSide = "right";
+        btnRight.classList.add("active");
+        btnLeft.classList.remove("active");
+      }
+    });
+
+    sideSection.appendChild(label);
+    sideSection.appendChild(btnLeft);
+    sideSection.appendChild(btnRight);
+    bodyElement.appendChild(sideSection);
+  }
 }

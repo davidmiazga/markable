@@ -34,6 +34,65 @@ export interface PluginEnableRecord {
   kind: "core" | "user";
 }
 
+// ── Sidebar settings ──────────────────────────────────────────────────────────
+
+/**
+ * Per-panel accordion state for one registered panel.
+ * Keyed by panelId in SidebarSlotState.panels.
+ */
+export interface SidebarPanelState {
+  accordionExpanded: boolean;
+}
+
+/**
+ * Persisted state for one sidebar slot (left or right).
+ *
+ * open           — whether the slot is currently visible.
+ * activeTabId    — id of the panel whose content is shown; null if no panels
+ *                  were registered when the settings were last written.
+ * width          — slot width in pixels (clamped 150–600 at write time).
+ * panels         — per-panel accordion state map (key = panelId).
+ */
+export interface SidebarSlotState {
+  open: boolean;
+  activeTabId: string | null;
+  width: number;
+  panels: Record<string, SidebarPanelState>;
+}
+
+/**
+ * Top-level sidebar settings object stored under MarkableSettings.sidebar.
+ * The Rust backend's raw-JSON pass-through makes this field safe without
+ * touching Rust structs (same precedent as findWidget, keybindings, plugins).
+ *
+ * panelSides stores per-panel user overrides for which sidebar side the panel
+ * should appear on. Keys are panel ids; values are "left" or "right". When a
+ * key is absent the panel uses its descriptor.side default.
+ */
+export interface SidebarSettings {
+  left: SidebarSlotState;
+  right: SidebarSlotState;
+  /**
+   * Per-panel side override map. Populated by movePanel() when the user
+   * reassigns a panel from its descriptor-declared default side to the other.
+   * Absent key = panel uses descriptor.side. Empty object = no overrides.
+   */
+  panelSides?: Record<string, "left" | "right">;
+}
+
+/**
+ * Default state for one sidebar slot. Used when the settings file predates
+ * the sidebar field (EC-10 migration case) and as the factory default.
+ *
+ * Both sidebars default to closed on first run (FR-6, EC-10).
+ */
+export const DEFAULT_SIDEBAR_SLOT: SidebarSlotState = {
+  open: false,
+  activeTabId: null,
+  width: 220,
+  panels: {},
+};
+
 export interface MarkableSettings {
   version: number;
   window: WindowSettings;
@@ -61,6 +120,16 @@ export interface MarkableSettings {
    * Absent map = settings file pre-dates Chunk 3 (migratePluginSettings runs).
    */
   plugins?: Record<string, PluginEnableRecord>;
+
+  /**
+   * Sidebar slot state for left and right sidebars.
+   *
+   * Optional — absent in settings files created before sidebar support was
+   * added. SidebarManager.init() applies DEFAULT_SIDEBAR_SLOT for each side
+   * that is absent. The Rust raw-JSON pass-through means this field is safe
+   * to add without modifying any Rust struct.
+   */
+  sidebar?: SidebarSettings;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */
@@ -121,6 +190,11 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
   /** FR-8.1: null means use default position (upper-right, below title bar). */
   findWidget: null,
   keybindings: {},
+  sidebar: {
+    left: { ...DEFAULT_SIDEBAR_SLOT },
+    right: { ...DEFAULT_SIDEBAR_SLOT },
+    panelSides: {},
+  },
 };
 
 // --- Window state helpers ---
