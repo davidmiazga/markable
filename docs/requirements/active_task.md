@@ -1,15 +1,15 @@
 ---
-title: "Markdown Toolbar Plugin"
-last-updated: "2026-04-15"
+title: "Table Toolbar Plugin"
+last-updated: "2026-04-14"
 review-cadence-days: 14
 status: active
 ---
 
-# Markdown Toolbar Plugin — Requirements Spec
+# Table Toolbar Plugin — Requirements Spec
 
 ## Summary
 
-As a user, I want a formatting toolbar with buttons for common Markdown styles so that I can apply and remove inline formatting without memorising syntax.
+As a user, I want a contextual toolbar with table management controls so that I can insert, delete, and reformat Markdown table rows and columns without memorising pipe-syntax or manually editing alignment separators.
 
 ---
 
@@ -21,75 +21,162 @@ The plugin supports exactly two mutually exclusive display modes, controlled by 
 
 | Mode | Description |
 |---|---|
-| `floating` | A bubble/palette that appears above the active text selection in the editor. Default mode. |
-| `sidebar` | Docked inside a left or right sidebar panel registered via `api.registerSidebarPanel()`. |
+| `floating` | Three contextual UI elements appear around the table when the cursor is inside it. Default mode. |
+| `sidebar` | A single docked panel always visible in a left or right sidebar slot. |
 
 The active mode is stored via `api.saveSettings()` and restored via `api.loadSettings()` on plugin enable. On first enable (no saved settings), `floating` mode is used and `sidebarSide` defaults to `"left"`.
 
-### FR-2: Toolbar Buttons (10 total)
+### FR-2: Floating Mode — Three UI Elements
 
-Each button wraps the current selection in the corresponding Markdown syntax. Buttons are listed in display order.
+When `toolbarMode === "floating"` and the cursor is anywhere inside a Markdown table (any `Table` node in the CM6 syntax tree), three elements are rendered:
 
-| # | Label | Syntax Applied | Notes |
-|---|---|---|---|
-| 1 | Bold | `**selection**` | |
-| 2 | Italic | `*selection*` | |
-| 3 | Underline | `<u>selection</u>` | HTML tag, not native Markdown |
-| 4 | Strikethrough | `~~selection~~` | |
-| 5 | Highlight | `==selection==` | |
-| 6 | Inline Code | `` `selection` `` | |
-| 7 | Superscript | `^selection^` | |
-| 8 | Link | `[selection](url)` | See FR-9 for URL resolution |
-| 9 | Image | `![selection](url)` | See FR-9 for URL resolution |
-| 10 | Erase Formatting | (strip all wrappers) | See FR-10 |
+#### FR-2a: Top Bar
 
-Clicking a button that is already "active" (cursor/selection is inside that format) removes the wrapper instead of nesting it. This is a toggle: apply if absent, remove if present.
+A horizontal toolbar floated above the table's first line. Buttons (in display order):
 
-### FR-3: Active State Detection
+| # | Label | Action |
+|---|---|---|
+| 1 | Insert Column Left | Insert blank column to the left of the current column |
+| 2 | Insert Column Right | Insert blank column to the right of the current column |
+| 3 | Align Left | Set `| :--- |` separator for current column |
+| 4 | Align Center | Set `| :---: |` separator for current column |
+| 5 | Align Right | Set `| ---: |` separator for current column |
+| 6 | Delete Column | Remove the current column |
+| 7 | Delete Table | Remove the entire table block from the document |
 
-When the cursor rests inside, or the selection overlaps, a formatted region, the corresponding button shows a highlighted/active visual state.
+Position: computed via `view.coordsAtPos(tableNode.from)` anchored to the top of the table, offset upward by the toolbar height plus an 8 px gap. If insufficient space above, the bar is flipped below the last table line (see EC-15).
 
-- Detection inspects the text immediately surrounding `selection.main` in the CM6 state.
-- All ten formats (FR-2) participate in active state detection, including Underline (`<u>`) and Image (`![`).
-- When the selection spans multiple overlapping formats (e.g. bold AND italic), all applicable buttons are highlighted simultaneously.
-- Detection is re-evaluated on every CM6 `selectionSet` or `docChanged` event via the `updateListener` extension.
+#### FR-2b: Row Handle
 
-### FR-4: Floating Mode Behaviour
+A small pill button rendered to the left of the cursor's current row. One handle is visible at a time — it tracks the active row. Clicking the handle opens a compact inline menu with three items:
 
-- The toolbar DOM element is appended to `document.body` and uses `position: fixed` to overlay the editor.
-- The toolbar appears when `selection.main.from !== selection.main.to` (non-empty selection).
-- Position is computed using `view.coordsAtPos(selection.main.from)` to place the toolbar above the start of the selection with a fixed vertical offset (e.g. `top - toolbarHeight - 8px`).
-- The toolbar is hidden (or removed from the DOM) when the selection is cleared.
-- The toolbar does not consume pointer events that fall through to the editor. Clicking a button applies the format and preserves the original selection range (restoring it after the dispatch if needed).
-- The toolbar must not appear when the editor does not have focus (i.e. selection events from other inputs).
+| Item | Action |
+|---|---|
+| Insert Row Above | Insert a blank row above the current row |
+| Insert Row Below | Insert a blank row below the current row |
+| Delete Row | Remove the current row |
 
-### FR-5: Sidebar Mode Behaviour
+Position: computed via `view.coordsAtPos(rowNode.from)`, aligned to the vertical midpoint of the row line, offset to the left of the editor's left edge. When the header row is active, "Delete Row" is shown but is disabled/greyed out (header row is protected — see EC-1).
 
-- The toolbar is registered as a sidebar panel via `api.registerSidebarPanel()` with `id: "markdown-toolbar"`.
-- The toolbar is always visible while the plugin is enabled; it does not show/hide based on selection.
-- Buttons are visually disabled (grayed out, `pointer-events: none`) when the selection is empty (`selection.main.empty === true`).
-- Buttons remain enabled when the selection is non-empty.
-- Active state detection (FR-3) functions the same as in floating mode.
+#### FR-2c: Bottom Pill
+
+A small `+` button rendered below the table's last line. Clicking it always inserts a new blank row at the end of the table (equivalent to Insert Row Below on the last body row). Position: computed via `view.coordsAtPos(tableNode.to)`, offset downward by a fixed gap (8 px).
+
+All three floating elements:
+- Are appended to `document.body` using `position: fixed`.
+- Are hidden (CSS `display: none` or removed) when the cursor leaves the table or the editor loses focus.
+- Do not consume pointer-fall-through to the editor for non-button areas.
+
+### FR-3: Sidebar Mode — Docked Panel
+
+When `toolbarMode === "sidebar"`, a single panel is registered via `api.registerSidebarPanel()`. It contains the following controls:
+
+| Button | Always Enabled? | Description |
+|---|---|---|
+| Insert Table | Yes | Inserts a blank 3-column × 2-row table (header + 1 body row) at cursor |
+| Insert Row Above | No | Inserts blank row above cursor row |
+| Insert Row Below | No | Inserts blank row below cursor row |
+| Delete Row | No | Deletes cursor row (header row: no-op, button disabled) |
+| Insert Column Left | No | Inserts blank column left of cursor column |
+| Insert Column Right | No | Inserts blank column right of cursor column |
+| Delete Column | No | Deletes cursor column (last column: no-op, button disabled) |
+| Align Left | No | Sets `:---` separator for cursor column |
+| Align Center | No | Sets `:---:` separator for cursor column |
+| Align Right | No | Sets `---:` separator for cursor column |
+| Delete Table | No | Deletes entire table block |
+
+"Not always enabled" buttons are visually disabled (`pointer-events: none`, greyed out) when the cursor is not inside a table. They are also individually disabled when the specific operation is structurally impossible (e.g. Delete Column when only one column exists — see EC-3).
+
+A CM6 `updateListener` (debounced 150 ms) drives the enabled/disabled state of all buttons after each editor transaction.
+
+### FR-4: Cursor-in-Table Detection
+
+- Detection uses `syntaxTree(state).resolve(pos)` to walk ancestors looking for a `Table` node — same approach as `live-preview.ts`'s `buildTableDecorations`.
+- Current row is determined by finding the enclosing `TableRow` (or `TableDelimiter` for the separator line) ancestor at `state.selection.main.head`.
+- Current column index is determined by counting `TableCell` (or `TableHeader`) siblings to the left of the cursor's enclosing cell within the current row.
+- A cursor on the separator line (the `| --- | --- |` line) is treated as "cursor is in the table" but the row index is considered `null` (separator). Row operations are disabled; column and table operations remain enabled.
+
+### FR-5: Table Operations — Pure String Transforms
+
+All eleven operations are pure string transforms on the Markdown source text of the table. Each operation:
+
+1. Reads the table's raw text via `state.doc.sliceString(tableNode.from, tableNode.to)`.
+2. Applies the transform to produce a new string.
+3. Dispatches exactly one `view.dispatch({ changes: { from: tableNode.from, to: tableNode.to, insert: newText } })` call.
+
+This guarantees each operation is a single undoable step (one Cmd-Z reversal).
+
+#### FR-5a: Row Operations
+
+**Insert Row Above** — Inserts a blank row (all cells empty, `|   |`) immediately before the current row. The separator row (row index 1) cannot be targeted; if cursor is on it, the insert is relative to the header row above.
+
+**Insert Row Below** — Inserts a blank row immediately after the current row.
+
+**Delete Row** — Removes the current row's line from the table string. The header row (row index 0) cannot be deleted (operation is a no-op; the button is disabled in both modes when cursor is on the header row). The separator row cannot be deleted.
+
+#### FR-5b: Column Operations
+
+**Insert Column Left** — Inserts a new `|   |` cell to the left of the current column in every row, and inserts a `| --- |` cell in the separator row at the same position.
+
+**Insert Column Right** — Same as Insert Column Left but inserts to the right.
+
+**Delete Column** — Removes the cell at the current column index from every row including the separator row. Disabled when the table has exactly one column (see EC-3).
+
+#### FR-5c: Alignment Operations
+
+**Align Left** — Replaces the separator cell at the current column index with ` :--- ` (colon on left).
+
+**Align Center** — Replaces the separator cell with ` :---: ` (colons on both sides).
+
+**Align Right** — Replaces the separator cell with ` ---: ` (colon on right).
+
+Each alignment operation changes only the separator row; no other rows are modified.
+
+#### FR-5d: Table-Level Operations
+
+**Delete Table** — Removes the entire block from `tableNode.from` to `tableNode.to` (inclusive of any trailing newline) in a single dispatch. If the table is the entire document, the document becomes empty (zero-length, not a crash).
+
+**Insert Table** — Inserts the following template at the current cursor position:
+
+```
+| Column 1 | Column 2 | Column 3 |
+| --- | --- | --- |
+|   |   |   |
+```
+
+A newline is prepended if the cursor is not at the start of a line, and a trailing newline is appended, so the table is always its own block. If the cursor is already inside a table (see EC-17), the insert is placed after the table's end rather than inside it.
 
 ### FR-6: Plugin Integration Contracts
 
-- File: `src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts`
-- Filename on disk (compiled): `markdown-toolbar.js` in `plugins/core/`
+- File: `src/plugins/table-toolbar/table-toolbar.plugin.ts`
+- Compiled output: `src-tauri/plugins/core/table-toolbar.js`
 - Plugin object fields:
-  - `id: "markdown-toolbar"`
-  - `name: "Markdown Toolbar"`
+  - `id: "table-toolbar"`
+  - `name: "Table Toolbar"`
   - `version: "1.0.0"`
   - `description`: one-line summary
   - `detail`: multi-sentence description for the Plugins Panel
-  - `sidebarPanelId: "markdown-toolbar"` — always set; the sidebar assignment toggle in the Plugins Panel relies on this field. When `toolbarMode` is `"floating"`, the panel is not registered at runtime, but the field is still present on the plugin object so the panel assignment UI is always available.
-- `onEnable(api)`: loads settings, resolves mode, injects CSS, registers CM6 extension, conditionally registers sidebar panel.
-- `onDisable(api)`: removes CM6 extension, unregisters sidebar panel if registered, removes floating toolbar DOM, removes injected CSS, resets all module-level state.
-- CM6 globals access pattern: all `@codemirror/*` values accessed via `window.__CM_VIEW__` (same pattern as `word-count.plugin.ts` and `auto-toc.plugin.ts`). `window.__CM_VIEW__` is never accessed at module-evaluation time; only inside `onEnable` or factory functions called from `onEnable`.
-- Direct editor dispatch uses `(window as any).__MARKABLE_EDITOR_VIEW__` (same pattern as `auto-toc.plugin.ts` render callback).
+  - `sidebarPanelId: "table-toolbar"` — always set so the Plugins Panel's L/R assignment toggle is always available, even when `toolbarMode` is `"floating"` and the panel is not registered at runtime.
+- `onEnable(api)`: loads settings, resolves mode, injects CSS, registers CM6 `updateListener` extension, conditionally creates floating DOM elements or registers sidebar panel.
+- `onDisable(api)`: removes CM6 extension, unregisters sidebar panel if registered, removes all floating DOM elements from `document.body`, removes injected CSS `<style>` tag, resets all module-level state to initial values.
+- CM6 globals access pattern: all `@codemirror/*` values accessed via `window.__CM_VIEW__` (same pattern as `markdown-toolbar.plugin.ts`). `window.__CM_VIEW__` is never accessed at module-evaluation time; only inside `onEnable` or factory functions called from `onEnable`.
+- Direct editor dispatch uses `(window as any).__MARKABLE_EDITOR_VIEW__`.
+- No `@codemirror/*` value imports at the module level; only `import type` annotations (erased by tsc) are permitted for IDE type support.
+- No app-internal module imports (`bridge`, `settings`, `main`, `plugin-types`, etc.).
 
-### FR-7: Persistent Settings
+### FR-7: Build System Integration
 
-Settings object shape (stored at `plugins/markdown-toolbar/settings.json`):
+- Add an entry to `scripts/build-plugins.mjs` `PLUGINS` array:
+  ```
+  ["table-toolbar", "src/plugins/table-toolbar/table-toolbar.plugin.ts"]
+  ```
+- Add a corresponding `pluginConfig(...)` call to `vite.plugins.config.ts`.
+- Both `build-plugins.mjs` and `vite.plugins.config.ts` must be updated before the plugin can be compiled.
+- The entry in both files follows the same pattern as the existing `markdown-toolbar` entry.
+
+### FR-8: Persistent Settings
+
+Settings object shape (stored at `plugins/table-toolbar/settings.json`):
 
 ```
 {
@@ -100,41 +187,20 @@ Settings object shape (stored at `plugins/markdown-toolbar/settings.json`):
 
 - `saveSettings` is called immediately whenever either setting changes.
 - `loadSettings` is called in `onEnable`; on `null` return the defaults above are used.
+- Missing or invalid keys fall back to their defaults without crashing (same `mergeSettings` guard as `markdown-toolbar.plugin.ts`).
 - The `sidebarSide` value determines the `side` field passed to `api.registerSidebarPanel()` when `toolbarMode === "sidebar"`.
 
-### FR-8: Formatting Dispatch
+### FR-9: CSS Scoping and Injection
 
-- All formatting operations are dispatched as CM6 transactions via `view.dispatch({ changes: ..., selection: ... })`.
-- Transactions must be constructed so that Cmd-Z (undo) reverses them in a single step. Each button click produces exactly one `view.dispatch` call (not multiple sequential dispatches).
-- After applying a wrapping format, the selection is updated to cover only the inserted text content (not the markers), so the user can keep typing without re-selecting.
-- After removing a format (toggle off), the selection is updated to cover the remaining unwrapped text.
-
-### FR-9: URL Resolution for Link and Image
-
-When the Link or Image button is activated:
-
-1. Attempt to read the system clipboard via `navigator.clipboard.readText()`.
-2. If the clipboard contains a string that passes a URL heuristic (starts with `http://`, `https://`, `ftp://`, or `/`), use it as the URL without prompting.
-3. Otherwise, call `window.prompt("Enter URL:")`. If the user cancels (`null` return), abort the operation with no changes to the document.
-4. The resolved URL is inserted into the `(url)` placeholder.
-
-### FR-10: Erase Formatting
-
-The Erase button removes all recognised format wrappers from the current selection:
-
-- Bold (`**`), Italic (`*`), Underline (`<u>...</u>`), Strikethrough (`~~`), Highlight (`==`), Inline Code (`` ` ``), Superscript (`^`).
-- Link syntax `[text](url)` is stripped to `text` (the URL and brackets are removed).
-- Image syntax `![alt](url)` is stripped to `alt`.
-- Stripping is applied iteratively until no further wrappers are found (handles nested formats).
-- All stripping happens in a single `view.dispatch` call (one undoable step).
-
-### FR-11: CSS Scoping and Injection
-
-- All CSS class names are prefixed `.md-toolbar` (e.g. `.md-toolbar`, `.md-toolbar__btn`, `.md-toolbar__btn--active`, `.md-toolbar__btn--disabled`).
-- CSS is injected as a `<style id="__markable_md_toolbar_css__">` tag in `onEnable`.
-- The same guard used in `auto-toc.plugin.ts` (check `document.getElementById(STYLE_ID)` before inserting) prevents duplicate injection on rapid toggle cycles.
+- All CSS class names are prefixed `.tbl-toolbar` (e.g. `.tbl-toolbar`, `.tbl-toolbar__btn`, `.tbl-toolbar__btn--disabled`, `.tbl-toolbar__row-handle`, `.tbl-toolbar__bottom-pill`).
+- CSS is injected as a `<style id="__markable_tbl_toolbar_css__">` tag in `onEnable`.
+- A guard (check `document.getElementById(STYLE_ID)` before inserting) prevents duplicate injection on rapid toggle cycles.
 - CSS is removed in `onDisable` by removing the `<style>` element by id.
-- CSS uses `var(--bg-primary)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--link-color)`, `var(--selection-bg)`, `var(--code-bg)` for automatic theme adoption.
+- CSS uses `var(--bg-primary)`, `var(--bg-chrome)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--accent-color)`, `var(--selection-bg)` for automatic theme adoption.
+
+### FR-10: Position Setting in Plugins Panel
+
+The Plugins Panel detail view for this plugin shows the same 3-way toggle as the Markdown Toolbar: **Left | Float | Right**. Selecting "Float" sets `toolbarMode: "floating"`. Selecting "Left" or "Right" sets `toolbarMode: "sidebar"` and `sidebarSide: "left"` or `"right"` accordingly. The change takes effect after `api.restartSelf()` is called (same pattern as `markdown-toolbar`).
 
 ---
 
@@ -142,13 +208,14 @@ The Erase button removes all recognised format wrappers from the current selecti
 
 ### NFR-1: No New Dependencies
 
-The plugin uses only vanilla TypeScript/DOM APIs. No third-party libraries are added to `package.json`. CM6 APIs are accessed exclusively through the existing `window.__CM_VIEW__` global (same pattern as all other plugins).
+The plugin uses only vanilla TypeScript/DOM APIs. No third-party libraries are added to `package.json`. CM6 APIs are accessed exclusively through the `window.__CM_VIEW__` global.
 
 ### NFR-2: Performance
 
-- The CM6 `updateListener` extension is debounced at 150 ms (matching the existing plugins) for active-state detection updates.
-- In floating mode, toolbar position recalculation runs synchronously on each selection change (no debounce) to avoid visual lag in the bubble position. Position update is cheap (one `coordsAtPos` call + two style assignments).
-- Toolbar DOM is created once in `onEnable` and reused; it is not recreated per selection event.
+- The CM6 `updateListener` extension is debounced at 150 ms for sidebar button state updates and for floating element show/hide decisions.
+- Floating element position recalculation (coordsAtPos calls + style assignments) runs synchronously on each selection change without debounce, to keep the elements tracking the cursor without visible lag. This is cheap (two `coordsAtPos` calls + six style assignments per update).
+- The floating DOM elements (top bar, row handle, bottom pill) are created once in `onEnable` and reused — not recreated per editor transaction.
+- The row handle menu (if implemented as a DOM popup rather than inline buttons) is created once and repositioned, not rebuilt per row change.
 
 ### NFR-3: Toggle Cycle Correctness
 
@@ -156,13 +223,20 @@ The plugin must survive repeated enable/disable cycles without leaking DOM nodes
 
 - All module-level state is reset to initial values at the end of `onDisable`.
 - The `<style>` tag is removed in `onDisable`.
-- The floating toolbar DOM element is removed from `document.body` in `onDisable`.
+- All three floating DOM elements are removed from `document.body` in `onDisable`.
 - `api.removeExtensions()` is always called in `onDisable`.
-- `api.unregisterSidebarPanel("markdown-toolbar")` is called in `onDisable` if (and only if) the panel was registered in the corresponding `onEnable`.
+- `api.unregisterSidebarPanel("table-toolbar")` is called in `onDisable` if and only if the panel was registered in the corresponding `onEnable`.
 
-### NFR-4: Mode Switch Without Plugin Restart
+### NFR-4: Undo Atomicity
 
-If a future settings UI allows changing `toolbarMode` while the plugin is enabled, the plugin must cleanly teardown the current mode and set up the new one (disable then re-enable pattern is acceptable for v1.0; no live mode-switch is required in this release).
+Every table operation must result in exactly one entry on the CM6 undo stack. No operation may call `view.dispatch` more than once. Multi-part transforms (e.g. inserting a column into N rows) must be computed as a single string substitution on the full table source and submitted in one dispatch.
+
+### NFR-5: Table Preservation
+
+All string transforms must preserve:
+- Trailing spaces within cells as-is (no trimming of user content).
+- The table's original line endings (LF or CRLF) — use whatever the document uses.
+- Pipe characters within cell content that are escaped (`\|`) — do not split on them as column delimiters.
 
 ---
 
@@ -172,37 +246,48 @@ All items below are mandatory test cases for the Code Reviewer.
 
 | # | Scenario | Expected Behaviour |
 |---|---|---|
-| EC-1 | Empty selection in floating mode | Toolbar does not appear; no DOM insertion or positioning occurs |
-| EC-2 | Empty selection in sidebar mode | All 10 buttons are visually disabled; clicks are no-ops |
-| EC-3 | Selection covers both bold and italic (e.g. `***text***`) | Both Bold and Italic buttons show active state simultaneously |
-| EC-4 | Nested formats — inner italics inside bold (`**_text_**`) | Both Bold and Italic detected; active state on both buttons |
-| EC-5 | Toggle off — cursor inside `**text**`, click Bold | Bold markers removed; selection covers unwrapped `text`; one undo step restores markers |
-| EC-6 | Undo after bold applied | Single Cmd-Z reverts the entire wrap (one dispatch = one undo step) |
-| EC-7 | Link button, clipboard contains `https://example.com` | No prompt; URL inserted directly |
-| EC-8 | Link button, clipboard is empty or non-URL text | `window.prompt` shown; user input used as URL |
-| EC-9 | Link button, user cancels prompt (returns null) | No changes to document; selection unchanged |
-| EC-10 | Image button with empty alt text (no selection) | Sidebar mode: button disabled (EC-2). Floating mode: toolbar not shown (EC-1). Both enforced by the empty-selection guard |
-| EC-11 | Erase on selection with no recognised wrappers | No document change; one dispatch with empty changeset or no dispatch at all |
-| EC-12 | Erase on selection with mixed formats (`**bold** and *italic*`) | All wrappers stripped in a single dispatch; result is `bold and italic` |
-| EC-13 | Erase on link `[text](https://url)` | Reduces to `text`; URL and surrounding syntax removed in one dispatch |
-| EC-14 | Floating toolbar positioned near top of viewport | Toolbar positioned below the selection (flipped) when insufficient space above; or clamped so it remains on-screen |
-| EC-15 | Rapid toggle (enable/disable/enable) | No duplicate `<style>` tags; no orphaned toolbar DOM; no stale CM6 extensions; no duplicate sidebar panels |
-| EC-16 | Plugin disabled while toolbar is visible (floating mode) | Toolbar is removed from DOM immediately in `onDisable`; no dangling element |
-| EC-17 | Plugin disabled while sidebar panel is registered | `api.unregisterSidebarPanel` called; `SidebarManager.destroy()` runs cleanly |
-| EC-18 | `loadSettings()` returns null (first run) | Defaults used: `toolbarMode: "floating"`, `sidebarSide: "left"`; no crash |
-| EC-19 | `loadSettings()` returns partial object (missing one key) | Missing key falls back to its default; no crash; settings not corrupted |
-| EC-20 | Selection spanning multiple lines | Active state detection still functions; toolbar appears/updates correctly |
-| EC-21 | Inline code button on selection containing backticks | Backticks in selection are not double-escaped; wrap produces `` `selection` `` verbatim |
-| EC-22 | `window.__MARKABLE_EDITOR_VIEW__` is undefined when render() fires | Toolbar renders in empty/disabled state; updateListener populates it on the next transaction |
-| EC-23 | Toolbar button clicked after editor view is replaced (new tab opened) | `__MARKABLE_EDITOR_VIEW__` always holds the live view; dispatch targets correct view |
-| EC-24 | Cursor/selection inside a `* item` bullet-list item | Italic button must NOT show active; italic detection must distinguish a `*` list bullet (at start-of-line, followed by a space) from a `*` italic marker |
+| EC-1 | Cursor is on the header row; Delete Row triggered | Operation is a no-op. Button is disabled (greyed out, pointer-events: none) in both floating and sidebar modes. No dispatch is emitted. |
+| EC-2 | Cursor is on the separator line (`| --- | --- |`) | Cursor-in-table detection returns `true`. Row index is treated as `null`. All row operations (Insert Row Above/Below, Delete Row) are disabled. Column and table operations remain enabled. |
+| EC-3 | Table has exactly one column; Delete Column triggered | Operation is a no-op. Delete Column button is disabled in both modes. No dispatch is emitted. |
+| EC-4 | Table has exactly one body row; Delete Row triggered on that body row | The body row is deleted. The table is left with only the header row and separator. The result is a valid (if minimal) Markdown table. |
+| EC-5 | Delete Table when table is the only content in the document | The document becomes empty (length 0). No crash. Cursor is placed at position 0. |
+| EC-6 | Insert Column Left/Right on a table with mismatched column counts across rows | The operation inserts a cell into every row using the detected column count, normalising any short rows by appending empty cells as needed before inserting. The resulting table has uniform column counts. |
+| EC-7 | Undo after any table operation | A single Cmd-Z reverts the entire operation (header, separator, and all body rows restored simultaneously). Only one undo step consumed. |
+| EC-8 | Rapid successive operations (column insert, then align, then row delete) | Each produces a separate undo step. Three Cmd-Z presses are required to fully revert all three. |
+| EC-9 | Insert Table when cursor is already inside a table | The new table is inserted after the existing table's last line, not inside it. The cursor's enclosing `Table` node's `to` position is used as the insertion point. |
+| EC-10 | Insert Table when cursor is mid-line (not at line start) | A newline is prepended before the table template so the table starts on its own line. |
+| EC-11 | Insert Table when document is empty | Template is inserted at position 0 with no leading newline. |
+| EC-12 | Cursor moves from inside table to outside (e.g. arrow key past last row) | All three floating elements are hidden within one debounce cycle (≤ 150 ms). No stale elements remain visible. |
+| EC-13 | Editor loses focus (window blur or click outside editor) | All floating elements are hidden immediately. |
+| EC-14 | Floating top bar would render above the viewport top edge | Bar is flipped to render below the table's last line instead of above the first line. |
+| EC-15 | Floating top bar near left or right viewport edge | Bar is clamped horizontally so it remains fully within the viewport. |
+| EC-16 | Row handle would render outside the visible scroll area | Row handle is hidden (or clamped) when the active row is scrolled out of the editor's visible rect. |
+| EC-17 | Plugin disabled while floating elements are visible | All three DOM elements are removed from `document.body` immediately in `onDisable`. No dangling elements after disable. |
+| EC-18 | Plugin disabled while sidebar panel is registered | `api.unregisterSidebarPanel("table-toolbar")` is called. `SidebarManager` cleans up without error. |
+| EC-19 | Rapid toggle (enable/disable/enable in quick succession) | No duplicate `<style>` tags, no orphaned DOM elements, no stale CM6 extensions, no duplicate sidebar panels. |
+| EC-20 | `loadSettings()` returns `null` (first run) | Defaults used: `toolbarMode: "floating"`, `sidebarSide: "left"`. No crash. |
+| EC-21 | `loadSettings()` returns a partial object (e.g. only `toolbarMode` present) | Missing key filled from defaults. No crash. Settings not corrupted. |
+| EC-22 | `window.__MARKABLE_EDITOR_VIEW__` is `undefined` when a button is clicked | The click handler is a no-op. No uncaught exception. The plugin does not crash. |
+| EC-23 | A new tab is opened while the plugin is enabled (editor view replaced) | `__MARKABLE_EDITOR_VIEW__` is read fresh on each button click and each `updateListener` call — never cached at enable-time. All operations target the current tab's editor view. |
+| EC-24 | Table cell contains a pipe character escaped as `\|` | Column split logic does not treat `\|` as a column delimiter. Column count and indexing remain correct. |
+| EC-25 | Table cell content includes leading/trailing spaces | Cell content is preserved verbatim. No trimming is applied by any transform. |
+| EC-26 | Align operation when the separator row cell already has the same alignment | The dispatch is still emitted (idempotent write). The separator cell is normalised to the canonical form (e.g. ` :--- ` with consistent spacing). |
+| EC-27 | Delete Column on the last remaining column when the table also has a header-only row | Covered by EC-3; Delete Column is disabled. |
+| EC-28 | Insert Row Above/Below when cursor is on the last body row | Row is inserted at the correct position relative to the last row. The bottom pill still renders below the (now updated) last row. |
+| EC-29 | Bottom pill clicked when cursor is not inside the table (pill somehow still visible) | Operation is a no-op. The pill hides itself and the cursor is not moved. |
+| EC-30 | Sidebar mode — Insert Table clicked when `__MARKABLE_EDITOR_VIEW__` is null | No-op; no crash. Button click is silently ignored. |
+| EC-31 | Table has CRLF line endings | All transforms preserve CRLF. The reconstructed table string uses the same line endings as the original. |
+| EC-32 | Build: `table-toolbar` entry missing from `build-plugins.mjs` | `npm run build:plugins` does not produce `table-toolbar.js`. CI catches the omission. |
+| EC-33 | Build: `table-toolbar` entry missing from `vite.plugins.config.ts` | `npm run build:plugins` (via vite.plugins.config.ts path) does not include the plugin. Both files must be updated. |
 
 ---
 
 ## Out of Scope (v1.0)
 
-- Custom button order or button visibility toggles via UI
-- Keyboard shortcuts for individual toolbar buttons (may be added in a future settings pass)
-- Live mode-switch (floating to sidebar) without plugin restart
-- Toolbar customisation panel within the Plugins Panel detail view
-- Support for block-level formatting (headings, blockquotes, lists)
+- Drag-and-drop column reordering.
+- Multi-column alignment (applying alignment to a range of columns at once).
+- Table formatting / pretty-printing (normalising cell widths to align pipes).
+- Keyboard shortcuts for individual table operations.
+- Live mode-switch (floating to sidebar) without plugin restart.
+- Support for HTML `<table>` elements (operates only on Markdown pipe-tables).
+- Merge/split cells (not representable in Markdown pipe-table syntax).

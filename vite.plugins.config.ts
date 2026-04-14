@@ -1,7 +1,7 @@
 /**
  * Vite build configuration for core plugin IIFE bundles.
  *
- * Builds the four built-in Markable plugins as self-contained IIFE `.js` files.
+ * Builds the six built-in Markable plugins as self-contained IIFE `.js` files.
  * Each output is evaluated at runtime inside a sandboxed Function scope via:
  *
  *   const fn = new Function(source + "\nreturn __markablePlugin__;");
@@ -12,9 +12,9 @@
  * Or automatically: npm run tauri build (via beforeBuildCommand in tauri.conf.json)
  *
  * Vite 6 constraint: IIFE format does not support multiple entry points in a
- * single lib build. This config exports an array of four per-plugin configs —
+ * single lib build. This config exports an array of six per-plugin configs —
  * Vite runs them sequentially. `emptyOutDir: true` is set only on the first
- * entry so the directory is cleared once before the four builds run.
+ * entry so the directory is cleared once before the six builds run.
  *
  * Design constraints:
  *   EC-31: `external: []` — NO packages may be externalized. Every @codemirror/*
@@ -114,9 +114,9 @@ function pluginConfig(
   });
 }
 
-// Export an array of four configs. Vite processes each sequentially.
+// Export an array of six configs. Vite processes each sequentially.
 // The first config (focus-mode) clears the output directory before building;
-// the remaining three append their output to the same directory.
+// the remaining five append their output to the same directory.
 export default [
   pluginConfig(
     "focus-mode",
@@ -141,6 +141,11 @@ export default [
   pluginConfig(
     "markdown-toolbar",
     resolve(__dirname, "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "table-toolbar",
+    resolve(__dirname, "src/plugins/table-toolbar/table-toolbar.plugin.ts"),
     false,
   ),
 ];

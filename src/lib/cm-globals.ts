@@ -18,14 +18,16 @@
  * runs, so the globals are available before evaluatePlugin() calls the IIFE.
  *
  * Exported names on each global match the named exports used by the plugin files:
- *   __CM_STATE__ — @codemirror/state exports used by focus-mode and typewriter-mode
- *   __CM_VIEW__  — @codemirror/view exports used by all four plugins
+ *   __CM_STATE__    — @codemirror/state exports used by focus-mode and typewriter-mode
+ *   __CM_VIEW__     — @codemirror/view exports used by all plugins
+ *   __CM_LANGUAGE__ — @codemirror/language exports used by table-toolbar (syntaxTree)
  */
 
 // We import the full module objects so we can expose every named export that
 // any plugin might need. New plugin authors can add exports here if needed.
 import * as _cmState from "@codemirror/state";
 import * as _cmView from "@codemirror/view";
+import * as _cmLanguage from "@codemirror/language";
 
 /**
  * Assign CodeMirror module namespaces to the window object.
@@ -36,3 +38,5 @@ import * as _cmView from "@codemirror/view";
  */
 (window as unknown as Record<string, unknown>)["__CM_STATE__"] = _cmState;
 (window as unknown as Record<string, unknown>)["__CM_VIEW__"] = _cmView;
+// Required by table-toolbar.plugin.ts — exposes syntaxTree and related language utilities.
+(window as unknown as Record<string, unknown>)["__CM_LANGUAGE__"] = _cmLanguage;
