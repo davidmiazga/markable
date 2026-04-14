@@ -1,0 +1,498 @@
+/**
+ * tabs.css — Shared CSS for all three tab-strip renderers.
+ *
+ * Design principles:
+ *   - Every color and size is expressed as a CSS custom property so the tab
+ *     strip inherits the active Markable theme without code changes.
+ *   - The fallback values in var() keep the strip usable even when the
+ *     parent theme does not define --bg-primary etc.
+ *   - Mode-specific classes (tab-mode-minimal, tab-mode-regular) are added by
+ *     the renderer to #tab-strip so the CSS can target them precisely.
+ *
+ * Step coverage:
+ *   step_02 — minimal mode (dot/pill strip) and base variables
+ *   step_03 — regular mode (.tab-label) placeholder
+ *   step_04 — vertical mode (#tab-vertical-strip) placeholder
+ */
+
+/* ── CSS custom properties ─────────────────────────────────────────────────── */
+:root {
+  /* Minimal dot/pill strip dimensions */
+  --tab-strip-height: 28px;
+  --tab-strip-bg: var(--bg-primary, #1e1e1e);
+  --tab-dot-size: 8px;
+  --tab-dot-active-width: 22px;
+
+  /*
+   * Inactive dots use --text-muted when available (set by theme plugins),
+   * falling back to a neutral mid-gray so they are visible on both light and
+   * dark backgrounds without being visually dominant.
+   */
+  --tab-dot-inactive-color: var(--text-primary, #e0e0e0);
+  --tab-dot-active-color: var(--text-primary, #e0e0e0);
+
+  /*
+   * The dirty indicator is shown as a small accent-colored dot so it is
+   * immediately noticeable without being distracting. --accent comes from the
+   * theme or falls back to the standard amber warning color.
+   */
+  --tab-dot-dirty-indicator-color: var(--accent, #0078d4);
+
+  /* Regular mode (step_03) */
+  --tab-regular-height: 36px;
+  --tab-regular-bg: var(--bg-secondary, #252526);
+  --tab-regular-active-bg: var(--bg-primary, #1e1e1e);
+  --tab-regular-text: var(--text-primary, #cccccc);
+  --tab-regular-accent: var(--accent, #0078d4);
+
+  /* Vertical mode (step_04) */
+  --tab-vertical-width: 36px;
+  --tab-vertical-bg: var(--bg-secondary, #252526);
+  --tab-vertical-active-bg: var(--bg-primary, #1e1e1e);
+  --tab-vertical-text: var(--text-primary, #cccccc);
+}
+
+/* ── #tab-strip base ────────────────────────────────────────────────────────── */
+
+/*
+ * #tab-strip sits between #titlebar and #app. It uses display:flex so both the
+ * minimal (horizontal) and regular (horizontal) renderers can lay out children
+ * without any additional wrappers.
+ */
+#tab-strip {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--tab-strip-bg);
+  /* Height is controlled by the mode-specific class below */
+}
+
+/* Minimal mode: compact dot/pill row */
+#tab-strip.tab-mode-minimal {
+  height: var(--tab-strip-height);
+  position: relative;   /* anchor for the absolutely-centred track */
+}
+
+/*
+ * The track is pinned to the exact horizontal (and vertical) centre of the
+ * strip with absolute positioning + transform. This means the centred point
+ * never moves regardless of how many dots are open or how wide the active pill
+ * is — the content size has zero effect on the position of the centre point.
+ */
+.tab-dot-track {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Regular mode: full-height filename tabs (step_03) */
+#tab-strip.tab-mode-regular {
+  height: var(--tab-regular-height);
+  padding: 0;
+  gap: 0;
+}
+
+/*
+ * Vertical mode hides #tab-strip entirely. The VerticalTabStrip renderer
+ * (step_04) inserts its own DOM element directly into #app-row as a flex
+ * child, so #tab-strip is unused in this mode.
+ */
+#tab-strip.tab-mode-vertical {
+  display: none;
+}
+
+/* ── Minimal mode: dots ─────────────────────────────────────────────────────── */
+
+/*
+ * Each tab is a small circular button. The active tab expands to a pill via
+ * width transition. Centering is handled by the .tab-dot-track wrapper above,
+ * so individual dot widths changing does not affect the group's centre position.
+ */
+.tab-dot {
+  flex-shrink: 0;
+  height: var(--tab-dot-size);
+  width: var(--tab-dot-size);
+  border-radius: 999px;
+  background: var(--tab-dot-inactive-color);
+  opacity: 0.2;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  outline: none;
+  transition: width 120ms ease, opacity 120ms ease;
+  position: relative;
+}
+
+/* Active tab: expand to pill width and full opacity */
+.tab-dot[aria-selected="true"] {
+  width: var(--tab-dot-active-width);
+  opacity: .5;
+}
+
+/* Dirty indicator: small accent dot in the top-right corner of the dot/pill */
+.tab-dot.is-dirty::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tab-dot-dirty-indicator-color);
+}
+
+/*
+ * Soft warning: when more than TAB_SOFT_WARNING_THRESHOLD tabs are open,
+ * TabManager adds "tab-over-limit" to #tab-strip. This dims all dots slightly
+ * and appends a small label (set via data-tab-warning) to remind the user.
+ */
+#tab-strip.tab-over-limit .tab-dot {
+  opacity: 0.6;
+}
+
+/*
+ * The warning text is pinned to the right edge of the strip rather than
+ * flowing after the track (which is absolutely positioned and out of flow).
+ */
+#tab-strip.tab-over-limit::after {
+  content: attr(data-tab-warning);
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--tab-dot-dirty-indicator-color);
+  white-space: nowrap;
+}
+
+/* ── Shared tooltip ─────────────────────────────────────────────────────────── */
+
+/*
+ * #tab-tooltip is appended to document.body by MinimalTabBar (and will be
+ * reused by the other renderers in later steps). It is hidden by default and
+ * shown by the renderer's mouseenter timer.
+ */
+#tab-tooltip {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-secondary, #252526);
+  color: var(--text-primary, #cccccc);
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  pointer-events: none;  /* never blocks mouse events on the editor */
+  white-space: nowrap;
+  display: none;         /* shown by JS on a delay; hidden again on mouseleave */
+}
+
+/* ── Regular mode: tab labels (step_03) ────────────────────────────────────── */
+
+/*
+ * #tab-strip.tab-mode-regular overrides: full-height label row.
+ * align-items:stretch ensures labels fill the full bar height.
+ */
+/*
+ * Regular mode: opacity-based hierarchy.
+ *
+ * The bar uses the titlebar color at 75% alpha so it visually sits between
+ * the titlebar and the editor. Each tab inherits that and adds its own
+ * opacity so active (100%) stands out from inactive (75%).
+ *
+ * color-mix is used for the background so that text/icons inside the strip
+ * are NOT affected — opacity on a parent would cascade and prevent children
+ * from reaching full opacity.
+ */
+#tab-strip.tab-mode-regular {
+  height: var(--tab-regular-height);
+  background: var(--bg-chrome, color-mix(in srgb, var(--bg-primary, #1e1e1e) 85%, black));
+  padding: 0;
+  gap: 0;
+  align-items: stretch;
+}
+
+/*
+ * Inner wrapper holds all .tab-label buttons. flex:1 makes it fill the
+ * remaining width after the "+" button. overflow:hidden clips any tabs that
+ * do not fit — scrolling is deferred OOS per step_03 spec.
+ */
+.tab-bar-inner {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+/*
+ * Each open document is represented as a <button class="tab-label">.
+ * flex-shrink:0 prevents tabs from being squeezed below their min-width
+ * when many tabs are open (combined with .tab-bar-inner overflow:hidden,
+ * excess tabs are simply clipped rather than squashed to zero width).
+ * max-width caps label width so a long filename does not dominate the bar.
+ */
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid color-mix(in srgb, var(--border-color, #444) 50%, transparent);
+  cursor: pointer;
+  color: var(--tab-regular-text);
+  font-size: calc(var(--settings-base-font-size, 16px) * 0.8);
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 180px;
+  min-width: 60px;
+  position: relative;
+  opacity: 0.75;
+  transition: opacity 120ms ease;
+}
+
+/* Active tab: full opacity + primary background so it visually "rises up"
+   from the darker chrome strip and merges with the editor content below. */
+.tab-label[aria-selected="true"] {
+  opacity: 1;
+  background: var(--bg-primary, #1e1e1e);
+}
+
+/*
+ * Text label: ellipsis truncation when the tab is narrower than the title.
+ * This is applied to the inner <span> rather than the button so the close
+ * button is never clipped.
+ */
+.tab-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Dirty indicator: a small amber bullet that appears before the filename
+ * when the document has unsaved changes. Hidden by default via display:none;
+ * shown when the parent .tab-label carries the .is-dirty class.
+ * Using display:none/inline avoids layout shift because the span is always
+ * present in the DOM — only its visibility changes.
+ */
+.tab-label-dirty {
+  display: none;
+  color: var(--tab-dot-dirty-indicator-color);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.tab-label.is-dirty .tab-label-dirty {
+  display: inline;
+}
+
+/*
+ * Close button (×): sits at the right end of each tab label. margin-left
+ * pushes it away from the filename text. border-radius gives it a subtle
+ * hover target shape matching common editor UI conventions.
+ */
+.tab-close {
+  margin-left: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tab-close:hover {
+  background: var(--bg-hover, #444);
+  color: var(--text-primary, #ccc);
+}
+
+/*
+ * "+" new-tab button: flex-shrink:0 ensures it is never clipped by the
+ * .tab-bar-inner overflow. line-height matches --tab-regular-height so the
+ * "+" character is vertically centred without extra positioning tricks.
+ */
+.tab-new-btn {
+  flex-shrink: 0;
+  padding: 0 10px;
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: var(--tab-regular-height);
+  height: 100%;
+}
+
+.tab-new-btn:hover {
+  color: var(--text-primary, #ccc);
+  background: var(--bg-hover, #444);
+}
+
+/*
+ * Soft warning: when the "+" button has the tab-over-limit class (added by
+ * RegularTabBar.update() when tabs.length > TAB_SOFT_WARNING_THRESHOLD),
+ * color it amber to signal that many tabs are open. The button stays enabled
+ * per spec (FR-9 is a visual cue only, not a hard cap).
+ *
+ * `position: relative` is required so the ::after badge can be positioned
+ * absolutely within the button's bounding box.
+ */
+.tab-new-btn.tab-over-limit {
+  color: var(--tab-dot-dirty-indicator-color);
+  position: relative;
+}
+
+/*
+ * Small "!" exclamation badge pinned to the top-right corner of the "+" button.
+ * The badge is purely decorative — the native title tooltip (set by JS) carries
+ * the accessible text. font-weight:bold and a small font-size keep it compact.
+ */
+.tab-new-btn.tab-over-limit::after {
+  content: "!";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+/* ── Vertical mode: strip ───────────────────────────────────────────────────── */
+
+/*
+ * #tab-vertical-strip is inserted by VerticalTabStrip.mount() as the first
+ * flex child of #app-row. It is a narrow column that lays out each open
+ * document as a vertical "card" (rotated title + hover-reveal close button).
+ *
+ * flex-shrink:0 prevents it from being compressed when #editor needs more
+ * space — the strip always stays at its declared width.
+ */
+#tab-vertical-strip {
+  width: var(--tab-vertical-width);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--tab-vertical-bg);
+  overflow: hidden;
+  flex-shrink: 0;
+  padding: 8px 0;
+  gap: 4px;
+}
+
+/*
+ * Each open document is represented as a <button class="tab-vertical-item">.
+ * The left border starts transparent and changes to the accent color when the
+ * tab is active, giving a clear visual anchor without requiring a color change
+ * on the entire item background.
+ *
+ * `position: relative` is needed so the close button can be positioned
+ * absolutely in the top-right corner via `position: absolute; top: 2px`.
+ */
+.tab-vertical-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 8px 0;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  color: var(--tab-vertical-text);
+  position: relative;
+}
+
+/*
+ * Active tab: accent left border + slightly lighter background so the user
+ * can immediately see which document is currently open. The left-border
+ * technique is the same used in VS Code's activity bar and familiar to
+ * users of "vertical tab" UIs.
+ */
+.tab-vertical-item[aria-selected="true"] {
+  background: var(--tab-vertical-active-bg);
+  border-left-color: var(--tab-regular-accent);
+}
+
+/*
+ * Title text rotated 90°. Using `writing-mode: vertical-rl` lays the text
+ * top-to-bottom in the normal vertical-rl direction. Adding
+ * `transform: rotate(180deg)` then flips it so text reads BOTTOM-to-TOP,
+ * which matches the Obsidian / Typora vertical-tab convention that users
+ * expect when titles are on the left side.
+ *
+ * max-height caps how far down the column the title extends so very long
+ * filenames do not overflow the strip. text-overflow: ellipsis clips the
+ * text gracefully (the overflow: hidden is required for this to work).
+ */
+.tab-vertical-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);   /* makes text read bottom-to-top */
+  font-size: calc(var(--settings-base-font-size, 16px) * 0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  max-height: 80px;
+  text-overflow: ellipsis;
+  color: var(--tab-vertical-text);
+}
+
+/*
+ * Dirty indicator: append a bullet character after the title text when the
+ * tab has unsaved changes. Using ::after on .tab-vertical-text means no
+ * extra DOM node is needed — only the .is-dirty class on the parent button
+ * triggers the indicator. The amber color matches the other dirty indicators
+ * in the minimal and regular modes.
+ */
+.tab-vertical-item.is-dirty .tab-vertical-text::after {
+  content: " •";
+  color: var(--tab-dot-dirty-indicator-color);
+}
+
+/*
+ * Close button in vertical strip: hidden (opacity 0) by default to keep the
+ * narrow column uncluttered. Revealed on parent hover via the rule below.
+ * Positioned in the top-right corner of the item using absolute positioning
+ * (the parent has `position: relative`).
+ */
+.tab-vertical-item .tab-close {
+  opacity: 0;
+  transition: opacity 150ms;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 11px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  background: var(--bg-hover, #444);
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #888);
+}
+
+/* Reveal close button when the user hovers over the item. */
+.tab-vertical-item:hover .tab-close {
+  opacity: 1;
+}
+
+/*
+ * Soft warning: when more than TAB_SOFT_WARNING_THRESHOLD tabs are open,
+ * VerticalTabStrip.update() adds "tab-over-limit" to #tab-vertical-strip.
+ * An "!" character is appended via ::after to signal the user without
+ * removing or disabling any strip items (FR-9 is visual only, no hard cap).
+ */
+#tab-vertical-strip.tab-over-limit::after {
+  content: "!";
+  color: var(--tab-dot-dirty-indicator-color);
+  font-size: 10px;
+  font-weight: bold;
+  padding: 4px;
+}

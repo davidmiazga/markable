@@ -15,6 +15,28 @@ interface CommandDef {
 const COMMANDS: CommandDef[] = [
   // File
   { id: "file-new",        label: "New",                    defaultKey: "Cmd-N",           section: "File" },
+  // Tab commands — added in step_06.
+  // "tab-new" and "file-new" intentionally produce the same behaviour (AD-7):
+  // handleAction() redirects both to tabManager.openNewTab(). Keeping two
+  // separate COMMANDS entries lets users see and remap both shortcuts
+  // independently in the Keybindings panel.
+  { id: "tab-new",   label: "New Tab",            defaultKey: "Cmd-T",         section: "File" },
+  { id: "tab-close", label: "Close Tab",          defaultKey: "Cmd-W",         section: "File" },
+  { id: "tab-prev",  label: "Previous Tab",       defaultKey: "Cmd-Alt-ArrowLeft",  section: "File" },
+  { id: "tab-next",  label: "Next Tab",           defaultKey: "Cmd-Alt-ArrowRight", section: "File" },
+  // Cmd-1..9: switch to tab by position. Cmd-9 always activates the last tab
+  // regardless of how many are open (FR-5.3). These do NOT conflict with
+  // "format-ordered-list" (Cmd-Shift-1) because the Shift key differs.
+  { id: "tab-1",     label: "Switch to Tab 1",    defaultKey: "Cmd-1",   section: "File" },
+  { id: "tab-2",     label: "Switch to Tab 2",    defaultKey: "Cmd-2",   section: "File" },
+  { id: "tab-3",     label: "Switch to Tab 3",    defaultKey: "Cmd-3",   section: "File" },
+  { id: "tab-4",     label: "Switch to Tab 4",    defaultKey: "Cmd-4",   section: "File" },
+  { id: "tab-5",     label: "Switch to Tab 5",    defaultKey: "Cmd-5",   section: "File" },
+  { id: "tab-6",     label: "Switch to Tab 6",    defaultKey: "Cmd-6",   section: "File" },
+  { id: "tab-7",     label: "Switch to Tab 7",    defaultKey: "Cmd-7",   section: "File" },
+  { id: "tab-8",     label: "Switch to Tab 8",    defaultKey: "Cmd-8",   section: "File" },
+  // Cmd-9 label says "last tab" to communicate the FR-5.3 special behaviour.
+  { id: "tab-9",     label: "Switch to Last Tab", defaultKey: "Cmd-9",   section: "File" },
   { id: "file-open",       label: "Open",                   defaultKey: "Cmd-O",           section: "File" },
   { id: "file-save",       label: "Save",                   defaultKey: "Cmd-S",           section: "File" },
   { id: "file-save-as",    label: "Save As",                defaultKey: "Cmd-Shift-S",     section: "File" },

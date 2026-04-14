@@ -1,334 +1,326 @@
 ---
-title: "Sidebar Panel System"
+title: "Multi-Document Tabs — Core Infrastructure"
 last-updated: "2026-04-13"
 review-cadence-days: 14
 status: active
 ---
 
-# Active Task: Sidebar Panel System
+# Active Task: Multi-Document Tabs — Core Infrastructure
 
 **Status: VALIDATED**
 **Date: 2026-04-13**
-**Supersedes:** Auto TOC Plugin Phase 1 task (complete; sidebar infrastructure is the prerequisite for all future panel-bearing plugins)
 
 ---
 
 ## Summary
 
-As a Markable user, I want a reusable sidebar infrastructure that any plugin can register a panel into — on either the left or right side of the editor — so that future panel-bearing plugins (TOC, Backlinks, etc.) gain a consistent home without each one hacking the DOM individually.
+As a Markable user, I want to open multiple Markdown files simultaneously as tabs within a single window, with a visual tab strip that supports three display modes (minimal dot-strip, regular filename bar, and vertical sidebar strip), so that I can switch between documents without opening multiple windows.
 
 ---
 
 ## Background and Constraints from Existing Architecture
 
-### Layout (locked)
+### DOM Layout (locked)
 
-The current DOM structure is:
+Current layout at the time this spec is written:
 
 ```
 <body>
   #titlebar
-  #app  (flex: column)
-    #editor
-    #statusbar
+  #tab-strip           ← NEW — inserted between titlebar and content-row
+  #content-row
+    #sidebar-left      ← hidden when vertical tabs mode is active
+    #editor-wrap
+      #editor
+      #status-bar
+    #sidebar-right
 ```
 
-The Auto TOC plugin currently wraps `#editor` in a `.toc-editor-row` flex row. That bespoke wrapper must be removed and replaced by the shared sidebar infrastructure.
+The `#tab-strip` element is owned entirely by `TabManager`. It is inserted into the DOM at application startup and is always present. It is never removed.
 
-### Plugin API (locked)
+### Single EditorView Constraint (locked)
 
-- All plugins are IIFE `.js` files that receive a `MarkablePluginAPI` in `onEnable` / `onDisable`.
-- The API is defined in `src/plugins/markable-plugin-api.ts`. New sidebar methods must be added to the `MarkablePluginAPI` interface and to `buildMarkablePluginAPI()`.
-- Every API addition must be mirrored in the `buildMarkablePluginAPI()` factory.
-- Plugins may not import app-internal modules directly (no `import` of `bridge`, `settings`, `main`, etc.).
-- The raw `EditorView` is not exposed through the API.
+There is exactly one `EditorView` instance for the lifetime of the application. Tab switching is implemented by calling `editorView.setState(savedState)` — it swaps the CM6 `EditorState` object (doc, selection, history, scroll). A new `EditorView` is never created per tab. This is architecturally locked.
 
-### Settings (locked)
+### Core Infrastructure (locked)
 
-- The authoritative settings type is `MarkableSettings` in `src/lib/settings.ts`.
-- Persistence uses `updateSettings()` (immediate write) or `updateSettingsDebounced()` (1 s window) which both ultimately call the Rust `save_settings` command.
-- The Rust backend does a raw-JSON pass-through, so adding optional TypeScript-only fields to `MarkableSettings` (without touching Rust structs) is safe and established precedent (`findWidget`, `keybindings`, `plugins`, etc.).
-- Sidebar state does not currently exist in `MarkableSettings` — it must be added as an optional field.
+Tabs are core application infrastructure, not a plugin. The feature:
 
-### Keyboard shortcuts (locked)
+- Does NOT use `UnifiedPlugin`, `MarkablePluginAPI`, `api.loadSettings()`, or `api.saveSettings()`.
+- Does NOT modify `PluginManager` or `MarkablePluginAPI`.
+- Lives in `src/editor/tab-manager.ts` (or `src/tabs/`), compiled as part of the main application bundle.
 
-- `Cmd-[` is already in use: it is the standard macOS "Decrease Indent" action. Confirm whether it is currently bound in `formatKeymap` before assigning sidebar shortcuts.
-- `Cmd-]` similarly. These may conflict; the Architect must audit `src/editor/format.ts` and `src/keybindings/`.
-- All keybindings must be registered via the existing keybindings system (`src/keybindings/`) so they appear in the Keyboard Shortcuts panel and can be customised by the user.
+### Settings Persistence (locked)
 
-### Auto TOC migration (locked)
+- Tab mode (`"minimal"` | `"regular"` | `"vertical"`) is stored as a field on `MarkableSettings` in `src/lib/settings.ts` (field name TBD by architecture phase, e.g. `tabMode`).
+- Session-restore data (open file paths, active tab index) is also stored in `MarkableSettings` / `settings.json`, not in a plugin settings file.
+- `MarkableSettings` IS modified by this feature (Rust struct + TypeScript type both updated).
 
-- The Auto TOC plugin (`src/plugins/auto-toc/auto-toc.plugin.ts`) must be migrated to use the new sidebar API.
-- Its current DOM-manipulation code (`enableLayout`, `disableLayout`, `.toc-editor-row`, `#toc-sidebar`, `TOC_CSS` for layout only) must be removed.
-- Only its pure logic (`scanHeadings`, `findActiveIndex`, `rebuildTOC`) and CM6 update listener must be retained; the panel content area is provided by the sidebar infrastructure.
-- Existing tests for `scanHeadings` and `findActiveIndex` must continue to pass without modification.
+### Sidebar Interaction (locked)
+
+When vertical tabs mode is active:
+
+- `TabManager` calls the existing `toggleSide("left", false)` from `SidebarManager` to hide `#sidebar-left`. It does not manipulate sidebar DOM directly.
+- On mode switch away from vertical, `TabManager` calls `toggleSide("left", true)` to restore the left sidebar.
+- The vertical strip is not a sidebar panel; it is a peer element in `#content-row`.
+
+### Renderer Architecture (locked)
+
+The three display modes are implemented as separate renderer classes/modules:
+
+- `MinimalTabBar` — dot/pill strip
+- `RegularTabBar` — standard filename bar with close buttons
+- `VerticalTabStrip` — vertical left-side strip
+
+A `TabManager` singleton coordinates all tab state and delegates rendering to the currently active renderer. Mode switches replace the active renderer instance; the `#tab-strip` element is reused.
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Left and Right Sidebar Slots
+### FR-1: Tab Data Model
 
-The layout must provide exactly two sidebar slots: `left` and `right`. Each slot can be independently shown or hidden. The editor (`#editor`) occupies the remaining horizontal space between the two visible sidebars. The status bar (`#statusbar`) always spans full width below all sidebars (it is a direct child of `#app`, not of the row container).
+Each tab record holds:
+- `id`: string (UUID, generated at tab creation time)
+- `filePath`: string | null (null for untitled documents)
+- `title`: string (filename without extension, or "Untitled" for null paths)
+- `isDirty`: boolean
+- `editorState`: CM6 `EditorState` snapshot (captured on tab-away, applied on tab-switch)
+- `scrollTop`: number (pixel offset, captured on tab-away, restored on tab-switch)
 
-### FR-2: Plugin Panel Registration API
+### FR-2: TabManager Initialization
 
-A plugin calls `api.registerSidebarPanel(descriptor)` in `onEnable` to register its panel, and `api.unregisterSidebarPanel(panelId)` in `onDisable` to remove it. The descriptor must include:
+`TabManager` is a singleton initialized at application startup (not on demand). It:
 
-- `id: string` — unique panel identifier (must be unique across all registered panels; kebab-case recommended).
-- `title: string` — short label displayed in the tab bar and accordion header.
-- `side: "left" | "right"` — which slot the panel requests.
-- `render(container: HTMLElement): void` — called by the infrastructure when the panel needs to be (re-)drawn into the provided container element. The plugin is responsible for all DOM inside `container`.
-- `destroy(container: HTMLElement): void` — called when the panel is unregistered or the plugin is disabled; the plugin must clean up all DOM and event listeners it placed inside `container`.
-- `defaultWidth?: number` — optional preferred width in pixels (default: 220 px if absent).
+- Inserts `#tab-strip` into the DOM between `#titlebar` and `#content-row`.
+- Reads `tabMode` and session-restore data from `MarkableSettings`.
+- Instantiates the appropriate renderer for the configured mode.
+- Restores the previous session (see FR-6).
 
-### FR-3: Tab Bar (Multiple Panels on the Same Side)
+The tab bar is always present and cannot be disabled.
 
-When two or more panels are registered to the same side, a horizontal tab bar appears at the top of that sidebar. Each tab shows the panel's `title`. Only one panel is active (visible) at a time per side. Clicking a tab makes it active. When only one panel is registered on a side, no tab bar is rendered — the panel header text (if shown via accordion) or side-indicator suffices.
+### FR-3: Display Modes
 
-### FR-4: Accordion Fold per Panel
+The application supports three display modes, selectable from the Settings panel:
 
-Each panel within a sidebar has a fold toggle button (chevron up/down icon). Clicking it collapses or expands the panel content area. When collapsed, only the panel header row (containing the title and fold button) is visible; the content area has `display: none`. This is distinct from hiding the entire sidebar: an accordion-collapsed panel still counts as "open" for sidebar visibility purposes.
+**FR-3.1 Minimal (default)**
+- A horizontal strip of dots/pills rendered in `#tab-strip`, positioned below `#titlebar`.
+- Inactive tabs are rendered as small gray circles.
+- The active tab is rendered as a wider pill shape (black fill in light theme, white fill in dark theme).
+- No text is visible in the strip itself.
+- Hovering a dot displays a tooltip showing the filename after an 800 ms delay.
+- Dirty state indicator: a small dot overlay on the circle (a second, smaller dot or color shift — exact visual TBD at design phase).
+- Dots are clickable to switch tabs.
 
-**Clarification on interaction with tabs:** In a tabbed sidebar (FR-3), the accordion toggle controls the content area of the currently active tab only. Switching to a different tab shows that tab's last-known accordion state.
+**FR-3.2 Regular**
+- A standard horizontal tab bar rendered in `#tab-strip`.
+- Each tab shows the filename and an "x" close button.
+- A "+" button sits at the right end of the tab bar.
+- The active tab is visually distinguished (accent underline or background).
+- Dirty state: a dot indicator on the tab label (e.g., a bullet before the filename).
 
-### FR-5: Show/Hide Sidebar via Keyboard Shortcuts
+**FR-3.3 Vertical**
+- A narrow vertical strip rendered on the LEFT side of the editor, replacing the left sidebar.
+- Filenames are displayed as rotated text (CSS `writing-mode: vertical-rl` or equivalent).
+- The active tab is visually distinguished with a background or accent color.
+- The strip is positioned as a flex sibling of `#editor-wrap`, occupying the same horizontal space `#sidebar-left` normally uses.
+- `#sidebar-left` is hidden by calling `toggleSide("left", false)` while this mode is active.
+- Dirty state: a dot indicator alongside the rotated filename.
 
-Two keyboard shortcuts must be registered through the existing keybindings system:
+### FR-4: Mode Switching
 
-- Toggle left sidebar visibility: default binding to be determined after conflict audit (see Unknowns), command-id `sidebar.toggleLeft`.
-- Toggle right sidebar visibility: default binding to be determined after conflict audit, command-id `sidebar.toggleRight`.
+- The current mode is stored in `MarkableSettings` under a field such as `tabMode` with values `"minimal"` | `"regular"` | `"vertical"`.
+- The Settings panel exposes a segmented control or radio selector for tab mode inside a "Tabs" section.
+- Changing the mode immediately re-renders the tab strip without requiring a restart.
+- When switching away from vertical mode, `toggleSide("left", true)` is called to restore the left sidebar.
 
-"Hidden" means the entire sidebar slot (including its tab bar if present) has `display: none`. The editor expands to fill the freed space. Toggling a hidden sidebar back to visible restores it to its previous width.
+### FR-5: Tab Operations
 
-### FR-6: Persist Sidebar State
+**FR-5.1 Open New Tab**
+- Triggered by `Cmd-T` or `Cmd-N` (both are equivalent — see OD-2) or the "+" button (regular mode only).
+- Creates a new untitled tab with an empty CM6 EditorState.
+- The new tab becomes the active tab.
 
-The following state must survive app restart. It is stored under a new optional field `sidebar` in `MarkableSettings`:
+**FR-5.2 Close Tab**
+- Triggered by `Cmd-W` or the "x" button on a tab (regular and vertical modes).
+- If the tab is dirty, a confirmation dialog is shown before closing ("You have unsaved changes. Close anyway?").
+- If only one tab remains, closing it closes the window (same behavior as current single-document close).
+- After closing, the adjacent tab (preferring the tab to the right, falling back to the left) becomes active.
 
-- Per side (`left`, `right`): open/closed (boolean).
-- Per side: active tab panel id (string, or null if no panels registered).
-- Per side: accordion expanded/collapsed state per registered panel id (Record<string, boolean>).
-- Per side: width in pixels (number).
+**FR-5.3 Switch Tab by Index**
+- `Cmd-1` through `Cmd-9` activate the tab at that 1-based index.
+- `Cmd-9` always activates the last tab (matching macOS/browser convention).
+- If fewer tabs exist than the index, the shortcut is a no-op.
 
-On cold start, if `sidebar` is absent from settings (migration case — all existing installs), both sidebars default to closed. The active tab defaults to the first registered panel on each side. Accordion state defaults to expanded.
+**FR-5.4 Tab-Switch State Swap**
+- On leaving a tab: capture current `EditorState` via `editorView.state` and scroll position via `editorView.scrollDOM.scrollTop`. Store both in the tab record.
+- On entering a tab: call `editorView.setState(tab.editorState)`, then set `editorView.scrollDOM.scrollTop = tab.scrollTop`.
+- The live preview file path is updated to `tab.filePath` (calls the existing `setLivePreviewFilePath()`).
+- The window title bar is updated to reflect the incoming tab's filename.
 
-### FR-7: Default Side and Width
+**FR-5.5 Open File into Tab**
+- When a file is opened via `Cmd-O` or "Open Recent", it opens in a new tab rather than replacing the current document.
+- If the file is already open in an existing tab, that tab is activated (no duplicate).
 
-Each panel descriptor declares a preferred `side`. The sidebar infrastructure honours this preference on first registration. If the user later drags or otherwise moves a panel (out of scope for this release — see NFR-5), the persisted side is used instead. For this release, panels always appear on their declared side.
+**FR-5.6 Save**
+- `Cmd-S` saves the currently active tab's document.
+- If the active tab is untitled, `Cmd-S` triggers a Save As dialog.
+- `Cmd-Shift-S` always triggers Save As (assigns or reassigns a file path to the current tab).
+- After a successful save, the tab's `isDirty` flag is cleared and the dirty indicator is removed.
 
-The default sidebar width is 220 px if `defaultWidth` is not specified in the descriptor and no persisted width exists.
+### FR-6: Session Restore
 
-### FR-8: Auto TOC Migration
+**FR-6.1** On application startup, `TabManager` reads session-restore data from `MarkableSettings`.
 
-The Auto TOC plugin's `onEnable` must call `api.registerSidebarPanel(...)` with `side: "right"`, providing a `render` callback that creates the `.toc-list` DOM and starts the CM6 update listener. The `destroy` callback must cancel any pending debounce timer, remove the CM6 extension (via `api.removeExtensions()`), and clear internal state. All current `.toc-editor-row` and bespoke layout code must be removed from the plugin.
+**FR-6.2** The saved session data stored in `MarkableSettings` includes:
+- `openFiles`: array of `{ filePath: string; scrollTop: number }` for all tabs that had a non-null `filePath` at last session end.
+- `activeTabIndex`: number — index of the active tab from the last session.
 
-### FR-9: No-Panel State
+**FR-6.3** Untitled (unsaved) tabs are NOT included in session restore — they are silently dropped.
 
-When no panels are registered to a side, that sidebar slot does not exist in the DOM. Keyboard shortcuts for that side are no-ops (they do not throw errors).
+**FR-6.4** If a file in `openFiles` no longer exists on disk at restore time, that tab is skipped silently (no error dialog). The remaining files are restored.
 
-### FR-10: Plugin Enable/Disable During Sidebar Open
+**FR-6.5** If `openFiles` is empty or absent after filtering, a single empty untitled tab is created.
 
-If a plugin is disabled while its sidebar panel is visible, the infrastructure calls `descriptor.destroy(container)` and removes the panel's tab (if in a tabbed sidebar). If that panel was the active tab, the sidebar switches focus to the next available tab. If it was the last panel on that side, the sidebar hides itself. If a plugin is re-enabled, its panel is re-registered and the sidebar shows it again.
+**FR-6.6** The restored `activeTabIndex` is clamped to the actual number of restored tabs. If clamping reduces it to 0 and no tabs exist, one untitled tab is created.
 
-### FR-11: Sidebar Width
+**FR-6.7** Session data is saved to `MarkableSettings` when: (a) a tab is closed, (b) a tab's file path changes (save-as), (c) the active tab changes, or (d) the app window receives the Tauri `close-requested` event.
 
-The sidebar width is user-resizable via a drag handle on the inner edge of each sidebar (right edge of the left sidebar; left edge of the right sidebar). The width is clamped between 150 px and 600 px. Width changes are persisted using `updateSettings()`.
+### FR-7: Dirty State Tracking
 
-### FR-12: Theme Compatibility
+- `TabManager` subscribes to CM6 document change transactions via an `EditorView` update listener (registered via `api.addExtensions()` or equivalent direct CM6 integration at startup).
+- On each transaction that modifies the document, the active tab's `isDirty` is set to `true`.
+- On successful save, the active tab's `isDirty` is set to `false`.
+- The tab strip UI re-renders the active tab's indicator immediately on dirty state change.
+- The window title bar dirty indicator (bullet or dot prefix) is updated to match the active tab's `isDirty` state, consistent with existing single-document behavior.
 
-All sidebar chrome (tab bar, accordion header, drag handle, borders) must use CSS custom properties (`var(--bg-titlebar)`, `var(--border-color)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--link-color)`, `var(--selection-bg)`) so that it automatically adopts hot-swapped themes. Panels themselves are responsible for their own internal CSS using the same variables.
+### FR-8: Keyboard Shortcuts Summary
 
-### FR-13: Sidebar Infrastructure Module Location
+| Action | Shortcut |
+|---|---|
+| New tab | Cmd-T |
+| New tab (equivalent) | Cmd-N |
+| Close tab | Cmd-W |
+| Switch to tab 1–8 | Cmd-1 through Cmd-8 |
+| Switch to last tab | Cmd-9 |
 
-The sidebar infrastructure must live in a dedicated module `src/sidebar/` (exact structure to be decided by the Architect), not inside `src/plugins/`. The `MarkablePluginAPI` calls `registerSidebarPanel` / `unregisterSidebarPanel` which delegate to the sidebar module, following the same pattern as `ensureStatusBar` / `hideStatusBarIfUnused` delegate to `src/plugins/status-bar/status-bar.ts`.
+All shortcuts are registered via the existing `resolveAction()` / keybindings system.
+
+### FR-9: Soft Tab Count Warning
+
+When the number of open tabs exceeds the soft warning threshold (candidate: 30, pending OD-4 confirmation), a visual indicator is shown in the tab strip. The exact form of the indicator (e.g., a small badge, a color shift on the "+" button) is deferred to the architecture phase. No hard cap is enforced; the user can continue opening tabs beyond the threshold.
 
 ---
 
 ## Non-Functional Requirements
 
-### NFR-1: Zero Layout Flash on Plugin Toggle
+### NFR-1: Performance
+- Tab switching must complete within 100 ms as perceived by the user (no visible flash or layout reflow visible to the naked eye).
+- Session restore must not block the window-show sequence — file reads are async and the window shows as soon as the first tab is ready.
 
-Enabling or disabling a plugin with a sidebar panel must not produce a visible flash or reflow of the editor content beyond the deliberate sidebar slide (or snap) into/out of view. The Auto TOC migration must not be perceptibly slower than its current direct DOM approach.
+### NFR-2: Memory
+- Closed tabs must release their CM6 `EditorState` reference from memory immediately.
+- `TabManager` must not accumulate stale EditorState snapshots for tabs that have been closed.
 
-### NFR-2: No Leaked DOM After Disable
+### NFR-3: Accessibility
+- Tab elements must have `role="tab"` and `aria-selected` attributes.
+- The tab strip container must have `role="tablist"`.
+- Tooltips (minimal mode) must be attached via `title` attribute or ARIA `aria-describedby` with a visually positioned tooltip element.
 
-After `api.unregisterSidebarPanel()` completes, no DOM nodes introduced by that panel must remain in the document. The sidebar infrastructure must guarantee container cleanup by calling `descriptor.destroy(container)` before removing the container.
+### NFR-4: Theme Compatibility
+- The tab strip must read active CSS custom properties (`--settings-base-font-size`, theme color variables) so it respects both light and dark themes and custom user themes.
+- No hardcoded color values — all colors must reference CSS variables or theme-provided classes.
 
-### NFR-3: Toggle Cycle Stability
-
-A plugin that registers a panel, then unregisters it, then registers it again must produce identical visual and functional results to the first registration. The infrastructure must not accumulate duplicate DOM elements or duplicate event listeners across toggle cycles.
-
-### NFR-4: Settings Write Efficiency
-
-Accordion state changes must be persisted using `updateSettings()` immediately (user has expressed an intent). Width changes during drag must use `updateSettingsDebounced()` (high-frequency event) with the existing 1 s debounce. Open/closed toggle must use `updateSettings()` immediately.
-
-### NFR-5: Panel Repositioning Out of Scope
-
-Moving panels from one side to the other at runtime is deferred to a future release. The `side` field in the descriptor is fixed for the lifetime of the plugin's registration.
-
-### NFR-6: Vitest Test Coverage
-
-The sidebar infrastructure core logic (panel registration, tab management, accordion state, settings serialisation) must have unit test coverage in `tests/`. Auto TOC migration tests (currently passing) must continue to pass without modification.
-
-### NFR-7: No Hardcoded Pixel Values Outside CSS Custom Properties
-
-Sidebar chrome sizing (border width, header height, chevron button dimensions) must be defined in CSS, not hardcoded in TypeScript, to allow theme overrides.
+### NFR-5: No DOM Leaks
+- All DOM nodes created by `TabManager` at startup persist for the application lifetime (the tab bar is always present).
+- All event listeners attached to `document` or `window` by `TabManager` must be removable (stored as named references) for future testability, even if teardown is not a runtime requirement.
 
 ---
 
-## Settings Schema Addition
+## Architecture Decisions
 
-The following optional field is added to `MarkableSettings` in `src/lib/settings.ts`. The Rust backend's raw-JSON pass-through makes this safe without touching Rust code.
-
-```typescript
-export interface SidebarPanelState {
-  accordionExpanded: boolean;
-}
-
-export interface SidebarSlotState {
-  open: boolean;
-  activeTabId: string | null;
-  width: number;
-  panels: Record<string, SidebarPanelState>;
-}
-
-export interface SidebarSettings {
-  left: SidebarSlotState;
-  right: SidebarSlotState;
-}
-
-// Added to MarkableSettings:
-sidebar?: SidebarSettings;
-```
-
-Default (applied when `sidebar` is absent from the loaded settings file):
-
-```typescript
-const DEFAULT_SIDEBAR_SLOT: SidebarSlotState = {
-  open: false,
-  activeTabId: null,
-  width: 220,
-  panels: {},
-};
-```
+| # | Decision | Status | Rationale |
+|---|---|---|---|
+| AD-1 | Single EditorView; tab switching uses `setState()` | Locked | Avoids multiple view initialization costs; CM6 EditorState is lightweight to snapshot |
+| AD-2 | Session data stored in `MarkableSettings` / `settings.json` | Locked | Tabs are core infrastructure; plugin-scoped persistence is not appropriate |
+| AD-3 | `#tab-strip` is a permanent DOM element inserted between `#titlebar` and `#content-row` | Locked | Always-present core UI; no lifecycle management needed |
+| AD-4 | Vertical mode calls `toggleSide("left", false/true)` on `SidebarManager` | Locked | Reuses existing sidebar API; avoids direct DOM coupling |
+| AD-5 | `TabManager` does not interact with `PluginManager` or `MarkablePluginAPI` | Locked | Tabs are not a plugin; no plugin API changes required |
+| AD-6 | Dirty state tracked via CM6 update listener extension registered at startup | Locked | Consistent with how other observers watch editor changes; no additional Tauri bridge calls needed |
+| AD-7 | `Cmd-T` and `Cmd-N` are equivalent; both open a new blank untitled tab | Locked (OD-2 resolved) | Preserves existing muscle memory for `Cmd-N`; no suppression or redirect logic needed |
+| AD-8 | Three renderer classes (`MinimalTabBar`, `RegularTabBar`, `VerticalTabStrip`) delegated from `TabManager` singleton | Locked | Separates rendering concerns; mode switches swap the active renderer without touching state |
 
 ---
 
-## API Surface Addition (MarkablePluginAPI)
+## Out of Scope (Deferred)
 
-The following two methods must be added to the `MarkablePluginAPI` interface in `src/plugins/markable-plugin-api.ts` and implemented in `buildMarkablePluginAPI()`:
-
-```typescript
-/**
- * Register a sidebar panel for this plugin. Call in onEnable.
- * The panel appears in the sidebar slot specified by descriptor.side.
- * Idempotent: calling again with the same id replaces the previous registration.
- */
-registerSidebarPanel(descriptor: SidebarPanelDescriptor): void;
-
-/**
- * Unregister the sidebar panel with the given id. Call in onDisable.
- * Triggers descriptor.destroy(container) before removing the DOM.
- * No-op if panelId was not registered by this plugin.
- */
-unregisterSidebarPanel(panelId: string): void;
-```
-
-The `SidebarPanelDescriptor` type must be exported from the sidebar module and re-exported from `src/plugins/markable-plugin-api.ts` for plugin author convenience.
+- **Drag-to-reorder tabs** — deferred; requires pointer drag logic and state reordering.
+- **Tab overflow / scrolling tab bar** — if more tabs are open than the bar can display, overflow behavior (scroll arrows, dropdown) is deferred; horizontal overflow hidden with CSS `overflow: hidden` for now.
+- **Detach tab to new window** — multi-window support is out of scope for this feature.
+- **Tab groups / colored tabs** — deferred.
+- **Pin tab** — deferred.
+- **Right-click context menu on tabs** — deferred.
+- **Synced scroll position for vertical mode resize** — the vertical strip width is fixed; drag-to-resize is deferred.
+- **File-watching / external change detection** — out of scope; user sees stale content until they close and reopen the file.
+- **Auto-save** — out of scope for this feature.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1: No panels registered on either side.**
-Both sidebar slots are absent from the DOM. Keyboard shortcuts `sidebar.toggleLeft` and `sidebar.toggleRight` are both no-ops. No visual chrome is rendered. The editor occupies full width. No errors thrown.
-
-**EC-2: Single panel registered on one side only.**
-No tab bar is rendered for that side (single-panel rule, FR-3). The sidebar is shown immediately when the plugin enables. The other side remains absent from the DOM.
-
-**EC-3: Multiple panels registered to the same side (tab scenario).**
-A tab bar appears. The first registered panel is active. Switching tabs must update `activeTabId` in settings and call `render` on the newly active panel's container if it has not yet been rendered. The previously active panel's container remains in the DOM but is hidden (`display: none`) to avoid destroying state unnecessarily.
-
-**EC-4: Active tab panel is unregistered while visible.**
-The infrastructure switches to the next available tab (by registration order). If no other panels exist on that side, the sidebar hides itself and `open` is set to `false` in settings.
-
-**EC-5: Last panel on a side is unregistered.**
-The entire sidebar slot is removed from the DOM. The `#editor` expands to fill the space. Persisted `open` state for that side is set to `false`. On next app launch with no panels registered, sidebar defaults to closed.
-
-**EC-6: Accordion collapsed, then panel unregistered.**
-`descriptor.destroy(container)` is called regardless of accordion state. The infrastructure must not skip destroy because the content area was hidden.
-
-**EC-7: Plugin disabled while accordion is collapsed.**
-Same as EC-6. Destroy must fire. The accordion state (collapsed) is preserved in settings so that if the plugin is re-enabled, the panel re-opens in collapsed state.
-
-**EC-8: Keyboard shortcut fires when target sidebar has no panels registered.**
-No-op. No error. No DOM mutation.
-
-**EC-9: Keyboard shortcut fires when target sidebar is already in the requested state.**
-Toggle is idempotent: toggling an open sidebar with `toggleRight` closes it; toggling a closed sidebar opens it. No error if called redundantly (e.g. two rapid keypresses).
-
-**EC-10: Settings file predates sidebar field (migration).**
-`MarkableSettings.sidebar` is absent. Both slots default to closed, width 220 px, no active tab, all panels expanded. This is the common case for all existing installs on first upgrade.
-
-**EC-11: `sidebar.open` is `true` in persisted settings but the plugin that owned the panel is disabled on launch.**
-On launch, plugins are restored before sidebar state is applied. If no panels are registered to a slot by the time sidebar restoration runs, the slot is not shown regardless of persisted `open: true`. No error.
-
-**EC-12: Two plugins attempt to register panels with the same `id`.**
-The second registration must log a console warning and be rejected (not silently overwrite). The first registration remains active.
-
-**EC-13: `render` callback throws during panel creation.**
-The infrastructure catches the error, logs it to the console with the panel id, and renders an error placeholder ("Panel failed to load") inside the container instead of propagating the exception.
-
-**EC-14: `destroy` callback throws during teardown.**
-The infrastructure catches the error, logs it, and proceeds with DOM removal regardless. A throwing `destroy` must never prevent the panel from being removed from the DOM.
-
-**EC-15: Sidebar resize drag below minimum width (150 px).**
-Drag is clamped at 150 px. The width CSS is updated in real time during drag but settings are only written on drag end (mouseup / pointerup). The editor does not reflow below the minimum sidebar width; it reaches its own minimum usable width constraint (out of scope for this feature).
-
-**EC-16: Sidebar resize drag above maximum width (600 px).**
-Clamped at 600 px. Same behaviour as EC-15.
-
-**EC-17: App closes during a debounced sidebar width save.**
-The debounce is 1 s. If the window closes before the timer fires, the last persisted width is the one from the previous completed save. This is acceptable (consistent with existing behaviour for window move/resize).
-
-**EC-18: `registerSidebarPanel` called from `onDisable` (programming error).**
-The infrastructure logs a warning and no-ops. Panels should only be registered from `onEnable`.
-
-**EC-19: `unregisterSidebarPanel` called with an id not owned by the calling plugin.**
-No-op. The infrastructure does not allow one plugin to unregister another plugin's panel. Ownership is tracked by `pluginId` (same closure-capture pattern as `addExtensions`/`removeExtensions`).
-
-**EC-20: Auto TOC plugin toggled off and on rapidly (toggle cycle).**
-The sidebar infrastructure must not produce duplicate tab entries, duplicate DOM containers, or duplicate event listeners after a rapid disable/re-enable cycle (leverages NFR-3).
-
-**EC-21: Auto TOC plugin enabled, then sidebar hidden via keyboard shortcut.**
-The CM6 update listener inside the panel continues to run (it is still registered). On sidebar show, the TOC content is already current. No stale-data flash.
-
-**EC-22: Auto TOC panel render called when `window.__MARKABLE_EDITOR_VIEW__` is not yet set.**
-The panel renders the empty state (no headings). The CM6 update listener populates it on the first transaction, consistent with current behaviour.
-
-**EC-23: Sidebar open state restored before any panels are registered.**
-The sidebar infrastructure must defer showing the sidebar until at least one panel has been registered to the relevant side, even if persisted state says `open: true`.
+| # | Scenario | Expected Behavior |
+|---|---|---|
+| EC-1 | App launches and all previously open files have been deleted from disk | All missing files are silently skipped. If no files survive restore, one untitled tab is created. No error dialog. |
+| EC-2 | User closes the last tab | Window close is triggered (same as existing single-document Cmd-W). If the last tab is dirty, the existing unsaved-changes dialog fires first. |
+| EC-3 | User presses Cmd-W with one tab remaining and that tab is dirty | Unsaved-changes dialog shown. On "Close Anyway", window closes. On "Cancel", tab remains open. |
+| EC-4 | User opens a file via Cmd-O that is already open in another tab | The existing tab for that file is activated; no duplicate tab is created. A duplicate-prevention check runs by comparing resolved file paths. |
+| EC-5 | User switches tabs while a CM6 transaction is in flight (e.g., autocomplete open) | The in-flight transaction is committed to the current tab's EditorState snapshot before the state swap. `editorView.state` always returns the post-transaction state. |
+| EC-6 | Session restore reads a file path that exists but the user has no read permission | `readFile()` Tauri command returns an error; that tab is skipped silently. No error dialog. |
+| EC-7 | `MarkableSettings` is corrupt or unparseable on restore | Settings load returns default values; TabManager starts with one untitled tab and minimal mode. No crash. |
+| EC-8 | `Cmd-1` through `Cmd-9` pressed when fewer tabs exist than the index | Shortcut is a no-op. No error. |
+| EC-9 | `Cmd-9` pressed when exactly one tab is open | Activates tab index 0 (last tab convention: always the last, even if that is also the first). |
+| EC-10 | Tab mode switched from vertical to minimal/regular | `toggleSide("left", true)` is called to restore the left sidebar to its managed state. |
+| EC-11 | Tab mode switched to vertical while a left sidebar panel is in mid-render or mid-animation | `toggleSide("left", false)` is called synchronously after the mode setting is persisted. Any in-progress sidebar animation is cut short. Acceptable — mode switches are explicit user actions. |
+| EC-12 | Save As is triggered on an untitled tab; user cancels the dialog | The tab remains untitled and dirty. No file path is assigned. No crash. |
+| EC-13 | Two tabs have the same file open (could occur if duplicate detection is bypassed via a race) | The second open attempt activates the existing tab. Files opened via OS drag-and-drop or "Open Recent" must also pass through the duplicate check. |
+| EC-14 | User drags a file onto the editor window while multiple tabs are open | The file opens in a new tab (not replacing the current tab). Duplicate check applies. |
+| EC-15 | App is force-quit (SIGKILL) between tab operations | Session data from the last successful settings save is restored. Work since the last save is lost. Acceptable — no auto-save is in scope. |
+| EC-16 | `Cmd-T` or `Cmd-N` is pressed when vertical tabs mode is active | New untitled tab is created and appended to the vertical strip. |
+| EC-17 | Session restore produces more tabs than the UI can reasonably display (e.g., 20+ tabs or beyond soft-warning threshold) | All tabs are restored. If count exceeds soft-warning threshold, the warning indicator is shown. No cap is enforced. |
+| EC-18 | The Settings panel is opened before `TabManager` has fully initialized (async startup) | The settings panel must not crash; the tab mode selector reads the default mode from `MarkableSettings` or defaults to `"minimal"`. |
+| EC-19 | `Cmd-N` is pressed (pre-existing shortcut) | Behaves identically to `Cmd-T`: opens a new blank untitled tab. No suppression, no redirect logic — both bindings map to the same action in `resolveAction()`. |
+| EC-20 | The active tab's file is modified externally (outside of Markable) while the tab is open | Out of scope. User sees stale content until they close and reopen the file. |
 
 ---
 
-## Out of Scope (this release)
+## Open Decisions
 
-- Moving a panel from one side to the other at runtime (NFR-5).
-- Detachable/floating sidebar panels.
-- Stacked (non-tabbed) panel layout (all panels visible simultaneously on the same side).
-- Per-panel resize handles (only the sidebar slot as a whole is resizable).
-- Nested accordions.
-- Sidebar panels contributed by user plugins (infrastructure supports it technically, but no test user-plugin is required).
+| # | Question | Status | Default Assumption |
+|---|---|---|---|
+| OD-1 | Is Tabs core infrastructure or a plugin? | **RESOLVED** | Core infrastructure. No plugin API involved. Tab bar is always present and cannot be disabled. |
+| OD-2 | Does `Cmd-N` open a new tab or is it suppressed in favor of `Cmd-T`? | **RESOLVED** | `Cmd-N` and `Cmd-T` are fully equivalent. Both open a new blank untitled tab. No suppression or redirect needed. |
+| OD-3 | On fresh install (no session data), does the app open to a single untitled tab or attempt to reopen the last used file from `recentFiles`? | **RESOLVED** | Single untitled tab. The `recentFiles` list is not consumed by tab restore on first run. |
+| OD-4 | What is the exact tab count at which the soft warning indicator appears? | **OPEN** | Candidate: 30 tabs. Pending user confirmation. Architect must flag this as a configurable constant. |
 
 ---
 
-## Files to Create / Modify
+## Files That Will Be Created or Modified
 
-| File | Action |
+| File | Change |
 |---|---|
-| `src/sidebar/` | Create new module (structure TBD by Architect) |
-| `src/plugins/markable-plugin-api.ts` | Add `registerSidebarPanel`, `unregisterSidebarPanel`; re-export `SidebarPanelDescriptor` |
-| `src/lib/settings.ts` | Add `SidebarSettings`, `SidebarSlotState`, `SidebarPanelState` types; add `sidebar?` field to `MarkableSettings`; add default in `DEFAULT_SETTINGS` |
-| `src/plugins/auto-toc/auto-toc.plugin.ts` | Migrate to `api.registerSidebarPanel`; remove `enableLayout`, `disableLayout`, `.toc-editor-row`, layout CSS |
-| `src/keybindings/` | Register `sidebar.toggleLeft` and `sidebar.toggleRight` commands |
-| `tests/` | Add sidebar infrastructure unit tests; verify Auto TOC tests still pass |
+| `src/editor/tab-manager.ts` (or `src/tabs/tab-manager.ts`) | New — `TabManager` singleton; tab state management; renderer delegation |
+| `src/tabs/renderers/minimal-tab-bar.ts` | New — `MinimalTabBar` renderer |
+| `src/tabs/renderers/regular-tab-bar.ts` | New — `RegularTabBar` renderer |
+| `src/tabs/renderers/vertical-tab-strip.ts` | New — `VerticalTabStrip` renderer |
+| `src/lib/settings.ts` | Modified — add `tabMode`, `openFiles`, `activeTabIndex` fields to `MarkableSettings` |
+| `src-tauri/src/` (Rust settings struct) | Modified — add corresponding fields to the Rust `MarkableSettings` struct |
+| `src/main.ts` | Modified — initialize `TabManager` at startup; wire `Cmd-N` to same action as `Cmd-T` |
+| `src/keybindings/keybindings-panel.ts` | Possibly modified — `resolveAction()` updated for new tab actions |
+| `src/plugins/markable-plugin-api.ts` | No changes required |
+| `src/plugins/index.ts` | No changes required |
+
+---
+
+## Reviewer Checklist (Edge Cases That Must Have Test Coverage)
+
+All 20 edge cases in the Edge Case Inventory (EC-1 through EC-20) are the mandatory test checklist for the Code Reviewer phase. No PR may be approved until each EC item has either a passing automated test or a documented manual verification note explaining why automation is not feasible.

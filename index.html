@@ -14,6 +14,14 @@
       <span id="titlebar-title" data-tauri-drag-region>Untitled</span>
     </div>
 
+    <!--
+      Tab strip: permanent element below the title bar. TabManager locates this
+      via document.getElementById("tab-strip") in init(). It is never removed
+      from the DOM; vertical mode hides it via CSS (display:none) and the
+      VerticalTabStrip renderer inserts its own element into #app-row instead.
+    -->
+    <div id="tab-strip"></div>
+
     <!-- Main application container -->
     <div id="app">
       <!-- Editor container: CodeMirror will mount here -->

@@ -18,8 +18,8 @@ import "./lib/cm-globals";
 import { EditorView } from "@codemirror/view";
 import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
-import { previewCompartment, previewExtensions, editableCompartment } from "./editor/extensions";
-import { setLivePreviewFilePath, setViewMode } from "./editor/live-preview";
+import { previewCompartment, previewExtensions } from "./editor/extensions";
+import { setViewMode } from "./editor/live-preview";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import {
@@ -45,11 +45,8 @@ import {
   deleteLine,
 } from "./editor/format";
 import {
-  readFile,
-  writeFile,
   readResourceFile,
   openFileDialog,
-  saveFileDialog,
   updateRecentFilesMenu,
   listThemes,
   readThemeCss,
@@ -65,12 +62,11 @@ import {
   updateSettings,
   getCurrentSettings,
   saveSettingsDebounced,
-  addRecentFile,
   removeRecentFile,
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
-import { createKeybindingsPanel, toggleKeybindingsPanel, eventMatchesKey, resolveAction } from "./keybindings/keybindings-panel";
+import { createKeybindingsPanel, toggleKeybindingsPanel, resolveAction } from "./keybindings/keybindings-panel";
 import {
   createPluginsPanel,
   togglePluginsPanel,
@@ -83,6 +79,10 @@ import {
   restoreSidebarFromSettings,
   toggleSidebarSide,
 } from "./sidebar";
+// tabManager is imported here so TabManager.init() can be called after the
+// editor and sidebar are both ready. The singleton is used directly; it is
+// not re-exported from main.ts.
+import { tabManager } from "./tabs";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -93,40 +93,14 @@ import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import "./styles.css";
 
-// Global editor instance and current file path
+// Global editor instance. currentFilePath, isDirty, isReadOnly, setDirty(),
+// setCurrentFile(), and updateTitleBar() were all removed in step_07 — their
+// responsibilities now belong to TabManager (_updateTitleBar, markActiveTabDirty,
+// getActiveFilePath, openFileInTab, saveActiveTab, saveActiveTabAs).
 let editor: ReturnType<typeof createEditor> = null;
-let currentFilePath: string | null = null;
 let previewEnabled = true;
-/** Set to true when a read-only help file is loaded; cleared on any editable file open. */
-let isReadOnly = false;
 /** Floating find/replace widget. Initialized in initApp() after editor is ready. */
 let findWidget: FindWidget | null = null;
-/** True when the document has unsaved changes. */
-let isDirty = false;
-
-function getFileName(path: string): string {
-  return path.split("/").pop() || path;
-}
-
-function updateTitleBar(override?: string) {
-  const titleEl = document.getElementById("titlebar-title");
-  const baseName = override ?? (currentFilePath ? getFileName(currentFilePath) : "Untitled");
-  if (titleEl) {
-    titleEl.textContent = isDirty ? `${baseName} •` : baseName;
-  }
-}
-
-function setDirty(dirty: boolean) {
-  if (isDirty === dirty) return;
-  isDirty = dirty;
-  updateTitleBar();
-}
-
-function setCurrentFile(path: string | null) {
-  currentFilePath = path;
-  setLivePreviewFilePath(path);
-  updateTitleBar();
-}
 
 async function refreshRecentFilesMenu(): Promise<void> {
   await updateRecentFilesMenu(getCurrentSettings().recentFiles);
@@ -301,199 +275,109 @@ function togglePreview() {
   console.log(`Preview mode: ${previewEnabled ? "ON" : "OFF"}`);
 }
 
-function newFile() {
-  if (editor) {
-    // FR-11.1: Close the FindWidget and clear the CM6 search state before
-    // replacing the document. A `changes`-only transaction does NOT reset
-    // StateField values in CM6, so stale highlights from the previous file
-    // would remain visible unless we clear explicitly.
-    findWidget?.close();
-    findWidget?.clearQuery();
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: "" },
-      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
-    });
-  }
-  setCurrentFile(null);
-  isReadOnly = false;
-  setDirty(false);
-}
-
 /**
- * Open a bundled help resource file read-only inside the editor.
- * @param filename  Bare filename, e.g. "quickstart.md"
- * @param title     Title bar label, e.g. "Quickstart"
+ * Open a bundled help resource file as a read-only tab.
+ *
+ * Help files are synthetic content tabs (no filePath, not persisted in
+ * session) that display the resource file content with editing disabled.
+ * This replaces the legacy openHelpFile() which mutated the single shared
+ * document; the tab-aware version opens the content in a dedicated tab
+ * so the user's current document is not displaced (step_07 spec).
+ *
+ * @param filename  Bare resource filename, e.g. "quickstart.md"
+ * @param title     Display title for the tab label, e.g. "Quickstart"
  */
-async function openHelpFile(filename: string, title: string) {
-  if (!editor) return;
+async function openHelpFileInTab(filename: string, title: string): Promise<void> {
   try {
     const content = await readResourceFile(filename);
-    findWidget?.close();
-    findWidget?.clearQuery();
-    isReadOnly = true;
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: content },
-      effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
-    });
-    setCurrentFile(null);
-    setDirty(false);
-    updateTitleBar(title);
+    // openContentTab() creates the tab, calls setState(), and applies the
+    // read-only compartment reconfigure in sequence.
+    tabManager.openContentTab(title, content, { readOnly: true });
   } catch (e) {
-    console.error("openHelpFile error:", e);
+    console.error("openHelpFileInTab error:", e);
     alert(`Could not open help file: ${filename}\n\n${String(e)}`);
   }
 }
 
-async function openFile() {
-  console.log("Open file dialog triggered");
-
+/**
+ * Show a native open-file dialog and open the selected file in a new tab.
+ *
+ * Delegates the actual file read, duplicate detection, live-preview wiring,
+ * recent-files registration, and state swap to tabManager.openFileInTab().
+ * This function is responsible only for showing the dialog and refreshing
+ * the Open Recent menu after the tab is created.
+ */
+async function openFile(): Promise<void> {
   const result = await openFileDialog();
-
-  if (result.cancelled) {
-    console.log("User cancelled file open dialog");
-    return;
-  }
-
-  const path = result.path;
-  console.log(`Opening file: ${path}`);
-
-  // Read file contents
-  const readResult = await readFile(path);
-
-  if (!readResult.ok) {
-    alert(`Error opening file: ${readResult.error.message}`);
-    return;
-  }
-
-  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
-  isReadOnly = false;
-  setCurrentFile(path);
-
-  // Load into editor
-  if (editor) {
-    const content = readResult.value;
-    findWidget?.close();
-    findWidget?.clearQuery();
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: content },
-      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
-    });
-    editor.dispatch({ effects: setViewMode.of(true) });
-    editor.contentDOM.blur();
-  }
-  setDirty(false);
-  await addRecentFile(path);
+  if (result.cancelled) return;
+  await tabManager.openFileInTab(result.path);
   await refreshRecentFilesMenu();
-
-  console.log(`File loaded: ${path}`);
 }
 
 /**
- * Load a file by absolute path (no dialog).
- * Used when Rust opens the file dialog itself (hidden-window case)
- * and sends the selected path via the "open-file-path" event.
+ * Open a file by absolute path without showing a dialog.
+ *
+ * Used by:
+ *   - The "open-file-path" menu event (Rust opens the dialog itself in the
+ *     hidden-window case and sends the selected path via IPC).
+ *   - The drag-and-drop handler (paths are provided by Tauri's onDragDropEvent).
+ *
+ * @param path  Absolute path to the file to open.
  */
 async function openFileByPath(path: string): Promise<void> {
-  const readResult = await readFile(path);
-  if (!readResult.ok) {
-    alert(`Error opening file: ${readResult.error.message}`);
-    return;
-  }
-
-  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
-  isReadOnly = false;
-  setCurrentFile(path);
-
-  if (editor) {
-    findWidget?.close();
-    findWidget?.clearQuery();
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: readResult.value },
-      effects: editableCompartment.reconfigure(EditorView.editable.of(true)),
-    });
-    // Enter view mode — all lines render in preview until the user clicks
-    editor.dispatch({ effects: setViewMode.of(true) });
-    editor.contentDOM.blur();
-  }
-
-  setDirty(false);
-  await addRecentFile(path);
-  await refreshRecentFilesMenu();
-  console.log(`File loaded (by path): ${path}`);
-}
-
-/**
- * Save editor contents to file
- */
-async function saveFile() {
-  if (isReadOnly) return;
-  // If no current file, use save-as dialog
-  if (!currentFilePath) {
-    return saveFileAs();
-  }
-
-  console.log(`Saving file: ${currentFilePath}`);
-
-  // Get editor content
-  if (!editor) {
-    alert("Editor not ready");
-    return;
-  }
-
-  const content = editor.state.doc.toString();
-
-  // Write to file
-  const result = await writeFile(currentFilePath, content);
-
-  if (!result.ok) {
-    alert(`Error saving file: ${result.error.message}`);
-    return;
-  }
-
-  console.log(`File saved: ${currentFilePath}`);
-  setDirty(false);
-  await addRecentFile(currentFilePath);
+  await tabManager.openFileInTab(path);
   await refreshRecentFilesMenu();
 }
 
 /**
- * Save editor contents to a new file (save-as)
+ * Open a file from the "Open Recent" submenu in a new tab.
+ *
+ * If tabManager.openFileInTab() returns false, the outcome is one of two cases:
+ *   (a) The file is already open — the existing tab was activated (no action needed).
+ *   (b) The file could not be read (alert already shown by tabManager) — in this
+ *       case the path must be removed from the recent list so it does not appear
+ *       again next launch.
+ *
+ * To distinguish (a) from (b): check whether any open tab has the path. If it
+ * does, the file is open (case a). If not, the read failed (case b) — remove it.
+ *
+ * @param path  Absolute path that appeared in the recent-files list.
  */
-async function saveFileAs() {
-  console.log("Save As dialog triggered");
+async function openRecentFileByPath(path: string): Promise<void> {
+  const opened = await tabManager.openFileInTab(path);
 
-  const result = await saveFileDialog();
-
-  if (result.cancelled) {
-    console.log("User cancelled save dialog");
-    return;
+  if (!opened) {
+    // false means either duplicate-activated or read-failed. Distinguish by
+    // checking whether the path appears in any open tab.
+    const isOpen = tabManager.getTabs().some((t) => t.filePath === path);
+    if (!isOpen) {
+      // Read failed — the path is stale (file moved / deleted). Remove it so
+      // it does not reappear the next time the user opens the Recent menu.
+      await removeRecentFile(path);
+    }
   }
 
-  const path = result.path;
-  console.log(`Saving to: ${path}`);
-
-  if (!editor) {
-    alert("Editor not ready");
-    return;
-  }
-
-  const content = editor.state.doc.toString();
-
-  // Write to file
-  const writeResult = await writeFile(path, content);
-
-  if (!writeResult.ok) {
-    alert(`Error saving file: ${writeResult.error.message}`);
-    return;
-  }
-
-  // Update current file path and title bar
-  setCurrentFile(path);
-  setDirty(false);
-  await addRecentFile(path);
+  // Always refresh the native submenu so any removal takes effect immediately.
   await refreshRecentFilesMenu();
+}
 
-  console.log(`File saved: ${path}`);
+/**
+ * Save the active tab's content to its current file path.
+ * Delegates entirely to TabManager, which handles the untitled → save-as
+ * redirect and clears the dirty flag on success.
+ */
+async function saveFile(): Promise<void> {
+  await tabManager.saveActiveTab();
+  await refreshRecentFilesMenu();
+}
+
+/**
+ * Prompt the user for a new save location and write the active tab's content.
+ * Delegates entirely to TabManager, which updates the tab's filePath and title.
+ */
+async function saveFileAs(): Promise<void> {
+  await tabManager.saveActiveTabAs();
+  await refreshRecentFilesMenu();
 }
 
 /**
@@ -515,33 +399,6 @@ async function showWindow() {
     // If show fails, the window remains hidden.
     // This should never happen in production, but log for debugging.
   }
-}
-
-async function openRecentFileByPath(path: string): Promise<void> {
-  const result = await readFile(path);
-  if (!result.ok) {
-    console.warn(`Recent file not found: ${path}`);
-    await removeRecentFile(path);
-    await refreshRecentFilesMenu();
-    return;
-  }
-
-  // Set file path BEFORE dispatch so buildDecorations can resolve relative images
-  setCurrentFile(path);
-
-  if (editor) {
-    findWidget?.close();
-    findWidget?.clearQuery();
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: result.value },
-    });
-    editor.dispatch({ effects: setViewMode.of(true) });
-    editor.contentDOM.blur();
-  }
-  setDirty(false);
-  await addRecentFile(path);
-  await refreshRecentFilesMenu();
-  console.log(`Opened recent: ${path}`);
 }
 
 async function setupWindowStateListeners(): Promise<void> {
@@ -685,16 +542,68 @@ function handleAction(action: string): void {
         editor.contentDOM.blur();
       }
       break;
-    case "file-new":        newFile();                break;
+    // "file-new" (Cmd-N): open a new untitled document in a new tab.
+    // Both Cmd-N and Cmd-T resolve to tabManager.openNewTab() (AD-7, EC-19).
+    // The legacy newFile() function was removed in step_07.
+    case "file-new":
+      tabManager.openNewTab();
+      break;
+
+    // ── Tab operations (step_06) ───────────────────────────────────────────────
+
+    // "tab-new" (Cmd-T): open a new empty untitled document in a new tab.
+    case "tab-new":
+      tabManager.openNewTab();
+      break;
+
+    // "tab-close" (Cmd-W): close whichever tab is currently active.
+    // closeTab() is async; we fire-and-forget with void because handleAction()
+    // is a synchronous dispatcher. Errors are handled inside closeTab().
+    case "tab-close":
+      void (async () => {
+        const tab = tabManager.getActiveTab();
+        if (tab) await tabManager.closeTab(tab.id);
+      })();
+      break;
+
+    // "tab-1".."tab-9" (Cmd-1..Cmd-9): switch to tab by one-based position.
+    // Cmd-9 always activates the last tab regardless of count (FR-5.3).
+    // An out-of-range index (e.g. Cmd-5 with only 3 tabs) is a silent no-op
+    // handled internally by activateTabByIndex() (EC-8).
+    case "tab-1":  tabManager.activateTabByIndex(1); break;
+    case "tab-2":  tabManager.activateTabByIndex(2); break;
+    case "tab-3":  tabManager.activateTabByIndex(3); break;
+    case "tab-4":  tabManager.activateTabByIndex(4); break;
+    case "tab-5":  tabManager.activateTabByIndex(5); break;
+    case "tab-6":  tabManager.activateTabByIndex(6); break;
+    case "tab-7":  tabManager.activateTabByIndex(7); break;
+    case "tab-8":  tabManager.activateTabByIndex(8); break;
+    case "tab-9":  tabManager.activateTabByIndex(9); break;
+
+    case "tab-prev": tabManager.activatePrevTab(); break;
+    case "tab-next": tabManager.activateNextTab(); break;
+
     case "file-open":       void openFile();          break;
     case "file-save":       void saveFile();          break;
     case "file-save-as":    void saveFileAs();        break;
     case "file-close-all":
-      // Clear editor state. Rust already hid the window before emitting this.
-      newFile();
+      // Close all open tabs in order. Each closeTab() call handles its own
+      // dirty-check dialog and stops the loop when the last tab closes the
+      // window (EC-2). Async IIFE because handleAction() is synchronous.
+      void (async () => {
+        // Snapshot the id list before the loop — the array shrinks as we close.
+        const ids = tabManager.getTabs().map((t) => t.id);
+        for (const id of ids) {
+          await tabManager.closeTab(id);
+          // Stop early if the window closed (no more tabs remain).
+          if (tabManager.getTabCount() === 0) break;
+        }
+      })();
       break;
     case "file-import":     void openFile();          break;
-    case "file-export":     void exportAsHtml(editor, currentFilePath); break;
+    // file-export uses getActiveFilePath() — no longer references the removed
+    // currentFilePath variable (step_07 spec).
+    case "file-export":     void exportAsHtml(editor, tabManager.getActiveFilePath()); break;
     case "file-print":      printDocument(); break;
     case "view-toggle-preview":    togglePreview();      break;
     case "view-toggle-statusbar":
@@ -783,9 +692,12 @@ function handleAction(action: string): void {
         findWidget.open("replace");
       }
       break;
-    case "help-quickstart": void openHelpFile("quickstart.md", "Quickstart"); break;
-    case "help-help":       void openHelpFile("help.md", "Help");             break;
-    case "help-cheatsheet": void openHelpFile("markdown-cheatsheet.md", "Markdown Cheatsheet"); break;
+    // Help files open as read-only content tabs so the user's current document
+    // is not replaced. openHelpFileInTab() uses tabManager.openContentTab()
+    // (step_07 spec).
+    case "help-quickstart": void openHelpFileInTab("quickstart.md", "Quickstart"); break;
+    case "help-help":       void openHelpFileInTab("help.md", "Help");             break;
+    case "help-cheatsheet": void openHelpFileInTab("markdown-cheatsheet.md", "Markdown Cheatsheet"); break;
     default: {
       if (action.startsWith("recent-file-")) {
         const idx = parseInt(action.replace("recent-file-", ""), 10);
@@ -899,13 +811,26 @@ async function initApp() {
   // restore "open" state if at least one panel was actually registered.
   restoreSidebarFromSettings();
 
+  // Initialize the tab manager. Must run after initSidebar() (which creates
+  // #app-row) and after editor creation. TabManager reads settings to restore
+  // the previous session and mounts the MinimalTabBar renderer into #tab-strip.
+  await tabManager.init(editor);
+
   // Attach dirty-state tracking to the editor via updateListener.
-  // The word-count plugin owns its own updateListener via api.addExtensions().
+  //
+  // tabManager.markActiveTabDirty() is idempotent (FR-7): calling it on every
+  // docChanged event is safe and never causes redundant title-bar updates or
+  // renderer calls (the method returns early when the tab is already dirty).
+  //
+  // The legacy isDirty / setDirty() variables and the isReadOnly guard were
+  // removed in step_07 — TabManager now owns all dirty-state tracking.
   editor.dispatch({
     effects: StateEffect.appendConfig.of(
       EditorView.updateListener.of((update) => {
-        if (update.docChanged && !isReadOnly) {
-          setDirty(true);
+        if (update.docChanged) {
+          // Single call — TabManager handles the title bar update and renderer
+          // notification when the tab transitions from clean to dirty.
+          tabManager.markActiveTabDirty();
         }
       })
     ),
@@ -969,6 +894,21 @@ async function initApp() {
   // Track window move/resize for settings persistence
   await setupWindowStateListeners();
 
+  // Save the tab session when the user clicks the window close button (FR-6.7d).
+  //
+  // In Tauri v2, listening to "tauri://close-requested" prevents the default
+  // window close. We save the session then call destroy() ourselves to complete
+  // the close sequence.
+  {
+    const appWindow = getCurrentWebviewWindow();
+    await appWindow.listen("tauri://close-requested", async () => {
+      // Flush the current session to disk before the window is torn down.
+      await tabManager.saveSession();
+      // Destroy the window now that persistence is complete.
+      await appWindow.destroy();
+    });
+  }
+
   // Listen for menu events from Rust
   await listen<{ action: string; path?: string }>("menu-event", (event) => {
     const { action, path } = event.payload;
@@ -981,14 +921,20 @@ async function initApp() {
     }
   });
 
-  // Drag & drop: open .md / .txt files dropped onto the window
+  // Drag & drop: open .md / .txt files dropped onto the window.
+  // EC-14: all dropped files open in new tabs; duplicate-path guard inside
+  // openFileInTab() prevents the same file from opening twice.
+  // Multiple-file drops are supported — each valid path gets its own tab.
   await getCurrentWebviewWindow().onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop") return;
     const paths = event.payload.paths.filter(
       (p) => p.endsWith(".md") || p.endsWith(".txt")
     );
     if (paths.length === 0) return;
-    await openFileByPath(paths[0]);
+    for (const path of paths) {
+      await tabManager.openFileInTab(path);
+    }
+    await refreshRecentFilesMenu();
   });
 
   // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom
@@ -1074,7 +1020,9 @@ async function initApp() {
     }
   });
 
-  updateTitleBar();
+  // The title bar is now managed entirely by TabManager._updateTitleBar(),
+  // which is called by _applyActiveTab() on every tab switch and after init().
+  // The standalone updateTitleBar() function has been removed in step_07.
 
   // Show the window now that everything is rendered
   await showWindow();

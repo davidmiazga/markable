@@ -23,6 +23,31 @@ export interface FindWidgetPosition {
 }
 
 /**
+ * One entry in the session restore list.
+ *
+ * Stored in MarkableSettings.openFiles. Each entry captures everything needed
+ * to reopen a file and restore the user's scroll position:
+ *
+ *   filePath  — absolute path used as the argument to readFile() on restore.
+ *   scrollTop — the value of editorView.scrollDOM.scrollTop when the user
+ *               last navigated away from (or closed) the tab. Applied via
+ *               editorView.scrollDOM.scrollTop = entry.scrollTop after setState().
+ *
+ * Untitled tabs are NOT included — they have no filePath and cannot be
+ * reconstructed from disk (FR-6.3). Only tabs where filePath !== null appear
+ * in this array.
+ */
+export interface SessionTabEntry {
+  /** Absolute file path on the host filesystem. */
+  filePath: string;
+  /**
+   * Scroll position in CSS pixels at the time the tab was last left or saved.
+   * Zero when the document was opened but never scrolled.
+   */
+  scrollTop: number;
+}
+
+/**
  * Per-plugin enable/disable state entry in the unified `plugins` map.
  *
  * `kind` distinguishes core plugins (shipped with the app) from user plugins
@@ -130,6 +155,35 @@ export interface MarkableSettings {
    * to add without modifying any Rust struct.
    */
   sidebar?: SidebarSettings;
+
+  /**
+   * Active tab display mode. Defaults to "minimal" (compact dot/pill strip).
+   *
+   * Optional — absent in settings files created before multi-document tabs
+   * were added. TabManager.init() falls back to "minimal" when this field
+   * is absent. The Rust raw-JSON pass-through means this field is safe to
+   * add without any Rust struct change.
+   */
+  tabMode?: "minimal" | "regular" | "vertical";
+
+  /**
+   * Session restore data: the list of open file paths and their scroll positions
+   * at the time the app was last closed or the session was last saved.
+   *
+   * Only tabs with a non-null filePath are included (untitled tabs cannot be
+   * restored by path). Absent when no session has been saved yet.
+   *
+   * Typed as SessionTabEntry[] so callers get property auto-complete and
+   * type-checking when reading filePath and scrollTop.
+   */
+  openFiles?: SessionTabEntry[];
+
+  /**
+   * Zero-based index of the active tab in the openFiles array at last save.
+   * Used to restore the user's focus to the same document on next launch.
+   * Clamped to the valid range by TabManager.init() after restore (FR-6.6).
+   */
+  activeTabIndex?: number;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */

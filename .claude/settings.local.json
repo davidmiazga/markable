@@ -108,7 +108,10 @@
       "Bash(awk 'NR>=366,NR<=463' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)",
       "Bash(awk:*)",
       "Bash(awk 'NR>=366,NR<=413' src/sidebar/sidebar-manager.ts)",
-      "Bash(awk 'NR>=366,NR<=413' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)"
+      "Bash(awk 'NR>=366,NR<=413' /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src/sidebar/sidebar-manager.ts)",
+      "Bash(find /Users/davidmiazga/Documents/_code-workArea/markable-2.0/tests -name *.test.ts)",
+      "Bash(find /Users/davidmiazga/Documents/_code-workArea/markable-2.0/tests/tabs -name *.test.ts)",
+      "Bash(npx eslint:*)"
     ]
   }
 }

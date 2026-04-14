@@ -8,6 +8,11 @@ import {
 } from "../lib/settings";
 import type { WindowSizeMode } from "../lib/settings";
 import { updateRecentFilesMenu } from "../lib/bridge";
+// tabManager is imported so the "Tabs" settings section can call setMode()
+// immediately when the user selects a new tab bar style. The import uses the
+// singleton from the tabs facade — settings-panel.ts is not a plugin so it is
+// permitted to import from the tabs module directly.
+import { tabManager } from "../tabs";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
@@ -80,6 +85,19 @@ export function createSettingsPanel(): void {
           <button class="settings-btn settings-btn-secondary" id="settings-clear-recent">
             Clear Recent Files
           </button>
+        </div>
+
+        <div class="settings-section">
+          <h3 class="settings-label">Tabs</h3>
+
+          <div class="settings-row">
+            <label class="settings-description">Tab bar style</label>
+            <div class="settings-segmented" id="tab-mode-control" role="group" aria-label="Tab bar style">
+              <button data-mode="minimal">Minimal</button>
+              <button data-mode="regular">Regular</button>
+              <button data-mode="vertical">Vertical</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="settings-footer">
@@ -226,6 +244,31 @@ function wireEvents(): void {
       syncRecentFilesCount();
     });
 
+  // Tab mode segmented control.
+  //
+  // Each button carries a data-mode attribute (minimal | regular | vertical).
+  // A click on the container uses event delegation so no per-button listener
+  // is needed. We call tabManager.setMode() which (a) swaps the renderer
+  // immediately and (b) persists the new mode via updateSettings internally.
+  //
+  // EC-18: if TabManager has not yet initialised (renderer is null), setMode()
+  // is a no-op on the renderer side — the mode is still persisted and will be
+  // applied on the next launch when init() reads it from settings.
+  panelElement.querySelector("#tab-mode-control")
+    ?.addEventListener("click", (e: Event) => {
+      const btn = (e.target as HTMLElement).closest("button[data-mode]") as HTMLButtonElement | null;
+      if (!btn) return;
+
+      const mode = btn.dataset.mode as "minimal" | "regular" | "vertical";
+      if (!mode) return;
+
+      // Apply the mode immediately through the TabManager singleton
+      tabManager.setMode(mode);
+
+      // Sync the active-button visual state in the segmented control
+      syncTabModeControl(mode);
+    });
+
   // Reset to defaults
   panelElement.querySelector("#settings-reset-defaults")
     ?.addEventListener("click", async () => {
@@ -267,7 +310,36 @@ function syncPanelToSettings(): void {
     cwInput.value = cw;
   }
 
+  // Tab mode segmented control — reflect the current saved mode
+  syncTabModeControl(settings.tabMode ?? "minimal");
+
   syncRecentFilesCount();
+}
+
+/**
+ * Updates which button in the #tab-mode-control segmented control appears
+ * active (aria-pressed + a CSS class).
+ *
+ * Called from syncPanelToSettings() when the panel opens, and from the click
+ * handler after the user selects a mode.
+ *
+ * Using aria-pressed rather than aria-selected because these are independent
+ * toggle buttons grouped by role="group", not tabs/options in a listbox.
+ *
+ * @param mode  The currently active tab mode to highlight.
+ */
+function syncTabModeControl(mode: "minimal" | "regular" | "vertical"): void {
+  const control = document.querySelector("#tab-mode-control");
+  if (!control) return;
+
+  control.querySelectorAll("button[data-mode]").forEach((el) => {
+    const btn = el as HTMLButtonElement;
+    const isActive = btn.dataset.mode === mode;
+    // aria-pressed communicates selection state to screen readers for this
+    // role="group" pattern (not role="tablist", which uses aria-selected).
+    btn.setAttribute("aria-pressed", String(isActive));
+    btn.classList.toggle("is-active", isActive);
+  });
 }
 
 function syncRecentFilesCount(): void {

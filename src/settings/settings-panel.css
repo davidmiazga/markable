@@ -228,6 +228,61 @@
   margin-top: 4px;
 }
 
+/* Settings row — two-column layout: label on the left, control on the right */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+/* Segmented control — a horizontal group of mutually exclusive mode buttons.
+ *
+ * Used for the "Tab bar style" setting (Minimal / Regular / Vertical). The
+ * group uses a connected-pill appearance: a shared border, no gap between
+ * buttons, and rounded corners only on the outermost edges.
+ *
+ * The active button is highlighted with the accent color. aria-pressed is
+ * set by JS; the .is-active class mirrors it for CSS targeting so no
+ * attribute selector is needed in animation-sensitive paths.
+ */
+.settings-segmented {
+  display: flex;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.settings-segmented button {
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.settings-segmented button:last-child {
+  /* Remove the trailing divider on the last button */
+  border-right: none;
+}
+
+.settings-segmented button:hover {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+/* Active state — mirrors aria-pressed="true" */
+.settings-segmented button.is-active {
+  background: var(--link-color, #5b8ee6);
+  color: #fff;
+}
+
 /* Footer */
 .settings-footer {
   padding: 16px 24px 20px;
