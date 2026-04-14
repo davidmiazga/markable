@@ -69,6 +69,11 @@ export interface UnifiedPluginDef {
    * that do not register a sidebar panel.
    */
   sidebarPanelId?: string;
+  /**
+   * Optional extra-settings renderer forwarded from UnifiedPlugin.renderDetailExtra.
+   * The Plugins Panel calls this at the bottom of the detail view when present.
+   */
+  renderDetailExtra?: (container: HTMLElement) => void;
 }
 
 /**
@@ -577,6 +582,9 @@ export class PluginManager {
       // view can render the Left / Right sidebar assignment toggle for plugins
       // that register a sidebar panel. Undefined for plugins without a panel.
       sidebarPanelId: r.plugin?.sidebarPanelId,
+      // Forward the optional extra-settings renderer so the Plugins Panel can
+      // call it at the bottom of the detail view without importing plugin files.
+      renderDetailExtra: r.plugin?.renderDetailExtra,
     }));
   }
 

@@ -181,6 +181,16 @@ export interface MarkablePluginAPI {
    * @param panelId  The id from the original SidebarPanelDescriptor.
    */
   unregisterSidebarPanel(panelId: string): void;
+
+  /**
+   * Disable then re-enable this plugin in a single async call.
+   *
+   * Useful for applying settings changes that require a full onEnable cycle
+   * (e.g. switching toolbar mode). The caller should save new settings to disk
+   * via saveSettings() BEFORE calling restartSelf() so that the subsequent
+   * onEnable reads the updated values.
+   */
+  restartSelf(): Promise<void>;
 }
 
 // ── Plugin interface (FR-2) ───────────────────────────────────────────────────
@@ -228,6 +238,16 @@ export interface UnifiedPlugin {
    * detail view will simply not show the sidebar assignment section.
    */
   readonly sidebarPanelId?: string;
+  /**
+   * Optional hook called by the Plugins Panel when rendering the detail view for
+   * this plugin. The plugin receives a `container` element and may append any
+   * additional settings UI to it (e.g. a mode toggle row).
+   *
+   * Called every time the detail view is opened. The container is freshly created
+   * on each call — no cleanup is needed. Must not throw; errors are silently
+   * swallowed by the panel to avoid breaking the detail view for other plugins.
+   */
+  renderDetailExtra?: (container: HTMLElement) => void;
   onEnable(api: MarkablePluginAPI): void | Promise<void>;
   onDisable(api: MarkablePluginAPI): void | Promise<void>;
 }
@@ -339,6 +359,16 @@ export function buildMarkablePluginAPI(
      */
     unregisterSidebarPanel(panelId: string): void {
       _unregisterSidebarPanel(pluginId, panelId);
+    },
+
+    /**
+     * Restart this plugin: disable then re-enable via PluginManager.toggle.
+     * The caller must save updated settings to disk before calling this so
+     * the fresh onEnable reads the new values.
+     */
+    async restartSelf(): Promise<void> {
+      await pluginManager.toggle(pluginId, false);
+      await pluginManager.toggle(pluginId, true);
     },
   };
 }

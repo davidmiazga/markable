@@ -153,6 +153,13 @@ let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
  */
 let _sidebarPanelRegistered: boolean = false;
 
+/**
+ * The MarkablePluginAPI instance captured in onEnable.
+ * Used by renderDetailExtra to save settings and restart the plugin.
+ * Reset to null in onDisable.
+ */
+let _api: MarkablePluginAPI | null = null;
+
 // ── 4. CSS constant and lifecycle helpers ─────────────────────────────────────
 
 /**
@@ -1339,6 +1346,7 @@ function buildUpdateListener() {
  */
 async function onEnable(api: MarkablePluginAPI): Promise<void> {
   _enabled = true;
+  _api = api;
 
   // Load and validate persisted settings (EC-18, EC-19).
   const raw = await api.loadSettings();
@@ -1451,8 +1459,69 @@ function onDisable(api: MarkablePluginAPI): void {
   _toolbarEl      = null;
   _buttons        = null;
   _view           = null;
+  _api            = null;
   _settings       = { ...DEFAULT_SETTINGS };
   _clickInFlight  = false;
+}
+
+/**
+ * Render extra settings rows into the Plugins Panel detail view.
+ *
+ * Appends a "Mode" toggle (Floating / Sidebar) and, when in sidebar mode,
+ * a "Side" toggle (Left / Right). Uses the same CSS classes as the built-in
+ * sidebar assignment section so no new styles are required.
+ *
+ * When the user changes mode or side, new settings are saved to disk and the
+ * plugin restarts via api.restartSelf() so the change takes effect immediately.
+ *
+ * Safe to call when the plugin is disabled (_api === null) — the controls are
+ * rendered but clicking them is a no-op.
+ *
+ * @param container - The detail-view body element provided by the Plugins Panel.
+ */
+function renderDetailExtra(container: HTMLElement): void {
+  // Derive the active 3-way position from the current settings.
+  // "left-sidebar"  → toolbarMode: "sidebar",  sidebarSide: "left"
+  // "floating"      → toolbarMode: "floating"  (sidebarSide irrelevant)
+  // "right-sidebar" → toolbarMode: "sidebar",  sidebarSide: "right"
+  type Position = "left-sidebar" | "floating" | "right-sidebar";
+  const activePosition: Position =
+    _settings.toolbarMode === "floating"
+      ? "floating"
+      : _settings.sidebarSide === "left"
+        ? "left-sidebar"
+        : "right-sidebar";
+
+  const section = document.createElement("div");
+  section.className = "plugin-detail-sidebar-section";
+
+  const label = document.createElement("span");
+  label.className = "plugin-detail-sidebar-label";
+  label.textContent = "Position";
+
+  const options: { id: Position; label: string }[] = [
+    { id: "left-sidebar", label: "Left" },
+    { id: "floating",     label: "Float" },
+    { id: "right-sidebar", label: "Right" },
+  ];
+
+  for (const opt of options) {
+    const btn = document.createElement("button");
+    btn.className =
+      "plugin-detail-sidebar-btn" + (activePosition === opt.id ? " active" : "");
+    btn.textContent = opt.label;
+    btn.addEventListener("click", () => {
+      if (!_api || activePosition === opt.id) return;
+      const newMode: ToolbarMode    = opt.id === "floating" ? "floating" : "sidebar";
+      const newSide: SidebarSide    = opt.id === "right-sidebar" ? "right" : "left";
+      void _api.saveSettings({ toolbarMode: newMode, sidebarSide: newSide })
+               .then(() => _api!.restartSelf());
+    });
+    section.appendChild(btn);
+  }
+
+  section.prepend(label);
+  container.appendChild(section);
 }
 
 /**
@@ -1485,6 +1554,7 @@ export default {
     "image, and erase formatting. Available as a floating bubble above the selection " +
     "(default) or as a docked sidebar panel.",
   sidebarPanelId: "markdown-toolbar",
+  renderDetailExtra,
   onEnable,
   onDisable,
 };

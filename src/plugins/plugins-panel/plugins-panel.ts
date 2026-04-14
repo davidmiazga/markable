@@ -574,10 +574,10 @@ function showDetailView(def: UnifiedPluginDef): void {
   bodyElement.appendChild(toggleRow);
 
   // ── Sidebar assignment section ──────────────────────────────────────────
-  // Only rendered when the plugin declares a sidebarPanelId — i.e. it
-  // registers a sidebar panel. Plugins that don't use the sidebar simply
-  // don't have this section at all (not hidden, just not present).
-  if (def.sidebarPanelId) {
+  // Only rendered when the plugin declares a sidebarPanelId AND does not
+  // supply its own renderDetailExtra (which takes full responsibility for
+  // position controls).
+  if (def.sidebarPanelId && typeof def.renderDetailExtra !== "function") {
     const panelId = def.sidebarPanelId;
 
     // Read the persisted side override from settings. When no override exists
@@ -635,5 +635,17 @@ function showDetailView(def: UnifiedPluginDef): void {
     sideSection.appendChild(btnLeft);
     sideSection.appendChild(btnRight);
     bodyElement.appendChild(sideSection);
+  }
+
+  // ── Plugin-defined extra settings ──────────────────────────────────────
+  // Plugins may supply a renderDetailExtra() function to append custom
+  // settings rows (e.g. a mode toggle). Called last so it appears below
+  // the standard sidebar assignment section.
+  if (typeof def.renderDetailExtra === "function") {
+    try {
+      def.renderDetailExtra(bodyElement);
+    } catch (err) {
+      console.warn(`[PluginsPanel] renderDetailExtra threw for "${def.id}":`, err);
+    }
   }
 }
