@@ -46,8 +46,8 @@
   --tab-regular-accent: var(--accent, #0078d4);
 
   /* Vertical mode (step_04) */
-  --tab-vertical-width: 36px;
-  --tab-vertical-bg: var(--bg-secondary, #252526);
+  --tab-vertical-width: 44px;
+  --tab-vertical-bg: var(--bg-chrome, color-mix(in srgb, var(--bg-primary, #1e1e1e) 85%, black));
   --tab-vertical-active-bg: var(--bg-primary, #1e1e1e);
   --tab-vertical-text: var(--text-primary, #cccccc);
 }
@@ -365,134 +365,130 @@
   line-height: 1;
 }
 
-/* ── Vertical mode: strip ───────────────────────────────────────────────────── */
+/* ── Vertical mode: carousel layout ─────────────────────────────────────────── */
 
 /*
- * #tab-vertical-strip is inserted by VerticalTabStrip.mount() as the first
- * flex child of #app-row. It is a narrow column that lays out each open
- * document as a vertical "card" (rotated title + hover-reveal close button).
+ * Carousel layout (see vertical-tab-strip.ts for full description):
  *
- * flex-shrink:0 prevents it from being compressed when #editor needs more
- * space — the strip always stays at its declared width.
+ *   [sidebar] | #tab-vertical-left | #editor | #tab-vertical-right | [sidebar-right]
+ *
+ * #tab-vertical-left holds columns for all tabs up to and including the active
+ * one. #tab-vertical-right holds columns for all tabs after the active one.
+ * The right strip is hidden via JS inline style when it has no content.
+ *
+ * Each strip is a horizontal flex row so its column children sit side by side.
+ * Both strips fill the full height of #app-row via the default align-items:stretch
+ * on the parent flex container.
+ *
+ * TODO: add document icon between close button and title text once the icon
+ *       system is in place (FC2 future work).
  */
-#tab-vertical-strip {
+#tab-vertical-left,
+#tab-vertical-right {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--tab-vertical-bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/*
+ * Right strip: left border separates it from the editor.
+ * Left strip has no right border — the active tab column blends seamlessly
+ * into the editor content area.
+ */
+#tab-vertical-right {
+  border-left: 1px solid var(--border-color, #444);
+}
+
+/*
+ * Each document column. Columns are always the same width; the active one is
+ * distinguished by color, not size.
+ *
+ * `position: relative` anchors nothing currently but will be needed once the
+ * document icon is added (TODO above).
+ */
+/* Each column — content anchored to bottom (justify-end). */
+.tab-vertical-col {
   width: var(--tab-vertical-width);
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: var(--tab-vertical-bg);
-  overflow: hidden;
-  flex-shrink: 0;
-  padding: 8px 0;
+  justify-content: flex-start;
+  padding-top: 10px;
   gap: 4px;
-}
-
-/*
- * Each open document is represented as a <button class="tab-vertical-item">.
- * The left border starts transparent and changes to the accent color when the
- * tab is active, giving a clear visual anchor without requiring a color change
- * on the entire item background.
- *
- * `position: relative` is needed so the close button can be positioned
- * absolutely in the top-right corner via `position: absolute; top: 2px`.
- */
-.tab-vertical-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  padding: 8px 0;
   background: transparent;
   border: none;
-  border-left: 2px solid transparent;
+  border-right: 1px solid
+    color-mix(in srgb, var(--border-color, #444) 40%, transparent);
   cursor: pointer;
-  color: var(--tab-vertical-text);
+  color: rgba(255, 255, 255, 0.5);
   position: relative;
+  transition: background 120ms ease;
 }
 
-/*
- * Active tab: accent left border + slightly lighter background so the user
- * can immediately see which document is currently open. The left-border
- * technique is the same used in VS Code's activity bar and familiar to
- * users of "vertical tab" UIs.
- */
-.tab-vertical-item[aria-selected="true"] {
+.tab-vertical-col:hover {
+  background: color-mix(in srgb, var(--bg-hover, #444) 25%, transparent);
+}
+
+/* Active column: full-opacity white text, no separator border. */
+.tab-vertical-col.is-active {
   background: var(--tab-vertical-active-bg);
-  border-left-color: var(--tab-regular-accent);
+  border-right: none;
+  color: white;
 }
 
 /*
- * Title text rotated 90°. Using `writing-mode: vertical-rl` lays the text
- * top-to-bottom in the normal vertical-rl direction. Adding
- * `transform: rotate(180deg)` then flips it so text reads BOTTOM-to-TOP,
- * which matches the Obsidian / Typora vertical-tab convention that users
- * expect when titles are on the left side.
- *
- * max-height caps how far down the column the title extends so very long
- * filenames do not overflow the strip. text-overflow: ellipsis clips the
- * text gracefully (the overflow: hidden is required for this to work).
+ * Title text — rotated bottom-to-top via writing-mode + rotate(180deg).
+ * max-height controls how many characters are visible before clipping.
  */
 .tab-vertical-text {
   writing-mode: vertical-rl;
   text-orientation: mixed;
-  transform: rotate(180deg);   /* makes text read bottom-to-top */
+  transform: rotate(180deg);
   font-size: calc(var(--settings-base-font-size, 16px) * 0.75);
   white-space: nowrap;
   overflow: hidden;
-  max-height: 80px;
+  max-height: 160px;
   text-overflow: ellipsis;
-  color: var(--tab-vertical-text);
 }
 
-/*
- * Dirty indicator: append a bullet character after the title text when the
- * tab has unsaved changes. Using ::after on .tab-vertical-text means no
- * extra DOM node is needed — only the .is-dirty class on the parent button
- * triggers the indicator. The amber color matches the other dirty indicators
- * in the minimal and regular modes.
- */
-.tab-vertical-item.is-dirty .tab-vertical-text::after {
+/* Dirty indicator: bullet after the title. */
+.tab-vertical-col.is-dirty .tab-vertical-text::after {
   content: " •";
   color: var(--tab-dot-dirty-indicator-color);
 }
 
-/*
- * Close button in vertical strip: hidden (opacity 0) by default to keep the
- * narrow column uncluttered. Revealed on parent hover via the rule below.
- * Positioned in the top-right corner of the item using absolute positioning
- * (the parent has `position: relative`).
- */
-.tab-vertical-item .tab-close {
-  opacity: 0;
-  transition: opacity 150ms;
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  font-size: 11px;
-  padding: 1px 3px;
-  border-radius: 2px;
-  background: var(--bg-hover, #444);
+/* Close button — inherits column color (white at 50% / full opacity). */
+.tab-vertical-col .tab-close {
+  margin-left: 0;
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: none;
   border: none;
   cursor: pointer;
-  color: var(--text-muted, #888);
+  color: inherit;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 150ms;
 }
 
-/* Reveal close button when the user hovers over the item. */
-.tab-vertical-item:hover .tab-close {
-  opacity: 1;
+.tab-vertical-col .tab-close:hover {
+  background: var(--bg-hover, #444);
 }
 
 /*
  * Soft warning: when more than TAB_SOFT_WARNING_THRESHOLD tabs are open,
- * VerticalTabStrip.update() adds "tab-over-limit" to #tab-vertical-strip.
- * An "!" character is appended via ::after to signal the user without
- * removing or disabling any strip items (FR-9 is visual only, no hard cap).
+ * VerticalTabStrip.update() adds "tab-over-limit" to #tab-vertical-left.
+ * An "!" is appended via ::after to signal the user (FR-9, visual only).
  */
-#tab-vertical-strip.tab-over-limit::after {
+#tab-vertical-left.tab-over-limit::after {
   content: "!";
   color: var(--tab-dot-dirty-indicator-color);
   font-size: 10px;
   font-weight: bold;
   padding: 4px;
+  align-self: flex-start;
 }

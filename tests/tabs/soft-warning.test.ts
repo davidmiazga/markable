@@ -286,13 +286,18 @@ describe("VerticalTabStrip — soft warning indicator (FR-9, step_08)", () => {
   let container: HTMLElement;
   let renderer: VerticalTabStrip;
   let appRow: HTMLElement;
-  let strip: HTMLElement | null;
+  let leftStrip: HTMLElement | null;
 
   beforeEach(() => {
-    // VerticalTabStrip inserts its strip into #app-row, not into container.
-    // Set up the required DOM before mounting.
+    // VerticalTabStrip inserts strips into #app-row relative to #editor.
+    // Both elements must exist before mounting.
     appRow = document.createElement("div");
     appRow.id = "app-row";
+
+    const editor = document.createElement("div");
+    editor.id = "editor";
+    appRow.appendChild(editor);
+
     document.body.appendChild(appRow);
 
     container = document.createElement("div");
@@ -301,30 +306,28 @@ describe("VerticalTabStrip — soft warning indicator (FR-9, step_08)", () => {
     renderer = new VerticalTabStrip(() => {}, () => {});
     renderer.mount(container, [], 0);
 
-    // Capture the strip element AFTER mount() so we always get the one
-    // inserted by this test's renderer instance.
-    strip = document.getElementById("tab-vertical-strip");
+    // The over-limit indicator lives on #tab-vertical-left (the left strip).
+    leftStrip = document.getElementById("tab-vertical-left");
   });
 
   afterEach(() => {
-    // Destroy the renderer and remove the test scaffold so the next test
-    // starts with a clean DOM (no stale #tab-vertical-strip elements that
-    // would cause getElementById to return a previous test's element).
     renderer.destroy();
     appRow.remove();
     container.remove();
+    document.getElementById("tab-vertical-left")?.remove();
+    document.getElementById("tab-vertical-right")?.remove();
   });
 
   it("adds tab-over-limit class to strip when tab count exceeds threshold (FR-9)", () => {
     renderer.update(makeTabs(TAB_SOFT_WARNING_THRESHOLD + 1), 0);
-    expect(strip?.classList.contains("tab-over-limit")).toBe(true);
+    expect(leftStrip?.classList.contains("tab-over-limit")).toBe(true);
   });
 
   it("removes tab-over-limit from strip when count drops to threshold (FR-9)", () => {
     // A tab close that brings the count back to exactly 30 must clear the warning.
     renderer.update(makeTabs(TAB_SOFT_WARNING_THRESHOLD + 1), 0);
     renderer.update(makeTabs(TAB_SOFT_WARNING_THRESHOLD), 0);
-    expect(strip?.classList.contains("tab-over-limit")).toBe(false);
+    expect(leftStrip?.classList.contains("tab-over-limit")).toBe(false);
   });
 });
 

@@ -1,32 +1,36 @@
 /**
  * vertical-tab-strip.ts — VerticalTabStrip renderer for the multi-document tab system.
  *
- * Renders an Obsidian-style vertical strip of narrow columns inserted as the
- * first child of #app-row (NOT inside #tab-strip). Each column represents one
- * open document and displays:
- *   - The document title rotated 90° so it reads bottom-to-top
- *   - A × close button that appears on hover
- *   - A dirty-state dot appended to the title via CSS ::after
+ * Implements a carousel vertical tab layout:
  *
- * When this renderer is active, #tab-strip is hidden by the CSS rule
- * `#tab-strip.tab-mode-vertical { display: none }` (set via the class
- * added in mount() and removed in destroy()).
+ *   [sidebar] | [tabs BEFORE active] [active label] | EDITOR | [tabs AFTER active] | [sidebar-right]
  *
- * Implements the ITabRenderer interface defined in tab-types.ts so TabManager
- * can swap this renderer in/out without knowing its internals.
+ * Tabs that come before the active one in the tab list are rendered as narrow
+ * columns to the LEFT of #editor (#tab-vertical-left). The active tab appears
+ * as the last (rightmost) column in the left strip, styled with an accent border
+ * and accent-colored title to indicate it is the current document. Tabs that
+ * come after the active one are rendered as columns to the RIGHT of #editor
+ * (#tab-vertical-right).
  *
- * DOM structure per item:
+ * Cycling with Cmd-Opt-←/→ moves which tab is active; update() is called by
+ * TabManager after each activation and the layout adjusts automatically.
+ *
+ * TODO: add a small document icon below the close button in each column once
+ *       the icon system is in place (FC2 future work).
+ *
+ * DOM structure per column:
  * ```html
- * <button class="tab-vertical-item [is-dirty]" role="tab"
- *         aria-selected="[true/false]" aria-label="[title]">
- *   <span class="tab-vertical-text">[title]</span>
+ * <div class="tab-vertical-col [is-active] [is-dirty]" role="tab"
+ *      aria-selected="[true/false]" aria-label="[title]" tabindex="0">
  *   <button class="tab-close" aria-label="Close [title]">×</button>
- * </button>
+ *   <span class="tab-vertical-text">[title]</span>
+ * </div>
  * ```
+ *
+ * Implements the ITabRenderer interface so TabManager can swap this renderer
+ * in/out without knowing its internals.
  */
 
-// Vite processes this CSS import at bundle time so all tab styles are included
-// in the final build without a separate <link> tag in index.html.
 import "../tabs.css";
 
 import type { TabEntry, ITabRenderer } from "../tab-types";
@@ -36,42 +40,32 @@ export class VerticalTabStrip implements ITabRenderer {
   // ── Private state ────────────────────────────────────────────────────────────
 
   /**
-   * The #tab-strip container passed to mount(). This renderer adds a class to
-   * it (to hide #tab-strip via CSS) but renders its own DOM into #app-row.
-   * Null before mount() and after destroy() so method guards are uniform.
+   * The #tab-strip element passed to mount(). Only used to add/remove
+   * "tab-mode-vertical" so CSS can hide the horizontal strip. No children are
+   * appended to it by this renderer.
    */
   private container: HTMLElement | null = null;
 
   /**
-   * The #tab-vertical-strip element created by mount() and inserted into
-   * #app-row as its first child. Null before mount() and after destroy().
+   * #tab-vertical-left — the flex-row container inserted into #app-row
+   * immediately before #editor. Holds tab columns for tabs[0..activeIndex].
+   * The active tab is the last (rightmost) column in this strip.
    */
-  private stripEl: HTMLElement | null = null;
+  private leftStripEl: HTMLElement | null = null;
 
   /**
-   * Callback fired when the user clicks a vertical item to switch to that tab.
-   * Provided by TabManager as `(id) => this.activateTab(id)`.
+   * #tab-vertical-right — the flex-row container inserted into #app-row
+   * immediately before #sidebar-right (after #editor). Holds tab columns for
+   * tabs[activeIndex+1..end]. Hidden via inline style when there are no
+   * after-tabs so it takes no space in the layout.
    */
+  private rightStripEl: HTMLElement | null = null;
+
   private readonly onActivate: (id: string) => void;
-
-  /**
-   * Callback fired when the user clicks the × close button on a vertical item.
-   * Provided by TabManager as `(id) => void this.closeTab(id)`.
-   */
   private readonly onClose: (id: string) => void;
 
   // ── Constructor ───────────────────────────────────────────────────────────────
 
-  /**
-   * Creates a VerticalTabStrip instance.
-   *
-   * The instance is reusable: call mount() to attach it and destroy() to
-   * detach. TabManager creates one instance per mode-switch rather than
-   * keeping a long-lived instance across mode changes.
-   *
-   * @param onActivate  Called with the tab id when the user clicks a strip item.
-   * @param onClose     Called with the tab id when the user clicks a × close button.
-   */
   constructor(
     onActivate: (id: string) => void,
     onClose: (id: string) => void,
@@ -85,18 +79,10 @@ export class VerticalTabStrip implements ITabRenderer {
   /**
    * Attaches the renderer to the DOM.
    *
-   * Unlike the horizontal renderers, this renderer does NOT render into
-   * `container` (#tab-strip). Instead it:
-   *   1. Adds class "tab-mode-vertical" to container — CSS then sets
-   *      `display: none` on #tab-strip, hiding the horizontal strip.
-   *   2. Locates #app-row and inserts a new #tab-vertical-strip element as
-   *      the first flex child so it appears to the left of #sidebar-left.
-   *   3. Delegates the first render to update().
-   *
-   * @param container    The #tab-strip element — its class list is modified,
-   *                     but no children are added to it.
-   * @param tabs         Current tab array snapshot.
-   * @param activeIndex  Index of the currently active tab.
+   * Adds "tab-mode-vertical" to `container` (#tab-strip) so CSS hides the
+   * horizontal strip. Then creates #tab-vertical-left (before #editor) and
+   * #tab-vertical-right (before #sidebar-right) inside #app-row, and delegates
+   * the first render to update().
    */
   mount(
     container: HTMLElement,
@@ -104,171 +90,133 @@ export class VerticalTabStrip implements ITabRenderer {
     activeIndex: number,
   ): void {
     this.container = container;
-
-    // Hide #tab-strip by adding the mode class. The CSS rule
-    // `#tab-strip.tab-mode-vertical { display: none }` handles the rest.
     container.classList.add("tab-mode-vertical");
 
-    // Locate the flex row that holds sidebar + editor. The vertical strip must
-    // be inserted here so it participates in the same flex layout.
     const appRow = document.getElementById("app-row");
-    if (!appRow) {
-      // Programming error: #app-row must exist before mount() is called.
-      // SidebarManager.init() creates it; TabManager.init() is called after.
+    const editorEl = document.getElementById("editor");
+
+    if (!appRow || !editorEl) {
       console.error(
-        "VerticalTabStrip.mount: #app-row not found in DOM. " +
+        "VerticalTabStrip.mount: #app-row or #editor not found in DOM. " +
         "Ensure SidebarManager.init() has been called before TabManager.init()."
       );
       return;
     }
 
-    // Create the vertical strip container and give it the required ARIA role
-    // so screen readers treat it as a tab list (NFR-3).
-    const stripEl = document.createElement("div");
-    stripEl.id = "tab-vertical-strip";
-    stripEl.setAttribute("role", "tablist");
+    // Left strip: before the editor. All before-tabs + active label go here.
+    const leftStrip = document.createElement("div");
+    leftStrip.id = "tab-vertical-left";
+    leftStrip.setAttribute("role", "tablist");
+    appRow.insertBefore(leftStrip, editorEl);
+    this.leftStripEl = leftStrip;
 
-    // Insert as the first child of #app-row so it appears left of #sidebar-left
-    // and the editor. insertBefore(node, null) would append — use firstChild
-    // to guarantee first-position insertion regardless of existing children.
-    appRow.insertBefore(stripEl, appRow.firstChild);
+    // Right strip: after the editor, before the right sidebar.
+    // Guard: only use sidebarRight as insertBefore reference if it is a direct
+    // child of appRow — otherwise appending to appRow is correct.
+    const sidebarRight = document.getElementById("sidebar-right");
+    const rightRef =
+      sidebarRight?.parentElement === appRow ? sidebarRight : null;
+    const rightStrip = document.createElement("div");
+    rightStrip.id = "tab-vertical-right";
+    rightStrip.setAttribute("role", "tablist");
+    appRow.insertBefore(rightStrip, rightRef);
+    this.rightStripEl = rightStrip;
 
-    this.stripEl = stripEl;
-
-    // Delegate the first render to update() so rendering logic is not duplicated.
     this.update(tabs, activeIndex);
   }
 
   /**
-   * Re-renders all vertical strip items after any state change (open, close,
-   * activate, dirty toggle).
+   * Re-renders all columns after any state change.
    *
-   * Uses a full innerHTML clear + re-build rather than diffing. The tab count
-   * is typically small (≤30) so the cost is negligible and the logic stays
-   * simple. Correctness matters more than micro-optimisation at this stage.
-   *
-   * @param tabs         Current tab array snapshot.
-   * @param activeIndex  Index of the currently active tab.
+   * Splits tabs at activeIndex:
+   *   - tabs[0..activeIndex]        → left strip (active is the last column)
+   *   - tabs[activeIndex+1..end]    → right strip (hidden when empty)
    */
   update(tabs: TabEntry[], activeIndex: number): void {
-    // Guard: update() is a no-op if mount() has not been called (or was called
-    // without a valid #app-row — stripEl would be null in that case).
-    if (!this.stripEl) return;
+    if (!this.leftStripEl || !this.rightStripEl) return;
 
-    // Wipe existing item buttons. Any event listeners on the old <button>
-    // elements are garbage-collected with their nodes — no manual cleanup needed.
-    this.stripEl.innerHTML = "";
+    this.leftStripEl.innerHTML = "";
+    this.rightStripEl.innerHTML = "";
 
-    // Render one column item per tab.
-    tabs.forEach((tab, i) => {
-      const itemEl = this._buildItemEl(tab, i === activeIndex);
-      this.stripEl!.appendChild(itemEl);
-    });
+    // Left strip: tabs up to and including the active one.
+    for (let i = 0; i <= activeIndex && i < tabs.length; i++) {
+      this.leftStripEl.appendChild(
+        this._buildColEl(tabs[i], i === activeIndex)
+      );
+    }
 
-    // Soft-warning indicator (FR-9, step_08): when the user has more tabs open
-    // than the recommended threshold, add a visual warning class so the CSS
-    // can display an indicator (e.g. via ::after pseudo-element).
-    const overLimit = tabs.length > TAB_SOFT_WARNING_THRESHOLD;
-    this.stripEl.classList.toggle("tab-over-limit", overLimit);
+    // Right strip: tabs after the active one.
+    for (let i = activeIndex + 1; i < tabs.length; i++) {
+      this.rightStripEl.appendChild(this._buildColEl(tabs[i], false));
+    }
+
+    // Hide the right strip when it has no content so it contributes no width.
+    this.rightStripEl.style.display =
+      tabs.length > activeIndex + 1 ? "" : "none";
+
+    // Soft-warning: flag the left strip when too many tabs are open (FR-9).
+    this.leftStripEl.classList.toggle(
+      "tab-over-limit",
+      tabs.length > TAB_SOFT_WARNING_THRESHOLD
+    );
   }
 
   /**
-   * Tears down all renderer DOM and resets the container to a neutral state.
-   *
-   * Removes #tab-vertical-strip from the DOM and removes the "tab-mode-vertical"
-   * class from the container (#tab-strip), making it visible again.
-   *
-   * After destroy(), the container is ready for the next renderer to mount
-   * into it cleanly (NFR-5).
+   * Removes both strip elements from the DOM and clears the container class.
+   * Idempotent — safe to call multiple times or before mount().
    */
   destroy(): void {
-    // Remove the vertical strip element from the DOM entirely.
-    // Optional-chaining makes this safe to call before mount() or after a
-    // second destroy() (idempotent teardown).
-    this.stripEl?.remove();
-    this.stripEl = null;
+    this.leftStripEl?.remove();
+    this.rightStripEl?.remove();
+    this.leftStripEl = null;
+    this.rightStripEl = null;
 
     if (!this.container) return;
-
-    // Remove the mode class to un-hide #tab-strip. The next renderer will set
-    // its own class in mount().
     this.container.classList.remove("tab-mode-vertical");
-
     this.container = null;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────────
 
   /**
-   * Creates and returns a single vertical strip <button> element for one tab.
+   * Builds a single tab column element.
    *
-   * The element structure:
-   * ```html
-   * <button class="tab-vertical-item [is-dirty]" role="tab"
-   *         aria-selected="[true/false]" aria-label="[title]">
-   *   <span class="tab-vertical-text">[title]</span>
-   *   <button class="tab-close" aria-label="Close [title]">×</button>
-   * </button>
-   * ```
-   *
-   * The title text is rotated 90° via CSS (`writing-mode: vertical-rl;
-   * transform: rotate(180deg)`) so it reads bottom-to-top in the narrow column.
-   *
-   * Click routing:
-   *   - Click on the outer button → calls this.onActivate(tab.id)
-   *   - Click on close button → calls this.onClose(tab.id) and calls
-   *     stopPropagation() so the outer button's click does NOT fire (FR-5.2).
-   *
-   * @param tab       The TabEntry this item represents.
-   * @param isActive  Whether this tab is currently active.
-   * @returns  A configured button element ready to be appended to stripEl.
+   * @param tab       The TabEntry this column represents.
+   * @param isActive  True when this column is the currently active document.
    */
-  private _buildItemEl(tab: TabEntry, isActive: boolean): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "tab-vertical-item";
-    btn.setAttribute("role", "tab");
+  private _buildColEl(tab: TabEntry, isActive: boolean): HTMLDivElement {
+    const col = document.createElement("div");
+    col.className = "tab-vertical-col";
+    if (isActive) col.classList.add("is-active");
+    col.classList.toggle("is-dirty", tab.isDirty);
+    col.setAttribute("role", "tab");
+    col.setAttribute("aria-selected", String(isActive));
+    col.setAttribute("aria-label", tab.title);
+    col.setAttribute("tabindex", "0");
 
-    // aria-selected drives CSS `.tab-vertical-item[aria-selected="true"]` for
-    // the active-state accent border and background.
-    btn.setAttribute("aria-selected", String(isActive));
-
-    // aria-label gives screen readers the document name (NFR-3).
-    btn.setAttribute("aria-label", tab.title);
-
-    // Toggle is-dirty so CSS can append a dirty-indicator bullet via ::after
-    // on `.tab-vertical-item.is-dirty .tab-vertical-text::after`.
-    btn.classList.toggle("is-dirty", tab.isDirty);
-
-    // Title text — the CSS rotates this 90° so it reads bottom-to-top.
-    // `writing-mode: vertical-rl` plus `transform: rotate(180deg)` achieves
-    // the correct reading direction without JavaScript coordinate math.
-    const textSpan = document.createElement("span");
-    textSpan.className = "tab-vertical-text";
-    textSpan.textContent = tab.title;
-    btn.appendChild(textSpan);
-
-    // Close button — shown only on hover (CSS: `.tab-vertical-item .tab-close {
-    // opacity: 0 }` and `.tab-vertical-item:hover .tab-close { opacity: 1 }`).
-    // stopPropagation prevents the click from reaching the outer button so that
-    // closing a tab does not also activate it (FR-5.2).
+    // Close button. stopPropagation prevents the outer click from also firing
+    // onActivate when the user closes a tab (FR-5.2).
     const closeBtn = document.createElement("button");
     closeBtn.className = "tab-close";
     closeBtn.setAttribute("aria-label", `Close ${tab.title}`);
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", (e) => {
-      // Prevent the click from reaching the outer button's handler so that
-      // onActivate is NOT called when the user closes a tab (FR-5.2).
       e.stopPropagation();
       this.onClose(tab.id);
     });
-    btn.appendChild(closeBtn);
+    col.appendChild(closeBtn);
 
-    // Outer button click: activate the tab. Fires only when the user clicks
-    // the item area, not the close button (guarded by stopPropagation above).
-    btn.addEventListener("click", () => {
+    // Title span — rotated bottom-to-top by CSS writing-mode + transform.
+    const textSpan = document.createElement("span");
+    textSpan.className = "tab-vertical-text";
+    textSpan.textContent = tab.title;
+    col.appendChild(textSpan);
+
+    // Clicking anywhere on the column (outside the close button) activates it.
+    col.addEventListener("click", () => {
       this.onActivate(tab.id);
     });
 
-    return btn;
+    return col;
   }
 }
