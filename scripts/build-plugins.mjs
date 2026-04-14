@@ -38,11 +38,12 @@ const outDir = resolve(root, "src-tauri/plugins/core");
  * The first entry triggers the output directory clear (emptyOutDir: true).
  */
 const PLUGINS = [
-  ["focus-mode",      "src/plugins/focus-mode/focus-mode.plugin.ts"],
-  ["typewriter-mode", "src/plugins/typewriter-mode/typewriter-mode.plugin.ts"],
-  ["word-count",      "src/plugins/word-count/word-count.plugin.ts"],
-  ["status-bar",      "src/plugins/status-bar/status-bar.plugin.ts"],
-  ["auto-toc",        "src/plugins/auto-toc/auto-toc.plugin.ts"],
+  ["focus-mode",        "src/plugins/focus-mode/focus-mode.plugin.ts"],
+  ["typewriter-mode",   "src/plugins/typewriter-mode/typewriter-mode.plugin.ts"],
+  ["word-count",        "src/plugins/word-count/word-count.plugin.ts"],
+  ["status-bar",        "src/plugins/status-bar/status-bar.plugin.ts"],
+  ["auto-toc",          "src/plugins/auto-toc/auto-toc.plugin.ts"],
+  ["markdown-toolbar",  "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"],
 ];
 
 /**
@@ -131,4 +132,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log("\n[build-plugins] All 5 core plugins built successfully.");
+console.log("\n[build-plugins] All 6 core plugins built successfully.");

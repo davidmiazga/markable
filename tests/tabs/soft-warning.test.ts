@@ -89,43 +89,12 @@ import { RegularTabBar } from "../../src/tabs/renderers/regular-tab-bar";
 import { VerticalTabStrip } from "../../src/tabs/renderers/vertical-tab-strip";
 import { TabManager } from "../../src/tabs/tab-manager";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../../src/tabs/tab-types";
-import type { TabEntry } from "../../src/tabs/tab-types";
 import { readFile } from "../../src/lib/bridge";
 import { getCurrentSettings } from "../../src/lib/settings";
+import { makeTab, makeTabs } from "./test-helpers";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockGetCurrentSettings = getCurrentSettings as ReturnType<typeof vi.fn>;
-
-// ── Shared helpers ─────────────────────────────────────────────────────────────
-
-/**
- * Creates a minimal TabEntry stub for renderer tests.
- * doc is empty string — renderers only read id, title, filePath, isDirty.
- *
- * @param overrides  Optional partial fields to override defaults.
- */
-function makeTab(overrides: Partial<TabEntry> = {}): TabEntry {
-  return {
-    id: crypto.randomUUID(),
-    filePath: null,
-    title: "Untitled",
-    isDirty: false,
-    doc: "",
-    scrollTop: 0,
-    ...overrides,
-  };
-}
-
-/**
- * Creates an array of n minimal TabEntry stubs.
- *
- * @param n  Number of stubs to create.
- */
-function makeTabs(n: number): TabEntry[] {
-  return Array.from({ length: n }, (_, i) =>
-    makeTab({ title: `Tab ${i + 1}` })
-  );
-}
 
 /**
  * Creates a minimal EditorView stub with the three properties TabManager reads.

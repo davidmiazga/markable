@@ -26,40 +26,8 @@ vi.mock("../../src/tabs/tabs.css", () => ({}));
 
 // ── Import after mocks ────────────────────────────────────────────────────────
 import { RegularTabBar } from "../../src/tabs/renderers/regular-tab-bar";
-import type { TabEntry } from "../../src/tabs/tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../../src/tabs/tab-types";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Creates a minimal TabEntry stub suitable for renderer tests.
- *
- * @param overrides  Partial fields to override the defaults.
- */
-function makeTab(overrides: Partial<TabEntry> = {}): TabEntry {
-  return {
-    id: crypto.randomUUID(),
-    filePath: null,
-    title: "Untitled",
-    isDirty: false,
-    // doc is empty string — renderers only read id, title, filePath, isDirty.
-    doc: "",
-    scrollTop: 0,
-    ...overrides,
-  };
-}
-
-/**
- * Creates an array of n minimal TabEntry stubs.
- * Used for multi-tab tests where individual tab properties are not important.
- *
- * @param n  Number of tabs to create.
- */
-function makeTabs(n: number): TabEntry[] {
-  return Array.from({ length: n }, (_, i) =>
-    makeTab({ title: `Tab ${i + 1}`, id: `tab-id-${i}` })
-  );
-}
+import { makeTab, makeTabs } from "./test-helpers";
 
 // ── Test suite: mount() ───────────────────────────────────────────────────────
 

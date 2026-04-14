@@ -138,4 +138,9 @@ export default [
     resolve(__dirname, "src/plugins/status-bar/status-bar.plugin.ts"),
     false,
   ),
+  pluginConfig(
+    "markdown-toolbar",
+    resolve(__dirname, "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"),
+    false,
+  ),
 ];

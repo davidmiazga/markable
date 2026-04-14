@@ -32,29 +32,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("../../src/tabs/tabs.css", () => ({}));
 
-import { VerticalTabStrip } from "../../src/tabs/renderers/vertical-tab-strip";
-import type { TabEntry } from "../../src/tabs/tab-types";
+import { VerticalTabStrip, LEFT_STRIP_ID, RIGHT_STRIP_ID } from "../../src/tabs/renderers/vertical-tab-strip";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../../src/tabs/tab-types";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function makeTab(overrides: Partial<TabEntry> = {}): TabEntry {
-  return {
-    id: crypto.randomUUID(),
-    filePath: null,
-    title: "Untitled",
-    isDirty: false,
-    doc: "",
-    scrollTop: 0,
-    ...overrides,
-  };
-}
-
-function makeTabs(n: number): TabEntry[] {
-  return Array.from({ length: n }, (_, i) =>
-    makeTab({ title: `Tab ${i + 1}`, id: `tab-id-${i}` })
-  );
-}
+import { makeTab, makeTabs } from "./test-helpers";
 
 /**
  * Standard DOM scaffold used by most suites.
@@ -95,8 +75,8 @@ function teardownDom() {
   document.getElementById("app-row")?.remove();
   document.getElementById("tab-strip")?.remove();
   // Guard: remove any strips that destroy() may have missed.
-  document.getElementById("tab-vertical-left")?.remove();
-  document.getElementById("tab-vertical-right")?.remove();
+  document.getElementById(LEFT_STRIP_ID)?.remove();
+  document.getElementById(RIGHT_STRIP_ID)?.remove();
 }
 
 // ── mount() ───────────────────────────────────────────────────────────────────
@@ -120,27 +100,27 @@ describe("VerticalTabStrip — mount()", () => {
 
   it("creates #tab-vertical-left inside #app-row (criterion 1)", () => {
     renderer.mount(container, makeTabs(1), 0);
-    const left = document.getElementById("tab-vertical-left");
+    const left = document.getElementById(LEFT_STRIP_ID);
     expect(left).not.toBeNull();
     expect(appRow.contains(left)).toBe(true);
   });
 
   it("inserts #tab-vertical-left immediately before #editor (criterion 1)", () => {
     renderer.mount(container, makeTabs(1), 0);
-    const left = document.getElementById("tab-vertical-left");
+    const left = document.getElementById(LEFT_STRIP_ID);
     expect(left?.nextElementSibling?.id).toBe("editor");
   });
 
   it("creates #tab-vertical-right inside #app-row (criterion 2)", () => {
     renderer.mount(container, makeTabs(2), 0);
-    const right = document.getElementById("tab-vertical-right");
+    const right = document.getElementById(RIGHT_STRIP_ID);
     expect(right).not.toBeNull();
     expect(appRow.contains(right)).toBe(true);
   });
 
   it("inserts #tab-vertical-right immediately before #sidebar-right (criterion 2)", () => {
     renderer.mount(container, makeTabs(2), 0);
-    const right = document.getElementById("tab-vertical-right");
+    const right = document.getElementById(RIGHT_STRIP_ID);
     expect(right?.nextElementSibling?.id).toBe("sidebar-right");
   });
 
@@ -151,15 +131,15 @@ describe("VerticalTabStrip — mount()", () => {
 
   it('sets role="tablist" on both strips (NFR-3)', () => {
     renderer.mount(container, makeTabs(2), 0);
-    expect(document.getElementById("tab-vertical-left")?.getAttribute("role")).toBe("tablist");
-    expect(document.getElementById("tab-vertical-right")?.getAttribute("role")).toBe("tablist");
+    expect(document.getElementById(LEFT_STRIP_ID)?.getAttribute("role")).toBe("tablist");
+    expect(document.getElementById(RIGHT_STRIP_ID)?.getAttribute("role")).toBe("tablist");
   });
 
   it("renders tabs immediately after mount (delegates to update())", () => {
     renderer.mount(container, makeTabs(3), 1);
     // Tab 0+1 in left, tab 2 in right
-    const leftCols = document.querySelectorAll("#tab-vertical-left .tab-vertical-col");
-    const rightCols = document.querySelectorAll("#tab-vertical-right .tab-vertical-col");
+    const leftCols = document.querySelectorAll(`#${LEFT_STRIP_ID} .tab-vertical-col`);
+    const rightCols = document.querySelectorAll(`#${RIGHT_STRIP_ID} .tab-vertical-col`);
     expect(leftCols.length).toBe(2);
     expect(rightCols.length).toBe(1);
   });
@@ -170,8 +150,8 @@ describe("VerticalTabStrip — mount()", () => {
 
     renderer.mount(container, makeTabs(1), 0);
 
-    expect(document.getElementById("tab-vertical-left")).toBeNull();
-    expect(document.getElementById("tab-vertical-right")).toBeNull();
+    expect(document.getElementById(LEFT_STRIP_ID)).toBeNull();
+    expect(document.getElementById(RIGHT_STRIP_ID)).toBeNull();
     expect(spy).toHaveBeenCalled();
 
     spy.mockRestore();
@@ -184,7 +164,7 @@ describe("VerticalTabStrip — mount()", () => {
 
     renderer.mount(container, makeTabs(1), 0);
 
-    expect(document.getElementById("tab-vertical-left")).toBeNull();
+    expect(document.getElementById(LEFT_STRIP_ID)).toBeNull();
     expect(spy).toHaveBeenCalled();
 
     spy.mockRestore();
@@ -212,26 +192,26 @@ describe("VerticalTabStrip — update() carousel split (criterion 4–8)", () =>
   it("puts tabs[0..activeIndex] in left strip, tabs after in right strip (criterion 4)", () => {
     // 5 tabs, active = index 2 → left has [0,1,2], right has [3,4]
     renderer.update(makeTabs(5), 2);
-    expect(document.querySelectorAll("#tab-vertical-left .tab-vertical-col").length).toBe(3);
-    expect(document.querySelectorAll("#tab-vertical-right .tab-vertical-col").length).toBe(2);
+    expect(document.querySelectorAll(`#${LEFT_STRIP_ID} .tab-vertical-col`).length).toBe(3);
+    expect(document.querySelectorAll(`#${RIGHT_STRIP_ID} .tab-vertical-col`).length).toBe(2);
   });
 
   it("all tabs in left strip when active is the last tab (criterion 4)", () => {
     const tabs = makeTabs(4);
     renderer.update(tabs, 3); // last tab active
-    expect(document.querySelectorAll("#tab-vertical-left .tab-vertical-col").length).toBe(4);
-    expect(document.querySelectorAll("#tab-vertical-right .tab-vertical-col").length).toBe(0);
+    expect(document.querySelectorAll(`#${LEFT_STRIP_ID} .tab-vertical-col`).length).toBe(4);
+    expect(document.querySelectorAll(`#${RIGHT_STRIP_ID} .tab-vertical-col`).length).toBe(0);
   });
 
   it("only active tab in left strip when active is the first tab (criterion 4)", () => {
     renderer.update(makeTabs(3), 0); // first tab active
-    expect(document.querySelectorAll("#tab-vertical-left .tab-vertical-col").length).toBe(1);
-    expect(document.querySelectorAll("#tab-vertical-right .tab-vertical-col").length).toBe(2);
+    expect(document.querySelectorAll(`#${LEFT_STRIP_ID} .tab-vertical-col`).length).toBe(1);
+    expect(document.querySelectorAll(`#${RIGHT_STRIP_ID} .tab-vertical-col`).length).toBe(2);
   });
 
   it("active column is the last element in the left strip (criterion 5)", () => {
     renderer.update(makeTabs(4), 2);
-    const leftCols = document.querySelectorAll<HTMLElement>("#tab-vertical-left .tab-vertical-col");
+    const leftCols = document.querySelectorAll<HTMLElement>(`#${LEFT_STRIP_ID} .tab-vertical-col`);
     const last = leftCols[leftCols.length - 1];
     expect(last.classList.contains("is-active")).toBe(true);
   });
@@ -239,7 +219,7 @@ describe("VerticalTabStrip — update() carousel split (criterion 4–8)", () =>
   it('active column has aria-selected="true" and class is-active (criterion 6)', () => {
     const tabs = makeTabs(3);
     renderer.update(tabs, 1);
-    const leftCols = document.querySelectorAll<HTMLElement>("#tab-vertical-left .tab-vertical-col");
+    const leftCols = document.querySelectorAll<HTMLElement>(`#${LEFT_STRIP_ID} .tab-vertical-col`);
     // Column 0 (inactive)
     expect(leftCols[0].getAttribute("aria-selected")).toBe("false");
     expect(leftCols[0].classList.contains("is-active")).toBe(false);
@@ -250,13 +230,13 @@ describe("VerticalTabStrip — update() carousel split (criterion 4–8)", () =>
 
   it("right strip is hidden when there are no after-tabs (criterion 7)", () => {
     renderer.update(makeTabs(3), 2); // active is last
-    const right = document.getElementById("tab-vertical-right") as HTMLElement;
+    const right = document.getElementById(RIGHT_STRIP_ID) as HTMLElement;
     expect(right.style.display).toBe("none");
   });
 
   it("right strip is visible when there are after-tabs (criterion 8)", () => {
     renderer.update(makeTabs(3), 0); // active is first, 2 tabs after
-    const right = document.getElementById("tab-vertical-right") as HTMLElement;
+    const right = document.getElementById(RIGHT_STRIP_ID) as HTMLElement;
     expect(right.style.display).not.toBe("none");
   });
 
@@ -292,7 +272,7 @@ describe("VerticalTabStrip — update() dirty state & aria", () => {
       makeTab({ id: "dirty", isDirty: true }),
     ];
     renderer.update(tabs, 0); // active=0 (clean), right has dirty
-    const rightCol = document.querySelector<HTMLElement>("#tab-vertical-right .tab-vertical-col");
+    const rightCol = document.querySelector<HTMLElement>(`#${RIGHT_STRIP_ID} .tab-vertical-col`);
     expect(rightCol?.classList.contains("is-dirty")).toBe(true);
   });
 
@@ -324,14 +304,14 @@ describe("VerticalTabStrip — update() dirty state & aria", () => {
   it("adds tab-over-limit to left strip when count exceeds threshold (criterion 16)", () => {
     renderer.update(makeTabs(TAB_SOFT_WARNING_THRESHOLD + 1), 0);
     expect(
-      document.getElementById("tab-vertical-left")?.classList.contains("tab-over-limit")
+      document.getElementById(LEFT_STRIP_ID)?.classList.contains("tab-over-limit")
     ).toBe(true);
   });
 
   it("does NOT add tab-over-limit at exactly the threshold", () => {
     renderer.update(makeTabs(TAB_SOFT_WARNING_THRESHOLD), 0);
     expect(
-      document.getElementById("tab-vertical-left")?.classList.contains("tab-over-limit")
+      document.getElementById(LEFT_STRIP_ID)?.classList.contains("tab-over-limit")
     ).toBe(false);
   });
 });
@@ -365,7 +345,7 @@ describe("VerticalTabStrip — click interactions (criterion 10–12)", () => {
       makeTab({ id: "second", title: "Second" }),
     ];
     renderer.mount(container, tabs, 1); // active=1, both in left strip
-    const leftCols = document.querySelectorAll<HTMLElement>("#tab-vertical-left .tab-vertical-col");
+    const leftCols = document.querySelectorAll<HTMLElement>(`#${LEFT_STRIP_ID} .tab-vertical-col`);
     leftCols[0].click(); // click the inactive column
     expect(onActivate).toHaveBeenCalledOnce();
     expect(onActivate).toHaveBeenCalledWith("first");
@@ -377,7 +357,7 @@ describe("VerticalTabStrip — click interactions (criterion 10–12)", () => {
       makeTab({ id: "right-tab", title: "Right" }),
     ];
     renderer.mount(container, tabs, 0); // active=0, right-tab in right strip
-    const rightCol = document.querySelector<HTMLElement>("#tab-vertical-right .tab-vertical-col");
+    const rightCol = document.querySelector<HTMLElement>(`#${RIGHT_STRIP_ID} .tab-vertical-col`);
     rightCol?.click();
     expect(onActivate).toHaveBeenCalledWith("right-tab");
   });
@@ -418,15 +398,15 @@ describe("VerticalTabStrip — destroy() (criterion 13–15)", () => {
   });
 
   it("removes #tab-vertical-left from the DOM (criterion 13)", () => {
-    expect(document.getElementById("tab-vertical-left")).not.toBeNull();
+    expect(document.getElementById(LEFT_STRIP_ID)).not.toBeNull();
     renderer.destroy();
-    expect(document.getElementById("tab-vertical-left")).toBeNull();
+    expect(document.getElementById(LEFT_STRIP_ID)).toBeNull();
   });
 
   it("removes #tab-vertical-right from the DOM (criterion 13)", () => {
-    expect(document.getElementById("tab-vertical-right")).not.toBeNull();
+    expect(document.getElementById(RIGHT_STRIP_ID)).not.toBeNull();
     renderer.destroy();
-    expect(document.getElementById("tab-vertical-right")).toBeNull();
+    expect(document.getElementById(RIGHT_STRIP_ID)).toBeNull();
   });
 
   it('removes "tab-mode-vertical" class from container (criterion 14)', () => {

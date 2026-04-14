@@ -36,6 +36,9 @@ import "../tabs.css";
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
 
+export const LEFT_STRIP_ID = "tab-vertical-left";
+export const RIGHT_STRIP_ID = "tab-vertical-right";
+
 export class VerticalTabStrip implements ITabRenderer {
   // ── Private state ────────────────────────────────────────────────────────────
 
@@ -105,7 +108,7 @@ export class VerticalTabStrip implements ITabRenderer {
 
     // Left strip: before the editor. All before-tabs + active label go here.
     const leftStrip = document.createElement("div");
-    leftStrip.id = "tab-vertical-left";
+    leftStrip.id = LEFT_STRIP_ID;
     leftStrip.setAttribute("role", "tablist");
     appRow.insertBefore(leftStrip, editorEl);
     this.leftStripEl = leftStrip;
@@ -117,7 +120,7 @@ export class VerticalTabStrip implements ITabRenderer {
     const rightRef =
       sidebarRight?.parentElement === appRow ? sidebarRight : null;
     const rightStrip = document.createElement("div");
-    rightStrip.id = "tab-vertical-right";
+    rightStrip.id = RIGHT_STRIP_ID;
     rightStrip.setAttribute("role", "tablist");
     appRow.insertBefore(rightStrip, rightRef);
     this.rightStripEl = rightStrip;
