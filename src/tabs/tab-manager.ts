@@ -228,6 +228,16 @@ export class TabManager {
 
     const tab = this.tabs[this.activeIndex];
 
+    // Set the file path BEFORE dispatching the document so that
+    // buildDecorations() has the correct path on its first run.
+    // If called after dispatch, images with relative paths never render on
+    // initial load when the syntax tree is already cached (no second update fires).
+    setLivePreviewFilePath(tab.filePath);
+    // AD-6: expose the current document path so IIFE plugins (e.g. image-toolbar)
+    // can resolve relative image paths without an app-internal import.
+    (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] =
+      tab.filePath;
+
     // Replace doc text in one transaction. For file-backed tabs, include
     // setViewMode.of(true) in the same transaction so the explicit effect
     // takes priority over the selection change — viewModeField checks
@@ -242,10 +252,6 @@ export class TabManager {
 
     // Restore the scroll position the user was at when they last left this tab.
     this.editorView.scrollDOM.scrollTop = tab.scrollTop;
-
-    // Inform the live-preview extension which file is now active so it can
-    // resolve relative image paths correctly.
-    setLivePreviewFilePath(tab.filePath);
 
     // Update the chromeless title bar.
     this._updateTitleBar(tab);
@@ -673,6 +679,8 @@ export class TabManager {
 
     void addRecentFile(path);
     setLivePreviewFilePath(path);
+    // AD-6: keep __MARKABLE_CURRENT_FILE__ in sync after Save As.
+    (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = path;
     void this.saveSession();
   }
 

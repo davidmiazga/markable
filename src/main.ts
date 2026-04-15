@@ -776,6 +776,17 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__MARKABLE_EDITOR_VIEW__"] =
     editor;
 
+  // AD-3: expose the file-open dialog so IIFE plugins (e.g. image-toolbar)
+  // can open the native file picker. Uses the existing openFileDialog() wrapper
+  // (invoke-based, no @tauri-apps/plugin-dialog dependency) and normalises the
+  // return value to string | null so the plugin doesn't need to import DialogResult.
+  (window as unknown as Record<string, unknown>)["__TAURI_DIALOG__"] = {
+    open: async (_opts?: unknown) => {
+      const result = await openFileDialog();
+      return result.cancelled ? null : (result as { cancelled: false; path: string }).path;
+    },
+  };
+
   // Apply editor settings (content width + font size)
   applyEditorSettings(migratedSettings.editor);
 

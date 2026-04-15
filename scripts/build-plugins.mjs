@@ -45,6 +45,7 @@ const PLUGINS = [
   ["auto-toc",          "src/plugins/auto-toc/auto-toc.plugin.ts"],
   ["markdown-toolbar",  "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"],
   ["table-toolbar",     "src/plugins/table-toolbar/table-toolbar.plugin.ts"],
+  ["image-toolbar",     "src/plugins/image-toolbar/image-toolbar.plugin.ts"],
 ];
 
 /**
@@ -133,4 +134,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log("\n[build-plugins] All 7 core plugins built successfully.");
+console.log("\n[build-plugins] All 8 core plugins built successfully.");

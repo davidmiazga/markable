@@ -114,9 +114,9 @@ function pluginConfig(
   });
 }
 
-// Export an array of six configs. Vite processes each sequentially.
+// Export an array of seven configs. Vite processes each sequentially.
 // The first config (focus-mode) clears the output directory before building;
-// the remaining five append their output to the same directory.
+// the remaining six append their output to the same directory.
 export default [
   pluginConfig(
     "focus-mode",
@@ -146,6 +146,11 @@ export default [
   pluginConfig(
     "table-toolbar",
     resolve(__dirname, "src/plugins/table-toolbar/table-toolbar.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "image-toolbar",
+    resolve(__dirname, "src/plugins/image-toolbar/image-toolbar.plugin.ts"),
     false,
   ),
 ];
