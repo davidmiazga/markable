@@ -1,0 +1,221 @@
+//! File discovery commands.
+//!
+//! Provides directory scanning utilities for the backlinks feature.
+//! Separate from io.rs because these commands return file metadata
+//! (names, not contents) and have different error semantics (empty
+//! Vec on failure, not Result::Err).
+
+use std::fs;
+use std::path::Path;
+
+/// List `.md` filenames in a directory (shallow, non-recursive).
+///
+/// Scans the immediate children of `directory_path` for files with a `.md`
+/// extension (case-insensitive). Hidden files (names starting with `.`) are
+/// excluded. Directories whose names end in `.md` are also excluded — only
+/// regular files are returned.
+///
+/// # Arguments
+/// * `directory_path` - Absolute path to the directory to scan.
+///
+/// # Returns
+/// Filenames (not full paths) of `.md` files, sorted alphabetically
+/// (case-insensitive). Returns an empty Vec if the directory does not
+/// exist, cannot be read, or contains no matching files.
+///
+/// # Performance
+/// NFR-1: must complete in under 50ms for directories with up to 500 files.
+/// This is a simple read_dir + filter — no file content is read, so the
+/// bottleneck is purely the number of directory entries.
+#[tauri::command]
+pub fn list_md_files(path: String) -> Vec<String> {
+    let dir = Path::new(&path);
+
+    // Attempt to read the directory. If it doesn't exist or we lack
+    // permission, return an empty list rather than an error — the caller
+    // (backlinks index builder) treats "no files" and "unreadable dir"
+    // identically.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut filenames: Vec<String> = entries
+        .filter_map(|entry| {
+            // Skip entries that fail to read (e.g., permission denied on
+            // individual entry). The filename is still returned if the
+            // DirEntry itself is readable — only metadata failures are
+            // skipped here (EC-21).
+            let entry = entry.ok()?;
+
+            // Only include regular files. Directories or symlinks whose
+            // names end in ".md" are excluded.
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_file() {
+                return None;
+            }
+
+            let name = entry.file_name().to_string_lossy().into_owned();
+
+            // Exclude hidden files (macOS convention: names starting with '.')
+            if name.starts_with('.') {
+                return None;
+            }
+
+            // Check .md extension case-insensitively. We use to_lowercase()
+            // on the full filename and check ends_with(".md") rather than
+            // splitting on '.' — this correctly handles names like "file.MD",
+            // "file.Md", and edge cases like ".md" (hidden, already excluded).
+            if !name.to_lowercase().ends_with(".md") {
+                return None;
+            }
+
+            Some(name)
+        })
+        .collect();
+
+    // Sort alphabetically with case-insensitive comparison. This ensures
+    // "alpha.md" sorts before "Beta.md" regardless of case, matching user
+    // expectations for file listings.
+    filenames.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+    filenames
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Create a unique temporary directory for a test case.
+    /// Each test gets its own directory to avoid interference.
+    fn setup_test_dir(prefix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "markable_files_test_{}_{}",
+            prefix,
+            std::process::id()
+        ));
+        // Clean up any leftover from a previous run
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Remove the temporary directory after a test completes.
+    fn cleanup(dir: &std::path::Path) {
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lists_only_md_files() {
+        let dir = setup_test_dir("basic");
+        fs::write(dir.join("notes.md"), "# Notes").unwrap();
+        fs::write(dir.join("todo.md"), "# Todo").unwrap();
+        fs::write(dir.join("readme.txt"), "text").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["notes.md", "todo.md"]);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn excludes_hidden_files() {
+        let dir = setup_test_dir("hidden");
+        fs::write(dir.join(".hidden.md"), "hidden").unwrap();
+        fs::write(dir.join("visible.md"), "visible").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["visible.md"]);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn case_insensitive_extension() {
+        let dir = setup_test_dir("case_ext");
+        fs::write(dir.join("upper.MD"), "# Upper").unwrap();
+        fs::write(dir.join("lower.md"), "# Lower").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result.len(), 2);
+        // Both should be present regardless of extension casing
+        assert!(result.contains(&"upper.MD".to_string()));
+        assert!(result.contains(&"lower.md".to_string()));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn case_insensitive_sort_order() {
+        let dir = setup_test_dir("sort");
+        fs::write(dir.join("Zebra.md"), "").unwrap();
+        fs::write(dir.join("alpha.md"), "").unwrap();
+        fs::write(dir.join("Beta.md"), "").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["alpha.md", "Beta.md", "Zebra.md"]);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn nonexistent_directory_returns_empty() {
+        let result = list_md_files("/nonexistent/path/that/does/not/exist".to_string());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_directory_returns_empty() {
+        let dir = setup_test_dir("empty");
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert!(result.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn excludes_directories_with_md_name() {
+        let dir = setup_test_dir("subdir");
+        fs::create_dir_all(dir.join("subfolder.md")).unwrap();
+        fs::write(dir.join("real.md"), "real").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["real.md"]);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn non_recursive_ignores_nested_files() {
+        let dir = setup_test_dir("nested");
+        fs::create_dir_all(dir.join("subdir")).unwrap();
+        fs::write(dir.join("subdir").join("nested.md"), "nested").unwrap();
+        fs::write(dir.join("top.md"), "top").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["top.md"]);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn returns_filenames_not_full_paths() {
+        let dir = setup_test_dir("names_only");
+        fs::write(dir.join("document.md"), "content").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        assert_eq!(result, vec!["document.md"]);
+        // Verify it's just the filename, not a path
+        assert!(!result[0].contains('/'));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn excludes_non_md_extensions() {
+        let dir = setup_test_dir("extensions");
+        fs::write(dir.join("file.md"), "").unwrap();
+        fs::write(dir.join("file.markdown"), "").unwrap();
+        fs::write(dir.join("file.txt"), "").unwrap();
+        fs::write(dir.join("file.mdx"), "").unwrap();
+        fs::write(dir.join("file.mdown"), "").unwrap();
+
+        let result = list_md_files(dir.to_string_lossy().to_string());
+        // Only .md extension should match — not .markdown, .mdx, .mdown
+        assert_eq!(result, vec!["file.md"]);
+        cleanup(&dir);
+    }
+}

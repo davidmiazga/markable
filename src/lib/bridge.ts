@@ -206,6 +206,30 @@ export async function readThemeCss(filename: string): Promise<string | null> {
   }
 }
 
+// ── Directory scanning ──────────────────────────────────────────────────────
+
+/**
+ * List .md filenames in a directory (shallow, non-recursive).
+ *
+ * Returns filenames only (not full paths), sorted alphabetically
+ * (case-insensitive). Hidden files are excluded. Returns an empty
+ * array if the directory does not exist or cannot be read.
+ *
+ * Used by the backlinks plugin for auto-complete file suggestions
+ * and for building the backlink index of sibling documents.
+ *
+ * @param directoryPath - Absolute path to the directory to scan
+ * @returns Sorted array of .md filenames (e.g. ["alpha.md", "beta.md"])
+ */
+export async function listMdFiles(directoryPath: string): Promise<string[]> {
+  try {
+    return await invoke<string[]>("list_md_files", { path: directoryPath });
+  } catch (error) {
+    console.error("Failed to list md files:", error);
+    return [];
+  }
+}
+
 // ── Core plugin copy ──────────────────────────────────────────────────────────
 
 /**

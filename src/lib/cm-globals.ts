@@ -21,6 +21,7 @@
  *   __CM_STATE__    — @codemirror/state exports used by focus-mode and typewriter-mode
  *   __CM_VIEW__     — @codemirror/view exports used by all plugins
  *   __CM_LANGUAGE__ — @codemirror/language exports used by table-toolbar (syntaxTree)
+ *   __CM_AUTOCOMPLETE__ — @codemirror/autocomplete exports used by backlinks (autocompletion)
  */
 
 // We import the full module objects so we can expose every named export that
@@ -28,6 +29,7 @@
 import * as _cmState from "@codemirror/state";
 import * as _cmView from "@codemirror/view";
 import * as _cmLanguage from "@codemirror/language";
+import * as _cmAutocomplete from "@codemirror/autocomplete";
 
 /**
  * Assign CodeMirror module namespaces to the window object.
@@ -40,3 +42,6 @@ import * as _cmLanguage from "@codemirror/language";
 (window as unknown as Record<string, unknown>)["__CM_VIEW__"] = _cmView;
 // Required by table-toolbar.plugin.ts — exposes syntaxTree and related language utilities.
 (window as unknown as Record<string, unknown>)["__CM_LANGUAGE__"] = _cmLanguage;
+// Required by backlinks.plugin.ts — exposes autocompletion, CompletionContext,
+// CompletionResult, and related autocomplete utilities.
+(window as unknown as Record<string, unknown>)["__CM_AUTOCOMPLETE__"] = _cmAutocomplete;

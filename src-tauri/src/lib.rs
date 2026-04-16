@@ -28,6 +28,7 @@ pub use commands::{
     list_themes, read_theme_css,
     copy_core_plugins,
     list_core_plugins,
+    list_md_files,
     list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
 };
 
@@ -307,6 +308,7 @@ pub fn run() {
             read_theme_css,
             copy_core_plugins,
             list_core_plugins,
+            list_md_files,
             list_user_plugins,
             read_plugin_file,
             read_plugin_settings,

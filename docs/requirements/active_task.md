@@ -1,218 +1,338 @@
 ---
-title: "Advanced Lists — Polish & Completion"
-last-updated: "2026-04-15"
+title: "Backlinks — Foundation (FC2 #13)"
+last-updated: "2026-04-16"
 review-cadence-days: 7
 status: active
 ---
 
-# Advanced Lists — Polish & Completion Requirements Spec
+# Backlinks — Foundation (FC2 #13) Requirements Spec
 
 ## Summary
 
-As a user, I want to switch an existing list block between the four supported list styles (standard, alphanumeric, decimal, steps) via dedicated keybindings or the Format menu, see the active style in the status bar, configure the global default style in the Settings panel, and trust that the existing comment-override feature works correctly — so that I can produce richly formatted outlines without manually rewriting markers.
+As a user, I want to create wiki-links (`[[filename]]`) between my Markdown files, see them rendered as clickable links in live preview, get auto-complete suggestions when typing `[[`, and view a sidebar panel listing all files that link back to my current document — so that I can navigate a web of related notes without leaving the editor.
 
 ---
 
 ## Background and Motivation
 
-The Advanced Lists engine (`src/editor/list-engine.ts`, 474 lines) and its keybinding handlers (`src/editor/list-keybindings.ts`, 182 lines) are already implemented and stable. The engine supports four styles (standard, alphanumeric, decimal, steps), seven marker types, comment-override parsing (`<!-- list: style -->`), style inference, and marker generation. Enter, Tab, Shift-Tab, and Backspace all work on list lines.
+Backlinks are a foundational PKM (Personal Knowledge Management) feature. Obsidian, Roam, and Logseq all center their workflows on bidirectional linking. Markable 2.0's FC2 roadmap lists "Backlinks (+Visualization?)" as item #13.
 
-What is missing to consider Advanced Lists **complete** (FC2 #5):
+This spec covers **Foundation Backlinks** — a practical, scoped stepping stone before FC3's full vault/AI system. The feature introduces wiki-link syntax, auto-complete, shallow directory scanning, and a backlinks sidebar panel. Graph visualization, unlinked mentions, recursive scanning, and AI suggestions are explicitly deferred to FC3.
 
-1. **Style-switching keybindings** — No way to convert an existing list block to a different style without manually rewriting every marker.
-2. **Format menu integration** — No native menu items for the list styles (only Bullet/Ordered/Task exist under Format > List).
-3. **Status bar indicator** — No visual feedback showing which list style is active at the cursor.
-4. **Settings panel dropdown** — The `listStyle` field exists in `MarkableSettings` but has no UI to change it.
-5. **Comment-override verification** — The `<!-- list: style -->` feature exists in the engine but has no dedicated test coverage for the full round-trip (comment present -> style used by keybindings -> correct markers generated).
+The implementation follows the existing plugin architecture: a single IIFE plugin (`backlinks.plugin.ts`) that registers CM6 extensions for wiki-link decorations and auto-complete, a sidebar panel for backlink listings, and a new Tauri command for directory scanning.
 
-### What Already Works (Do Not Modify)
+### Existing Infrastructure Leveraged
 
-- `list-engine.ts` — all pure functions, 637 lines of passing tests
-- `list-keybindings.ts` — Enter/Tab/Shift-Tab/Backspace at `Prec.highest`
-- `format.ts` — `indentLines`/`outdentLines` already call the list engine
-- `settings.ts` — `listStyle` field on `MarkableSettings`, `getCurrentSettings().listStyle` used by keybindings
+- **Plugin system**: `MarkablePluginAPI` provides `addExtensions()`, `registerSidebarPanel()`, `loadSettings()`, `saveSettings()`.
+- **Sidebar panel system**: `SidebarManager` with accordion panels, left/right assignment, tab support when multiple panels share a side.
+- **Tab manager**: `tabManager.openFileInTab(path)` for click-to-navigate, `window.__MARKABLE_CURRENT_FILE__` for current document path.
+- **Live preview**: `src/editor/live-preview.ts` handles link decorations (`.cm-live-link` class, `--link-color` variable). The backlinks plugin will add its own decorations for wiki-links following the same visual style.
+- **Bridge layer**: `src/lib/bridge.ts` wraps Tauri `invoke()` calls. A new `listDirectory()` function will be added here.
+- **CM6 globals**: `window.__CM_VIEW__` and `window.__CM_STATE__` provide access to CM6 modules from IIFE plugins.
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Style-Switching Keybindings
+### FR-1: Wiki-Link Syntax Recognition
 
-**FR-1.1** Three new CM6 keybindings are registered:
-- `Alt-r` — convert current list block to **alphanumeric** style (I. A. 1. a. i.)
-- `Alt-n` — convert current list block to **decimal** style (1. 1.1. 1.1.1.)
-- `Alt-l` — convert current list block to **steps** style (1. a. -)
+**FR-1.1** The plugin recognizes wiki-link syntax: `[[filename]]` and `[[filename|display text]]`.
 
-**FR-1.2** The **standard** style (1. 2. 3. at all depths) is the default and has no dedicated keybinding. It is set via the Settings panel or comment override only.
+**FR-1.2** Recognition rules:
+- Opening delimiter: exactly `[[` (two consecutive left square brackets).
+- Closing delimiter: exactly `]]` (two consecutive right square brackets).
+- Content between delimiters must not contain `[[`, `]]`, or newlines.
+- The pipe `|` separates the target filename from optional display text. Only the first pipe is significant; subsequent pipes are part of the display text.
+- Whitespace around the filename and display text is preserved verbatim (no trimming during recognition). Trimming occurs only during navigation (FR-6.3).
 
-**FR-1.3** When a style-switching keybinding fires:
-1. Identify the list block containing the cursor using `findListBlockRange()`.
-2. For every list line in the block, compute the correct marker for the target style at that line's depth using `markerTypeForDepth()` and `generateMarker()`.
-3. Replace all markers in a **single CM6 transaction** (one undo step).
-4. Preserve all line content (text after the marker) and indentation depth.
-5. Cursor position remains at the same line and approximate character offset after the rewrite.
+**FR-1.3** Wiki-links are NOT parsed by CM6's built-in Markdown parser (which does not know `[[...]]` syntax). Instead, the plugin uses a ViewPlugin or StateField that scans the document text via regex and applies decorations.
 
-**FR-1.4** If the cursor is not on a list line when a style-switching keybinding fires, the keybinding is a no-op (returns `false`, falls through to default CM6 handling).
+### FR-2: Live Preview Rendering
 
-**FR-1.5** The keybinding does NOT change the global `listStyle` setting. It only rewrites the current block's markers.
+**FR-2.1** In live preview mode, when the cursor is NOT on the wiki-link's line, the plugin renders wiki-links as styled inline links:
+- The `[[` and `]]` delimiters are hidden (replaced with zero-width decorations).
+- For `[[filename]]`: the text "filename" is displayed with the `.cm-live-link` class (same style as standard Markdown links).
+- For `[[filename|display text]]`: only "display text" is displayed; the "filename|" portion is hidden.
 
-### FR-2: Format Menu Integration
+**FR-2.2** When the cursor IS on the wiki-link's line, the full raw syntax is shown (e.g., `[[filename|display text]]`) — consistent with how live preview handles all other Markdown syntax.
 
-**FR-2.1** Add a **"List Style"** submenu inside the existing Format > List submenu in `menu.rs`. The submenu contains four items:
-- "Standard" — menu id `format-list-style-standard`
-- "Alphanumeric (I. A. 1. a. i.)" — menu id `format-list-style-alphanumeric`, accelerator `Alt+R`
-- "Decimal Outline (1.1.)" — menu id `format-list-style-decimal`, accelerator `Alt+N`
-- "Steps (1. a. -)" — menu id `format-list-style-steps`, accelerator `Alt+L`
+**FR-2.3** Wiki-link decorations use the existing `.cm-live-link` CSS class and `--link-color` variable. No new CSS variables are introduced for link styling.
 
-**FR-2.2** Each menu item triggers the same logic as the corresponding keybinding (FR-1.3). The "Standard" menu item converts the current list block to standard style.
+**FR-2.4** Wiki-links inside fenced code blocks (``` or ~~~) are NOT decorated. The plugin must skip ranges that fall within `FencedCode` syntax tree nodes.
 
-**FR-2.3** Menu items are always enabled. If the cursor is not on a list line, the action is a no-op.
+### FR-3: Click-to-Navigate (Wiki-Links in Editor)
 
-### FR-3: Status Bar Indicator
+**FR-3.1** Clicking a rendered wiki-link (in live preview mode, when decorations are visible) navigates to the target file.
 
-**FR-3.1** When the cursor is inside a list block, the status bar displays the active list style name. Display text:
-- "Standard" for standard
-- "Alphanumeric" for alphanumeric
-- "Decimal" for decimal
-- "Steps" for steps
+**FR-3.2** Navigation behavior:
+- Resolve the target filename relative to the current file's directory.
+- If the target lacks a `.md` extension, append `.md` automatically.
+- Call `tabManager.openFileInTab(resolvedPath)` to open the file (or switch to its existing tab).
 
-**FR-3.2** When the cursor is not inside a list block, the indicator is hidden (no text, no placeholder).
+**FR-3.3** If the target file does not exist, show an alert: "File not found: {filename}.md". Do not create the file automatically. (File creation on wiki-link click is deferred to FC3.)
 
-**FR-3.3** The indicator updates on every cursor movement (CM6 `updateListener` that checks `docChanged || selectionSet`).
+**FR-3.4** Click handling uses a CM6 `EditorView.domEventHandlers({ click })` handler. The handler checks whether the click target falls within a wiki-link decoration range and, if so, prevents default behavior and navigates.
 
-**FR-3.4** Placement: the indicator appears in the status bar. Exact zone and styling will be refined during implementation — do not over-engineer the initial version.
+### FR-4: Auto-Complete for Wiki-Links
 
-### FR-4: Settings Panel Dropdown
+**FR-4.1** Typing `[[` triggers an auto-complete popup listing available `.md` files in the current file's directory.
 
-**FR-4.1** Add a "List Style" section to the Settings panel (`settings-panel.ts`), following the existing pattern of labeled sections with description text.
+**FR-4.2** The auto-complete source is registered via CM6's `@codemirror/autocomplete` module (`autocompletion()` with a custom `CompletionSource`).
 
-**FR-4.2** The section contains a `<select>` dropdown with four options:
-- "Standard (1. 2. 3.)" — value `"standard"`
-- "Alphanumeric (I. A. 1. a. i.)" — value `"alphanumeric"`
-- "Decimal Outline (1. 1.1.)" — value `"decimal"`
-- "Steps (1. a. -)" — value `"steps"`
+**FR-4.3** Completion behavior:
+- The completion context activates when the cursor is preceded by `[[` and the text between `[[` and the cursor contains no `]]`.
+- Each completion option displays the filename without the `.md` extension.
+- Selecting a completion inserts the filename (without `.md`) and appends the closing `]]` delimiter.
+- Example: typing `[[no` and selecting "notes" inserts `notes]]`, resulting in `[[notes]]`.
 
-**FR-4.3** Changing the dropdown calls `updateSettings()` to persist the new `listStyle` value immediately.
+**FR-4.4** The file list for auto-complete is populated from the directory scan (FR-5). The list is cached and refreshed on file save and tab switch events.
 
-**FR-4.4** The dropdown syncs from `getCurrentSettings().listStyle` when the panel opens (`syncPanelToSettings()`). If the field is absent (migration from old settings), default to `"standard"`.
+**FR-4.5** The current file is excluded from the completion list (a file should not link to itself).
 
-**FR-4.5** Description text below the dropdown: "Default style for new lists. Existing lists auto-detect their style from markers, or use a `<!-- list: style -->` comment override."
+**FR-4.6** If no `.md` files exist in the directory (other than the current file), the popup shows no results (standard CM6 autocomplete behavior — popup does not appear).
 
-### FR-5: Comment Override Verification
+### FR-5: Directory Scanning
 
-**FR-5.1** Add dedicated integration-style tests (Vitest, no CM6 runtime needed) that verify the full inference chain:
-- A `<!-- list: alphanumeric -->` comment preceding a `1. 2. 3.` list causes `inferListStyle()` to return `"alphanumeric"`.
-- The comment override takes priority over marker inference (e.g., a list with `I.` markers but a `<!-- list: steps -->` comment returns `"steps"`).
-- The comment on the first line of the block (not preceding) also works.
-- Whitespace variations in the comment (`<!--list:steps-->`, `<!-- list: steps -->`) are accepted.
+**FR-5.1** A new Tauri command `list_md_files` is added to the Rust backend:
+- Input: `directory_path: String` — absolute path to a directory.
+- Output: `Vec<String>` — filenames (not full paths) of `.md` files in the directory.
+- The scan is **shallow** (non-recursive). Only immediate children of the directory are listed.
+- Files are sorted alphabetically (case-insensitive).
+- Hidden files (names starting with `.`) are excluded.
+- The command returns an empty Vec if the directory does not exist or cannot be read.
 
-**FR-5.2** These tests are additive. The existing 637-line test suite must pass unchanged.
+**FR-5.2** A corresponding TypeScript bridge function `listMdFiles(directoryPath: string): Promise<string[]>` is added to `src/lib/bridge.ts`.
+
+**FR-5.3** The plugin derives the directory path from `window.__MARKABLE_CURRENT_FILE__` by stripping the filename component. If `__MARKABLE_CURRENT_FILE__` is null (untitled document), the file list is empty and auto-complete is disabled.
+
+### FR-6: Backlink Indexing
+
+**FR-6.1** The plugin maintains an in-memory index mapping each sibling `.md` file to its outgoing links (both wiki-links and standard Markdown links pointing to `.md` files).
+
+**FR-6.2** Outgoing link extraction scans file content for:
+- Wiki-links: `[[target]]` and `[[target|display]]` — extract "target".
+- Standard Markdown links: `[text](target.md)` and `[text](./target.md)` — extract "target.md" (relative paths only; absolute paths and URLs are ignored).
+
+**FR-6.3** Link target normalization:
+- Strip leading `./` if present.
+- Append `.md` if the target has no extension.
+- Trim whitespace from target names.
+- Comparison is case-sensitive (macOS APFS default is case-insensitive, but the index stores original case; matching uses `localeCompare` with `sensitivity: 'base'` for case-insensitive comparison).
+
+**FR-6.4** The index is rebuilt when:
+- The plugin is enabled (initial build).
+- The active tab changes (current file changed — the directory may differ).
+- The active document is saved (outgoing links may have changed in the current file or the user may have created a new file).
+
+**FR-6.5** Index rebuild is asynchronous and debounced at 300ms. During rebuild, the sidebar shows a brief "Scanning..." indicator. If a rebuild is triggered while one is in progress, the in-progress scan is abandoned and a new one starts after the debounce.
+
+**FR-6.6** To build the index, the plugin:
+1. Calls `listMdFiles()` to get sibling filenames.
+2. For each sibling file, calls `readFile()` (from bridge.ts) to read its content.
+3. Extracts outgoing links from the content.
+4. Stores the result in a `Map<string, string[]>` (filename -> array of link targets).
+
+**FR-6.7** The backlinks for the current file are computed by filtering the index: any file whose outgoing links include the current filename is a backlink source.
+
+### FR-7: Backlinks Sidebar Panel
+
+**FR-7.1** The plugin registers a sidebar panel via `api.registerSidebarPanel()` with:
+- `id`: `"backlinks"`
+- `title`: `"Backlinks"`
+- `side`: `"right"` (default; user-assignable via Plugins Panel detail view)
+- `defaultWidth`: 220
+
+**FR-7.2** The panel content displays:
+- A list of files that link to the current document.
+- Each entry shows the filename (without `.md` extension) as a clickable button.
+- Entries are sorted alphabetically.
+
+**FR-7.3** Empty state: when no backlinks exist, the panel shows centered text: "No backlinks".
+
+**FR-7.4** Loading state: while the index is being rebuilt, the panel shows centered text: "Scanning...".
+
+**FR-7.5** Each backlink entry, when clicked, opens the linking file in a tab (or switches to its existing tab) via `tabManager.openFileInTab()`.
+
+**FR-7.6** The panel updates when:
+- The active tab changes (different file may have different backlinks).
+- The index is rebuilt (new scan results available).
+
+**FR-7.7** The panel follows the same CSS patterns as the Auto TOC panel: `.backlinks-list`, `.backlink-item`, `.backlink-empty` classes. CSS is injected via a `<style>` tag in `onEnable` and removed in `onDisable`.
+
+### FR-8: Plugin Lifecycle
+
+**FR-8.1** The plugin is registered as a core plugin with:
+- `id`: `"backlinks"`
+- `name`: `"Backlinks"`
+- `version`: `"1.0.0"`
+- `description`: `"Wiki-link syntax and backlink tracking"`
+- `sidebarPanelId`: `"backlinks"`
+
+**FR-8.2** `onEnable` sequence:
+1. Inject CSS.
+2. Build the CM6 extensions (wiki-link decorations, click handler, auto-complete).
+3. Register extensions via `api.addExtensions()`.
+4. Register the sidebar panel via `api.registerSidebarPanel()`.
+5. Trigger initial directory scan and index build.
+
+**FR-8.3** `onDisable` sequence (exact reversal):
+1. Cancel any pending debounce timers.
+2. Remove CM6 extensions via `api.removeExtensions()`.
+3. Unregister sidebar panel via `api.unregisterSidebarPanel("backlinks")`.
+4. Remove injected CSS.
+5. Clear the in-memory index and all module-level state.
+
+**FR-8.4** The plugin is added to the `PLUGINS` array in `scripts/build-plugins.mjs` for IIFE bundling.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1: Single Transaction** — The style-switch rewrite (FR-1.3) must be dispatched as one CM6 transaction so that Cmd-Z undoes the entire rewrite in a single step.
+**NFR-1: Performance — Directory Scan** — The shallow directory scan (`list_md_files`) must complete in under 50ms for directories with up to 500 `.md` files. This is a simple `read_dir` + filter operation.
 
-**NFR-2: No Engine Modification** — `list-engine.ts` must not be modified. All new functionality is in new files or existing integration points (keybindings, format, menu handler, settings panel, status bar).
+**NFR-2: Performance — Index Build** — Reading and scanning up to 100 sibling files for outgoing links must complete in under 2 seconds. Files are read sequentially (not in parallel) to avoid file descriptor exhaustion. For directories with more than 200 `.md` files, the plugin logs a warning and proceeds (no hard cap).
 
-**NFR-3: Existing Tests Pass** — The 637-line `tests/list-engine.test.ts` and all other existing tests (909 Vitest total) must pass without modification.
+**NFR-3: Performance — Decorations** — Wiki-link decoration scanning (regex over document text) must not cause visible lag on documents up to 50,000 lines. The ViewPlugin should bail early on transactions that don't change the document.
 
-**NFR-4: Performance** — The status bar indicator must not cause visible lag on every keystroke. Use the same `updateListener` pattern as existing status bar plugins (check `update.docChanged || update.selectionSet`, bail early if neither).
+**NFR-4: No External Dependencies** — The plugin uses only CM6 modules already available via window globals and existing Tauri bridge functions. No new npm dependencies.
 
-**NFR-5: Platform Convention** — Keybindings use `Alt` (macOS Option key). Menu accelerators display as `Alt+R`, `Alt+N`, `Alt+L` per Tauri/macOS convention.
+**NFR-5: CSS Theme Compatibility** — All backlinks UI elements use existing CSS variables (`--text-primary`, `--text-secondary`, `--link-color`, `--code-bg`, `--selection-bg`). The panel automatically adopts the active theme.
+
+**NFR-6: IIFE Self-Containment** — The plugin follows all IIFE self-containment rules: no `@codemirror/*` value imports (accessed via `window.__CM_VIEW__`), no app-internal module imports, CSS injected via `<style>` tag.
 
 ---
 
 ## Architectural Decisions
 
-**AD-1: New File for Style Switching** — Create a new file `src/editor/list-style-switch.ts` containing the `switchListStyle(view: EditorView, targetStyle: ListStyle)` function and the three keybinding handlers. This keeps the stable engine and keybinding files untouched.
+**AD-1: Decoration Approach Over Custom Parser** — Wiki-links are detected via regex in a ViewPlugin rather than a custom lezer grammar extension. Rationale: IIFE plugins cannot modify the core parser; the decoration approach is proven (used by live-preview.ts for all Markdown decorations) and sufficient for `[[...]]` syntax.
 
-**AD-2: Keymap Registration** — The new keybindings are added to `formatKeymap` in `format.ts` (same pattern as all other formatting keybindings), NOT to `listKeymap` in `list-keybindings.ts`. This avoids modifying the stable `Prec.highest` keymap.
+**AD-2: Single Plugin File** — All backlinks functionality (decorations, auto-complete, click handler, sidebar panel, indexing) lives in one plugin file (`backlinks.plugin.ts`). This follows the pattern of auto-toc.plugin.ts and avoids splitting the feature across multiple plugins.
 
-**AD-3: Menu Handler Dispatch** — Menu item click events are dispatched from the existing Tauri menu event handler (wherever `format-bullet-list`, `format-ordered-list`, etc. are handled). The handler calls the same `switchListStyle()` function.
+**AD-3: Shallow Scan Only** — The directory scan is limited to sibling files (same directory as the current document). Recursive scanning introduces vault-like semantics that belong in FC3. Shallow scan keeps the feature simple and fast.
 
-**AD-4: Status Bar Integration** — The list style indicator is implemented as a lightweight status bar update within the existing status bar infrastructure, not as a separate plugin. It follows whatever pattern the word-count or other status bar items use.
+**AD-4: Read-Only Backlinks** — Clicking a wiki-link to a non-existent file shows an alert rather than creating the file. File creation from wiki-links is a vault feature (FC3). This avoids accidental file creation from typos.
 
-**AD-5: Settings Panel Placement** — The "List Style" dropdown is added to the Settings panel body, after the "Tabs" section and before the "Recent Files" section (or wherever the Architect determines is most logical given the current layout).
+**AD-5: Case-Insensitive Matching** — Link target matching uses `localeCompare` with `sensitivity: 'base'` to handle macOS APFS case-insensitivity. A wiki-link `[[Notes]]` matches a file named `notes.md`.
+
+**AD-6: Autocomplete via CM6 Module** — The auto-complete uses `@codemirror/autocomplete`'s `autocompletion()` API accessed via `window.__CM_AUTOCOMPLETE__`. A new global must be exposed in `src/lib/cm-globals.ts` for the autocomplete module, following the existing pattern for `__CM_VIEW__` and `__CM_STATE__`.
+
+**AD-7: Shared readFile for Index Building** — The index builder reads sibling files using the existing `readFile()` bridge function (Tauri `read_file` command). No new bulk-read command is needed; sequential reads are adequate for the shallow-scan scope.
+
+**AD-8: Tab Manager Integration via Window Global** — The plugin accesses the tab manager via `window.__MARKABLE_TAB_MANAGER__` (or equivalent global). If no such global exists, one must be exposed, following the pattern of `window.__MARKABLE_EDITOR_VIEW__` and `window.__MARKABLE_CURRENT_FILE__`.
 
 ---
 
 ## Out of Scope
 
-1. **Changing the list engine** — `list-engine.ts` is stable and passes all tests. No modifications.
-2. **New list styles** — Only the four existing styles (standard, alphanumeric, decimal, steps) are supported.
-3. **Auto-renumbering on paste** — Pasting list items does not trigger automatic renumbering.
-4. **Multi-cursor style switching** — Style switching operates on the primary cursor's list block only.
-5. **Nested list splitting** — If a block contains mixed styles at different depths, the switch rewrites all markers uniformly. Per-depth style preservation is not in scope.
-6. **Comment override insertion UI** — No UI to insert `<!-- list: style -->` comments. Users type them manually.
-7. **Table editing in preview mode** — Separate feature, not related to lists.
+1. **Unlinked mentions** — Scanning for plain-text filename matches without explicit link syntax. Deferred to FC3.
+2. **Graph visualization** — Interactive node-edge graph view of backlinks. Deferred to FC3 (see FEATURES.md addition below).
+3. **Recursive directory scanning** — Scanning subdirectories or vault-wide indexing. Deferred to FC3.
+4. **AI-powered link suggestions** — Suggesting related files based on content similarity. Deferred to FC3.
+5. **Block-level backlinks** — Linking to specific headings or paragraphs within a file. Deferred to FC3.
+6. **File creation from wiki-links** — Clicking a broken wiki-link to create the target file. Deferred to FC3.
+7. **Backlink count in status bar** — Showing a count of backlinks in the status bar. May be added in a future polish pass.
+8. **Wiki-link rename propagation** — Renaming a file and updating all wiki-links that reference it. Deferred to FC3.
+9. **Frontmatter-based link metadata** — Using YAML frontmatter fields as link targets or aliases. Deferred to FC3.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1: Cursor not on a list line** — Keybinding fires but cursor is on a paragraph, heading, or blank line. Expected: no-op, return `false`.
+**EC-1: Untitled document (no file path)** — `window.__MARKABLE_CURRENT_FILE__` is null. Expected: auto-complete is disabled (no directory to scan), backlinks panel shows "No backlinks", wiki-link click handler shows "Cannot navigate: document has no file path". Decorations still render wiki-link syntax visually.
 
-**EC-2: Single-item list** — A list block with exactly one line (e.g., `1. Only item`). Expected: the single marker is rewritten to the target style's depth-0 marker.
+**EC-2: Wiki-link to self** — `[[current-file]]` links to the file currently open. Expected: clicking navigates to the same file (no-op via tabManager's duplicate-path guard). The file is excluded from auto-complete suggestions (FR-4.5) but the link still renders as a styled link.
 
-**EC-3: Deeply nested list (5+ levels)** — A list with depth 5+ in alphanumeric style cycles back through the marker types (roman-upper at depth 5 = depth 0). Expected: `markerTypeForDepth` handles the modulo correctly (already tested, but style switch must also produce correct output).
+**EC-3: Wiki-link target does not exist** — `[[nonexistent]]` points to a file that is not in the directory. Expected: the link renders with normal link styling (no broken-link indicator in Foundation scope), clicking shows alert "File not found: nonexistent.md" (FR-3.3).
 
-**EC-4: Empty list items** — Lines like `1. ` (marker with no content). Expected: marker is rewritten; empty content is preserved.
+**EC-4: Wiki-link with display text** — `[[target|My Display Text]]` Expected: in preview mode, only "My Display Text" is shown (styled as link). Clicking navigates to "target.md".
 
-**EC-5: Mixed depths with decimal-outline** — Switching TO decimal style requires building parent chains. A flat `1. / 2. / 3.` list at depth 0 becomes `1. / 2. / 3.` (no change in decimal-outline at depth 0). An indented item at depth 1 under item 2 becomes `2.1.`. Expected: parent chain is computed from the sequential position of ancestor items.
+**EC-5: Wiki-link with multiple pipes** — `[[target|text with | pipes]]` Expected: target is "target", display text is "text with | pipes" (only first pipe is the separator per FR-1.2).
 
-**EC-6: Comment override already present** — A block preceded by `<!-- list: alphanumeric -->` is switched to steps via `Alt-L`. Expected: markers are rewritten to steps style, but the comment is NOT modified or removed. On the next Enter/Tab, the comment override will win again (inferListStyle checks comment first). The user must manually delete the comment if they want the keybinding's style to persist.
+**EC-6: Wiki-link inside fenced code block** — ` ```\n[[not-a-link]]\n``` ` Expected: no decoration applied, no click handler, treated as plain text (FR-2.4).
 
-**EC-7: Switching to the same style** — User presses `Alt-R` on a block that is already alphanumeric. Expected: no-op or idempotent rewrite (markers remain the same). Either behavior is acceptable; the transaction should not corrupt content.
+**EC-7: Nested square brackets** — `[[[text]]]` or `[[text]` (malformed). Expected: the regex matches the innermost valid `[[...]]` pair or fails to match. Malformed syntax is not decorated.
 
-**EC-8: Alpha overflow (>26 items)** — A list at an alpha-lower depth with 27+ items. `toAlphaLower(27)` returns `"27"` (the string). Expected: the marker becomes `27. ` which looks like a decimal marker. This is existing engine behavior and is not changed by this feature.
+**EC-8: Wiki-link spanning multiple lines** — `[[file\nname]]` Expected: not recognized as a wiki-link (FR-1.2 forbids newlines in content). Rendered as plain text.
 
-**EC-9: Roman numeral ambiguity during switch** — Switching to alphanumeric on a list where depth-0 items will get roman-upper markers. Items like "I." are both valid alpha-upper and roman-upper. Expected: `generateMarker("roman-upper", ordinal)` is used directly (no detection/disambiguation needed since we are generating, not parsing).
+**EC-9: Empty wiki-link** — `[[]]` Expected: recognized as valid syntax but target is empty string. Decoration renders an empty link (zero-width). Clicking shows alert "File not found: .md". Auto-complete should still trigger between `[[` and `]]`.
 
-**EC-10: Undo after style switch** — User switches from standard to alphanumeric, then presses Cmd-Z. Expected: the entire list reverts to standard markers in one undo step (NFR-1).
+**EC-10: Very long filename in wiki-link** — `[[a-filename-that-is-200-characters-long]]` Expected: decoration renders normally; file resolution proceeds normally (OS will reject if path exceeds system limit).
 
-**EC-11: Status bar on non-list line** — Cursor moves from a list line to a heading. Expected: status bar indicator disappears (FR-3.2).
+**EC-11: Directory with 500+ .md files** — Large directory scan. Expected: scan completes (NFR-1 budget 50ms), auto-complete shows all results filtered by typed prefix, index build may be slow but runs asynchronously with "Scanning..." indicator.
 
-**EC-12: Status bar with comment override** — Cursor is inside a list block preceded by `<!-- list: steps -->`, but the markers look like standard `1. 2. 3.`. Expected: status bar shows "Steps" (because inferListStyle returns "steps" due to the comment override).
+**EC-12: File saved while index build is in progress** — User saves while the debounced index rebuild is running. Expected: the in-progress build is abandoned, a new debounce cycle starts (FR-6.5).
 
-**EC-13: Settings migration — absent listStyle** — Old settings file has no `listStyle` field. Expected: dropdown defaults to "standard"; `getCurrentSettings().listStyle` returns `undefined`; all code falls back to `"standard"`.
+**EC-13: Tab switch to file in different directory** — User switches from `/docs/a.md` to `/notes/b.md`. Expected: the index is fully rebuilt for `/notes/` directory. Previous index for `/docs/` is discarded.
 
-**EC-14: Decimal outline parent chain computation** — When switching TO decimal style, the parent chain must be computed by scanning preceding lines at shallower depths. Example: lines at depths [0, 1, 1, 0, 1, 2] with ordinals [1, 1, 2, 2, 1, 1] should produce markers [1., 1.1., 1.2., 2., 2.1., 2.1.1.]. This is the most complex edge case and requires careful sequential scanning.
+**EC-14: Tab switch to untitled document** — User switches to a new untitled tab. Expected: index is cleared, auto-complete disabled, backlinks panel shows "No backlinks".
 
-**EC-15: Bullet markers in steps style** — Switching to steps with items at depth 2+. Expected: those items get bullet markers (`- `). Bullets have no ordinal progression, so all depth-2+ items show `- ` regardless of position.
+**EC-15: Plugin enabled then immediately disabled** — Rapid toggle. Expected: all timers cancelled, no stale index updates fire after disable, CM6 extensions cleanly removed, sidebar panel destroyed without errors.
 
-**EC-16: Empty document / no list block** — `findListBlockRange` returns null. Expected: keybinding is a no-op, status bar shows nothing.
+**EC-16: Wiki-link target with path separators** — `[[subfolder/file]]` Expected: in Foundation scope (shallow scan), this will not match any sibling file. The link renders but clicking resolves to a path that likely does not exist (alert shown). This syntax becomes meaningful when recursive scanning is added in FC3.
 
-**EC-17: Selection spans multiple list blocks** — Cursor is on line 5 which is in a list, but lines 3-4 are a blank line separating two lists. Expected: only the block containing line 5 is rewritten. `findListBlockRange` already handles this by stopping at blank lines.
+**EC-17: Standard markdown link to .md file** — `[text](sibling.md)` in a sibling file. Expected: the backlink index detects this as an outgoing link to the current file and shows the sibling in the backlinks panel.
 
-**EC-18: List block starts with comment line** — `findListBlockRange` walks backward and includes `isListMetaComment` lines. Expected: the comment line is included in the range but not rewritten (it has no list marker).
+**EC-18: Standard markdown link with relative path** — `[text](./sibling.md)` Expected: the `./` prefix is stripped during normalization (FR-6.3), correctly matching "sibling.md".
+
+**EC-19: Standard markdown link with absolute path or URL** — `[text](/absolute/path.md)` or `[text](https://example.com/file.md)` Expected: ignored by the backlink indexer (FR-6.2 specifies relative paths only).
+
+**EC-20: Binary or non-UTF-8 .md file in directory** — A `.md` file that contains binary data. Expected: `readFile()` returns an error; the file is skipped during index build (logged as warning, not fatal).
+
+**EC-21: Permission-denied file in directory** — A `.md` file that cannot be read due to permissions. Expected: `readFile()` returns an error; the file is skipped during index build (logged as warning, not fatal).
+
+**EC-22: Auto-complete with no matching files** — User types `[[xyz` but no files start with "xyz". Expected: auto-complete popup shows no results (standard CM6 behavior — popup closes or does not appear).
+
+**EC-23: Auto-complete closing bracket insertion** — User selects a completion. Expected: the filename is inserted AND `]]` is appended (FR-4.3). If `]]` already exists after the cursor, do not insert duplicate brackets.
+
+**EC-24: Concurrent wiki-link click during index rebuild** — User clicks a wiki-link while the index is being rebuilt. Expected: click navigation proceeds immediately (it does not depend on the index — it resolves the file path directly).
+
+**EC-25: File renamed externally** — A sibling file is renamed outside Markable while the app is open. Expected: the stale index entry persists until the next rebuild trigger (file save or tab switch). The backlinks panel may show a now-incorrect entry; clicking it shows "File not found" alert. This is acceptable for Foundation scope.
+
+**EC-26: Wiki-link at document boundaries** — `[[link]]` as the very first or very last characters in the document. Expected: decoration and click handling work correctly; no off-by-one errors in range calculations.
+
+**EC-27: Multiple wiki-links on the same line** — `See [[file-a]] and [[file-b]]`. Expected: both are independently decorated and clickable.
+
+**EC-28: Wiki-link adjacent to other Markdown syntax** — `**[[bold-link]]**` or `- [[list-link]]`. Expected: wiki-link decoration is applied; surrounding Markdown syntax is handled by the existing live preview system.
+
+**EC-29: Autocomplete global not exposed** — `window.__CM_AUTOCOMPLETE__` is not yet defined in `cm-globals.ts`. Expected: the implementation must add this global. If the global is missing at runtime, the plugin logs a warning and disables auto-complete (decorations and backlinks panel still work).
+
+**EC-30: Tab manager global not exposed** — `window.__MARKABLE_TAB_MANAGER__` may not exist. Expected: the implementation must expose it (or use an alternative mechanism). If missing, click-to-navigate logs a warning and is disabled.
 
 ---
 
 ## Migration Notes
 
-### Already Implemented (Stable, Do Not Modify)
+### Already Implemented (Leverage As-Is)
 
-| Component | File | Status |
+| Component | File | Relevance |
 |---|---|---|
-| List engine (4 styles, 7 markers, inference, comment parsing) | `src/editor/list-engine.ts` | Stable, 474 lines |
-| List keybindings (Enter, Tab, Shift-Tab, Backspace) | `src/editor/list-keybindings.ts` | Stable, 182 lines |
-| `listStyle` field in settings type | `src/lib/settings.ts` line 132 | Stable |
-| `listStyle` read in keybindings | `list-keybindings.ts:41` via `getCurrentSettings().listStyle` | Stable |
-| `listStyle` read in format.ts | `format.ts:17` via `getCurrentSettings().listStyle` | Stable |
-| Existing test suite | `tests/list-engine.test.ts` | 637 lines, all passing |
-| Format > List submenu in native menu | `menu.rs` lines 138-148 | Bullet/Ordered/Task items exist |
+| Plugin API (addExtensions, registerSidebarPanel, etc.) | `src/plugins/markable-plugin-api.ts` | Full API surface for plugin lifecycle |
+| Sidebar panel system | `src/sidebar/sidebar-manager.ts` | Panel registration, L/R assignment, tabs |
+| Auto TOC plugin (reference pattern) | `src/plugins/auto-toc/auto-toc.plugin.ts` | Sidebar panel plugin pattern to follow |
+| Tab manager (openFileInTab, getTabs) | `src/tabs/tab-manager.ts` | File navigation on link/backlink click |
+| Live preview link handling | `src/editor/live-preview.ts` (handleLink, line 531+) | CSS classes and decoration patterns |
+| Bridge layer (readFile, writeFile) | `src/lib/bridge.ts` | File I/O for index building |
+| CM6 globals | `src/lib/cm-globals.ts` | Window globals for IIFE CM6 access |
+| Plugin build script | `scripts/build-plugins.mjs` | PLUGINS array for IIFE bundling |
+| File I/O commands | `src-tauri/src/commands/io.rs` | Pattern for new Rust command |
+| `__MARKABLE_CURRENT_FILE__` global | Set by `tab-manager.ts` | Current file path for directory derivation |
 
 ### New Work Required
 
 | Component | Target File | Notes |
 |---|---|---|
-| `switchListStyle()` function | `src/editor/list-style-switch.ts` (new) | Core rewrite logic, single transaction |
-| Three Alt keybindings | Added to `formatKeymap` in `src/editor/format.ts` | `Alt-r`, `Alt-n`, `Alt-l` |
-| "List Style" submenu in Format > List | `src-tauri/src/menu.rs` | 4 new menu items with accelerators |
-| Menu event handler wiring | Wherever menu events are dispatched to JS | Calls `switchListStyle()` |
-| Status bar indicator | Status bar infrastructure file | updateListener, show style name |
-| Settings panel dropdown | `src/settings/settings-panel.ts` | New section with `<select>` |
-| Comment override integration tests | `tests/list-engine.test.ts` (additive) | Verify full inference chain |
-| Style switch unit tests | `tests/list-style-switch.test.ts` (new) | All edge cases above |
+| Backlinks plugin (all frontend logic) | `src/plugins/backlinks/backlinks.plugin.ts` (new) | IIFE plugin: decorations, autocomplete, click handler, sidebar, indexing |
+| `list_md_files` Tauri command | `src-tauri/src/commands/io.rs` (or new file) | Shallow directory scan returning `.md` filenames |
+| `listMdFiles()` bridge function | `src/lib/bridge.ts` | TypeScript wrapper for new Tauri command |
+| CM6 autocomplete global | `src/lib/cm-globals.ts` | Expose `window.__CM_AUTOCOMPLETE__` |
+| Tab manager global (if needed) | `src/tabs/tab-manager.ts` or `src/main.ts` | Expose `window.__MARKABLE_TAB_MANAGER__` for IIFE access |
+| Plugin build registration | `scripts/build-plugins.mjs` | Add `["backlinks", "src/plugins/backlinks/backlinks.plugin.ts"]` to PLUGINS |
+| Register command in Tauri app builder | `src-tauri/src/main.rs` (or `lib.rs`) | Add `list_md_files` to `.invoke_handler()` |
+| Backlinks tests | `tests/plugins/backlinks/backlinks.test.ts` (new) | Unit tests for all pure functions + edge cases |
+| FEATURES.md update | `docs/requirements/FEATURES.md` | Add FC3 #11a Knowledge Graph Visualization |
+
+### FEATURES.md Addition
+
+Add after FC3 item 11 (File Browser Advanced / Vaults):
+
+> **11a. Knowledge Graph Visualization** — interactive node-edge graph view of vault backlinks and connections (deferred from FC2 Backlinks)

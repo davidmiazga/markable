@@ -213,6 +213,7 @@ These conflicts are flagged for the Architect to propose alternatives:
 11. **File Browser Advanced** — "Vaults" (Obsidian-style)
     1. Content type hierarchy: Vault, Areas-Divisions, Domains, Fields, Subfields, Disciplines, Subjects, Topics, Subtopics, Snippets
     2. Folder View: customized view of items inside a hierarchy item
+11a. **Knowledge Graph Visualization** — interactive node-edge graph view of vault backlinks and connections (deferred from FC2 Backlinks)
 12. **Backup & Sync**
 13. **Networking Solutions** — file paths on local networks or cross-OS
 14. **Projects**

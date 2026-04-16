@@ -43,6 +43,7 @@ const PLUGINS = [
   ["word-count",        "src/plugins/word-count/word-count.plugin.ts"],
   ["auto-toc",          "src/plugins/auto-toc/auto-toc.plugin.ts"],
   ["markdown-toolbar",  "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"],
+  ["backlinks",         "src/plugins/backlinks/backlinks.plugin.ts"],
 ];
 
 /**
@@ -131,4 +132,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log("\n[build-plugins] All 5 core plugins built successfully.");
+console.log("\n[build-plugins] All 6 core plugins built successfully.");

@@ -786,6 +786,11 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__MARKABLE_EDITOR_VIEW__"] =
     editor;
 
+  // AD-8: expose the tab manager so IIFE plugins (e.g. backlinks) can call
+  // openFileInTab() for click-to-navigate without an app-internal import.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_TAB_MANAGER__"] =
+    tabManager;
+
   // AD-3: expose the file-open dialog so IIFE plugins (e.g. image-toolbar)
   // can open the native file picker. Uses the existing openFileDialog() wrapper
   // (invoke-based, no @tauri-apps/plugin-dialog dependency) and normalises the
