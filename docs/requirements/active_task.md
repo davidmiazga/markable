@@ -1,317 +1,209 @@
 ---
-title: "Image Toolbar Plugin"
-last-updated: "2026-04-14"
-review-cadence-days: 14
+title: "Consolidate Toolbar Plugins"
+last-updated: "2026-04-15"
+review-cadence-days: 7
 status: active
 ---
 
-# Image Toolbar Plugin — Requirements Spec
+# Consolidate Toolbar Plugins — Requirements Spec
 
 ## Summary
 
-As a user, I want a floating popover toolbar that appears whenever I interact with a Markdown image — either by clicking on the rendered preview or by moving the cursor onto the image syntax line — so that I can change the image source and control its alignment without editing raw Markdown.
+As a user, I want the three separate toolbar plugins (markdown-toolbar, table-toolbar, image-toolbar) replaced by a single unified plugin whose active sub-toolbar switches automatically based on cursor context — image controls when on an image line, table controls when inside a table, formatting controls everywhere else — so that the Plugins Panel shows one entry instead of three and toolbar mode preferences are managed in one place.
+
+---
+
+## Background and Motivation
+
+Three independently authored plugins currently share the same structural pattern:
+- A CM6 `updateListener` that detects cursor context on every editor transaction.
+- A `floating` or `sidebar` mode with identical settings shape (`toolbarMode`, `sidebarSide`).
+- Separate CSS style tags, separate plugin IDs, separate entries in `build-plugins.mjs`, and separate test files.
+
+Users must enable/disable three plugins separately. Settings are duplicated across three files. The Plugins Panel shows three toolbar entries, which is confusing because only one toolbar is ever active at a time.
+
+The consolidation goal is to merge all three into a single plugin file `src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts` with a single build output `src-tauri/plugins/core/markdown-toolbar.js`.
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Trigger Conditions
+### FR-1: Single Plugin Entry Point
 
-The toolbar is displayed under exactly two conditions. Both conditions produce the same popover UI.
+The unified plugin is registered under `id: "markdown-toolbar"`. The `table-toolbar` and `image-toolbar` plugin IDs are retired. After consolidation:
 
-| Trigger | Detection Method |
-|---|---|
-| Live preview mode — user clicks on a rendered `<img class="cm-live-image">` element | A DOM `click` listener on `document` (event delegation) checks `event.target.closest("img.cm-live-image")`. On match, the toolbar is shown and positioned relative to the clicked image element. |
-| Edit mode — cursor moves onto the line containing `![alt](url)` syntax | A CM6 `updateListener` extension reads `state.selection.main.head`, resolves the line, and checks the syntax tree for an `Image` node whose range overlaps that line. On match, the toolbar is shown and positioned relative to the CM6 widget coordinates for that image node. |
+- `build-plugins.mjs` has one fewer entry (`table-toolbar` and `image-toolbar` are removed; `markdown-toolbar` remains).
+- `src-tauri/plugins/core/` contains `markdown-toolbar.js` but no longer `table-toolbar.js` or `image-toolbar.js`.
+- The Plugins Panel displays one toolbar entry.
 
-Both triggers identify the same logical image (the `![alt](url)` or `<img>` at a given document position). The popover is anchored to the image's bounding rect in both cases.
+### FR-2: Context-Sensitive Sub-Toolbar Switching
 
-When the cursor moves to a different line (or off an image line entirely) in edit mode, the toolbar hides. When the user clicks outside the popover in live preview mode, the toolbar hides (see FR-5).
+On every CM6 editor transaction (via a single shared `updateListener`), the plugin evaluates cursor context and activates exactly one sub-toolbar. Priority order when contexts overlap:
 
-Only one toolbar instance exists at a time. If a second trigger fires while the toolbar is already visible for a different image, the toolbar repositions and reinitialises for the new image.
+1. **Image context** — cursor is on a line containing `![alt](url)` syntax (edit mode), OR the user has clicked a rendered `<img class="cm-live-image">` element (live preview mode). Shows the image sub-toolbar.
+2. **Table context** — cursor is inside a GFM table (detected via the existing `detectTableContext` logic). Shows the table sub-toolbar.
+3. **Default context** — all other positions. Shows the markdown formatting sub-toolbar.
 
-### FR-2: Popover Structure
+Only one sub-toolbar is visible at any given moment. Switching contexts hides the previously active sub-toolbar and shows the newly active one within the same update cycle (no flash).
 
-The toolbar is a single `<div>` fixed-positioned over `document.body`. It contains two sections rendered inline:
+The priority order (image > table > default) is the resolution rule when a position is simultaneously inside a table and on an image line (e.g. an image cell in a table). Image context wins.
 
-1. A two-tab strip: "Select" and "Embed Link".
-2. An alignment control group: four buttons — Left, Center, Right, Float Right.
+### FR-3: Floating Mode Behaviour
 
-The two sections are always visible simultaneously (they are not in separate tabs relative to each other). The tab strip controls which source-editing panel is shown within the popover; the alignment buttons are always present.
+When `toolbarMode === "floating"`:
 
-#### FR-2a: Select Tab
+- The markdown sub-toolbar (formatting buttons) shows as a floating bubble above the selection, identical to the current `markdown-toolbar` plugin behaviour. It is hidden when there is no selection and the cursor is not on a non-empty line.
+- The table sub-toolbar shows as the three-element floating UI (top bar, row handle, bottom pill) around the table, identical to the current `table-toolbar` plugin behaviour.
+- The image sub-toolbar shows as the floating popover above the image, identical to the current `image-toolbar` plugin behaviour.
 
-Content: a single button labelled "Choose File".
+All three share one `toolbarMode` / `sidebarSide` setting pair. A user setting of `"floating"` applies to all three sub-toolbars simultaneously.
 
-Behaviour: clicking the button calls `window.__TAURI_DIALOG__.open(...)` (see AD-3) with a filter restricting to image extensions: `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`. If the user selects a file, the plugin:
-1. Calls `resolveRelativePath(selectedAbsPath, currentDocumentPath)` to produce a relative path when the image is inside or below the document's directory, or retains the absolute path otherwise.
-2. Dispatches a CM6 transaction that replaces the URL portion of the current image's Markdown source with the new path (see FR-6).
-3. Closes the toolbar.
+### FR-4: Sidebar Mode Behaviour
 
-If the user cancels the dialog (dialog returns `null`), no dispatch is emitted and the toolbar remains open.
+When `toolbarMode === "sidebar"`:
 
-`currentDocumentPath` is obtained from `(window as any).__MARKABLE_CURRENT_FILE__` (the same global used by `live-preview.ts` via `setLivePreviewFilePath`). If that global is `null` (untitled document), the absolute path is used as-is.
+- The markdown sub-toolbar and table sub-toolbar are eligible for sidebar docking (both supported sidebar mode individually).
+- The image sub-toolbar is floating-only regardless of `toolbarMode`. When `toolbarMode === "sidebar"`, the image sub-toolbar continues to appear as a floating popover (preserving the existing `AD-5` decision from the image-toolbar spec).
+- A single sidebar panel is registered under `id: "markdown-toolbar"`. Its content area switches dynamically: when cursor enters a table, the sidebar panel shows table controls; otherwise it shows markdown formatting buttons.
+- The image popover is always a separate floating element and does not appear in the sidebar panel.
 
-#### FR-2b: Embed Link Tab
+### FR-5: Unified Settings
 
-Content: a text `<input>` pre-filled with the current image's `src` value (the raw Markdown URL, not the resolved Tauri asset URL). Below the input: an "Embed Image" button.
+A single settings object is persisted per the existing plugin settings pattern (`api.loadSettings()` / `api.saveSettings()`):
 
-Behaviour: clicking "Embed Image" reads the current input value. If it is non-empty and differs from the existing URL, the plugin dispatches a CM6 transaction replacing the URL in the Markdown source (see FR-6). If the value is unchanged or empty, no dispatch is emitted. The toolbar closes after a successful dispatch.
+```typescript
+interface UnifiedToolbarSettings {
+  toolbarMode: "floating" | "sidebar";
+  sidebarSide: "left" | "right";
+}
+```
 
-"Embed Image" is enabled regardless of URL scheme — it accepts relative paths, absolute paths, `https://` URLs, and data URIs.
+Default: `{ toolbarMode: "floating", sidebarSide: "left" }`.
 
-### FR-3: Alignment Controls
+Settings migration: if a user previously had settings written by the old `markdown-toolbar`, `table-toolbar`, or `image-toolbar` plugins, the unified plugin reads the `markdown-toolbar` settings file. The `table-toolbar` and `image-toolbar` settings files are not read (they may exist on disk but are ignored). No migration of those old files is required.
 
-Four buttons: **Left** | **Center** | **Right** | **Float Right**.
+### FR-6: Plugin Panel Detail View
 
-The active alignment is visually indicated (CSS accent border or background) on the button that matches the current image's alignment state (detected at open time — see FR-4).
+The Plugins Panel detail view for the unified plugin shows:
 
-Each button, when clicked, dispatches a single CM6 transaction that replaces the image's surrounding Markdown source with the aligned form (see FR-6). The toolbar closes after dispatch.
+- A three-way position toggle: **Left** | **Float** | **Right** (identical to the existing markdown-toolbar and table-toolbar `renderDetailExtra` controls).
+- No separate controls for the image sub-toolbar's position (it is always floating).
+- Changing position saves settings and calls `api.restartSelf()`, identical to current behaviour.
 
-#### FR-3a: Alignment Source Forms
+### FR-7: CSS Scoping
 
-| Button | Written Markdown form |
-|---|---|
-| Left | `![alt](url)` (bare — removes any existing `<div align="...">` wrapper) |
-| Center | `<div align="center">![alt](url)</div>` |
-| Right | `<div align="right">![alt](url)</div>` |
-| Float Right | `<img src="url" alt="alt" align="right" style="float:right; margin:0 0 8px 16px">` |
+All CSS from the three existing plugins is retained verbatim but injected under a single `<style id="__markable_unified_toolbar_css__">` tag. The three existing `STYLE_ID` constants are merged. Existing class names (`.md-toolbar`, `.tbl-toolbar`, `.img-toolbar`) are preserved unchanged so layout and visual behaviour are identical to the existing plugins.
 
-"Left" is the removal/reset case: if the image already has no wrapper it is a no-op dispatch (still emits to normalise any float-right inline HTML back to Markdown — see EC-5).
+### FR-8: Build System Update
 
-#### FR-3b: Detection of Current Alignment
+- Remove `["table-toolbar", ...]` and `["image-toolbar", ...]` entries from `build-plugins.mjs` `PLUGINS` array.
+- Update the success log message from "All 8 core plugins" to "All 6 core plugins".
+- No new `vite.plugins.config.ts` entry is required (the `markdown-toolbar` entry already exists).
+- The two retired `.js` files (`table-toolbar.js`, `image-toolbar.js`) will be absent from the build output. Any code that loads them by name must be updated (see FR-9).
 
-At toolbar open time, the plugin reads the raw Markdown source of the current image region (see FR-4 for region detection) and classifies it:
+### FR-9: PluginManager / Settings Migration
 
-- If the source matches `<div align="center">...</div>` — active alignment is Center.
-- If the source matches `<div align="right">...</div>` — active alignment is Right.
-- If the source matches `<img ... align="right" ...>` (inline `<img>` with `align="right"`) — active alignment is Float Right.
-- Otherwise (bare `![alt](url)`, `<div align="left">...</div>`, or any unrecognised form) — active alignment is Left.
+The PluginManager loads plugins by filename. When `settings.plugins` contains `"table-toolbar": true` or `"image-toolbar": true` from a previous session, those keys are now for non-existent files. The PluginManager already handles `status: "missing"` for files no longer on disk — this is an existing code path (EC-7/EC-8 in `index.ts`). No new handling is required. The `"markdown-toolbar"` enabled state is preserved.
 
-### FR-4: Image Region Detection
+### FR-10: Test Coverage
 
-"Image region" is the span of document text that the plugin reads and replaces on each operation. The region must capture the full image expression including any wrapper element.
+All tests — migrated and new — live in a single file: `tests/plugins/markdown-toolbar/markdown-toolbar.test.ts`. The old test files (`tests/plugins/table-toolbar/table-toolbar.test.ts` and `tests/plugins/image-toolbar/image-toolbar.test.ts`) are deleted after migration.
 
-Detection algorithm (applied at each trigger event):
-
-1. Obtain the document position of the image. In click-trigger mode this is the CM6 widget position recovered from the clicked `<img>` element's dataset attribute (see AD-2). In edit-mode this is the `Image` node's `from` position from the CM6 syntax tree.
-2. From that position, call `syntaxTree(state).resolveInner(pos)` and walk up to find the `Image` node.
-3. Obtain the raw line text for the line containing `node.from`.
-4. Check if the line matches a `<div align="...">` open tag immediately before the image, and if the following line contains the corresponding `</div>` close tag. If so, the region is the combined span from the start of the `<div>` tag to the end of the `</div>` tag (including the newline between them if present).
-5. Check if the line itself is a standalone `<img ... >` tag (Float Right form). If so, the region is that entire line.
-6. Otherwise the region is exactly the `Image` node's range (`node.from` to `node.to`).
-
-The detected region, raw source text, alt text, and url are stored in a module-level `currentImageContext` object and used by all toolbar actions.
-
-### FR-5: Popover Dismiss Behaviour
-
-The toolbar distinguishes two open modes — **edit-triggered** (cursor moved onto an image line) and **click-triggered** (user clicked an `<img class="cm-live-image">` in live preview). A module-level `triggerMode: "edit" | "click" | null` flag tracks which mode is active.
-
-**Edit-triggered mode dismiss conditions:**
-
-- The CM6 `updateListener` fires and the cursor is no longer on an image line. The toolbar hides immediately (no debounce). This mirrors the Table Toolbar which calls `updateFloatingVisibility(null)` from its `updateListener` when the cursor leaves the table.
-
-**Click-triggered mode dismiss conditions:**
-
-- A `mousedown` event fires on `document` outside the toolbar element (click-outside). The toolbar hides on the `mousedown` event itself (not `mouseup`) so that clicking the editor body feels instantaneous.
-- The CM6 `updateListener` fires and the cursor moves to a non-image line AND `triggerMode` is `"click"`. The cursor's position at click time was irrelevant to opening the toolbar, but if the user subsequently navigates the cursor off every image line the toolbar still hides.
-
-**Both modes — additional dismiss conditions:**
-
-- The editor loses focus (`blur` event on the editor's DOM node).
-- `onDisable` is called.
-
-**Unified logic summary:** any path that hides the toolbar calls a single `hideToolbar()` helper that sets `display: none`, clears `currentImageContext` to `null`, and resets `triggerMode` to `null`. This ensures all dismiss paths are symmetric.
-
-Hiding means `display: none` on the popover element. It does not destroy the element — the same DOM node is reused on the next trigger.
-
-### FR-6: Document Mutations
-
-All document mutations follow the same contract as the Table Toolbar plugin:
-
-- Each action dispatches exactly one `view.dispatch({ changes: { from, to, insert } })` call covering the full image region (from FR-4).
-- The `from`/`to` span is the image region detected at open time and stored in `currentImageContext`.
-- The `insert` string is the fully composed new Markdown form for the image.
-- A single dispatch = a single undo step (one Cmd-Z reversal).
-
-URL replacement preserves the existing alt text. Alt text replacement (future) preserves the existing URL.
-
-### FR-7: Popover Positioning
-
-The toolbar uses the same positioning strategy as the Table Toolbar:
-
-- Default: appear above the image element, vertically offset by `toolbarHeight + 8px`.
-- Flip: if the computed top position would place the toolbar above the viewport top edge (`< 0`), flip to appear below the image instead.
-- Horizontal clamp: if the toolbar's right edge would exceed `window.innerWidth`, shift left until it is fully within the viewport.
-- The position is recalculated on each trigger (open), not continuously tracked during scroll. If the user scrolls after opening, the toolbar may drift. The toolbar auto-closes on cursor movement (edit mode) or click-away (preview mode) so visible drift is brief.
-
-### FR-8: Plugin Integration Contracts
-
-- File: `src/plugins/image-toolbar/image-toolbar.plugin.ts`
-- Compiled output: `src-tauri/plugins/core/image-toolbar.js`
-- Plugin object fields:
-  - `id: "image-toolbar"`
-  - `name: "Image Toolbar"`
-  - `version: "1.0.0"`
-  - `description`: one-line summary
-  - `detail`: multi-sentence description for the Plugins Panel
-  - `sidebarPanelId`: omitted (this plugin is floating-only; no sidebar mode)
-- `onEnable(api)`: loads settings (none in v1.0 but the hook must exist for future extensibility), injects CSS, adds the CM6 `updateListener` extension via `api.addExtensions()`, creates the floating popover DOM element, attaches the `document` click-delegation listener and the click-away dismiss listener.
-- `onDisable(api)`: calls `api.removeExtensions()`, removes the popover DOM element from `document.body`, removes all `document`-level event listeners, resets all module-level state to initial values.
-- CM6 globals pattern: `window.__CM_VIEW__` for CM6 value access (same as `table-toolbar.plugin.ts`). Never accessed at module-evaluation time. Direct editor dispatch via `(window as any).__MARKABLE_EDITOR_VIEW__`.
-- No `@codemirror/*` value imports at module level; only `import type` annotations.
-- No app-internal module imports.
-
-### FR-9: Build System Integration
-
-- Add one entry to `scripts/build-plugins.mjs` `PLUGINS` array:
-  `["image-toolbar", "src/plugins/image-toolbar/image-toolbar.plugin.ts"]`
-- Add one `pluginConfig(...)` call to `vite.plugins.config.ts` (same pattern as existing entries; `clearOutput: false`).
-- Update the success-count log message in `build-plugins.mjs` from "All 7 core plugins" to "All 8 core plugins".
-- Both files must be updated before the plugin can be compiled.
-
-### FR-10: CSS Scoping and Injection
-
-- All CSS class names prefixed `.img-toolbar` (e.g. `.img-toolbar`, `.img-toolbar__tab`, `.img-toolbar__tab--active`, `.img-toolbar__align-btn`, `.img-toolbar__align-btn--active`, `.img-toolbar__input`).
-- CSS injected as `<style id="__markable_img_toolbar_css__">` in `onEnable`.
-- Guard: check `document.getElementById(STYLE_ID)` before inserting to prevent duplicate injection on rapid toggle cycles.
-- CSS removed in `onDisable` by id.
-- CSS uses `var(--bg-primary)`, `var(--bg-chrome)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--accent-color)`, `var(--selection-bg)` for automatic theme adoption.
-
-### FR-11: Persistent Settings
-
-No user-configurable settings in v1.0. `onEnable` still calls `api.loadSettings()` as a no-op scaffold so the pattern is in place for future additions (e.g., a default alignment preference). The settings file is not written unless a user action requires it.
+Each sub-toolbar's existing test suite is migrated to import from the unified plugin file. Test coverage for all existing edge cases is preserved. No test cases may be deleted; they are reorganised under the new import path within the single combined file. New integration tests are added for:
+- Context switching (cursor moves from default → table → image → default).
+- Overlap resolution (image inside table cell: image context wins).
+- Sidebar panel content switching (sidebar mode: panel shows markdown buttons in default context, table buttons in table context).
 
 ---
 
 ## Non-Functional Requirements
 
-### NFR-1: No New Dependencies
+### NFR-1: Single CM6 Extension Registration
 
-The plugin uses only vanilla TypeScript/DOM APIs. `@tauri-apps/plugin-dialog` is accessed via a `window` global (AD-3) — not imported directly — so no new `package.json` entries are required for the plugin bundle. CM6 APIs are accessed through `window.__CM_VIEW__`.
+The unified plugin registers exactly one CM6 `updateListener` extension via `api.addExtensions()`, not three. All context detection runs inside that single listener. This replaces the three separate listeners that existed across the three original plugins.
 
-### NFR-2: Performance
+### NFR-2: Toggle Cycle Correctness
 
-- The CM6 `updateListener` runs on every editor transaction. The image-detection check (resolve syntax node for cursor line) must complete in under 1 ms on a typical document. No debounce is applied to the show/hide decision — the toolbar must respond immediately to cursor movement.
-- The popover DOM element is created once in `onEnable` and reused; it is not rebuilt per transaction.
-- `currentImageContext` is updated only when the trigger image changes, not on every transaction.
+The unified plugin survives repeated enable/disable cycles without leaking DOM nodes, event listeners, or CM6 extensions. All three sub-toolbars' teardown logic (currently in their individual `onDisable` functions) is consolidated into the single `onDisable`. All module-level state is reset to initial values in `onDisable`.
 
-### NFR-3: Toggle Cycle Correctness
+### NFR-3: No Runtime Dependencies Added
 
-The plugin must survive repeated enable/disable cycles without leaking DOM nodes, event listeners, or CM6 extensions:
+No new npm packages or `@codemirror/*` value imports are added. CM6 APIs continue to be accessed via `window.__CM_VIEW__`. The three existing `import type` patterns are preserved.
 
-- All module-level state is reset in `onDisable`.
-- The `<style>` tag is removed in `onDisable`.
-- The popover DOM element is removed from `document.body` in `onDisable`.
-- `api.removeExtensions()` is called in `onDisable`.
-- All `document`-level listeners registered in `onEnable` are removed in `onDisable` using identical function references (listeners must be stored as module-level variables, not anonymous functions, to allow removal).
+### NFR-4: Identical Visual Behaviour
 
-### NFR-4: Undo Atomicity
+From the user's perspective, each sub-toolbar looks and behaves identically to the original standalone plugin. No visual regression is acceptable. Pixel-identical positioning logic is preserved.
 
-Every document mutation dispatches exactly one CM6 transaction. No action may call `view.dispatch` more than once. Alignment changes that require replacing a multi-line `<div>...</div>` wrapper must compute the full replacement string before the single dispatch.
+### NFR-5: Performance
 
-### NFR-5: Source Fidelity
+The single shared `updateListener` must complete context detection (image check + table check) in under 2 ms on a typical document. Detection order is: image first (cheapest — one line text check), then table (existing `detectTableContext` function). Short-circuit evaluation applies: if image context is detected, table context is not evaluated.
 
-All mutations preserve:
-- Alt text verbatim (no trimming, no escaping changes).
-- URL verbatim (no re-encoding except the deliberate relative-path resolution in FR-2a).
-- Line endings of the surrounding document (LF or CRLF) when constructing multi-line `<div>` wrapper forms.
+Context detection and the resulting show/hide DOM toggle run synchronously in the `updateListener` callback (no debounce, no `requestAnimationFrame` wrapper). Debounce (150 ms) is applied only to the "which buttons are active/highlighted" calculation — a cheap DOM class update — to avoid redundant work on fast cursor movement. The two operations must remain independent: hiding/showing a sub-toolbar never waits for the debounce window.
+
+### NFR-6: Undo Atomicity Preserved
+
+All document mutations in all sub-toolbars continue to dispatch exactly one CM6 transaction per user action, preserving single undo-step behaviour.
 
 ---
 
 ## Architectural Decisions
 
-### AD-1: `ignoreEvent` Override on ImageWidget
+### AD-1: File Location and Name
 
-`ImageWidget.ignoreEvent()` currently returns `true` (line 126 of `live-preview.ts`), which prevents the CM6 editor from processing any DOM events that originate within the `<img>` element. This means a `click` event on the image does not move the cursor.
+The unified plugin lives at `src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts`. The existing `table-toolbar/` and `image-toolbar/` directories are deleted after migration. The unified plugin is the only entry point.
 
-The image toolbar requires click events on `<img class="cm-live-image">` elements to be detectable. The chosen approach is **event delegation on `document`** rather than modifying `ignoreEvent`. The plugin registers a `mousedown` (or `click`) listener on `document`; this fires regardless of `ignoreEvent` because `ignoreEvent` only affects CM6's internal event handling, not native DOM bubbling.
+### AD-2: Module Structure
 
-`ImageWidget.ignoreEvent()` in `live-preview.ts` is NOT modified. The plugin is entirely self-contained.
+The unified plugin file is organised in named sections (same convention as existing plugins):
 
-### AD-2: Mapping Clicked `<img>` to Document Position
+1. Type-only imports
+2. Settings types and defaults
+3. Module-level state declarations (combined from all three originals)
+4. CSS constant (merged from all three originals)
+5. Format registry and detection (from markdown-toolbar)
+6. Pure format functions — computeWrap / computeUnwrap / computeErase (from markdown-toolbar)
+7. ImageContext types, detection, alignment (from image-toolbar)
+8. TableContext type and detection (from table-toolbar)
+9. Pure table operations (from table-toolbar)
+10. DOM builders — markdown toolbar, image popover, table floating elements, sidebar panel
+11. Positioning helpers (shared / per-sub-toolbar)
+12. Context resolver — single function that returns `"image" | "table" | "default"`
+13. Shared CM6 updateListener factory
+14. Event handler consolidation
+15. Plugin export object
 
-When the user clicks an `<img class="cm-live-image">` in live preview mode, the plugin must recover the corresponding CM6 document position to identify which image was clicked.
+### AD-3: Sidebar Panel Switching Strategy
 
-Mechanism: when the popover opens via an image click, the plugin iterates `view.visibleRanges` and walks the decoration set (`view.state.field(decorationsField)` or via `view.dom.querySelectorAll("img.cm-live-image")`) to find the DOM node whose identity matches `event.target`. The plugin uses `view.posAtDOM(event.target)` (CM6 API) to obtain the document position, then resolves the syntax node.
+In sidebar mode, a single sidebar panel container is registered. The panel's inner content is swapped by the context resolver on each `updateListener` invocation:
+- In default context: the markdown formatting buttons are rendered inside the panel.
+- In table context: the table sidebar controls are rendered inside the panel.
+- The image sub-toolbar is never shown in the sidebar panel (AD-5 of the original image-toolbar spec is preserved).
 
-`view.posAtDOM` is confirmed as standard CM6 public API — no deviation from this approach is required. Proceed as specified.
+Swapping is implemented by toggling `display: none` on two inner container divs (one for markdown controls, one for table controls) within the single sidebar panel element. No DOM nodes are created/destroyed on context switch — only visibility is toggled.
 
-If `posAtDOM` is unavailable or throws, fall back to scanning the syntax tree for `Image` nodes and matching `resolveImageSrc(node.url)` against `event.target.src`. Throw an error log and abort (no toolbar shown) only if both methods fail.
+### AD-4: Retained Globals
 
-### AD-3: Tauri Dialog Access Pattern
+`window.__TAURI_DIALOG__`, `window.__MARKABLE_CURRENT_FILE__`, `window.__MARKABLE_EDITOR_VIEW__`, and `window.__CM_VIEW__` are all retained as-is. No new globals are introduced.
 
-`@tauri-apps/plugin-dialog` cannot be imported directly inside a plugin IIFE bundle because the resulting `require()` call is not available in the `new Function()` sandbox.
+### AD-5: Image Sub-Toolbar Remains Floating-Only
 
-`window.__TAURI_DIALOG__` does NOT exist yet and must be added as part of this feature's implementation. The exposure is performed in `main.ts`, matching the pattern used for `window.__MARKABLE_EDITOR_VIEW__` at line 776 of `main.ts`.
-
-Implementation in `main.ts`:
-
-```typescript
-import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
-// (at the point where __MARKABLE_EDITOR_VIEW__ is set, add:)
-(window as unknown as Record<string, unknown>)["__TAURI_DIALOG__"] = { open: dialogOpen };
-```
-
-The plugin accesses it as `(window as any).__TAURI_DIALOG__?.open(...)`. If the global is absent (test environment), the Select tab button is a no-op and the toolbar logs a warning.
-
-This pattern is analogous to `window.__MARKABLE_EDITOR_VIEW__` used by the Table Toolbar.
-
-### AD-4: `currentImageContext` Module-Level State Shape
-
-```
-interface ImageContext {
-  from: number;          // document position of region start (inclusive)
-  to: number;            // document position of region end (exclusive)
-  rawSource: string;     // raw Markdown/HTML text of the full region
-  url: string;           // extracted URL (Markdown src, not resolved asset URL)
-  alt: string;           // extracted alt text
-  alignment: "left" | "center" | "right" | "float-right";
-  anchorEl: HTMLElement; // the <img> DOM element used to position the popover
-}
-```
-
-`currentImageContext` is `null` when the toolbar is hidden. It is set on each toolbar open and cleared on hide.
-
-### AD-5: No Sidebar Mode
-
-The Image Toolbar is floating-only. There is no sidebar mode and no position toggle in the Plugins Panel detail view. `sidebarPanelId` is omitted from the plugin object. This simplifies the plugin relative to the Table Toolbar and can be revisited in a later iteration.
-
-### AD-6: `__MARKABLE_CURRENT_FILE__` Global
-
-`window.__MARKABLE_CURRENT_FILE__` does NOT exist yet and must be added as part of this feature's implementation. It tracks the absolute filesystem path of the currently active document, or `null` for untitled documents.
-
-**Exposure point:** `main.ts`, inside (or immediately after) the call to `setLivePreviewFilePath()` — which is already called from `tab-manager.ts`'s `_applyActiveTab()` whenever a tab becomes active. The same `null`-or-string value passed to `setLivePreviewFilePath()` must also be written to the global.
-
-Implementation in `main.ts` (or wherever `setLivePreviewFilePath` is called):
-
-```typescript
-(window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = filePath; // string | null
-```
-
-This must be set on every tab switch so the value is always current. It must be set to `null` when a new untitled document is opened.
-
-The plugin reads this global in the Select tab handler:
-
-```typescript
-const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
-```
-
-If the global is `undefined` (not yet set, or test environment), it is treated identically to `null` — the selected file's absolute path is used as-is.
+The image sub-toolbar retains its floating-only constraint regardless of the plugin's `toolbarMode` setting. This is consistent with `AD-5` from the original image-toolbar spec and avoids introducing a new sidebar layout for image operations.
 
 ---
 
-## Out of Scope (v1.0)
+## Out of Scope
 
-- Alt text editing.
+- Alt text editing in the image sub-toolbar.
 - Image resize controls (width/height).
 - Delete image button.
-- Sidebar/docked mode.
 - Caption support.
 - Drag-and-drop image insert.
-- Image alignment for images inside tables or blockquotes (behaviour is undefined in v1.0 — the toolbar may not open or may operate incorrectly in those contexts).
-- Multiple images on the same line — only the first `Image` node on the line is targeted.
-- Future merge into the unified `markdown-toolbar` plugin.
+- Any modification to `live-preview.ts` or `ImageWidget.ignoreEvent()`.
+- Changing the visual design of any sub-toolbar.
+- Adding a fourth context (e.g. code block toolbar).
+- Changing the Markdown format buttons set (remains 10 buttons).
+- Persisting the "last active sub-toolbar" across sessions.
+- Migrating settings from the old `table-toolbar` or `image-toolbar` settings files.
 
 ---
 
@@ -321,35 +213,59 @@ All items below are mandatory test cases for the Code Reviewer.
 
 | # | Scenario | Expected Behaviour |
 |---|---|---|
-| EC-1 | Image inside `<div align="center">...</div>` wrapper — alignment buttons | The entire `<div>...</div>` span (both lines) is detected as the region. Clicking a different alignment replaces both lines in a single dispatch. Clicking Left removes the wrapper entirely, leaving bare `![alt](url)`. |
-| EC-2 | Image inside `<div align="right">...</div>` wrapper — alignment detection | Toolbar opens with "Right" button shown as active. |
-| EC-3 | Float-right image (inline `<img ... align="right" style="float:right...">`) — source detection | Toolbar opens with "Float Right" shown as active. The entire `<img>` line is the region. Clicking Left replaces the `<img>` line with bare `![alt](url)`. |
-| EC-4 | Float-right image — clicking Center | Replaces the inline `<img>` line with `<div align="center">![alt](url)</div>` (two-line form). Single dispatch. |
-| EC-5 | Left alignment on image already at Left (no wrapper) | Dispatch is still emitted so any float-right or wrapper form is normalised to bare `![alt](url)`. Idempotent write is acceptable. |
-| EC-6 | Relative path image (`![photo](./images/photo.png)`) — Select tab file picked from same directory | New path is expressed relative to document directory. URL in dispatch is a relative path, not an absolute path. |
-| EC-7 | Relative path image — Select tab file picked from outside document directory | Absolute path is used as-is. URL in dispatch is the absolute filesystem path. |
-| EC-8 | Untitled document (`__MARKABLE_CURRENT_FILE__` is null) — Select tab | Selected file's absolute path is used directly. No crash. |
-| EC-9 | Image clicked in live preview mode, cursor is on a different line | Toolbar opens and shows the clicked image's context. Cursor position does not affect the shown image. The toolbar closes only on click-away or cursor moving onto a different image line (not merely to a non-image line, since the trigger was a click, not cursor movement — see dismiss behaviour in FR-5). |
-| EC-10 | Empty src — `![]()` | Toolbar opens. Embed Link tab shows empty input. Select tab is functional. Alignment buttons write the correct form with empty URL. No crash on region detection. |
-| EC-11 | Cursor moves onto image line in edit mode, then moves off before user interacts | Toolbar hides within one CM6 update cycle. No dangling event listeners. |
-| EC-12 | Tauri dialog cancelled (user clicks Cancel) | `dialog.open()` returns `null`. No dispatch. Toolbar remains open. |
-| EC-13 | Tauri dialog global `__TAURI_DIALOG__` is undefined (test environment) | Select tab button click is a no-op. Warning logged to console. No crash. |
-| EC-14 | `window.__MARKABLE_EDITOR_VIEW__` is undefined when an alignment button is clicked | Click handler is a no-op. No uncaught exception. Toolbar remains open. |
-| EC-15 | `view.posAtDOM(imgEl)` throws (image not in visible range) | Plugin falls back to syntax-tree scan. If fallback also fails, logs error and does not open toolbar. No crash. |
-| EC-16 | Two images on the same line — cursor on that line in edit mode | The first `Image` node encountered on the line is used. The toolbar opens for that image only. This is documented as a known limitation (Out of Scope). |
-| EC-17 | Rapid toggle — enable/disable/enable in quick succession | No duplicate `<style>` tags, no orphaned DOM elements, no stale CM6 extensions, no duplicate `document` listeners. |
-| EC-18 | Plugin disabled while toolbar is visible | `onDisable` removes the popover from `document.body` immediately. No dangling element after disable. |
-| EC-19 | `loadSettings()` returns `null` (first run) | No crash. Plugin initialises with no saved settings (no settings to load in v1.0). `onEnable` completes normally. |
-| EC-20 | Embed Link tab — "Embed Image" clicked with unchanged URL | No dispatch emitted. Toolbar remains open. |
-| EC-21 | Embed Link tab — "Embed Image" clicked with empty input | No dispatch emitted. Toolbar remains open. |
-| EC-22 | CRLF document — alignment adds `<div>` wrapper | The `\r\n` line ending is preserved in the inserted `<div align="...">![alt](url)</div>\r\n` string. No mixed line endings introduced. |
-| EC-23 | Image toolbar popover would render above viewport top edge | Toolbar flips to render below the image element instead. |
-| EC-24 | Image toolbar popover right edge overflows viewport | Toolbar is clamped leftward so it is fully within the viewport. |
-| EC-25 | New tab opened while plugin is enabled (editor view replaced) | `__MARKABLE_EDITOR_VIEW__` is read fresh on each action. The previous tab's context is not used for dispatches on the new tab. |
-| EC-26 | Alt text contains special characters (`"`, `\`, `[`, `]`) | Alt text is preserved verbatim in all written forms. No escaping or unescaping is applied by the plugin. |
-| EC-27 | `<div align="...">` wrapper spans lines with CRLF — region detection | Region `from`/`to` correctly includes both the open tag line and the close tag line, accounting for `\r\n` line endings. |
-| EC-28 | Image inside a blockquote or table cell | Region detection may fail or produce incorrect spans. Behaviour is undefined. Plugin should not crash — if region detection fails, the toolbar does not open and an error is logged. |
-| EC-29 | Build: `image-toolbar` entry missing from `build-plugins.mjs` | `npm run build:plugins` does not produce `image-toolbar.js`. CI catches the omission. |
-| EC-30 | Build: `image-toolbar` entry missing from `vite.plugins.config.ts` | `npm run build:plugins` (via vite.plugins.config.ts path) does not include the plugin. Both files must be updated. |
-| EC-31 | Select tab — file picker returns a path with spaces or Unicode characters | Path is used verbatim in the Markdown source. No URL-encoding is applied unless the file picker itself returns a URL (it returns a filesystem path on macOS). |
-| EC-32 | Clicking the already-active alignment button | Dispatch is still emitted (idempotent normalisation). Active button visual state is unchanged. |
+| EC-1 | Cursor moves from default context into a table | Markdown sub-toolbar hides; table sub-toolbar shows. Single CM6 update cycle — no frame where both are visible simultaneously. |
+| EC-2 | Cursor moves from a table into default context | Table sub-toolbar hides; markdown sub-toolbar shows (if selection is non-empty) or hides (if selection is empty). |
+| EC-3 | Cursor moves onto an image line (edit mode) while inside a table | Image context wins (priority rule from FR-2). Image sub-toolbar shows; table sub-toolbar hides. |
+| EC-4 | Cursor moves off an image line that is inside a table (back to a non-image cell) | Image sub-toolbar hides; table sub-toolbar shows (cursor is still in table). |
+| EC-5 | User clicks rendered `<img class="cm-live-image">` inside a table cell (live preview mode) | Image sub-toolbar shows. Table sub-toolbar hides. Clicking outside dismisses image toolbar; table context resumes if cursor is still inside the table. |
+| EC-6 | Plugin is disabled while the image popover is visible | `onDisable` removes the popover from `document.body` immediately. No dangling element. |
+| EC-7 | Plugin is disabled while the table floating UI is visible | `onDisable` removes all three table floating elements (`_topBar`, `_rowHandle`, `_bottomPill`) from DOM. |
+| EC-8 | Plugin is disabled while a markdown toolbar is visible (floating mode) | `onDisable` removes `_toolbarEl` from DOM. |
+| EC-9 | Rapid enable/disable/enable cycle | No duplicate `<style>` tags, no orphaned DOM elements, no stale CM6 extensions, no duplicate document listeners. Single `__markable_unified_toolbar_css__` tag exists after re-enable. |
+| EC-10 | `toolbarMode` changes from `"floating"` to `"sidebar"` mid-session | `api.restartSelf()` triggers a clean disable/enable cycle. After re-enable, the sidebar panel is registered; floating elements are not added to `document.body`. |
+| EC-11 | `toolbarMode` changes from `"sidebar"` to `"floating"` mid-session | After re-enable, the sidebar panel is unregistered; floating elements are appended to `document.body`. |
+| EC-12 | Sidebar mode — cursor enters a table | The sidebar panel's inner markdown buttons div is hidden; the table controls div is shown. No sidebar panel re-registration occurs. |
+| EC-13 | Sidebar mode — cursor leaves a table | The sidebar panel's inner table controls div is hidden; the markdown buttons div is shown. |
+| EC-14 | Sidebar mode — cursor moves onto an image line | Image popover appears (floating). Sidebar panel continues showing either markdown or table controls based on whether cursor is also in a table (table wins in sidebar panel, image wins for popover). |
+| EC-15 | `loadSettings()` returns `null` (first run, no prior settings) | Plugin initialises with `{ toolbarMode: "floating", sidebarSide: "left" }`. No crash. |
+| EC-16 | `loadSettings()` returns partial object (missing `sidebarSide`) | Missing key is filled from defaults. Plugin initialises correctly. |
+| EC-17 | `loadSettings()` returns object with invalid `toolbarMode` value | Invalid value falls back to `"floating"`. No crash. |
+| EC-18 | Old `table-toolbar` and `image-toolbar` settings files exist on disk | They are ignored. Unified plugin reads only the `markdown-toolbar` settings namespace. |
+| EC-19 | `settings.plugins` contains `"table-toolbar": true` from a previous session | PluginManager marks `table-toolbar` as `status: "missing"` (existing behaviour). No crash. The unified `markdown-toolbar` plugin is enabled independently. |
+| EC-20 | `settings.plugins` contains `"image-toolbar": true` from a previous session | Same as EC-19. PluginManager marks `image-toolbar` as `status: "missing"`. No crash. |
+| EC-21 | Two images on the same line — cursor on that line in edit mode | First `Image` syntax node encountered on the line is used (existing image-toolbar behaviour preserved). |
+| EC-22 | Image inside `<div align="center">...</div>` wrapper — alignment button dispatched | Full `<div>...</div>` span (both lines) replaced in a single dispatch. Existing behaviour preserved. |
+| EC-23 | Table with only one row — delete-row is disabled | `deleteRow` button shows as disabled. Existing table-toolbar behaviour preserved. |
+| EC-24 | Table with only one column — delete-column is disabled | `deleteColumn` button shows as disabled. Existing table-toolbar behaviour preserved. |
+| EC-25 | Tab switch while image popover is open | `window.__MARKABLE_EDITOR_VIEW__` is updated on tab switch. On the next CM6 transaction, context is re-evaluated for the new tab. If the new tab's cursor is not on an image line, popover hides. |
+| EC-26 | Tab switch while table floating UI is visible | Table floating UI hides (the next updateListener tick on the new view will detect non-table context and hide all table elements). |
+| EC-27 | Tauri dialog cancelled (user clicks Cancel in image Select tab) | No dispatch emitted. Image popover remains open. Existing image-toolbar behaviour preserved. |
+| EC-28 | `window.__TAURI_DIALOG__` is undefined (test environment) | Select tab button is a no-op. Warning logged. No crash. |
+| EC-29 | CRLF document — image alignment adds `<div>` wrapper | `\r\n` line ending preserved in inserted string. No mixed line endings. |
+| EC-30 | Row drag starts in table floating mode, then plugin is disabled | `_dragIndicator` is removed in `onDisable`. No orphaned drag indicator element in DOM. |
+| EC-31 | Scroll while image popover is open | Popover may drift (by design — same behaviour as original plugin). Popover closes on next cursor move. |
+| EC-32 | Sidebar mode — `sidebarSide` changes from `"left"` to `"right"` | `api.restartSelf()` triggers clean cycle. After re-enable, sidebar panel appears on the right slot. |
+| EC-33 | Markdown toolbar is in sidebar mode and selection is empty | Markdown buttons are shown but in disabled state (greyed out). Existing markdown-toolbar behaviour preserved. |
+| EC-34 | Cursor moves rapidly across context boundaries (default → table → image → default in quick succession) | Sub-toolbar show/hide toggles are applied immediately on each `updateListener` tick — no debounce delay. Only the active-button highlight recalculation is debounced at 150 ms; the debounce timer is reset on each new tick but the correct sub-toolbar is always visible before the debounce fires. |
+| EC-35 | `build-plugins.mjs` still contains `table-toolbar` or `image-toolbar` entries after migration | Build would produce dead output files. This is caught by the code reviewer comparing the `PLUGINS` array to the requirement that exactly 6 entries remain. |
+| EC-36 | Image toolbar popover positioning — would render above viewport top | Flips to render below. Existing image-toolbar behaviour preserved. |
+| EC-37 | Image toolbar popover positioning — right edge overflows viewport | Clamped leftward. Existing image-toolbar behaviour preserved. |
+| EC-38 | Keyboard-only navigation — Tab key moves focus through toolbar buttons in floating mode | Focus order follows DOM order within the active sub-toolbar. No focus trapped in hidden sub-toolbars. Hidden sub-toolbar elements carry `tabindex="-1"` or `display: none` to exclude them from the tab order. |
+| EC-39 | All three existing test suites pass after migration | Every test case from the 679-line markdown-toolbar test, 1350-line table-toolbar test, and 1598-line image-toolbar test is migrated into `tests/plugins/markdown-toolbar/markdown-toolbar.test.ts`, importing from the unified plugin. The two old test files are then deleted. Zero test case deletions. |
+
+---
+
+## Migration Checklist (for Architect)
+
+The following files are affected by this consolidation:
+
+- **Delete**: `src/plugins/table-toolbar/table-toolbar.plugin.ts`
+- **Delete**: `src/plugins/image-toolbar/image-toolbar.plugin.ts`
+- **Delete**: `src/plugins/table-toolbar/` (entire directory)
+- **Delete**: `src/plugins/image-toolbar/` (entire directory)
+- **Rewrite**: `src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts` — unified plugin
+- **Update**: `scripts/build-plugins.mjs` — remove two entries, update count string
+- **Update**: `tests/plugins/markdown-toolbar/markdown-toolbar.test.ts` — add migrated test cases
+- **Delete**: `tests/plugins/table-toolbar/table-toolbar.test.ts` (after migration)
+- **Delete**: `tests/plugins/image-toolbar/image-toolbar.test.ts` (after migration)
+- **No changes required**: `src/plugins/markable-plugin-api.ts`, `src/plugins/index.ts`, `src/sidebar/`, `src/lib/settings.ts`, `main.ts`

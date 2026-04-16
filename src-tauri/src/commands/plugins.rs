@@ -585,6 +585,40 @@ pub fn copy_core_plugins(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // ── 7a. Remove stale core plugins no longer in the bundle ─────────────────
+    // When plugins are consolidated or removed between versions, old `.js` files
+    // linger in `plugins/core/`. Build a set of bundled filenames and delete any
+    // `.js` file in `core_dir` that is not in the set.
+    {
+        let bundled_names: std::collections::HashSet<String> = std::fs::read_dir(&bundled_core_dir)
+            .map_err(|e| format!("Failed to read bundled core plugins dir: {}", e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file()
+                    && e.path().extension().and_then(|x| x.to_str()) == Some("js")
+            })
+            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+            .collect();
+
+        if let Ok(existing) = std::fs::read_dir(&core_dir) {
+            for entry in existing.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if path.extension().and_then(|x| x.to_str()) != Some("js") {
+                    continue;
+                }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !bundled_names.contains(name) {
+                        eprintln!("[plugins] Removing stale core plugin: {}", name);
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+    }
+
     // ── 8. Copy each `.js` file from bundle → plugins/core/ ──────────────────
     // EC-6: individual copy failures are logged and skipped — non-fatal.
     //       The remaining files are still copied.
