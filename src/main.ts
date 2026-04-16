@@ -44,6 +44,8 @@ import {
   duplicateLine,
   deleteLine,
 } from "./editor/format";
+import { switchListStyle, listStyleIndicator, createListStyleIndicator } from "./editor/list-style-switch";
+import { registerStatusBarDependent, ensureStatusBar } from "./plugins/status-bar/status-bar";
 import {
   readResourceFile,
   openFileDialog,
@@ -652,6 +654,14 @@ function handleAction(action: string): void {
     case "format-bullet-list":   if (editor) toggleLinePrefix(editor, "- ");  break;
     case "format-ordered-list":  if (editor) toggleOrderedList(editor);       break;
     case "format-task-list":     if (editor) toggleTaskList(editor);          break;
+    // List style menu items (Format > List > List Style). Each calls
+    // switchListStyle with the target style name. The function returns
+    // boolean but the result is unused here — if the cursor is not on a
+    // list line the call silently returns false (FR-2.3).
+    case "format-list-style-standard":      if (editor) switchListStyle(editor, "standard");      break;
+    case "format-list-style-alphanumeric":  if (editor) switchListStyle(editor, "alphanumeric");  break;
+    case "format-list-style-decimal":       if (editor) switchListStyle(editor, "decimal");       break;
+    case "format-list-style-steps":         if (editor) switchListStyle(editor, "steps");         break;
     case "format-indent":        if (editor) indentLines(editor);   break;
     case "format-outdent":       if (editor) outdentLines(editor);  break;
     case "format-hr":            if (editor) insertHorizontalRule(editor); break;
@@ -846,6 +856,25 @@ async function initApp() {
       })
     ),
   });
+
+  // List style status bar indicator (FR-3).
+  // Registers as a status bar dependent so the bar auto-shows when this
+  // feature is active. Creates a clickable indicator in the left zone.
+  registerStatusBarDependent("list-style-indicator");
+  ensureStatusBar();
+  const listStyleZone = statusBarZones.left;
+  if (listStyleZone) {
+    const listIndicatorEl = createListStyleIndicator(() => editor);
+    listStyleZone.appendChild(listIndicatorEl);
+    editor.dispatch({
+      effects: StateEffect.appendConfig.of(
+        listStyleIndicator(
+          listIndicatorEl,
+          () => (getCurrentSettings().listStyle ?? "standard") as "standard" | "alphanumeric" | "decimal" | "steps",
+        )
+      ),
+    });
+  }
 
   // Auto-focus the editor so the cursor is blinking immediately
   editor.focus();

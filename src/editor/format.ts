@@ -10,6 +10,7 @@ import { EditorSelection, Prec } from "@codemirror/state";
 import { marked } from "marked";
 import { readClipboardText } from "../lib/bridge";
 import { detectListLine, inferListStyle, firstMarkerForDepth, findListBlockRange, type ListStyle } from "./list-engine";
+import { switchToAlphanumeric, switchToDecimal, switchToSteps } from "./list-style-switch";
 import { getCurrentSettings } from "../lib/settings";
 
 /** Infer the list style for the block containing the given line index (0-based). */
@@ -672,6 +673,12 @@ export const formatKeymap: KeyBinding[] = [
   { key: "Meta-Shift--", mac: "Meta-Shift--", run: (v) => { toggleLinePrefix(v, "- "); return true; } },
   { key: "Meta-Shift-1", mac: "Meta-Shift-1", run: (v) => { toggleOrderedList(v); return true; } },
   { key: "Meta-Shift-;", mac: "Meta-Shift-;", run: (v) => { toggleTaskList(v); return true; } },
+  // List style switching (Ctrl on macOS). These handlers return false
+  // when the cursor is not on a list line, allowing CM6 to fall through
+  // to default key handling (EC-1).
+  { key: "Ctrl-r", run: switchToAlphanumeric },
+  { key: "Ctrl-n", run: switchToDecimal },
+  { key: "Ctrl-l", run: switchToSteps },
   { key: "Meta-]", mac: "Meta-]", run: (v) => { indentLines(v); return true; } },
   { key: "Meta-[", mac: "Meta-[", run: (v) => { outdentLines(v); return true; } },
   { key: "Meta-Shift-r", mac: "Meta-Shift-r", run: (v) => { insertHorizontalRule(v); return true; } },

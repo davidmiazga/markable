@@ -635,3 +635,110 @@ describe("steps style full sequence", () => {
     expect(firstMarkerForDepth("steps", 3)).toBe("- ");
   });
 });
+
+// ============================================================
+// Comment override integration tests (FR-5)
+// ============================================================
+
+describe("inferListStyle — comment override integration", () => {
+
+  /**
+   * FR-5.1a: A preceding `<!-- list: alphanumeric -->` comment overrides
+   * what markers alone would infer. Even though "1. 2." looks like standard
+   * decimal, the comment forces the return value to "alphanumeric".
+   */
+  it("FR-5.1a: preceding comment overrides marker inference", () => {
+    const lines = ["1. First item", "2. Second item"];
+    const precedingLine = "<!-- list: alphanumeric -->";
+    expect(inferListStyle(lines, precedingLine, "standard")).toBe("alphanumeric");
+  });
+
+  /**
+   * FR-5.1b: Comment override takes priority even when markers clearly
+   * suggest a different style. Roman-upper markers (I., II.) at depth 0
+   * would normally infer "alphanumeric", but the comment says "steps".
+   */
+  it("FR-5.1b: comment override takes priority over conflicting markers", () => {
+    const lines = ["I. First item", "II. Second item"];
+    const precedingLine = "<!-- list: steps -->";
+    expect(inferListStyle(lines, precedingLine, "standard")).toBe("steps");
+  });
+
+  /**
+   * FR-5.1c: The comment can also appear as the first line of the block
+   * itself (not just as a preceding line). inferListStyle checks lines[0]
+   * as a fallback after checking precedingLine.
+   */
+  it("FR-5.1c: comment on first line of block also works", () => {
+    const lines = ["<!-- list: decimal -->", "1. First", "2. Second"];
+    expect(inferListStyle(lines, null, "standard")).toBe("decimal");
+  });
+
+  /**
+   * FR-5.1d: The comment regex allows flexible whitespace around the
+   * "list:" keyword and style name. All three variations below must
+   * be accepted by the regex:
+   *   /<!--\s*list:\s*(standard|alphanumeric|decimal|steps)\s*-->/
+   */
+  it("FR-5.1d: whitespace variations in comment are accepted", () => {
+    // Tight spacing: no spaces anywhere inside the comment
+    expect(inferListStyle(
+      ["1. A"],
+      "<!--list:steps-->",
+      "standard",
+    )).toBe("steps");
+
+    // Extra spaces: multiple spaces around every token
+    expect(inferListStyle(
+      ["1. A"],
+      "<!--   list:   alphanumeric   -->",
+      "standard",
+    )).toBe("alphanumeric");
+
+    // Normal spacing: single space after <!-- and before -->
+    expect(inferListStyle(
+      ["1. A"],
+      "<!-- list: decimal -->",
+      "standard",
+    )).toBe("decimal");
+  });
+
+  /**
+   * FR-5.1e: When both a preceding line AND the first block line contain
+   * comment overrides, the preceding line wins because inferListStyle
+   * checks it first. This confirms the priority order in the inference
+   * chain (Layer 1a before Layer 1b).
+   */
+  it("FR-5.1e: preceding comment wins over first-line comment", () => {
+    const lines = ["<!-- list: decimal -->", "1. A"];
+    const precedingLine = "<!-- list: alphanumeric -->";
+    expect(inferListStyle(lines, precedingLine, "standard")).toBe("alphanumeric");
+  });
+
+  /**
+   * FR-5.1f: A comment with an unrecognised style name (e.g. "fancy")
+   * does not match the regex capture group, so the engine falls through
+   * to marker-based inference (Layer 2). Roman-upper at depth 0
+   * triggers the "alphanumeric" heuristic.
+   */
+  it("FR-5.1f: invalid style in comment falls through to marker inference", () => {
+    const lines = ["I. First", "II. Second"];
+    const precedingLine = "<!-- list: fancy -->";
+    // "fancy" is not in the regex alternation, so the comment is ignored.
+    // Marker inference finds roman-upper at depth 0 -> "alphanumeric".
+    expect(inferListStyle(lines, precedingLine, "standard")).toBe("alphanumeric");
+  });
+
+  /**
+   * FR-5.1g: A regular HTML comment that does not contain the "list:"
+   * keyword is not a style override. The engine ignores it entirely
+   * and proceeds to marker inference. Plain decimal markers at depth 0
+   * are ambiguous, so the fallback style is returned.
+   */
+  it("FR-5.1g: comment with no list keyword is ignored", () => {
+    const lines = ["1. A", "2. B"];
+    const precedingLine = "<!-- this is a regular comment -->";
+    // Falls through to marker inference -> all decimal at depth 0 -> ambiguous -> fallback
+    expect(inferListStyle(lines, precedingLine, "standard")).toBe("standard");
+  });
+});

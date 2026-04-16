@@ -99,6 +99,17 @@ export function createSettingsPanel(): void {
             </div>
           </div>
         </div>
+
+        <div class="settings-section">
+          <label class="settings-label">List Style</label>
+          <select class="settings-select" id="settings-list-style">
+            <option value="standard">Standard (1. 2. 3.)</option>
+            <option value="alphanumeric">Alphanumeric (I. A. 1. a. i.)</option>
+            <option value="decimal">Decimal Outline (1. 1.1.)</option>
+            <option value="steps">Steps (1. a. -)</option>
+          </select>
+          <p class="settings-description">Default style for new lists. Existing lists auto-detect their style from markers, or use a <code>&lt;!-- list: style --&gt;</code> comment override.</p>
+        </div>
       </div>
       <div class="settings-footer">
         <button class="settings-btn settings-btn-reset" id="settings-reset-defaults">
@@ -269,6 +280,17 @@ function wireEvents(): void {
       syncTabModeControl(mode);
     });
 
+  // List style dropdown — persist the selected style immediately so the list
+  // engine picks it up on the next Enter/Tab keypress. Follows the same
+  // pattern as the window size dropdowns (wSelect/hSelect above).
+  const listStyleSelect = panelElement.querySelector("#settings-list-style") as HTMLSelectElement;
+  listStyleSelect?.addEventListener("change", async () => {
+    await updateSettings((s) => ({
+      ...s,
+      listStyle: listStyleSelect.value as "standard" | "alphanumeric" | "decimal" | "steps",
+    }));
+  });
+
   // Reset to defaults
   panelElement.querySelector("#settings-reset-defaults")
     ?.addEventListener("click", async () => {
@@ -308,6 +330,13 @@ function syncPanelToSettings(): void {
   if (cwInput) {
     const cw = (settings.editor as any).contentWidth ?? `${settings.editor.contentMaxWidth}px`;
     cwInput.value = cw;
+  }
+
+  // List style dropdown — defaults to "standard" when the field is absent
+  // (EC-13: settings migration from before the Advanced Lists feature).
+  const listStyleSelect = document.querySelector("#settings-list-style") as HTMLSelectElement;
+  if (listStyleSelect) {
+    listStyleSelect.value = settings.listStyle ?? "standard";
   }
 
   // Tab mode segmented control — reflect the current saved mode

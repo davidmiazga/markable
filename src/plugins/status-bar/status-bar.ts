@@ -50,14 +50,58 @@ export function unregisterStatusBarDependent(id: string): void {
 }
 
 /**
+ * Inject status bar CSS into the document head. Idempotent — no-ops if
+ * already injected. Called automatically by ensureStatusBar() so consumers
+ * never need to manage CSS injection themselves.
+ */
+function injectStatusBarCSS(): void {
+  const id = "__markable_status_bar_css__";
+  if (document.getElementById(id)) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = `
+    #statusbar {
+      height: 24px;
+      min-height: 24px;
+      max-height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: var(--bg-titlebar);
+      border-top: 1px solid var(--border-color);
+      padding: 0 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 11px;
+      color: var(--text-secondary);
+      user-select: none;
+      -webkit-user-select: none;
+      flex-shrink: 0;
+    }
+    #statusbar.hidden { display: none; }
+    .statusbar-left,
+    .statusbar-center,
+    .statusbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .statusbar-left   { justify-content: flex-start; }
+    .statusbar-center { justify-content: center; }
+    .statusbar-right  { justify-content: flex-end; }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
  * Ensure the status bar is visible.
  * No-op if already visible. Safe to call multiple times (idempotent).
- * Also syncs the plugins panel so the Status Bar toggle reflects the auto-enable.
+ * Injects CSS automatically so no separate plugin is needed to style the bar.
  *
  * EC-1: guards with optional chaining on #statusbar — safe before DOM exists.
  */
 export function ensureStatusBar(): void {
   if (_statusBarVisible) return;
+  injectStatusBarCSS();
   _statusBarVisible = true;
   document.getElementById("statusbar")?.classList.remove("hidden");
   updatePluginStates({ statusBar: true });
