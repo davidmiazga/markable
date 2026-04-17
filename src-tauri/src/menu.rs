@@ -32,6 +32,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         &[
             &MenuItem::with_id(handle, "file-new", "New", true, Some("CmdOrCtrl+N"))?,
+            &MenuItem::with_id(handle, "file-new-from-template", "New from Template...", true, Some("CmdOrCtrl+Shift+N"))?,
             &MenuItem::with_id(handle, "file-open", "Open...", true, Some("CmdOrCtrl+O"))?,
             &Submenu::with_id_and_items(
                 handle,
@@ -45,6 +46,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(handle, "file-save-as", "Save As...", true, Some("CmdOrCtrl+Shift+S"))?,
+            &MenuItem::with_id(handle, "file-save-as-template", "Save as Template...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "file-export", "Export as HTML...", true, Some("CmdOrCtrl+Alt+E"))?,
             &MenuItem::with_id(handle, "file-import", "Import (.md / .txt)...", true, Some("CmdOrCtrl+Alt+Shift+I"))?,

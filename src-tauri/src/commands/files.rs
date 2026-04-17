@@ -82,6 +82,23 @@ pub fn list_md_files(path: String) -> Vec<String> {
     filenames
 }
 
+/// Ensure a directory exists, creating it and all parent directories if absent.
+///
+/// Thin wrapper around `std::fs::create_dir_all`. Returns `Ok(())` if the
+/// directory already exists or was successfully created. Returns `Err` with
+/// a human-readable message on failure (permissions, path is a file, etc.).
+///
+/// General-purpose — not specific to the templates feature. Can be reused
+/// by any feature that needs to ensure a directory exists before writing.
+///
+/// # Arguments
+/// * `path` - Absolute path to the directory to ensure.
+#[tauri::command]
+pub fn ensure_directory(path: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&path);
+    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +233,51 @@ mod tests {
         let result = list_md_files(dir.to_string_lossy().to_string());
         // Only .md extension should match — not .markdown, .mdx, .mdown
         assert_eq!(result, vec!["file.md"]);
+        cleanup(&dir);
+    }
+
+    // ── ensure_directory tests ──────────────────────────────────────────────
+
+    #[test]
+    fn ensure_directory_creates_new_dir() {
+        let dir = setup_test_dir("ensure_new");
+        let target = dir.join("subdir");
+        assert!(!target.exists());
+        let result = ensure_directory(target.to_string_lossy().to_string());
+        assert!(result.is_ok());
+        assert!(target.is_dir());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn ensure_directory_creates_nested_dirs() {
+        let dir = setup_test_dir("ensure_nested");
+        let target = dir.join("a").join("b").join("c");
+        assert!(!target.exists());
+        let result = ensure_directory(target.to_string_lossy().to_string());
+        assert!(result.is_ok());
+        assert!(target.is_dir());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn ensure_directory_succeeds_if_exists() {
+        let dir = setup_test_dir("ensure_exists");
+        // dir already exists from setup
+        let result = ensure_directory(dir.to_string_lossy().to_string());
+        assert!(result.is_ok());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn ensure_directory_fails_if_path_is_file() {
+        let dir = setup_test_dir("ensure_file_conflict");
+        let file_path = dir.join("not_a_dir");
+        std::fs::write(&file_path, "content").unwrap();
+        // Trying to create a directory where a file exists should fail
+        let result = ensure_directory(file_path.to_string_lossy().to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to create directory"));
         cleanup(&dir);
     }
 }

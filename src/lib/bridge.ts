@@ -230,6 +230,20 @@ export async function listMdFiles(directoryPath: string): Promise<string[]> {
   }
 }
 
+// ── Directory management ─────────────────────────────────────────────────────
+
+/**
+ * Ensure a directory exists, creating it and all parents if absent.
+ *
+ * Wraps the Rust `ensure_directory` command. No-op if the directory
+ * already exists. Throws on failure (permissions, path conflict).
+ *
+ * @param path - Absolute path to the directory to ensure
+ */
+export async function ensureDirectory(path: string): Promise<void> {
+  await invoke("ensure_directory", { path });
+}
+
 // ── Core plugin copy ──────────────────────────────────────────────────────────
 
 /**

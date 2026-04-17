@@ -11,7 +11,7 @@ pub mod settings;
 pub mod themes;
 
 pub use dialogs::{open_file_dialog, save_file_dialog, save_html_dialog};
-pub use files::list_md_files;
+pub use files::{list_md_files, ensure_directory};
 pub use io::{read_file, write_file};
 pub use plugins::{
     copy_core_plugins,

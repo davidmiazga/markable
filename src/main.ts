@@ -551,6 +551,30 @@ function handleAction(action: string): void {
       tabManager.openNewTab();
       break;
 
+    // "file-new-from-template" (Cmd-Shift-N): open the template picker.
+    // Delegates to the Templates plugin via window global (AD-1, FR-7.3).
+    case "file-new-from-template": {
+      const templatesForNew = (window as any).__MARKABLE_TEMPLATES__;
+      if (templatesForNew && typeof templatesForNew.openPicker === "function") {
+        templatesForNew.openPicker();
+      } else {
+        alert("Enable the Templates plugin in Markable > Plugins to use this feature.");
+      }
+      break;
+    }
+
+    // "file-save-as-template": save current doc as a template file.
+    // Delegates to the Templates plugin via window global (AD-1, FR-7.3).
+    case "file-save-as-template": {
+      const templatesForSave = (window as any).__MARKABLE_TEMPLATES__;
+      if (templatesForSave && typeof templatesForSave.saveAsTemplate === "function") {
+        templatesForSave.saveAsTemplate();
+      } else {
+        alert("Enable the Templates plugin in Markable > Plugins to use this feature.");
+      }
+      break;
+    }
+
     // ── Tab operations (step_06) ───────────────────────────────────────────────
 
     // "tab-new" (Cmd-T): open a new empty untitled document in a new tab.

@@ -29,6 +29,7 @@ pub use commands::{
     copy_core_plugins,
     list_core_plugins,
     list_md_files,
+    ensure_directory,
     list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
 };
 
@@ -233,6 +234,7 @@ pub fn run() {
                 | "view-toggle-preview" | "view-toggle-statusbar" | "view-toggle-focus" | "view-toggle-typewriter"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"
+                | "file-new-from-template" | "file-save-as-template"
                 | "theme-light" | "theme-dark" | "theme-system" => true,
                 _ if id.starts_with("format-") || id.starts_with("recent-file-") || id.starts_with("help-") => true,
                 _ => {
@@ -309,6 +311,7 @@ pub fn run() {
             copy_core_plugins,
             list_core_plugins,
             list_md_files,
+            ensure_directory,
             list_user_plugins,
             read_plugin_file,
             read_plugin_settings,
