@@ -26,8 +26,9 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    let file_menu = Submenu::with_items(
+    let file_menu = Submenu::with_id_and_items(
         handle,
+        "file-menu",
         "File",
         true,
         &[

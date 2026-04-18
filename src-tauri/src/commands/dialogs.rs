@@ -3,6 +3,7 @@
 /// This module provides native file open/save dialogs that integrate
 /// with the system's file browser (Finder on macOS, Explorer on Windows, etc.).
 
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 /// Open file dialog for selecting a file to open
@@ -119,5 +120,39 @@ pub async fn save_html_dialog(
     rx.recv().map_err(|e| {
         eprintln!("save_html_dialog error: {}", e);
         format!("File dialog failed: {}", e)
+    })
+}
+
+/// Open folder picker dialog for selecting a directory.
+///
+/// # Arguments
+/// * `app` - Tauri AppHandle for dialog access
+/// * `default_path` - Optional starting directory for the picker (e.g. working directory)
+///
+/// # Returns
+/// * `Ok(Some(path))` - User selected a folder (absolute path)
+/// * `Ok(None)` - User cancelled the dialog
+/// * `Err(String)` - Dialog failed (rare)
+#[tauri::command]
+pub async fn open_folder_dialog(
+    app: tauri::AppHandle,
+    default_path: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = mpsc::channel();
+
+    let mut builder = app.dialog().file();
+    if let Some(path) = default_path {
+        builder = builder.set_directory(PathBuf::from(path));
+    }
+    builder.pick_folder(move |path| {
+        let path_string = path.map(|p| p.to_string());
+        let _ = tx.send(path_string);
+    });
+
+    rx.recv().map_err(|e| {
+        eprintln!("open_folder_dialog error: {}", e);
+        format!("Folder dialog failed: {}", e)
     })
 }

@@ -49,6 +49,7 @@ import { registerStatusBarDependent, ensureStatusBar } from "./plugins/status-ba
 import {
   readResourceFile,
   openFileDialog,
+  openFolderDialog,
   updateRecentFilesMenu,
   listThemes,
   readThemeCss,
@@ -822,6 +823,10 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__TAURI_DIALOG__"] = {
     open: async (_opts?: unknown) => {
       const result = await openFileDialog();
+      return result.cancelled ? null : (result as { cancelled: false; path: string }).path;
+    },
+    openFolder: async (defaultPath?: string) => {
+      const result = await openFolderDialog(defaultPath);
       return result.cancelled ? null : (result as { cancelled: false; path: string }).path;
     },
   };

@@ -25,16 +25,17 @@ import type { MarkablePluginAPI } from "../markable-plugin-api";
 // Types and Constants
 // ---------------------------------------------------------------------------
 
-/** Plugin settings shape (FR-9.1). */
+/** Plugin settings shape. */
 interface TemplatesSettings {
-  templatesFolderName: string;
+  /** Absolute path to the templates folder. Empty string = not yet configured. */
+  templatesFolderPath: string;
   createStarterTemplates: boolean;
   setupComplete: boolean;
 }
 
 /** Default settings applied on first enable or when persisted data is absent. */
 const DEFAULT_SETTINGS: TemplatesSettings = {
-  templatesFolderName: "Templates",
+  templatesFolderPath: "",
   createStarterTemplates: true,
   setupComplete: false,
 };
@@ -128,13 +129,22 @@ function getWorkingDirectory(): string | null {
 /**
  * Resolve the absolute path to the templates folder.
  *
- * Combines the working directory with the configured folder name.
- * Returns null if no file is open (EC-1).
+ * Returns the stored absolute path, or null if setup is incomplete.
  */
 function resolveTemplatesFolder(): string | null {
+  return _settings.templatesFolderPath || null;
+}
+
+/**
+ * Derive the default suggested templates folder path for the setup wizard.
+ *
+ * Uses the parent directory of the currently open file + "/Templates".
+ * Returns null if no file is open.
+ */
+function getDefaultTemplatesPath(): string | null {
   const workDir = getWorkingDirectory();
   if (!workDir) return null;
-  return `${workDir}/${_settings.templatesFolderName}`;
+  return `${workDir}/Templates`;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,10 +285,10 @@ function validateTemplateName(name: string): string | null {
  * 8. Show confirmation alert.
  */
 async function saveAsTemplate(): Promise<void> {
-  // EC-1: no file open — cannot determine working directory.
+  // No templates folder configured — prompt user to run setup.
   const templatesFolder = resolveTemplatesFolder();
   if (!templatesFolder) {
-    alert("Save your document first to establish a working directory, then try again.");
+    alert("No templates folder configured. Use File > New from Template to run setup first.");
     return;
   }
 
@@ -460,6 +470,31 @@ function injectTemplatesCSS(): void {
       font-size: 13px;
     }
 
+    .templates-wizard-path-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0 12px;
+    }
+
+    .templates-wizard-path-display {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1px solid var(--border-color, #333);
+      border-radius: 4px;
+      background: var(--bg-secondary, #252525);
+      color: var(--text-primary, #eee);
+      font-size: 12px;
+      word-break: break-all;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+    }
+
+    .templates-wizard-path-placeholder {
+      color: var(--text-secondary, #888);
+    }
+
     .templates-wizard-field {
       display: block;
       width: 100%;
@@ -618,7 +653,7 @@ function showPickerUI(templatesFolder: string, templates: string[]): void {
       // EC-3: different message depending on whether filtering or truly empty.
       empty.textContent = filter.value.length > 0
         ? "No matching templates."
-        : `No templates found in ${_settings.templatesFolderName}/. Create a template using File > Save as Template.`;
+        : `No templates found. Add .md files to your templates folder or use File > Save as Template.`;
       listEl.appendChild(empty);
       return;
     }
@@ -729,9 +764,10 @@ function showPickerUI(templatesFolder: string, templates: string[]): void {
 /**
  * Show the first-use setup wizard.
  *
- * Called when _settings.setupComplete is false. The wizard lets the user
- * configure the templates folder name and optionally create starter templates.
- * On success, the wizard saves settings and immediately opens the picker (FR-6.4).
+ * Presents a path display and a "Choose Folder" button backed by the native
+ * folder picker. The user selects (or creates via the OS dialog) the folder
+ * where templates will live. On success the settings are saved and the picker
+ * opens immediately.
  */
 function showSetupWizard(): void {
   _pickerOpen = true;
@@ -750,16 +786,26 @@ function showSetupWizard(): void {
 
   // Description.
   const desc = document.createElement("p");
-  desc.textContent = "No templates folder is configured for this directory.";
+  desc.textContent = "Choose a folder where your template files will be stored.";
 
-  // Folder name field.
-  const folderLabel = document.createElement("label");
-  folderLabel.textContent = "Folder name:";
+  // Folder path row: display + Choose button.
+  const pathRow = document.createElement("div");
+  pathRow.className = "templates-wizard-path-row";
 
-  const folderInput = document.createElement("input");
-  folderInput.className = "templates-wizard-field";
-  folderInput.type = "text";
-  folderInput.value = _settings.templatesFolderName;
+  const pathDisplay = document.createElement("div");
+  pathDisplay.className = "templates-wizard-path-display";
+
+  // Seed the display with the default suggested path (workDir/Templates).
+  let chosenPath = getDefaultTemplatesPath() ?? "";
+  pathDisplay.textContent = chosenPath || "No folder selected";
+  if (!chosenPath) pathDisplay.classList.add("templates-wizard-path-placeholder");
+
+  const chooseBtn = document.createElement("button");
+  chooseBtn.className = "templates-btn templates-btn-secondary";
+  chooseBtn.textContent = "Choose…";
+
+  pathRow.appendChild(pathDisplay);
+  pathRow.appendChild(chooseBtn);
 
   // Error message element (hidden by default).
   const errorEl = document.createElement("div");
@@ -772,9 +818,8 @@ function showSetupWizard(): void {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = _settings.createStarterTemplates;
-  const checkboxText = document.createTextNode(" Create starter templates");
   checkboxLabel.appendChild(checkbox);
-  checkboxLabel.appendChild(checkboxText);
+  checkboxLabel.appendChild(document.createTextNode(" Create starter templates"));
 
   // Action buttons.
   const actions = document.createElement("div");
@@ -784,106 +829,100 @@ function showSetupWizard(): void {
   cancelBtn.className = "templates-btn templates-btn-secondary";
   cancelBtn.textContent = "Cancel";
 
-  const createBtn = document.createElement("button");
-  createBtn.className = "templates-btn templates-btn-primary";
-  createBtn.textContent = "Create Folder";
+  const doneBtn = document.createElement("button");
+  doneBtn.className = "templates-btn templates-btn-primary";
+  doneBtn.textContent = "Create Folder";
 
   actions.appendChild(cancelBtn);
-  actions.appendChild(createBtn);
+  actions.appendChild(doneBtn);
 
   // Assemble card.
   card.appendChild(header);
   card.appendChild(desc);
-  card.appendChild(folderLabel);
-  card.appendChild(folderInput);
+  card.appendChild(pathRow);
   card.appendChild(errorEl);
   card.appendChild(checkboxLabel);
   card.appendChild(actions);
   overlay.appendChild(card);
 
-  /**
-   * Handle the "Create Folder" action.
-   *
-   * Validates the folder name, creates the directory, optionally writes
-   * starter templates, saves settings, then transitions to the picker (FR-6.4).
-   */
-  async function handleCreateFolder(): Promise<void> {
-    const folderName = folderInput.value.trim();
-
-    // Validate: folder name must be non-empty and must not contain separators.
-    if (!folderName || folderName.includes("/") || folderName.includes("\\")) {
-      errorEl.textContent = "Folder name must be non-empty and cannot contain / or \\.";
+  // "Choose…" opens the native folder picker, seeded at the working directory.
+  chooseBtn.addEventListener("click", async () => {
+    const dialog = (window as any).__TAURI_DIALOG__;
+    if (!dialog?.openFolder) {
+      errorEl.textContent = "Folder picker not available.";
       errorEl.style.display = "block";
-      return; // EC-15: wizard stays open on validation error.
+      return;
+    }
+    const startDir = getWorkingDirectory() ?? undefined;
+    const picked: string | null = await dialog.openFolder(startDir);
+    if (picked) {
+      chosenPath = picked;
+      pathDisplay.textContent = picked;
+      pathDisplay.classList.remove("templates-wizard-path-placeholder");
+      errorEl.style.display = "none";
+    }
+  });
+
+  /**
+   * Handle the "Create Folder" / "Done" action.
+   */
+  async function handleDone(): Promise<void> {
+    if (!chosenPath) {
+      errorEl.textContent = "Please choose a folder first.";
+      errorEl.style.display = "block";
+      return;
     }
     errorEl.style.display = "none";
 
-    const workDir = getWorkingDirectory();
-    if (!workDir) return;
-
-    const folderPath = `${workDir}/${folderName}`;
-
-    // Step 1: Create the folder.
+    // Ensure the chosen folder exists (user may have picked a new path that
+    // doesn't exist yet, or created it via the OS picker's New Folder button).
     try {
-      await (window as any).__TAURI_INTERNALS__.invoke("ensure_directory", { path: folderPath });
+      await (window as any).__TAURI_INTERNALS__.invoke("ensure_directory", { path: chosenPath });
     } catch (error) {
-      // EC-15: show error and keep the wizard open so the user can retry.
       errorEl.textContent = `Could not create folder: ${String(error)}`;
       errorEl.style.display = "block";
       return;
     }
 
-    // Step 2: Write starter templates if the checkbox is checked.
+    // Write starter templates if checked.
     const createStarters = checkbox.checked;
     if (createStarters) {
-      for (const [starterFilename, starterContent] of Object.entries(STARTER_TEMPLATES)) {
+      for (const [filename, content] of Object.entries(STARTER_TEMPLATES)) {
         try {
           await (window as any).__TAURI_INTERNALS__.invoke("write_file", {
-            path: `${folderPath}/${starterFilename}`,
-            content: starterContent,
+            path: `${chosenPath}/${filename}`,
+            content,
           });
         } catch (error) {
-          // Non-fatal: log and continue with remaining starters.
-          console.warn(`[templates] Failed to write starter template ${starterFilename}:`, error);
+          console.warn(`[templates] Failed to write starter template ${filename}:`, error);
         }
       }
     }
 
-    // Step 3: Save settings so setup doesn't repeat.
-    _settings.templatesFolderName = folderName;
+    // Save settings.
+    _settings.templatesFolderPath = chosenPath;
     _settings.createStarterTemplates = createStarters;
     _settings.setupComplete = true;
     if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
 
-    // Step 4: Close wizard and immediately open the picker (FR-6.4).
+    // Transition to picker.
     closePicker();
-    const discoveredTemplates = await discoverTemplates(folderPath);
-    showPickerUI(folderPath, discoveredTemplates);
+    const discoveredTemplates = await discoverTemplates(chosenPath);
+    showPickerUI(chosenPath, discoveredTemplates);
   }
 
-  // Event listeners.
   cancelBtn.addEventListener("click", () => closePicker());
-  createBtn.addEventListener("click", () => void handleCreateFolder());
+  doneBtn.addEventListener("click", () => void handleDone());
 
-  // Escape key closes the wizard (same as Cancel).
   overlay.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closePicker();
-    }
+    if (e.key === "Escape") { e.preventDefault(); closePicker(); }
   });
-
-  // Backdrop click dismissal.
   overlay.addEventListener("click", (e: MouseEvent) => {
-    if (e.target === overlay) {
-      closePicker();
-    }
+    if (e.target === overlay) closePicker();
   });
 
-  // Mount and focus.
   document.body.appendChild(overlay);
-  folderInput.focus();
-  folderInput.select();
+  chooseBtn.focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -899,12 +938,6 @@ function showSetupWizard(): void {
  */
 async function openPicker(): Promise<void> {
   if (!_enabled) return;
-
-  // EC-1: no file open — cannot determine templates folder location.
-  if (!getWorkingDirectory()) {
-    alert("Save your document first to establish a working directory, then try again.");
-    return;
-  }
 
   // EC-12: picker is already open — prevent duplicate overlays.
   if (_pickerOpen) return;
@@ -927,7 +960,12 @@ async function openPicker(): Promise<void> {
   // Capture templates folder path at open time (EC-10: dir changes while
   // picker is open have no effect; EC-14: settings changes are captured).
   const templatesFolder = resolveTemplatesFolder();
-  if (!templatesFolder) return;
+  if (!templatesFolder) {
+    // setupComplete is true but path is missing (corrupted settings) — re-run wizard.
+    _settings.setupComplete = false;
+    showSetupWizard();
+    return;
+  }
 
   // Discover available templates.
   const templates = await discoverTemplates(templatesFolder);
@@ -953,50 +991,38 @@ function renderDetailExtra(container: HTMLElement): void {
   const wrapper = document.createElement("div");
   wrapper.style.padding = "8px 0";
 
-  // Folder name setting.
-  const row = document.createElement("div");
-  row.style.marginBottom = "8px";
+  // Current folder path display.
+  const label = document.createElement("div");
+  label.style.cssText = "margin-bottom:4px;font-size:12px;color:var(--text-secondary,#888)";
+  label.textContent = "Templates folder:";
 
-  const label = document.createElement("label");
-  label.style.cssText = "display:block;margin-bottom:4px;font-size:12px;color:var(--text-secondary,#888)";
-  label.textContent = "Templates folder name:";
+  const pathDisplay = document.createElement("div");
+  pathDisplay.style.cssText = "font-size:12px;color:var(--text-primary,#eee);word-break:break-all;margin-bottom:8px;padding:4px 0";
+  pathDisplay.textContent = _settings.templatesFolderPath || "Not configured";
 
-  const input = document.createElement("input");
-  input.type = "text";
-  input.value = _settings.templatesFolderName;
-  input.style.cssText = "padding:4px 8px;border:1px solid var(--border-color,#333);border-radius:3px;background:var(--bg-secondary,#252525);color:var(--text-primary,#eee);font-size:13px;width:160px;margin-right:6px";
+  // Choose Folder button — opens the native picker.
+  const chooseBtn = document.createElement("button");
+  chooseBtn.textContent = "Choose Folder…";
+  chooseBtn.style.cssText = "padding:4px 10px;border:1px solid var(--border-color,#333);border-radius:3px;background:var(--selection-bg,#264f78);color:#fff;font-size:12px;cursor:pointer;margin-right:6px";
 
-  const saveBtn = document.createElement("button");
-  saveBtn.textContent = "Save";
-  saveBtn.style.cssText = "padding:4px 10px;border:1px solid var(--border-color,#333);border-radius:3px;background:var(--selection-bg,#264f78);color:#fff;font-size:12px;cursor:pointer";
-
-  saveBtn.addEventListener("click", async () => {
-    const newName = input.value.trim();
-    if (newName) {
-      _settings.templatesFolderName = newName;
+  chooseBtn.addEventListener("click", async () => {
+    const dialog = (window as any).__TAURI_DIALOG__;
+    if (!dialog?.openFolder) return;
+    const startDir = _settings.templatesFolderPath
+      ? _settings.templatesFolderPath.substring(0, _settings.templatesFolderPath.lastIndexOf("/"))
+      : (getWorkingDirectory() ?? undefined);
+    const picked: string | null = await dialog.openFolder(startDir);
+    if (picked) {
+      _settings.templatesFolderPath = picked;
+      _settings.setupComplete = true;
+      pathDisplay.textContent = picked;
       if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
     }
   });
 
-  row.appendChild(label);
-  row.appendChild(input);
-  row.appendChild(saveBtn);
-
-  // Reconfigure button (FR-6.4).
-  const reconfigureBtn = document.createElement("button");
-  reconfigureBtn.textContent = "Reconfigure Templates Folder";
-  reconfigureBtn.style.cssText = "padding:4px 10px;border:1px solid var(--border-color,#333);border-radius:3px;background:transparent;color:var(--text-primary,#eee);font-size:12px;cursor:pointer";
-
-  reconfigureBtn.addEventListener("click", async () => {
-    // Reset setupComplete so openPicker triggers the wizard.
-    _settings.setupComplete = false;
-    if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
-    // Trigger the wizard immediately.
-    void openPicker();
-  });
-
-  wrapper.appendChild(row);
-  wrapper.appendChild(reconfigureBtn);
+  wrapper.appendChild(label);
+  wrapper.appendChild(pathDisplay);
+  wrapper.appendChild(chooseBtn);
   container.appendChild(wrapper);
 }
 
@@ -1045,6 +1071,9 @@ const plugin = {
       openPicker,
       saveAsTemplate,
     };
+
+    // Show template menu items now that the plugin is active.
+    void (window as any).__TAURI_INTERNALS__.invoke("set_template_menu_enabled", { enabled: true });
   },
 
   /**
@@ -1062,6 +1091,9 @@ const plugin = {
     // FR-8.3 step 3: remove the window global so handleAction() shows the
     // "enable plugin" alert instead of calling stale references.
     delete (window as any).__MARKABLE_TEMPLATES__;
+
+    // Hide template menu items when plugin is off.
+    void (window as any).__TAURI_INTERNALS__.invoke("set_template_menu_enabled", { enabled: false });
 
     // FR-8.3 step 4: clear module-level state.
     _api = null;

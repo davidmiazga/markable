@@ -85,6 +85,22 @@ export async function saveFileDialog(): Promise<DialogResult> {
  * }
  * ```
  */
+export async function openFolderDialog(defaultPath?: string): Promise<DialogResult> {
+  try {
+    const path = await invoke<string | null>("open_folder_dialog", {
+      defaultPath: defaultPath ?? null,
+    });
+    if (path) {
+      return { cancelled: false, path };
+    } else {
+      return { cancelled: true };
+    }
+  } catch (error) {
+    console.error("openFolderDialog error:", error);
+    return { cancelled: true };
+  }
+}
+
 export async function saveHtmlDialog(suggestedFilename: string): Promise<DialogResult> {
   try {
     // Tauri v2 maps camelCase JS keys to snake_case Rust params automatically.

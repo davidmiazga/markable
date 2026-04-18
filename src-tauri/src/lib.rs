@@ -23,7 +23,7 @@ fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: 
 fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
 
 pub use commands::{
-    open_file_dialog, read_file, save_file_dialog, save_html_dialog, write_file,
+    open_file_dialog, open_folder_dialog, read_file, save_file_dialog, save_html_dialog, write_file,
     get_settings, save_settings,
     list_themes, read_theme_css,
     copy_core_plugins,
@@ -70,6 +70,107 @@ fn find_recent_submenu<R: tauri::Runtime>(
         }
     }
     Err("Could not find open-recent-submenu".to_string())
+}
+
+/// Find the File submenu by its explicit ID "file-menu".
+fn find_file_submenu<R: tauri::Runtime>(
+    menu: &tauri::menu::Menu<R>,
+) -> Result<tauri::menu::Submenu<R>, String> {
+    let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
+    for item in &items {
+        if let Some(submenu) = item.as_submenu() {
+            if submenu.id().as_ref() == "file-menu" {
+                return Ok(submenu.clone());
+            }
+        }
+    }
+    Err("File submenu not found".to_string())
+}
+
+/// Find the index of a MenuItem by ID within a submenu.
+/// Returns None if not found.
+fn find_item_index<R: tauri::Runtime>(
+    submenu: &tauri::menu::Submenu<R>,
+    target_id: &str,
+) -> Option<usize> {
+    let items = submenu.items().ok()?;
+    items.iter().position(|item| {
+        item.as_menuitem()
+            .map(|mi| mi.id().as_ref() == target_id)
+            .unwrap_or(false)
+    })
+}
+
+/// Show or hide the two Templates menu items by removing or re-inserting them.
+///
+/// Called by the Templates plugin's onEnable/onDisable.
+/// - enabled=true:  inserts "New from Template..." after "file-new" and
+///                  "Save as Template..." after "file-save-as".
+/// - enabled=false: removes both items entirely from the File menu.
+#[tauri::command]
+fn set_template_menu_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let menu = app.menu().ok_or("No app menu found")?;
+    let file_submenu = find_file_submenu(&menu)?;
+
+    if enabled {
+        // Only insert if not already present (idempotent).
+        if find_item_index(&file_submenu, "file-new-from-template").is_none() {
+            let new_from_tmpl = MenuItem::with_id(
+                &app,
+                "file-new-from-template",
+                "New from Template...",
+                true,
+                Some("CmdOrCtrl+Shift+N"),
+            )
+            .map_err(|e| format!("Failed to create menu item: {}", e))?;
+
+            // Insert directly after "file-new".
+            let pos = find_item_index(&file_submenu, "file-new")
+                .map(|i| i + 1)
+                .unwrap_or(1);
+            file_submenu
+                .insert(&new_from_tmpl, pos)
+                .map_err(|e| format!("Failed to insert menu item: {}", e))?;
+        }
+
+        if find_item_index(&file_submenu, "file-save-as-template").is_none() {
+            let save_as_tmpl = MenuItem::with_id(
+                &app,
+                "file-save-as-template",
+                "Save as Template...",
+                true,
+                None::<&str>,
+            )
+            .map_err(|e| format!("Failed to create menu item: {}", e))?;
+
+            // Insert directly after "file-save-as".
+            let pos = find_item_index(&file_submenu, "file-save-as")
+                .map(|i| i + 1)
+                .unwrap_or_else(|| {
+                    // Fallback: after "file-save".
+                    find_item_index(&file_submenu, "file-save")
+                        .map(|i| i + 1)
+                        .unwrap_or(7)
+                });
+            file_submenu
+                .insert(&save_as_tmpl, pos)
+                .map_err(|e| format!("Failed to insert menu item: {}", e))?;
+        }
+    } else {
+        // Remove both template items if present.
+        let items = file_submenu
+            .items()
+            .map_err(|e| format!("Failed to get File menu items: {}", e))?;
+        for item in &items {
+            if let Some(mi) = item.as_menuitem() {
+                let id = mi.id().as_ref();
+                if id == "file-new-from-template" || id == "file-save-as-template" {
+                    let _ = file_submenu.remove(item);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -299,6 +400,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             open_file_dialog,
+            open_folder_dialog,
             read_file,
             read_resource_file,
             save_file_dialog,
@@ -317,7 +419,8 @@ pub fn run() {
             read_plugin_settings,
             write_plugin_settings,
             update_recent_files_menu,
-            update_theme_menu
+            update_theme_menu,
+            set_template_menu_enabled
         ])
         .on_window_event(|window, event| {
             // Hide-on-close: intercept the close request and hide the window

@@ -12,7 +12,7 @@ import type { FileResult, DialogResult, TauriCommandError } from "./errors";
 import type { MarkableSettings } from "./settings";
 
 // Re-export dialog functions from dialogs.ts
-export { openFileDialog, saveFileDialog, saveHtmlDialog } from "./dialogs";
+export { openFileDialog, openFolderDialog, saveFileDialog, saveHtmlDialog } from "./dialogs";
 export type { DialogResult };
 
 /**
