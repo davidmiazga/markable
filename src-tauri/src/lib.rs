@@ -87,19 +87,6 @@ fn find_file_submenu<R: tauri::Runtime>(
     Err("File submenu not found".to_string())
 }
 
-/// Find the index of a MenuItem by ID within a submenu.
-/// Returns None if not found.
-fn find_item_index<R: tauri::Runtime>(
-    submenu: &tauri::menu::Submenu<R>,
-    target_id: &str,
-) -> Option<usize> {
-    let items = submenu.items().ok()?;
-    items.iter().position(|item| {
-        item.as_menuitem()
-            .map(|mi| mi.id().as_ref() == target_id)
-            .unwrap_or(false)
-    })
-}
 
 /// Show or hide the two Templates menu items by removing or re-inserting them.
 ///
@@ -112,9 +99,21 @@ fn set_template_menu_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(),
     let menu = app.menu().ok_or("No app menu found")?;
     let file_submenu = find_file_submenu(&menu)?;
 
+    // Fetch items once — used for both idempotency checks and position lookups.
+    let current_items = file_submenu
+        .items()
+        .map_err(|e| format!("Failed to get File menu items: {}", e))?;
+
+    let index_of = |target_id: &str| -> Option<usize> {
+        current_items.iter().position(|item| {
+            item.as_menuitem()
+                .map(|mi| mi.id().as_ref() == target_id)
+                .unwrap_or(false)
+        })
+    };
+
     if enabled {
-        // Only insert if not already present (idempotent).
-        if find_item_index(&file_submenu, "file-new-from-template").is_none() {
+        if index_of("file-new-from-template").is_none() {
             let new_from_tmpl = MenuItem::with_id(
                 &app,
                 "file-new-from-template",
@@ -124,16 +123,13 @@ fn set_template_menu_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(),
             )
             .map_err(|e| format!("Failed to create menu item: {}", e))?;
 
-            // Insert directly after "file-new".
-            let pos = find_item_index(&file_submenu, "file-new")
-                .map(|i| i + 1)
-                .unwrap_or(1);
+            let pos = index_of("file-new").map(|i| i + 1).unwrap_or(1);
             file_submenu
                 .insert(&new_from_tmpl, pos)
                 .map_err(|e| format!("Failed to insert menu item: {}", e))?;
         }
 
-        if find_item_index(&file_submenu, "file-save-as-template").is_none() {
+        if index_of("file-save-as-template").is_none() {
             let save_as_tmpl = MenuItem::with_id(
                 &app,
                 "file-save-as-template",
@@ -143,25 +139,16 @@ fn set_template_menu_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(),
             )
             .map_err(|e| format!("Failed to create menu item: {}", e))?;
 
-            // Insert directly after "file-save-as".
-            let pos = find_item_index(&file_submenu, "file-save-as")
+            let pos = index_of("file-save-as")
+                .or_else(|| index_of("file-save"))
                 .map(|i| i + 1)
-                .unwrap_or_else(|| {
-                    // Fallback: after "file-save".
-                    find_item_index(&file_submenu, "file-save")
-                        .map(|i| i + 1)
-                        .unwrap_or(7)
-                });
+                .unwrap_or(7);
             file_submenu
                 .insert(&save_as_tmpl, pos)
                 .map_err(|e| format!("Failed to insert menu item: {}", e))?;
         }
     } else {
-        // Remove both template items if present.
-        let items = file_submenu
-            .items()
-            .map_err(|e| format!("Failed to get File menu items: {}", e))?;
-        for item in &items {
+        for item in &current_items {
             if let Some(mi) = item.as_menuitem() {
                 let id = mi.id().as_ref();
                 if id == "file-new-from-template" || id == "file-save-as-template" {

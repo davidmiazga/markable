@@ -68,6 +68,13 @@ export interface SidebarPanelDescriptor {
    * exists for this side. Default: 220 px.
    */
   defaultWidth?: number;
+
+  /**
+   * Optional action buttons rendered in the accordion header, after the title
+   * and before the move/toggle buttons. Each button shows its icon as text and
+   * its title as a tooltip.
+   */
+  headerActions?: Array<{ icon: string; title: string; onClick: () => void }>;
 }
 
 // ── Private types ─────────────────────────────────────────────────────────────
@@ -714,6 +721,24 @@ function _buildPanelWrapper(
   toggleBtn.setAttribute("aria-expanded", "true");
 
   headerEl.appendChild(titleEl);
+
+  // Optional header action buttons (e.g. "+" on the Properties panel).
+  // Rendered after the title, before the move/toggle buttons.
+  if (descriptor.headerActions) {
+    for (const action of descriptor.headerActions) {
+      const actionBtn = document.createElement("button");
+      actionBtn.className = "sidebar-header-action-btn";
+      actionBtn.textContent = action.icon;
+      actionBtn.title = action.title;
+      actionBtn.setAttribute("aria-label", action.title);
+      actionBtn.addEventListener("click", (e) => {
+        e.stopPropagation(); // prevent accordion toggle
+        action.onClick();
+      });
+      headerEl.appendChild(actionBtn);
+    }
+  }
+
   headerEl.appendChild(moveBtn);   // between title and accordion chevron
   headerEl.appendChild(toggleBtn);
   wrapperEl.appendChild(headerEl);

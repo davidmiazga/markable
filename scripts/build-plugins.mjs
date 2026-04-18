@@ -45,6 +45,7 @@ const PLUGINS = [
   ["markdown-toolbar",  "src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts"],
   ["backlinks",         "src/plugins/backlinks/backlinks.plugin.ts"],
   ["templates",         "src/plugins/templates/templates.plugin.ts"],
+  ["yaml-pane",         "src/plugins/yaml-pane/yaml-pane.plugin.ts"],
 ];
 
 /**
