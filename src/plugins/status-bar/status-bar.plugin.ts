@@ -51,7 +51,7 @@ function injectCSS(): void {
       background-color: var(--bg-titlebar);
       border-top: 1px solid var(--border-color);
       padding: 0 12px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: var(--ui-font);
       font-size: 11px;
       color: var(--text-secondary);
       user-select: none;

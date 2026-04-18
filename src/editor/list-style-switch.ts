@@ -323,7 +323,7 @@ const LIST_INDICATOR_CSS = `
     cursor: pointer;
     padding: 0 6px;
     border-radius: 3px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--ui-font);
     font-size: 11px;
     line-height: 20px;
     white-space: nowrap;
@@ -345,7 +345,7 @@ const LIST_INDICATOR_CSS = `
     min-width: 220px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
     z-index: 9999;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--ui-font);
     font-size: 12px;
     color: var(--text-primary, #eee);
   }

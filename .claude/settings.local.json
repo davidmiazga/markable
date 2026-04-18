@@ -119,7 +119,8 @@
       "Read(//^async function onEnable/{start=NR} start && /^}$/**)",
       "Bash(rm '__TRACKED_VAR__/Library/Application Support/com.markable.app/plugins/core/image-toolbar.js' '__TRACKED_VAR__/Library/Application Support/com.markable.app/plugins/core/table-toolbar.js')",
       "Bash(cp '/Users/davidmiazga/Documents/_code-workArea/markable-2.0/src-tauri/plugins/core/*.js' '__TRACKED_VAR__/Library/Application Support/com.markable.app/plugins/core/')",
-      "Bash(find /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src-tauri/src/commands -name \"*.rs\" -type f -exec wc -l {} +)"
+      "Bash(find /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src-tauri/src/commands -name \"*.rs\" -type f -exec wc -l {} +)",
+      "Bash(git merge:*)"
     ]
   }
 }

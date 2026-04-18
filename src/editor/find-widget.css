@@ -37,7 +37,7 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 
   /* Typography: inherit from system UI stack. */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 13px;
   color: var(--text-primary);
 

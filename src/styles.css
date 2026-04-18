@@ -22,6 +22,12 @@
   --blockquote-border: hsl(210, 18%, 84%);
   --hr-color: hsl(210, 18%, 87%);
   
+  /* Typography */
+  --ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono-font: "Menlo", "Consolas", "Courier New", monospace;
+  --key-font: -apple-system, "SF Pro Display", sans-serif;
+  --accent-color: var(--link-color);
+
   /* Layout constants */
   --titlebar-height: 38px;
   --traffic-light-offset: 80px;
@@ -97,6 +103,7 @@ body {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  font-family: var(--ui-font);
   color: var(--text-primary);
   background-color: var(--bg-primary);
 }
@@ -126,7 +133,7 @@ body.tab-mode-vertical #titlebar {
 }
 
 #titlebar-title {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 13px;
   color: var(--text-titlebar);
   font-weight: 400;
@@ -214,7 +221,7 @@ body.tab-mode-vertical #titlebar {
    Code Mode -- Typography
    ============================================================ */
 #editor:not(.preview-mode) .cm-editor {
-  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-family: var(--mono-font);
   font-size: 14px;
   line-height: 1.5;
 }
@@ -355,7 +362,7 @@ body.tab-mode-vertical #titlebar {
 
 .cm-live-frontmatter {
   color: var(--text-secondary);
-  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-family: var(--mono-font);
   font-size: 0.85em;
 }
 
@@ -380,7 +387,7 @@ body.tab-mode-vertical #titlebar {
    To widen the background, increase padding-left/right.
    The bg is constrained to .cm-content width (max-width: 720px). */
 .cm-live-codeblock {
-  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-family: var(--mono-font);
   font-size: 0.85em;
   line-height: 1.6;
   background-color: var(--code-bg);
@@ -449,7 +456,7 @@ body.tab-mode-vertical #titlebar {
 }
 
 .cm-live-code {
-  font-family: "Menlo", "Consolas", "Courier New", monospace;
+  font-family: var(--mono-font);
   font-size: 0.85em;
   background-color: var(--code-bg);
   color: var(--code-text);
@@ -684,7 +691,7 @@ body.tab-mode-vertical #titlebar {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 13px;
   color: var(--text-primary);
 }

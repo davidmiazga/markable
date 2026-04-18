@@ -41,20 +41,18 @@ const baseTheme = EditorView.theme({
   },
 });
 
-const interStack = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-
 /** Preview mode theme — sets typography via CM6's own style system. */
 export const previewTheme = EditorView.theme({
   "&": {
-    fontFamily: interStack,
+    fontFamily: "var(--ui-font)",
     fontSize: "var(--settings-base-font-size)",
     lineHeight: "1.7",
   },
   ".cm-content": {
-    fontFamily: interStack,
+    fontFamily: "var(--ui-font)",
   },
   ".cm-line": {
-    fontFamily: interStack,
+    fontFamily: "var(--ui-font)",
   },
 });
 

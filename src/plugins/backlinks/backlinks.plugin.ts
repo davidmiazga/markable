@@ -1476,7 +1476,7 @@ const BACKLINKS_CSS = `
   border: none;
   border-left: 2px solid transparent;
   text-align: left;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 12px;
   line-height: 1.4;
   padding: 4px 12px;
@@ -1499,7 +1499,7 @@ const BACKLINKS_CSS = `
   align-items: center;
   justify-content: center;
   padding: 16px 8px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 12px;
   color: var(--text-secondary);
   pointer-events: none;
@@ -1507,7 +1507,7 @@ const BACKLINKS_CSS = `
 }
 
 .backlinks-section-header {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;

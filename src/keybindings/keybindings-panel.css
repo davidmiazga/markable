@@ -35,7 +35,7 @@
 
 /* Key mode: styled as a key-capture badge, not a free-text field */
 .kb-search-input.kb-key-mode {
-  font-family: -apple-system, "SF Pro Display", sans-serif;
+  font-family: var(--key-font);
   text-align: center;
   cursor: default;
   caret-color: transparent;
@@ -141,7 +141,7 @@
 
 .kb-badge {
   display: inline-block;
-  font-family: -apple-system, "SF Pro Display", sans-serif;
+  font-family: var(--key-font);
   font-size: 12px;
   padding: 2px 8px;
   border-radius: 4px;

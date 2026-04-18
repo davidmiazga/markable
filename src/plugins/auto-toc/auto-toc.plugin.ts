@@ -141,7 +141,7 @@ const TOC_CONTENT_CSS = `
   border: none;
   border-left: 2px solid transparent;
   text-align: left;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 12px;
   line-height: 1.4;
   padding: 4px 12px;
@@ -168,7 +168,7 @@ const TOC_CONTENT_CSS = `
   align-items: center;
   justify-content: center;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
   font-size: 12px;
   color: var(--text-secondary);
   pointer-events: none;
