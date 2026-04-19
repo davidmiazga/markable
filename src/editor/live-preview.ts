@@ -131,6 +131,12 @@ function handleImage(
   state: EditorState,
   decorations: Range<Decoration>[]
 ) {
+  // FR-6.2 / AD-6: When the media-preview plugin is active, it owns all image
+  // rendering. Skip the core fallback to prevent double decoration.
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  if ((window as any).__MARKABLE_MEDIA_PREVIEW_ACTIVE__) return;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
   const cursor = node.node.cursor();
   if (!cursor.firstChild()) return;
 

@@ -47,6 +47,7 @@ const PLUGINS = [
   ["templates",         "src/plugins/templates/templates.plugin.ts"],
   ["yaml-pane",         "src/plugins/yaml-pane/yaml-pane.plugin.ts"],
   ["math",              "src/plugins/math/math.plugin.ts"],
+  ["media-preview",     "src/plugins/media-preview/media-preview.plugin.ts"],
 ];
 
 /**

@@ -702,6 +702,9 @@ export function isCursorInsideRange(
  * @returns     - A DecorationSet with replace decorations for all out-of-cursor math ranges.
  */
 export function buildMathDecorations(state: EditorState): DecorationSet {
+  // Never decorate in source/raw mode — widgets must not appear when live preview is off.
+  if (!(window as any).__MARKABLE_PREVIEW_ENABLED__) return Decoration.none;
+
   const text   = state.doc.toString();
   const ranges = scanMathRanges(text);
   const sel    = state.selection.main;

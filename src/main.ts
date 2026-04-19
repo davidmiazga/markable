@@ -89,6 +89,7 @@ import { tabManager } from "./tabs";
 import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/400-italic.css";
 import "@fontsource/inter/500.css";
@@ -269,6 +270,7 @@ async function zoomReset() {
 function togglePreview() {
   if (!editor) return;
   previewEnabled = !previewEnabled;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_PREVIEW_ENABLED__"] = previewEnabled;
   editor.dispatch({
     effects: previewCompartment.reconfigure(
       previewEnabled ? previewExtensions : []
@@ -830,6 +832,17 @@ async function initApp() {
       return result.cancelled ? null : (result as { cancelled: false; path: string }).path;
     },
   };
+
+  // AD-1: Expose convertFileSrc so IIFE plugins (e.g. media-preview) can resolve
+  // local filesystem paths to Tauri asset:// URLs without bundling @tauri-apps/api.
+  // convertFileSrc is a pure synchronous function — assigning it here (before plugin
+  // loading) ensures EC-35 (startup race condition) cannot occur.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_CONVERT_FILE_SRC__"] =
+    convertFileSrc;
+
+  // Expose preview mode state so IIFE plugins know whether to render decorations.
+  // Plugins must check this before decorating — source/raw mode must show no widgets.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_PREVIEW_ENABLED__"] = true;
 
   // Apply editor settings (content width + font size)
   applyEditorSettings(migratedSettings.editor);

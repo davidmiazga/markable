@@ -60,6 +60,8 @@ beforeAll(async () => {
   // can destructure window.__CM_STATE__ and window.__CM_VIEW__ at evaluation time.
   (window as any).__CM_STATE__ = cmState;
   (window as any).__CM_VIEW__  = cmView;
+  // Tests run with preview enabled — source-mode guard must not suppress decorations.
+  (window as any).__MARKABLE_PREVIEW_ENABLED__ = true;
 
   // Dynamic import runs AFTER the globals assignment above — math.plugin.ts is
   // evaluated here and the destructure at the top of that module finds the globals.
@@ -704,14 +706,15 @@ describe("CSS injection (EC-23)", () => {
   });
 
   // CSS08
-  it("CSS08: KATEX_CSS string length is > 10,000 characters (sanity check)", async () => {
+  it("CSS08: KATEX_CSS contains layout CSS and no @font-face or font file URLs", async () => {
     const { KATEX_CSS } = await import("../../../src/plugins/math/katex-css");
+    // Layout CSS must be present (~10 KB after @font-face stripping).
     expect(KATEX_CSS.length).toBeGreaterThan(10_000);
-    // All woff2 URLs must be replaced with data URIs (the primary font format for WebKit).
-    // The woff/ttf fallback entries are left as relative paths — WebKit never loads them
-    // because woff2 resolves first (see scripts/inline-katex-fonts.mjs rationale).
-    expect(KATEX_CSS).not.toMatch(/url\(fonts\/[^)]+\.woff2\)/);
-    expect(KATEX_CSS).toContain("data:font/woff2;base64,");
+    // @font-face blocks were stripped to keep math.js under the 500 KB plugin cap.
+    // Font file references (fonts/*.woff2 etc.) must not appear — they 404 in the
+    // Tauri WebView which has no HTTP server to serve relative paths.
+    expect(KATEX_CSS).not.toMatch(/@font-face/);
+    expect(KATEX_CSS).not.toMatch(/url\(fonts\//);
   });
 });
 

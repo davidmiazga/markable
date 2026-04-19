@@ -1,274 +1,342 @@
 ---
-title: "Math LaTeX Rendering — FC2 #8"
-last-updated: "2026-04-18"
+title: "Media Preview — FC2 #7"
+last-updated: "2026-04-19"
 review-cadence-days: 7
 status: active
 ---
 
-# Math LaTeX Rendering (FC2 #8) Requirements Spec
+# Media Preview (FC2 #7) Requirements Spec
 
 ## Summary
 
-As a user, I want inline `$...$` and display `$$...$$` math expressions to render as typeset mathematics in the live preview — so that equations are readable as formatted output rather than raw LaTeX strings, while still becoming editable source text when my cursor is inside them.
+As a user, I want inline images (and optionally other media) to render as actual visual elements in the live editor — so that my notes display images in place rather than raw Markdown syntax — while still revealing the raw source when my cursor enters the image region for editing.
 
 ---
 
 ## Background and Motivation
 
-Markable already ships syntax insertion for both math forms: `insertInlineMath()` and `insertMathBlock()` in `src/editor/format.ts`, bound to Cmd-Shift-M (inline) and accessible via the toolbar. The help docs explicitly note: _"Math is inserted as syntax only in Phase 1 — rendering requires a future plugin."_ This feature delivers that rendering.
+FEATURES.md item 7 is labeled "Advanced Media Preview — inserting/previewing images, video, embedded `.md`." The scope for this implementation covers **images as the core deliverable**; other media types are explicitly deferred (see Out of Scope).
 
-The Typora-style live preview contract already established for other Markdown syntax (headings, bold, links) must be extended to math: raw LaTeX is hidden when the cursor is away from the expression and revealed when the cursor enters it.
+### What Already Exists
 
-### Existing Infrastructure Leveraged
+Image rendering in Markable already exists in `src/editor/live-preview.ts` as part of the core live-preview `ViewPlugin`. It is not a plugin — it is wired directly into the editor and cannot be toggled. The Media Preview plugin will:
 
-| Component | File | Relevance |
-|---|---|---|
-| Math insertion (inline) | `src/editor/format.ts` — `insertInlineMath()` | Inserts `$...$`; produces source text this plugin renders |
-| Math insertion (block) | `src/editor/format.ts` — `insertMathBlock()` | Inserts `$$\n...\n$$`; produces source text this plugin renders |
-| IIFE plugin system | `src/plugins/`, `scripts/build-plugins.mjs` | New plugin must register in PLUGINS array; follow IIFE self-containment rules |
-| CM6 globals | `src/lib/cm-globals.ts` | `window.__CM_VIEW__` / `window.__CM_STATE__` are the only CM6 access points inside the IIFE |
-| Plugin API | `src/plugins/markable-plugin-api.ts` | `api.addExtensions()` / `api.removeExtensions()` for CM6 registration |
-| Focus mode pattern | `src/plugins/focus-mode/focus-mode.plugin.ts` | Reference for ViewPlugin + CSS injection pattern |
-| YAML pane pattern | `src/plugins/yaml-pane/yaml-pane.plugin.ts` | Reference for bundling a third-party library (js-yaml precedent) into the IIFE |
-| Build system | `scripts/build-plugins.mjs` | `external: [/^@codemirror\//]` rule — @codemirror/* must NOT be imported as values; KaTeX must be bundled |
+1. Replace the existing non-toggleable image rendering in `live-preview.ts` with a proper, toggleable plugin that owns the image `WidgetType` and the `StateField`.
+2. Keep the `resolveImageSrc` / `convertFileSrc` URL conversion logic — it already correctly handles relative paths, absolute paths, and remote URLs.
+3. Add missing capabilities: broken-image error state, GIF/SVG edge cases, load-error fallback, accessibility attributes, and settings.
+
+The existing implementation in `live-preview.ts` is the **authoritative reference** for how images are currently rendered. Key facts:
+- `resolveImageSrc()` uses `convertFileSrc` from `@tauri-apps/api/core` (which converts a local path to the Tauri `asset://` protocol).
+- Images are matched via the lezer syntax tree (`Image` node), not a regex scanner.
+- Dimensions are parsed from alt text using the `alt|WxH` convention (e.g., `![photo|400x300](img.png)`).
+- The `ImageWidget` passes `ignoreEvent(): true` (clicks pass through to the editor), which means clicking a rendered image does NOT reveal raw source today — this must change.
+
+### IIFE Constraint
+
+The plugin is a bundled IIFE file loaded at runtime. It cannot use `@tauri-apps/api/core` directly because that is an app-internal module not available via window globals. The `convertFileSrc` function must be exposed via `window.__MARKABLE_CONVERT_FILE_SRC__` (see FR-3 and the Architecture Decisions section).
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Inline Math Rendering
+### FR-1: Image Rendering in Live Preview
 
-**FR-1.1** An inline math span is any occurrence of `$<content>$` in the document where:
-- The opening `$` is not preceded by another `$` (not the start of a display block).
-- The closing `$` is not followed by another `$`.
-- `<content>` is non-empty.
-- The expression does not span more than one line.
+**FR-1.1** The plugin renders any standard CommonMark inline image syntax `![alt](url)` as a visual `<img>` element in the editor, replacing the raw Markdown syntax when the cursor is not on the image's line(s).
 
-**FR-1.2** When the cursor is NOT inside an inline math span (i.e., `selection.main.head` is not in the range `[dollarOpen, dollarClose]` inclusive), the plugin replaces the entire `$...$` source text with a rendered HTML widget produced by KaTeX in inline mode.
+**FR-1.2** The rendered image widget is a CM6 `ReplaceDecoration` wrapping an `<img>` element. The image element carries:
+- `src` set to the resolved URL (see FR-3 for URL resolution rules).
+- `alt` set to the cleaned alt text (after dimension annotations and CSS annotations are stripped, per FR-2).
+- `class="cm-media-image"` for CSS targeting, plus any additional CSS classes derived from alt text annotation (per FR-2.4).
 
-**FR-1.3** When the cursor IS inside an inline math span (cursor head is at any position from the opening `$` through the closing `$` inclusive), the raw LaTeX source is visible and fully editable. The rendered widget is not shown.
+**FR-1.3** Cursor-on-reveal (Typora-style contract): when the cursor is on any position within the image's source range `[from, to)`, the raw Markdown syntax is shown and the widget is not rendered. When the cursor leaves the range, the widget re-renders.
 
-**FR-1.4** A selection that spans across an inline math expression (anchor outside, head inside, or vice versa) counts as "cursor inside" and shows the raw source for the entire expression.
+**FR-1.4** "Cursor inside" is defined identically to the Math plugin: any position where `selFrom < to && selTo >= from` (using normalized selection). Inclusive on both delimiter characters.
 
-**FR-1.5** The rendered widget for inline math is a `WidgetDecoration` that replaces the entire `$...$` range in the CM6 document (a `ReplaceDecoration` with `widget` set). The widget's DOM is a `<span class="cm-math-inline">` containing KaTeX output.
+**FR-1.5** Clicking on a rendered image widget moves the cursor into the image's source range (which triggers FR-1.3 to reveal the raw source). The `ignoreEvent()` method on the widget must return `false`. This is a behavior change from the current live-preview.ts implementation (which uses `ignoreEvent: true`).
 
-### FR-2: Block (Display) Math Rendering
+**FR-1.6** The plugin uses a CM6 `StateField<DecorationSet>` (not a `ViewPlugin`) for the decoration set. Rationale: consistency with the Math plugin pattern; block decorations require StateField stability; and the plugin needs to be independently registered/removed via `api.addExtensions()`.
 
-**FR-2.1** A display math block is a sequence of lines matching:
-```
-$$
-<content lines>
-$$
-```
-Where the opening `$$` occupies a complete line (optionally with trailing whitespace) and the closing `$$` occupies a complete line. The content may span zero or more lines between the delimiters.
+**FR-1.7** The `StateField` recomputes on every `docChanged` or `selectionSet` transaction.
 
-**FR-2.2** When the cursor is NOT anywhere within the block (from the first character of the opening `$$` line through the last character of the closing `$$` line), the entire multi-line block is replaced by a single block `WidgetDecoration` containing KaTeX output rendered in display mode. The widget is a `<div class="cm-math-block">`.
+### FR-2: Alt Text Annotation Parsing
 
-**FR-2.3** When the cursor IS inside the block (any position from the opening `$$` line through the closing `$$` line), the raw LaTeX is visible and fully editable. No widget is shown.
+**FR-2.1** The existing `alt|WxH` and `alt|W` dimension-annotation convention is preserved:
+- `![photo|400x300](img.png)` → `width: 400px; height: 300px`
+- `![photo|400](img.png)` → `width: 400px; height: auto`
+- `![photo](img.png)` → no explicit size (natural image size, capped by `maxDisplayWidth`)
 
-**FR-2.4** The same "selection spans boundary" rule from FR-1.4 applies: any selection that touches the block range causes the raw source to be shown.
+**FR-2.2** The separator may be `|` (pipe) with optional surrounding spaces. The Unicode multiply character `×` is accepted as an alternative to `x` for dimensions (matching the existing implementation).
 
-**FR-2.5** A display block with zero content lines between the delimiters (i.e., `$$\n$$`) renders as a KaTeX widget for an empty expression (KaTeX renders an empty string without error).
+**FR-2.3** The cleaned alt text (with all annotation tokens stripped) is used as the `<img alt="">` attribute.
 
-### FR-3: KaTeX Rendering Library
+**FR-2.4** The plugin supports two CSS annotation mechanisms in alt text, both of which may coexist with dimension annotations:
 
-**FR-3.1** KaTeX is the required rendering library. MathJax is explicitly out of scope. Rationale: KaTeX is synchronous, ~250 KB minified+gzipped, and designed for IIFE bundling. MathJax is async and large.
+**Class shorthand** — A dot-prefixed token in alt text (e.g., `![photo.center](img.png)`) maps to a CSS class on the `<img>` element:
+- `![photo.center](img.png)` → `<img class="cm-media-image center" ...>`
+- Multiple classes are supported: `![photo.center.shadow](img.png)` → class list includes `center` and `shadow`.
+- The class shorthand may appear before or after a dimension annotation. All dot-class tokens are stripped from the alt text passed to `<img alt="">`.
 
-**FR-3.2** KaTeX must be bundled into the plugin IIFE output (`math.js`). It must NOT be loaded from a CDN. Bundling follows the js-yaml precedent established in `yaml-pane.plugin.ts` (import at the top of the `.plugin.ts` file; Vite bundles it because `@codemirror/*` is the only external).
+**Inline CSS properties** — An arbitrary CSS string may be included using the `{...}` syntax (e.g., `![photo{border:2px solid red}](img.png)`):
+- The content between `{` and `}` is treated as a CSS `style` attribute value and applied to the `<img>` element via `element.style.cssText`.
+- Multiple properties are supported, comma-separated in standard CSS shorthand form.
+- The `{...}` token is stripped from the alt text passed to `<img alt="">`.
 
-**FR-3.3** KaTeX CSS must be injected as a `<style>` tag by the plugin's `onEnable`, following the pattern in `focus-mode.plugin.ts` (inject by `document.createElement("style")`). The CSS must be sourced from the KaTeX npm package at build time — the Architect must determine the exact import path (e.g., `katex/dist/katex.min.css` read as a string via Vite's `?inline` or `?raw` import, or inlined manually).
+Security constraint: inline CSS values are applied via the DOM `style` attribute only (not injected as raw HTML). JavaScript protocol values (`javascript:`) in CSS are ignored. (See EC-31 in the Edge Case Inventory.)
 
-**FR-3.4** KaTeX font files. KaTeX uses web fonts. The Architect must propose a strategy for font delivery. Two candidate approaches:
-- Bundle fonts as base64 data URIs embedded in the injected CSS (simplest for IIFE).
-- Copy font files into Tauri's resource bundle and reference them via `asset://` protocol.
-The chosen strategy must be specified before implementation begins.
+**FR-2.5** Zero or negative dimension values are ignored (treated as "no explicit size").
 
-**FR-3.5** KaTeX rendering calls use `katex.renderToString(latex, options)`. Options:
-- `displayMode: false` for inline math (FR-1), `displayMode: true` for block math (FR-2).
-- `throwOnError: false` — rendering errors must not throw; invalid LaTeX must produce a visible error state (FR-5).
-- `output: "html"` — SVG output is out of scope.
+### FR-3: URL Resolution
 
-### FR-4: CM6 Implementation Architecture
+**FR-3.1** The plugin must correctly render images from three URL categories:
 
-**FR-4.1** The math rendering plugin uses a single CM6 `StateField<DecorationSet>` (not a `ViewPlugin`) for the decoration set. Rationale: math blocks can span multiple lines and therefore require block decorations, which are only stable in a `StateField`.
+| Category | Example | Resolution |
+|---|---|---|
+| Remote (http/https) | `![](https://example.com/a.png)` | Used as-is — no conversion needed |
+| Absolute local path | `![](/Users/foo/img.png)` | Convert via `__MARKABLE_CONVERT_FILE_SRC__()` to `asset://` |
+| Relative local path | `![](./img.png)` or `![](img.png)` | Resolve against current file's directory, then convert via `__MARKABLE_CONVERT_FILE_SRC__()` |
 
-**FR-4.2** The `StateField` computes its `DecorationSet` by:
-1. Scanning the full document text for all inline `$...$` spans and all display `$$...$$` blocks.
-2. Comparing each found range against the current cursor selection.
-3. For ranges where the cursor is NOT inside: producing a `Decoration.replace({ widget: ... })` that covers the entire `$...$` or `$$...$$` source range.
-4. For ranges where the cursor IS inside: producing no decoration (raw source is shown).
+**FR-3.2** The current file path is accessed via `window.__MARKABLE_CURRENT_FILE__`. This global is confirmed to be updated synchronously on every tab switch via `_applyActiveTab()` in `tab-manager.ts` — no race conditions.
 
-**FR-4.3** The `StateField` recomputes on every `docChanged` or `selectionSet` transaction (same trigger pattern as `focusModeViewPlugin.update()`).
+**FR-3.3** `file://` URLs must be rejected and treated as broken-image (EC-09). Tauri's security policy does not allow `file://` for local assets.
 
-**FR-4.4** CM6 globals are accessed via the window globals pattern — no `@codemirror/*` value imports in the `.plugin.ts` file:
-```typescript
-const { StateField, StateEffect } = (window as any).__CM_STATE__;
-const { Decoration, WidgetType, EditorView } = (window as any).__CM_VIEW__;
-```
-All `@codemirror/*` references in the file must be `import type` only, following the precedent in `focus-mode.plugin.ts` and the bug #5 fix documented in `cm-globals.ts`.
+**FR-3.4** `data:` URLs (base64-embedded images) are supported as-is — they require no conversion.
 
-**FR-4.5** The `StateField` is registered via `api.addExtensions([mathField])` in `onEnable` and removed via `api.removeExtensions()` in `onDisable`.
+**FR-3.5** An empty URL `![]()` or `![alt]()` produces a broken-image placeholder (EC-03), not a rendering attempt.
 
-**FR-4.6** Each rendered KaTeX widget extends `WidgetType`. The widget's `toDOM()` method calls `katex.renderToString()` and sets the result as the `innerHTML` of a container element. The widget must implement `eq()` to return `true` when the LaTeX source string is identical, enabling CM6 to skip DOM reconstruction for unchanged math.
+### FR-4: Image Scanning Strategy
 
-### FR-5: Error Handling for Invalid LaTeX
+The plugin uses **Option A: lezer syntax tree via `window.__CM_LANGUAGE__`**. The `__CM_LANGUAGE__` global already exists in the codebase (`cm-globals.ts`). The plugin calls `syntaxTree(state)` (accessed from `window.__CM_LANGUAGE__`) to walk the parsed AST for `Image` nodes, identical to how `live-preview.ts` currently scans images.
 
-**FR-5.1** When KaTeX fails to parse a math expression (even with `throwOnError: false`, it may still throw for certain inputs), the failure is caught and the widget renders an error placeholder instead of a blank or broken widget.
+This is more accurate than a regex scanner and is not fragile for edge cases such as images inside fenced code blocks or inline code spans. The lezer parser natively excludes image syntax inside code fences from the `Image` node type.
 
-**FR-5.2** The error placeholder is a `<span class="cm-math-error">` (inline) or `<div class="cm-math-error">` (block) containing a short human-readable message: `"Math error"` with a tooltip (`title` attribute) showing the raw LaTeX source, allowing the user to understand what failed.
+**FR-4.1** The scanner must not produce decorations for image syntax appearing inside:
+- Fenced code blocks (` ``` `)
+- Inline code spans (`` ` ``)
 
-**FR-5.3** An invalid LaTeX expression that is currently cursor-away still produces the error placeholder widget (the raw source is not exposed). The user must move the cursor into the expression to see and correct the raw LaTeX.
+These cases are handled automatically by the lezer AST — no additional filtering is required.
 
-**FR-5.4** The error state is styled with a distinct visual (e.g., red text or red underline) using a CSS variable-compatible approach so it respects the active theme.
+**FR-4.2** The scanner returns an array of `ImageRange` objects sorted ascending by `from` (required by `RangeSetBuilder`).
+
+**FR-4.3** Each `ImageRange` contains: `from`, `to` (document offsets for the full `![alt](url)` span), `src` (raw URL string), `alt` (raw alt text including all annotations), `cssClasses` (string[] of class shorthand tokens), `cssStyle` (raw CSS string from `{...}` token or undefined), and `displayWidth`/`displayHeight` (parsed integers or undefined).
+
+**FR-4.4** Edge case: if `syntaxTree(state)` returns an incomplete tree on the very first render (document not yet fully parsed), the scanner may produce an empty result. The StateField will recompute on the next transaction and recover. This is acceptable behavior (EC-32).
+
+### FR-5: Broken Image Handling
+
+**FR-5.1** When an image fails to load (network error, file not found, permission denied), the widget displays a broken-image placeholder instead of a blank area or broken browser icon. The placeholder contains:
+- A visual icon (SVG inline, or CSS-drawn broken-image symbol).
+- The `alt` text displayed as a caption below the icon.
+- A `title` attribute on the container with the raw URL, so the user can hover to see what path failed.
+
+**FR-5.2** The broken-image state is set via the `<img>` element's `onerror` event. The handler replaces the `<img>` with the placeholder DOM or applies a CSS error class.
+
+**FR-5.3** An empty URL (EC-03) produces the broken-image placeholder immediately, without attempting to load anything.
+
+**FR-5.4** The placeholder is styled with a CSS variable-compatible approach for theme compatibility (e.g., `color: var(--media-error-color, #c0392b)`).
+
+**FR-5.5** A broken image is still subject to the cursor-on-reveal rule: the placeholder is shown when the cursor is away; the raw Markdown source is shown when the cursor enters the image range.
 
 ### FR-6: Plugin Lifecycle
 
-**FR-6.1** The plugin is a new file: `src/plugins/math/math.plugin.ts`. It does NOT modify `markdown-toolbar.plugin.ts` or any other existing plugin.
+**FR-6.1** The plugin is a new file: `src/plugins/media-preview/media-preview.plugin.ts`.
 
-**FR-6.2** Plugin metadata:
-- `id`: `"math"`
-- `name`: `"Math"`
+**FR-6.2** Image rendering coordination with `live-preview.ts`: a minimal image fallback remains in `live-preview.ts` even when the plugin is disabled. When the media-preview plugin is enabled, it must suppress the core fallback to prevent double rendering. The agreed mechanism is a global flag (`window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__`) that `live-preview.ts` checks: when true, the core fallback skips image decorations. The plugin sets this flag in `onEnable` and clears it in `onDisable`.
+
+The minimal core fallback in `live-preview.ts` exists so users who have never installed or enabled the plugin still see images rendered. The plugin is not required to be enabled-by-default (though the Architect may choose that if the implementation is cleaner).
+
+**FR-6.3** Plugin metadata:
+- `id`: `"media-preview"`
+- `name`: `"Media Preview"`
 - `version`: `"1.0.0"`
-- `description`: `"Render LaTeX math expressions using KaTeX"`
-- `detail`: A longer description explaining that inline `$...$` and display `$$...$$` expressions are rendered in live preview mode; raw LaTeX is shown when the cursor is inside the expression.
+- `description`: `"Render images inline in the live editor"`
+- `detail`: A longer description explaining that `![alt](url)` image syntax is rendered inline; clicking a rendered image reveals the source Markdown for editing; supports local files (relative and absolute paths) and remote URLs; alt text supports CSS class shorthand (`.classname`) and inline style (`{property:value}`) annotations.
 
-**FR-6.3** `onEnable` sequence:
-1. Inject KaTeX CSS as a `<style>` tag (idempotent — guard by element id).
-2. Construct the `mathStateField` (`StateField<DecorationSet>`).
-3. Register via `api.addExtensions([mathStateField])`.
+**FR-6.4** `onEnable` sequence:
+1. Inject plugin CSS as a `<style>` tag (idempotent, guarded by element id).
+2. Set `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__ = true` to suppress the core fallback in `live-preview.ts`.
+3. Construct a fresh `StateField<DecorationSet>`.
+4. Register via `api.addExtensions([mediaPreviewField])`.
 
-**FR-6.4** `onDisable` sequence:
-1. `api.removeExtensions()`.
-2. Remove the injected KaTeX CSS `<style>` tag.
-
-**FR-6.5** The plugin is added to the `PLUGINS` array in `scripts/build-plugins.mjs` as:
-```javascript
-["math", "src/plugins/math/math.plugin.ts"],
-```
+**FR-6.5** `onDisable` sequence:
+1. `api.removeExtensions()` — removes decorations; raw Markdown syntax becomes visible.
+2. Clear `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__` — re-enables the core fallback in `live-preview.ts`.
+3. Remove injected CSS `<style>` tag.
 
 ### FR-7: Settings
 
-**FR-7.1** Phase 1 of this feature has no user-configurable settings beyond the standard plugin on/off toggle (handled by `PluginManager`).
+**FR-7.1** Phase 1 user-configurable settings (minimal):
+- `maxDisplayWidth: number` — Serves as both a **global cap** and the **default width** for images with no size annotation. Default: `600`. Applied as `width: Xpx; height: auto` (standard CSS proportional scaling — no issues). Images with an explicit dimension annotation in alt text use that annotation instead, subject to the cap. Set to `0` to disable the constraint entirely.
 
-**FR-7.2** The Architect may reserve a settings structure for future options (e.g., macros dictionary, display-math centering toggle), but no settings UI is required for this implementation.
+**FR-7.2** Settings are loaded via `api.loadSettings()` in `onEnable` and saved via `api.saveSettings()` when changed.
 
-### FR-8: Interaction with Existing Live Preview Mode
+**FR-7.3** No settings UI is required for Phase 1 beyond the standard plugin toggle. Settings can be configured via the plugin panel's detail view if the Architect chooses.
 
-**FR-8.1** The math plugin's `StateField` is independent of the live preview (Typora-style syntax hiding) `StateField`. They coexist as separate CM6 extensions. No coupling between the two is required.
+---
 
-**FR-8.2** When the math plugin hides a `$...$` span via a `ReplaceDecoration`, the live preview mode has no `$` syntax to process for that range — the replace decoration takes precedence. This is expected and correct behavior.
+## Architecture Decisions (Resolved)
 
-**FR-8.3** The rendered KaTeX widget must not interfere with the editor's scroll position, selection restoration, or undo history. Widget decorations in CM6 are non-editable by default (cursor skips over them); this is the desired behavior.
+These decisions were confirmed during requirements analysis and must be honored during architecture.
+
+**AD-1: `convertFileSrc` exposure** — `convertFileSrc` is a pure synchronous JS function from `@tauri-apps/api/core`. It requires no Rust round-trip. It is exposed as `window.__MARKABLE_CONVERT_FILE_SRC__` in `main.ts` using the pattern:
+```
+(window as unknown as Record<string, unknown>)["__MARKABLE_CONVERT_FILE_SRC__"] = convertFileSrc;
+```
+This matches the existing pattern for `__MARKABLE_EDITOR_VIEW__`, `__TAURI_DIALOG__`, and similar globals.
+
+**AD-2: `__MARKABLE_CURRENT_FILE__` timing** — Confirmed updated synchronously on every tab switch via `_applyActiveTab()` in `tab-manager.ts`. No race conditions on tab switch.
+
+**AD-3: Image scanner** — Uses lezer `syntaxTree(state)` via `window.__CM_LANGUAGE__` (Option A). The `__CM_LANGUAGE__` global already exists in `cm-globals.ts`. Regex scanning is not used.
+
+**AD-4: SVG rendering** — SVG files render as `<img src="asset://...">` (raster mode). No inline SVG DOM injection.
+
+**AD-5: `maxDisplayWidth` semantics** — Acts as both a global width cap and the default width for unsized images. Uses `width: Xpx; height: auto` CSS (proportional scaling).
+
+**AD-6: Core fallback preservation** — A minimal image rendering path stays in `live-preview.ts`. Plugin suppresses it via `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__` flag while active.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1: Render Performance** — KaTeX `renderToString()` is synchronous. For documents with up to 50 math expressions, the full `StateField` recomputation (scanning + rendering all non-cursor expressions) must complete within 50ms. For documents with more than 50 expressions, rendering is still synchronous but the Architect should evaluate whether incremental recomputation (only re-render changed ranges) is needed.
+**NFR-1: Render Performance** — The `StateField` recomputation (full document scan + widget construction) must complete within 30ms for documents with up to 100 image references. Image loading itself is async (browser network/disk) and does not block the StateField update.
 
-**NFR-2: IIFE Bundle Size** — KaTeX minified is approximately 80 KB (JS only, excluding fonts). The plugin IIFE `math.js` is expected to be approximately 100–120 KB. This is acceptable given KaTeX's rendering quality and the js-yaml precedent (~40 KB bundled in yaml-pane).
+**NFR-2: IIFE Bundle Size** — This plugin bundles no large third-party libraries. The IIFE output (`media-preview.js`) is expected to be under 30 KB. Well within the 500 KB cap.
 
-**NFR-3: IIFE Self-Containment** — The plugin follows all IIFE rules: no app-internal imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag, all third-party dependencies bundled.
+**NFR-3: IIFE Self-Containment** — All IIFE rules apply: no app-internal module imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag.
 
-**NFR-4: Theme Compatibility** — Math widget containers (`cm-math-inline`, `cm-math-block`) use CSS variables for margin, padding, and background so they adopt the active theme. KaTeX's own internal CSS is self-contained and must not conflict with Markable theme variables.
+**NFR-4: Theme Compatibility** — Image widget containers use CSS variables for border, background, padding, and error state color.
 
-**NFR-5: Undo/Redo Safety** — The `StateField` decorations are derived state; they do not participate in the undo history. Undo/redo of the underlying LaTeX source text works normally via CM6's built-in history.
+**NFR-5: Accessibility** — All rendered `<img>` elements must carry a non-empty `alt` attribute. When the alt text is empty in the Markdown, use an empty-string `alt=""` (which is valid for decorative images) rather than omitting the attribute.
 
-**NFR-6: No KaTeX CDN Dependency** — The app is designed to work offline. KaTeX must be fully bundled.
+**NFR-6: No Image Caching Required** — The browser/WebView handles image caching. The plugin does not implement its own cache.
 
----
-
-## Architectural Decisions (Proposed — for Architect to confirm)
-
-**AD-1: StateField over ViewPlugin** — A `StateField<DecorationSet>` is required (not a `ViewPlugin`) because multi-line `$$...$$` blocks require block-level `ReplaceDecoration`, which must be stable across transactions and is only reliable in a `StateField`. Single-line ViewPlugin decorations are insufficient for the block math case.
-
-**AD-2: Full Document Scan per Transaction** — The `StateField.provide()` computes decorations by scanning the full document on every relevant transaction. This is O(N) in document size. For typical note-taking documents (under 10,000 lines), this is acceptable. The Architect may propose incremental scan optimization if benchmarks indicate a problem.
-
-**AD-3: KaTeX Bundled as IIFE Dependency** — KaTeX is imported at the top of `math.plugin.ts` (`import katex from "katex"`). The build system's `external: [/^@codemirror\//]` rule does not affect KaTeX; Vite/Rollup will bundle it into `math.js`. This is identical to how js-yaml is bundled into `yaml-pane.js`.
-
-**AD-4: Font Strategy (Architect Must Decide)** — The two options for KaTeX fonts are:
-- Option A: Inline fonts as base64 in the injected CSS. Pro: single self-contained `<style>` tag. Con: increases injected CSS size by ~500 KB.
-- Option B: Copy KaTeX font files into `src-tauri/plugins/core/katex-fonts/` and reference them via Tauri's `asset://` protocol in the injected CSS. Pro: smaller CSS injection, fonts cached by browser. Con: requires Tauri resource bundling configuration.
-The Architect must evaluate and select one option.
-
----
-
-## Open Questions (for Architecture Phase)
-
-**OQ-1: KaTeX CSS Import Strategy** — How should KaTeX's CSS be imported at build time into the IIFE? Options: (a) `import katexCss from "katex/dist/katex.min.css?inline"` (Vite raw import), (b) manually copy the CSS into a string constant, (c) post-process the build output. The Architect must confirm which approach works cleanly with the IIFE build format and does not introduce `require()` calls.
-
-**OQ-2: Font Delivery** — See AD-4 above. The Architect must select Option A or Option B and specify the exact implementation.
-
-**OQ-3: `__CM_STATE__` Exports** — `StateField` and `RangeSetBuilder` are accessed from `window.__CM_STATE__`. Confirm that `RangeSetBuilder` is exported by `@codemirror/state` and is present in `window.__CM_STATE__` (currently `cm-globals.ts` exports `import * as _cmState from "@codemirror/state"`, so all named exports are included — this should be confirmed).
-
-**OQ-4: `WidgetType` Access** — `WidgetType` is in `@codemirror/view`. Confirm it is accessible as `(window as any).__CM_VIEW__.WidgetType` (it should be, per the `import * as _cmView` pattern in `cm-globals.ts`).
-
-**OQ-5: Inline Math Regex Edge Cases** — The regex for detecting `$...$` must handle: escaped dollar signs (`\$`), dollar signs inside code spans (`` ` `` ... `` ` ``), and dollar signs inside fenced code blocks. The Architect must specify whether the scanner uses a simple regex or a lightweight parser that respects code fences.
-
-**OQ-6: KaTeX Version** — Confirm the current stable KaTeX version (expected: 0.16.x). Check for any known IIFE bundling issues with the current release.
+**NFR-7: No Heavy Media Libraries** — No third-party image processing libraries (sharp, jimp, etc.). The plugin uses only native browser `<img>`, `<video>`, and `<audio>` elements.
 
 ---
 
 ## Out of Scope
 
-1. **MathJax** — Not supported; KaTeX only.
-2. **SVG output** — KaTeX `output: "svg"` is not used; HTML output only.
-3. **Custom macro definitions via settings UI** — No settings UI in this phase. Macros may be considered as a future enhancement.
-4. **Math rendering in exported HTML** — The HTML export command (`Cmd-Opt-E`) is out of scope for this feature; it uses `marked` for rendering, not CM6 decorations.
-5. **Multi-cursor math editing** — CM6's built-in multi-cursor works on the source text; no special handling of multi-cursor interactions with math widgets is required.
-6. **Inline math spanning multiple lines** — Multi-line inline math (`$...\n...$`) is not supported. Only single-line inline math is rendered. Multi-line inline math is displayed as raw text (no widget).
-7. **Nested math delimiters** — `$a $ b$` (dollar sign inside an inline math span) is out of scope. The scanner uses the first valid pair match.
-8. **Server-side or pre-rendering** — All rendering is client-side via KaTeX in the IIFE.
+The following items from FEATURES.md #7 description ("video, embedded `.md`") are explicitly deferred from this implementation:
+
+1. **Video rendering** — `![](video.mp4)` as a `<video>` element. Deferred to a future phase.
+2. **Audio rendering** — `![](audio.mp3)` as an `<audio>` element. Deferred.
+3. **Embedded Markdown** — `![](other-note.md)` rendering the content of another `.md` file inline. Deferred (this is a complex transclusion feature, closer to Obsidian embeds).
+4. **Iframe embeds** — Rendering `<iframe>` or embedded links (YouTube, etc.) inline. Deferred.
+5. **Image insertion UI** — The "insert image" action (Cmd-E, toolbar button) is already handled by the markdown-toolbar plugin and is out of scope for media-preview.
+6. **Image alignment/float UI** — The image toolbar (resize, align controls) is already handled by `markdown-toolbar.plugin.ts`. Media-preview owns rendering only.
+7. **Export rendering** — Images in exported HTML use a separate rendering path (`marked`); this plugin's decorations are CM6-only and do not affect exports.
+8. **Image file management** — Copy-paste image embedding, drag-and-drop file import. Out of scope.
+9. **Lazy loading / virtualization** — For very large documents with many images, off-screen images may load eagerly. Virtualization is a future optimization.
+10. **AVIF / WebP format-specific handling** — All raster formats supported by the macOS WebView are supported automatically; no format-specific code paths are needed.
+11. **Reference-style images** — `![alt][ref]` CommonMark reference-style image syntax is not handled. The scanner only processes inline `![alt](url)` syntax. Reference-style images are rendered as raw text.
+12. **Interactive SVG** — SVG files are rendered as raster images via `<img>`. No inline `<svg>` DOM injection, no CSS styling of SVG internals, no interactivity.
+
+---
+
+## Acceptance Criteria
+
+**AC-1** An `![alt](relative/path.png)` image reference renders as a visual `<img>` element when the cursor is not on that line.
+
+**AC-2** Clicking the rendered image moves the cursor into the image source, revealing the raw `![alt](url)` Markdown for editing.
+
+**AC-3** A relative path image (e.g., `![](./screenshot.png)`) loads correctly when the file is in the same directory as the open document.
+
+**AC-4** An `https://` remote image URL loads and renders correctly.
+
+**AC-5** A path to a non-existent file displays the broken-image placeholder (not a blank space or browser error icon), with the failed URL visible on hover.
+
+**AC-6** Disabling the plugin in the Plugins panel removes all image widgets; raw `![alt](url)` syntax is visible throughout the document.
+
+**AC-7** Re-enabling the plugin re-renders all images correctly from a clean state.
+
+**AC-8** A GIF image animates in the widget (no special handling needed — native `<img>` supports animated GIFs).
+
+**AC-9** An image with alt-text dimension annotation `![photo|400x300](img.png)` renders at exactly 400x300 px.
+
+**AC-10** An image with a very long URL containing special characters (spaces, parentheses, Unicode) renders correctly (URL is used as-is; encoding is the author's responsibility per CommonMark).
+
+**AC-11** The `maxDisplayWidth` setting caps the displayed size of images exceeding that width, and also sets the default width for unsized images.
+
+**AC-12** No console errors are thrown during normal operation (typing, cursor movement, image load, image load failure).
+
+**AC-13** `![photo.center](img.png)` produces an `<img>` element with CSS class `center` applied in addition to `cm-media-image`.
+
+**AC-14** `![photo{border:2px solid red}](img.png)` produces an `<img>` element with `border: 2px solid red` in its inline `style` attribute.
+
+**AC-15** When the media-preview plugin is disabled, the core `live-preview.ts` fallback resumes rendering images (basic rendering, no CSS annotations or broken-image placeholder).
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1: Cursor exactly on the opening `$`** — The cursor is at the position of the `$` character that opens an inline math span. Expected: raw LaTeX is shown (cursor is "inside" the expression). The widget is not rendered.
+**EC-01: Cursor exactly on the opening `!` character** — Cursor is at the `!` of `![alt](url)`. Expected: raw source is shown (cursor is inside the image range). Widget is not rendered.
 
-**EC-2: Cursor exactly on the closing `$`** — The cursor is at the position of the `$` character that closes an inline math span. Expected: raw LaTeX is shown. Same rule as EC-1.
+**EC-02: Cursor exactly on the closing `)` character** — Cursor is at the closing `)` of `![alt](url)`. Expected: raw source is shown.
 
-**EC-3: Cursor on the line containing `$$` (block math delimiter)** — The cursor is on the opening or closing `$$` line of a display block. Expected: raw LaTeX block is shown (entire block is "active").
+**EC-03: Empty URL — `![alt]()`** — The URL is empty. Expected: broken-image placeholder shown when cursor away; raw source shown when cursor inside. No attempt to load a blank URL.
 
-**EC-4: Two adjacent inline math spans on the same line** — E.g., `$a$ and $b$` with cursor between them (outside both). Expected: both are rendered as separate widgets. The inter-expression text `" and "` is shown as-is.
+**EC-04: Empty alt text — `![](url)`** — Alt text is empty. Expected: image renders normally with `alt=""`. No dimension parsing attempted.
 
-**EC-5: Inline math immediately adjacent to other syntax** — E.g., `**bold $x^2$ bold**`. The `$...$` span is inside a bold run. Expected: the inner math renders as a widget; the outer bold decoration (from the live preview layer) applies independently.
+**EC-05: URL contains spaces — `![](my photo.png)`** — CommonMark does not require space-encoding in image URLs. Expected: URL is passed through as-is to `convertFileSrc` / the `<img src>` attribute. If the browser rejects it, the `onerror` handler fires and the broken-image placeholder appears.
 
-**EC-6: Empty inline math — `$$` (two dollars, no content)** — This is actually the block math opening delimiter pattern when followed by a newline. When both `$` characters are on the same line with no content between them: the inline scanner finds zero-length content and should NOT produce a decoration (zero-length math is not valid). Treated as raw text.
+**EC-06: URL contains parentheses — `![](path/to/(file).png)`** — CommonMark has specific rules about balanced parens in link destinations. Expected: the scanner (via lezer AST) correctly captures the full URL including the parentheses. The Architect must verify the lezer parser's behavior for this case.
 
-**EC-7: Block math with only whitespace content** — `$$\n   \n$$`. Expected: KaTeX renders an empty expression (whitespace-only LaTeX renders as empty). The widget shows an empty display box.
+**EC-07: Relative path with no current file path known** — The plugin attempts to resolve a relative URL but `__MARKABLE_CURRENT_FILE__` is null (new unsaved document). Expected: the relative path cannot be resolved. The plugin should attempt to use the path as-is, which will fail to load. The `onerror` handler fires and the broken-image placeholder appears.
 
-**EC-8: Block math immediately at start of document** — The opening `$$` is on line 1 of the document. Expected: no special handling needed; block detection is position-agnostic.
+**EC-08: Absolute path outside the allowed scope** — Tauri's `asset://` protocol may be restricted to certain directories based on the capability configuration. A path outside the scope (e.g., `/etc/passwd`) would fail. Expected: `onerror` fires, broken-image placeholder shown.
 
-**EC-9: Invalid LaTeX inside an inline span** — E.g., `$\frac{1}{$` (unclosed brace). Expected: error placeholder widget per FR-5.2. The expression is not rendered; the error indicator is shown when cursor is away.
+**EC-09: `file://` URL** — `![](file:///Users/foo/img.png)`. Expected: rejected per FR-3.3. `file://` is treated as a broken URL — broken-image placeholder shown.
 
-**EC-10: Invalid LaTeX inside a display block** — Same as EC-9 but for block math. Expected: block-level error placeholder (`<div class="cm-math-error">`).
+**EC-10: `data:` URI** — `![](data:image/png;base64,...)`. Expected: rendered directly as `src` without any `convertFileSrc` conversion. Must work correctly even for very large base64 strings (subject to WebView memory, not the plugin's concern).
 
-**EC-11: Dollar sign inside a fenced code block** — A `$...$` pattern appears inside a ` ``` ` fenced code block. Expected: the scanner must not produce a decoration for math inside code fences. This is a code block; no math rendering occurs.
+**EC-11: GIF image** — Animated GIF file referenced via relative path. Expected: renders and animates normally. No special handling needed.
 
-**EC-12: Dollar sign inside an inline code span** — E.g., `` `$x$` `` — a dollar sign inside backtick-delimited code. Expected: no math decoration; the content is a code span, not math.
+**EC-12: SVG image** — `.svg` file referenced via relative path. Expected: renders as `<img src="asset://...">` (raster mode). No DOM injection of SVG content.
 
-**EC-13: Escaped dollar sign — `\$`** — A backslash-escaped dollar sign. Expected: the scanner must recognize `\$` as a literal dollar sign and not treat it as a math delimiter. The `\$` sequence must not open or close a math span.
+**EC-13: Image syntax inside a fenced code block** — ` ```\n![alt](url)\n``` `. Expected: no image widget. Handled automatically by lezer AST (code block nodes do not contain `Image` nodes).
 
-**EC-14: Math plugin disabled while cursor is inside a math span** — `onDisable` calls `api.removeExtensions()`, which removes the `StateField`. Expected: all widgets are removed; the raw LaTeX source text is visible throughout the document. No error or stale DOM elements.
+**EC-14: Image syntax inside an inline code span** — `` `![alt](url)` ``. Expected: no image widget. Handled automatically by lezer AST.
 
-**EC-15: Math plugin re-enabled (toggle off, then on)** — Expected: a fresh `StateField` is created in `onEnable`; all math spans in the current document are rendered correctly. No residual state from the previous enable cycle.
+**EC-15: Very large image file (10+ MB)** — A multi-megabyte PNG referenced by path. Expected: the `<img>` element begins loading asynchronously. The StateField does not block on image load. The widget is placed immediately; the image paints when the WebView finishes loading it. No plugin-level timeout or size gate.
 
-**EC-16: Very large math expression — LaTeX string > 1000 characters** — KaTeX must handle this without hanging. Expected: KaTeX renders it (or returns an error placeholder if it exceeds internal limits). No UI freeze.
+**EC-16: Very wide image without dimension annotation** — A 4000px-wide image. Expected: constrained to `maxDisplayWidth` (default 600px) with `height: auto`.
 
-**EC-17: Block math delimiter `$$` appears inside an inline code span** — E.g., `` `$$` ``. Expected: same as EC-12 — code spans take precedence; no math decoration produced.
+**EC-17: Image with only width annotation — `![photo|400](img.png)`** — Expected: `width: 400px; height: auto` applied.
 
-**EC-18: Multiple display blocks in the document** — Ten or more `$$...$$` blocks, none of which the cursor is in. Expected: all blocks render as widgets. Performance must remain within NFR-1 bounds.
+**EC-18: Image on the first line of the document** — No special handling needed. The scanner is position-agnostic.
 
-**EC-19: Display block with no closing `$$`** — An opening `$$` on its own line with no matching closing `$$` before end of document. Expected: the scanner treats this as an unterminated block and produces no widget. The raw `$$` and subsequent text are shown as-is.
+**EC-19: Two images on the same line** — `![a](a.png) and ![b](b.png)`. Both should render as separate widgets. Cursor inside the first reveals the first's source; cursor inside the second reveals the second's source. Both rendered when cursor is between them.
 
-**EC-20: Inline math containing a newline (multi-line inline)** — `$a\n+b$`. Expected: the inline scanner requires single-line content (FR-1.1). This is not rendered as a widget; raw text is shown.
+**EC-20: Image immediately adjacent to other syntax** — `**bold ![img](url) bold**`. Expected: image widget renders inside the bold region. The live-preview bold decoration and the image replace-decoration coexist independently.
 
-**EC-21: Tab switch while a math widget is displayed** — User switches to a different tab. The new document may contain different math. Expected: the `StateField` recomputes on the new document state (tab switch triggers a document change or editor re-mount); widgets for the new document are rendered correctly.
+**EC-21: Image reference-style links — `![alt][ref]`** — These are out of scope (see Out of Scope item 11). The scanner only handles inline `![alt](url)` syntax. Reference-style images are shown as raw text.
 
-**EC-22: Undo past a math expression deletion** — User types over and deletes a `$x^2$` span, then presses Cmd-Z. Expected: the undo restores the source text; the `StateField` recomputes and the widget re-renders. No stale widget fragments remain.
+**EC-22: Image inside a blockquote — `> ![alt](url)`** — Expected: image renders normally. The lezer AST includes `Image` nodes inside blockquote contexts.
 
-**EC-23: KaTeX CSS injection — toggle off then on** — `onDisable` removes the `<style>` tag. `onEnable` re-injects it. Expected: the CSS injection is idempotent (guarded by a fixed element id per focus-mode pattern). No duplicate `<style>` tags accumulate across toggle cycles.
+**EC-23: Plugin disabled mid-document with images loaded** — User disables the plugin while images are displayed. Expected: `api.removeExtensions()` removes all decorations; raw Markdown syntax is visible throughout. No stale `<img>` elements remain in the DOM. Core `live-preview.ts` fallback resumes.
+
+**EC-24: Plugin re-enabled (toggle off, then on)** — Expected: a fresh `StateField` is created; all images in the current document render correctly from a clean state.
+
+**EC-25: Tab switch while images are displayed** — User switches to a different tab. Expected: the StateField recomputes on the new document; images in the new document render; images from the previous document do not bleed through.
+
+**EC-26: Undo of an image insertion** — User types `![alt](url)`, cursor moves away (image renders), then presses Cmd-Z. Expected: undo restores the pre-insertion text; the StateField recomputes and the image widget disappears. No stale widget remains.
+
+**EC-27: Image `src` URL changes while cursor is away** — User is in another part of the document; they switch tabs, edit the image URL, then switch back. Expected: the StateField's `docChanged` trigger recomputes; the new URL is reflected in the widget.
+
+**EC-28: Image path with special filename characters — spaces, parentheses, Unicode, emoji** — `![](café photo (1).png)`. Expected: the scanner captures the full URL including special characters. `__MARKABLE_CONVERT_FILE_SRC__` is called with the raw path string. If the filesystem path is valid, the image loads. If not, `onerror` fires.
+
+**EC-29: Multiple image widgets + cursor movement performance** — Document with 50 images, cursor moving line by line. Expected: StateField recomputes on each selection change within NFR-1 bounds (30ms). No visible lag.
+
+**EC-30: CSS style tag accumulation across toggles** — `onDisable` removes the plugin `<style>` tag. `onEnable` re-injects it. Expected: idempotent injection (guarded by fixed element id). No duplicate `<style>` tags after multiple toggle cycles.
+
+**EC-31: CSS injection via alt text — XSS / script injection attempt** — A malicious alt text like `![x{background:url(javascript:alert(1))}](img.png)` must not execute scripts. Expected: the `{...}` CSS string is applied only via `element.style.cssText` (DOM property), not via `innerHTML` or `setAttribute("style", rawString)`. Browser CSS engines ignore `javascript:` values in `style.cssText`. No script execution. The Architect must verify that `element.style.cssText = userValue` is used, not `element.setAttribute("style", userValue)`.
+
+**EC-32: Incomplete lezer syntax tree on first render** — On the very first render of a newly opened document, `syntaxTree(state)` may return a partial tree if the lezer parser has not finished its incremental parse pass. Expected: the scanner produces a partial or empty `ImageRange` list. The StateField places no decorations (or decorations only for the parsed region). On the next transaction (`docChanged` or `selectionSet`), the tree is complete and all images render. No crash; graceful degradation.
+
+**EC-33: CSS class shorthand with invalid class name characters** — `![photo.my class!](img.png)` — spaces or special characters in the dot-class token. Expected: the annotation parser strips the dot-class token from alt text but does not apply the invalid class name to the DOM. The Architect must decide whether to sanitize (strip invalid characters) or silently discard invalid class tokens.
+
+**EC-34: Both dimension annotation and CSS annotation present** — `![photo.center|400x300{opacity:0.8}](img.png)`. Expected: all three annotations are parsed independently. The `<img>` has `width: 400px; height: 300px`, class `center`, and `style="opacity:0.8"`. The clean alt text is `photo`.
+
+**EC-35: `__MARKABLE_CONVERT_FILE_SRC__` not yet defined when plugin initializes** — The plugin's `onEnable` runs before `main.ts` has assigned the global (race condition during app startup). Expected: `onEnable` should guard with a check; if the global is undefined, log a warning and fall back to passing URLs through unconverted (which will fail for local paths but not crash). This case should not occur in normal flow since plugins load after `main.ts`, but the guard is defensive.
 
 ---
 
@@ -276,9 +344,11 @@ The Architect must evaluate and select one option.
 
 | Component | Target File | Notes |
 |---|---|---|
-| Math plugin | `src/plugins/math/math.plugin.ts` (new) | IIFE plugin: StateField, KaTeX widget, CSS injection |
-| Plugin build registration | `scripts/build-plugins.mjs` | Add `["math", "src/plugins/math/math.plugin.ts"]` to PLUGINS array |
-| KaTeX npm dependency | `package.json` | Add `"katex": "^0.16.x"` to `dependencies`; add `"@types/katex"` to `devDependencies` |
-| KaTeX font strategy | TBD by Architect (OQ-2 / AD-4) | Either base64 inline or Tauri resource bundle |
-| Plugin settings store | None required | No user settings in Phase 1 |
-| Math plugin tests | `tests/plugins/math/math.test.ts` (new) | Unit tests for scanner pure functions (EC-11 through EC-20 are highest priority) |
+| Media Preview plugin | `src/plugins/media-preview/media-preview.plugin.ts` (new) | IIFE plugin: StateField, ImageWidget, broken-image placeholder, CSS annotation parsing, CSS injection |
+| Plugin build registration | `scripts/build-plugins.mjs` | Add `["media-preview", "src/plugins/media-preview/media-preview.plugin.ts"]` to PLUGINS array |
+| `convertFileSrc` global exposure | `src/main.ts` | `window.__MARKABLE_CONVERT_FILE_SRC__ = convertFileSrc` (AD-1) |
+| Current file path global | Already exists as `window.__MARKABLE_CURRENT_FILE__` | Confirmed synchronous on tab switch — no changes needed |
+| `live-preview.ts` core fallback | `src/editor/live-preview.ts` | Keep minimal image fallback; add `__MARKABLE_MEDIA_PREVIEW_ACTIVE__` check to suppress when plugin active (FR-6.2) |
+| Plugin settings | Via `api.loadSettings()` / `api.saveSettings()` | `maxDisplayWidth` setting (dual-purpose: cap and default width) |
+| Media preview tests | `tests/plugins/media-preview/media-preview.test.ts` (new) | Unit tests for scanner, URL resolution (mocked), broken-image, dimension parsing, CSS annotation parsing (FR-2.4), EC-31 XSS guard, EC-32 incomplete tree |
+| `__CM_LANGUAGE__` global (if not already sufficient) | `src/lib/cm-globals.ts` | Confirm `syntaxTree` is accessible from the existing `__CM_LANGUAGE__` global; extend if needed (AD-3) |
