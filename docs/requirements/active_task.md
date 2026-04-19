@@ -1,319 +1,274 @@
 ---
-title: "YAML Pane — Front Matter Sidebar Panel (FC3 #2)"
-last-updated: "2026-04-17"
+title: "Math LaTeX Rendering — FC2 #8"
+last-updated: "2026-04-18"
 review-cadence-days: 7
 status: active
 ---
 
-# YAML Pane — Front Matter Sidebar Panel (FC3 #2) Requirements Spec
+# Math LaTeX Rendering (FC2 #8) Requirements Spec
 
 ## Summary
 
-As a user, I want a sidebar panel that reads my document's YAML front matter and presents it as a structured, editable form — so that I can view and update fields like `title`, `date`, `tags`, and `categories` without ever touching raw YAML syntax.
+As a user, I want inline `$...$` and display `$$...$$` math expressions to render as typeset mathematics in the live preview — so that equations are readable as formatted output rather than raw LaTeX strings, while still becoming editable source text when my cursor is inside them.
 
 ---
 
 ## Background and Motivation
 
-Markable is evolving into a PKM (Personal Knowledge Management) tool alongside being a Markdown editor. Structured front matter — `date`, `title`, `tags`, `categories`, `status` — is the backbone of that PKM layer. The YAML Pane makes that metadata first-class: visible at a glance, editable with proper UI controls, and auto-populated for new documents.
+Markable already ships syntax insertion for both math forms: `insertInlineMath()` and `insertMathBlock()` in `src/editor/format.ts`, bound to Cmd-Shift-M (inline) and accessible via the toolbar. The help docs explicitly note: _"Math is inserted as syntax only in Phase 1 — rendering requires a future plugin."_ This feature delivers that rendering.
 
-This feature is listed as FC3 #2 ("YAML Pane — auto-tagging, categories, displayed in a right-side panel"). It must also support term restriction to eliminate similar/duplicate terms (Notion-style controlled vocabulary via schema-driven dropdowns/autocomplete).
-
-This is a **standalone sidebar panel feature**, not part of the Templates plugin. It is independently toggle-able and can coexist with any other sidebar panels.
-
-### Relationship to Templates Plugin
-
-The Templates plugin (FC2 #4) copies YAML front matter verbatim from template files into new documents. The YAML Pane then reads that front matter and exposes it for editing. The two features compose but do not couple — the YAML Pane works on any document with front matter, whether or not it came from a template.
+The Typora-style live preview contract already established for other Markdown syntax (headings, bold, links) must be extended to math: raw LaTeX is hidden when the cursor is away from the expression and revealed when the cursor enters it.
 
 ### Existing Infrastructure Leveraged
 
 | Component | File | Relevance |
 |---|---|---|
-| Sidebar panel system | `src/sidebar/sidebar-manager.ts` | `register()` / `unregister()` with `SidebarPanelDescriptor` |
-| Plugin API | `src/plugins/markable-plugin-api.ts` | `api.registerSidebarPanel()`, `api.loadSettings()`, `api.saveSettings()`, `api.addExtensions()` |
-| Plugin settings persistence | `src-tauri/src/commands/plugins.rs` | `read_plugin_settings` / `write_plugin_settings` Tauri commands |
-| CM6 globals (IIFE) | `src/lib/cm-globals.ts` | `window.__CM_VIEW__`, `window.__CM_STATE__` |
-| App globals | `src/main.ts` | `window.__MARKABLE_CURRENT_FILE__`, `window.__MARKABLE_EDITOR_VIEW__` |
-| Tab switch detection | CM6 `updateListener` | Same polling pattern as Backlinks (compare `__MARKABLE_CURRENT_FILE__` across transactions) |
-| Bridge layer | `src/lib/bridge.ts` | `readFile()`, `writeFile()` for schema file I/O |
-| Existing panels (reference) | `src/plugins/backlinks/backlinks.plugin.ts`, `src/plugins/auto-toc/auto-toc.plugin.ts` | Sidebar panel registration and update patterns |
+| Math insertion (inline) | `src/editor/format.ts` — `insertInlineMath()` | Inserts `$...$`; produces source text this plugin renders |
+| Math insertion (block) | `src/editor/format.ts` — `insertMathBlock()` | Inserts `$$\n...\n$$`; produces source text this plugin renders |
+| IIFE plugin system | `src/plugins/`, `scripts/build-plugins.mjs` | New plugin must register in PLUGINS array; follow IIFE self-containment rules |
+| CM6 globals | `src/lib/cm-globals.ts` | `window.__CM_VIEW__` / `window.__CM_STATE__` are the only CM6 access points inside the IIFE |
+| Plugin API | `src/plugins/markable-plugin-api.ts` | `api.addExtensions()` / `api.removeExtensions()` for CM6 registration |
+| Focus mode pattern | `src/plugins/focus-mode/focus-mode.plugin.ts` | Reference for ViewPlugin + CSS injection pattern |
+| YAML pane pattern | `src/plugins/yaml-pane/yaml-pane.plugin.ts` | Reference for bundling a third-party library (js-yaml precedent) into the IIFE |
+| Build system | `scripts/build-plugins.mjs` | `external: [/^@codemirror\//]` rule — @codemirror/* must NOT be imported as values; KaTeX must be bundled |
 
 ---
 
 ## Functional Requirements
 
-### FR-1: YAML Front Matter Detection
+### FR-1: Inline Math Rendering
 
-**FR-1.1** The YAML Pane detects whether the current document begins with a YAML front matter block. A valid front matter block is defined as: the document starts with `---` on line 1 (no leading whitespace, no trailing content on that line), followed by zero or more content lines, closed by a line containing only `---` or `...`.
+**FR-1.1** An inline math span is any occurrence of `$<content>$` in the document where:
+- The opening `$` is not preceded by another `$` (not the start of a display block).
+- The closing `$` is not followed by another `$`.
+- `<content>` is non-empty.
+- The expression does not span more than one line.
 
-**FR-1.2** If no valid front matter block is detected, the panel displays an empty-state UI with an "Add Front Matter" button (FR-3.4).
+**FR-1.2** When the cursor is NOT inside an inline math span (i.e., `selection.main.head` is not in the range `[dollarOpen, dollarClose]` inclusive), the plugin replaces the entire `$...$` source text with a rendered HTML widget produced by KaTeX in inline mode.
 
-**FR-1.3** Front matter is parsed as YAML. If the YAML content within the delimiters is syntactically invalid, the panel displays a parse-error state (see EC-2).
+**FR-1.3** When the cursor IS inside an inline math span (cursor head is at any position from the opening `$` through the closing `$` inclusive), the raw LaTeX source is visible and fully editable. The rendered widget is not shown.
 
-**FR-1.4** Front matter detection and parsing run on every CM6 document update (transaction), debounced at 150ms, so the panel stays in sync as the user types in the editor.
+**FR-1.4** A selection that spans across an inline math expression (anchor outside, head inside, or vice versa) counts as "cursor inside" and shows the raw source for the entire expression.
 
-**FR-1.5** The front matter block is defined as character positions `[0, closingDelimiterEnd]` in the CM6 document. All edit operations target this exact range.
+**FR-1.5** The rendered widget for inline math is a `WidgetDecoration` that replaces the entire `$...$` range in the CM6 document (a `ReplaceDecoration` with `widget` set). The widget's DOM is a `<span class="cm-math-inline">` containing KaTeX output.
 
-### FR-2: Field Display
+### FR-2: Block (Display) Math Rendering
 
-**FR-2.1** The panel renders each top-level YAML key-value pair as a labeled row. The label is the YAML key; the value is an editable control (determined by FR-4).
-
-**FR-2.2** Field rows are presented in the order they appear in the YAML source. Order is preserved on write-back.
-
-**FR-2.3** Nested YAML objects (values that are themselves maps) are displayed as a collapsible sub-section, indented under the parent key. Nested editing is supported for one level of nesting only. Deeper nesting (2+ levels) is displayed as a read-only raw YAML string (see EC-6).
-
-**FR-2.4** YAML sequences (arrays) are displayed as a tag/chip widget: each array element is a removable chip, and a text input appends new items. This applies to fields like `tags` and `categories`.
-
-**FR-2.5** Scalar values (strings, numbers, booleans) are displayed as single-line text inputs, except where schema overrides apply (FR-5).
-
-**FR-2.6** Multi-line string values (YAML block scalars: `|` and `>`) are displayed as multi-line textarea controls.
-
-**FR-2.7** Each row has a delete button (visible on hover) that removes the entire key-value pair from the front matter.
-
-### FR-3: Field Editing and Write-back
-
-**FR-3.1** When the user commits a field edit (blur, Enter for single-line fields, chip add/remove), the plugin computes the updated YAML string and dispatches a CM6 transaction that replaces the front matter block in the document.
-
-**FR-3.2** The write-back operation replaces only the front matter block (`[0, closingDelimiterEnd]`), not the entire document. Non-front-matter document content is never touched.
-
-**FR-3.3** The replacement YAML is serialized from the in-memory field model, preserving: field order, YAML block scalar syntax (`|` / `>`), and comments. NOTE: because standard YAML serializers strip comments, comment preservation is handled by a line-diffing strategy — only the modified key's line(s) are rewritten; unmodified lines are forwarded verbatim from the original YAML source (see AD-2 for architecture decision).
-
-**FR-3.4** "Add Front Matter" button (shown when no front matter exists): inserts a minimal front matter block at position 0 with auto-populated fields (FR-6). After insertion, the panel switches to its normal display mode.
-
-**FR-3.5** "Add Field" button at the bottom of the panel: opens an inline input row where the user types a key name and initial value. On confirm, the new key-value pair is appended to the end of the front matter block.
-
-**FR-3.6** Field edits do not trigger the document's debounced save (they do not count as "typing in the editor"). Front matter edits dispatch a CM6 transaction that sets the `dirty` flag, requiring the user to save via the normal Cmd-S flow.
-
-**FR-3.7** While the user is editing a field in the panel, the CM6 document update listener (FR-1.4) is suppressed for the field being edited, to prevent the panel re-rendering and losing focus mid-edit. Other fields may still update if an external change occurs.
-
-### FR-4: Field Type Inference
-
-In the absence of a schema entry (FR-5), the panel infers the control type from the YAML value:
-
-**FR-4.1** `boolean` values (`true`/`false`) — rendered as a toggle/checkbox.
-
-**FR-4.2** `number` values (integer or float) — rendered as a number input.
-
-**FR-4.3** `string` values — rendered as a single-line text input, unless the raw YAML source uses block scalar syntax (`|` or `>`), in which case a textarea is used (FR-2.6).
-
-**FR-4.4** `array` (sequence) values — rendered as a chip/tag widget (FR-2.4).
-
-**FR-4.5** `null` / empty values — rendered as a single-line text input (the field exists but has no value; the user can type to fill it).
-
-**FR-4.6** `date` string values matching ISO 8601 (`YYYY-MM-DD`) — rendered as a date input (`<input type="date">`), unless a schema override specifies otherwise.
-
-### FR-5: Schema-Based Field Validation and Controlled Vocabularies
-
-**FR-5.1** The schema file is a JSON file at a user-configured absolute path (stored in plugin settings). When no schema path is configured, all fields fall back to FR-4 type inference and no controlled vocabulary enforcement occurs.
-
-**FR-5.2** The schema file format defines per-field rules. Minimum required structure:
-
-```json
-{
-  "fields": {
-    "<fieldName>": {
-      "type": "string" | "number" | "boolean" | "date" | "array" | "select" | "multiselect",
-      "values": ["allowed-value-1", "allowed-value-2"],
-      "required": true | false,
-      "description": "Human-readable hint shown under the field label"
-    }
-  }
-}
+**FR-2.1** A display math block is a sequence of lines matching:
 ```
+$$
+<content lines>
+$$
+```
+Where the opening `$$` occupies a complete line (optionally with trailing whitespace) and the closing `$$` occupies a complete line. The content may span zero or more lines between the delimiters.
 
-`values` is only meaningful for `select`, `multiselect`, and `array` types. When present, the field's edit control becomes a dropdown (single select) or an autocomplete chip widget (multiselect/array) restricted to the listed values.
+**FR-2.2** When the cursor is NOT anywhere within the block (from the first character of the opening `$$` line through the last character of the closing `$$` line), the entire multi-line block is replaced by a single block `WidgetDecoration` containing KaTeX output rendered in display mode. The widget is a `<div class="cm-math-block">`.
 
-**FR-5.3** A field with `"type": "select"` is rendered as a `<select>` dropdown (or a styled equivalent). Only values listed in `values[]` are valid; free-text input is not permitted.
+**FR-2.3** When the cursor IS inside the block (any position from the opening `$$` line through the closing `$$` line), the raw LaTeX is visible and fully editable. No widget is shown.
 
-**FR-5.4** A field with `"type": "multiselect"` or `"type": "array"` with a `values` list is rendered as a chip widget where adding a new chip shows an autocomplete dropdown filtered to `values[]`. Free-text input that does not match any entry in `values[]` is rejected with an inline validation message (see EC-9).
+**FR-2.4** The same "selection spans boundary" rule from FR-1.4 applies: any selection that touches the block range causes the raw source to be shown.
 
-**FR-5.5** A field marked `"required": true` that is absent from the document's front matter is highlighted in the panel with a visual indicator (e.g., yellow background or asterisk on the label). The missing field row is shown as an "add this field" prompt. The YAML Pane does not block saving — it only indicates the violation visually.
+**FR-2.5** A display block with zero content lines between the delimiters (i.e., `$$\n$$`) renders as a KaTeX widget for an empty expression (KaTeX renders an empty string without error).
 
-**FR-5.6** The `description` string, if present, is displayed as a tooltip or sub-label under the field row.
+### FR-3: KaTeX Rendering Library
 
-**FR-5.7** Schema is loaded once at plugin enable time and when the schema path setting changes. It is not re-read on every document open. A "Reload Schema" button is available in the plugin's settings panel.
+**FR-3.1** KaTeX is the required rendering library. MathJax is explicitly out of scope. Rationale: KaTeX is synchronous, ~250 KB minified+gzipped, and designed for IIFE bundling. MathJax is async and large.
 
-**FR-5.8** Schema loading failures (file not found, invalid JSON, malformed structure) result in a non-fatal warning displayed in the panel header: "Schema could not be loaded. Using type inference." All fields fall back to FR-4 behavior.
+**FR-3.2** KaTeX must be bundled into the plugin IIFE output (`math.js`). It must NOT be loaded from a CDN. Bundling follows the js-yaml precedent established in `yaml-pane.plugin.ts` (import at the top of the `.plugin.ts` file; Vite bundles it because `@codemirror/*` is the only external).
 
-### FR-6: Auto-Population of Standard Fields
+**FR-3.3** KaTeX CSS must be injected as a `<style>` tag by the plugin's `onEnable`, following the pattern in `focus-mode.plugin.ts` (inject by `document.createElement("style")`). The CSS must be sourced from the KaTeX npm package at build time — the Architect must determine the exact import path (e.g., `katex/dist/katex.min.css` read as a string via Vite's `?inline` or `?raw` import, or inlined manually).
 
-**FR-6.1** When the "Add Front Matter" button is clicked (FR-3.4) and the document has no front matter, the plugin auto-populates the following standard fields if they are not already present:
+**FR-3.4** KaTeX font files. KaTeX uses web fonts. The Architect must propose a strategy for font delivery. Two candidate approaches:
+- Bundle fonts as base64 data URIs embedded in the injected CSS (simplest for IIFE).
+- Copy font files into Tauri's resource bundle and reference them via `asset://` protocol.
+The chosen strategy must be specified before implementation begins.
 
-- `date` — today's date in ISO 8601 format (`YYYY-MM-DD`), derived from the system clock at click time.
-- `title` — derived as follows, in priority order:
-  1. The first `# Heading 1` found in the document body (text only, Markdown syntax stripped).
-  2. The filename without extension (from `window.__MARKABLE_CURRENT_FILE__`), with hyphens and underscores replaced by spaces.
-  3. The string `"Untitled"` if neither of the above is available.
+**FR-3.5** KaTeX rendering calls use `katex.renderToString(latex, options)`. Options:
+- `displayMode: false` for inline math (FR-1), `displayMode: true` for block math (FR-2).
+- `throwOnError: false` — rendering errors must not throw; invalid LaTeX must produce a visible error state (FR-5).
+- `output: "html"` — SVG output is out of scope.
 
-**FR-6.2** Auto-population only fires on "Add Front Matter". It does NOT fire automatically when the user opens an existing document that lacks front matter. The user must explicitly opt in via the button.
+### FR-4: CM6 Implementation Architecture
 
-**FR-6.3** Auto-populated fields can be freely edited or deleted after insertion.
+**FR-4.1** The math rendering plugin uses a single CM6 `StateField<DecorationSet>` (not a `ViewPlugin`) for the decoration set. Rationale: math blocks can span multiple lines and therefore require block decorations, which are only stable in a `StateField`.
 
-**FR-6.4** Schema-defined `required` fields that are absent are flagged visually (FR-5.5) but are not auto-inserted. Only `date` and `title` are auto-inserted on "Add Front Matter".
+**FR-4.2** The `StateField` computes its `DecorationSet` by:
+1. Scanning the full document text for all inline `$...$` spans and all display `$$...$$` blocks.
+2. Comparing each found range against the current cursor selection.
+3. For ranges where the cursor is NOT inside: producing a `Decoration.replace({ widget: ... })` that covers the entire `$...$` or `$$...$$` source range.
+4. For ranges where the cursor IS inside: producing no decoration (raw source is shown).
 
-### FR-7: Panel Lifecycle and Tab Switching
+**FR-4.3** The `StateField` recomputes on every `docChanged` or `selectionSet` transaction (same trigger pattern as `focusModeViewPlugin.update()`).
 
-**FR-7.1** The panel re-parses and re-renders its content when the active tab changes (detected via comparison of `window.__MARKABLE_CURRENT_FILE__` across CM6 `updateListener` calls, matching the Backlinks polling pattern).
+**FR-4.4** CM6 globals are accessed via the window globals pattern — no `@codemirror/*` value imports in the `.plugin.ts` file:
+```typescript
+const { StateField, StateEffect } = (window as any).__CM_STATE__;
+const { Decoration, WidgetType, EditorView } = (window as any).__CM_VIEW__;
+```
+All `@codemirror/*` references in the file must be `import type` only, following the precedent in `focus-mode.plugin.ts` and the bug #5 fix documented in `cm-globals.ts`.
 
-**FR-7.2** When the active tab is an untitled (unsaved) document, the panel shows the empty-state UI with the "Add Front Matter" button — the title auto-population falls back to `"Untitled"` per FR-6.1.3.
+**FR-4.5** The `StateField` is registered via `api.addExtensions([mathField])` in `onEnable` and removed via `api.removeExtensions()` in `onDisable`.
 
-**FR-7.3** The panel is destroyed (via `descriptor.destroy()`) and re-created when the plugin is disabled and re-enabled.
+**FR-4.6** Each rendered KaTeX widget extends `WidgetType`. The widget's `toDOM()` method calls `katex.renderToString()` and sets the result as the `innerHTML` of a container element. The widget must implement `eq()` to return `true` when the LaTeX source string is identical, enabling CM6 to skip DOM reconstruction for unchanged math.
 
-**FR-7.4** The default panel side is `right`. The user can move it to the left sidebar via the standard sidebar move button.
+### FR-5: Error Handling for Invalid LaTeX
 
-**FR-7.5** The panel id is `"yaml-pane"`. The panel title displayed in the sidebar header is `"Properties"` (matching Obsidian convention, which users of this feature will recognise).
+**FR-5.1** When KaTeX fails to parse a math expression (even with `throwOnError: false`, it may still throw for certain inputs), the failure is caught and the widget renders an error placeholder instead of a blank or broken widget.
 
-### FR-8: Plugin Lifecycle
+**FR-5.2** The error placeholder is a `<span class="cm-math-error">` (inline) or `<div class="cm-math-error">` (block) containing a short human-readable message: `"Math error"` with a tooltip (`title` attribute) showing the raw LaTeX source, allowing the user to understand what failed.
 
-**FR-8.1** The plugin is registered as a core plugin with:
-- `id`: `"yaml-pane"`
-- `name`: `"YAML Pane"`
+**FR-5.3** An invalid LaTeX expression that is currently cursor-away still produces the error placeholder widget (the raw source is not exposed). The user must move the cursor into the expression to see and correct the raw LaTeX.
+
+**FR-5.4** The error state is styled with a distinct visual (e.g., red text or red underline) using a CSS variable-compatible approach so it respects the active theme.
+
+### FR-6: Plugin Lifecycle
+
+**FR-6.1** The plugin is a new file: `src/plugins/math/math.plugin.ts`. It does NOT modify `markdown-toolbar.plugin.ts` or any other existing plugin.
+
+**FR-6.2** Plugin metadata:
+- `id`: `"math"`
+- `name`: `"Math"`
 - `version`: `"1.0.0"`
-- `description`: `"Display and edit document front matter as structured fields"`
+- `description`: `"Render LaTeX math expressions using KaTeX"`
+- `detail`: A longer description explaining that inline `$...$` and display `$$...$$` expressions are rendered in live preview mode; raw LaTeX is shown when the cursor is inside the expression.
 
-**FR-8.2** `onEnable` sequence:
-1. Inject CSS for the panel UI.
-2. Load plugin settings (schema path, any persisted UI state).
-3. Load the schema file if a path is configured (FR-5.1).
-4. Register the sidebar panel via `api.registerSidebarPanel()`.
-5. Register the CM6 `updateListener` extension via `api.addExtensions()` for document change detection.
+**FR-6.3** `onEnable` sequence:
+1. Inject KaTeX CSS as a `<style>` tag (idempotent — guard by element id).
+2. Construct the `mathStateField` (`StateField<DecorationSet>`).
+3. Register via `api.addExtensions([mathStateField])`.
 
-**FR-8.3** `onDisable` sequence:
-1. Unregister the sidebar panel via `api.unregisterSidebarPanel()` (calls `destroy()` on the container).
-2. Remove CM6 extensions via `api.removeExtensions()`.
-3. Remove injected CSS.
-4. Clear all in-memory state (parsed field model, schema cache, debounce timers).
+**FR-6.4** `onDisable` sequence:
+1. `api.removeExtensions()`.
+2. Remove the injected KaTeX CSS `<style>` tag.
 
-**FR-8.4** The plugin is added to the `PLUGINS` array in `scripts/build-plugins.mjs` for IIFE bundling.
-
-### FR-9: Settings
-
-**FR-9.1** Plugin settings schema:
-
-```json
-{
-  "schemaPath": "",
-  "defaultSide": "right"
-}
+**FR-6.5** The plugin is added to the `PLUGINS` array in `scripts/build-plugins.mjs` as:
+```javascript
+["math", "src/plugins/math/math.plugin.ts"],
 ```
 
-**FR-9.2** `schemaPath` — absolute path to the JSON schema file. Empty string means no schema configured. Editable via the plugin detail view in the Plugins Panel.
+### FR-7: Settings
 
-**FR-9.3** `defaultSide` — the initial sidebar side (`"left"` or `"right"`). Overridden by the sidebar system's `panelSides` map once the user moves the panel.
+**FR-7.1** Phase 1 of this feature has no user-configurable settings beyond the standard plugin on/off toggle (handled by `PluginManager`).
 
-**FR-9.4** Settings are persisted via `api.saveSettings()` / `api.loadSettings()`, stored at `~/Library/Application Support/com.markable.app/plugins/yaml-pane/settings.json`.
+**FR-7.2** The Architect may reserve a settings structure for future options (e.g., macros dictionary, display-math centering toggle), but no settings UI is required for this implementation.
+
+### FR-8: Interaction with Existing Live Preview Mode
+
+**FR-8.1** The math plugin's `StateField` is independent of the live preview (Typora-style syntax hiding) `StateField`. They coexist as separate CM6 extensions. No coupling between the two is required.
+
+**FR-8.2** When the math plugin hides a `$...$` span via a `ReplaceDecoration`, the live preview mode has no `$` syntax to process for that range — the replace decoration takes precedence. This is expected and correct behavior.
+
+**FR-8.3** The rendered KaTeX widget must not interfere with the editor's scroll position, selection restoration, or undo history. Widget decorations in CM6 are non-editable by default (cursor skips over them); this is the desired behavior.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1: Parse Performance** — Front matter parsing must complete in under 20ms for documents up to 10,000 lines. The front matter block itself rarely exceeds 50 lines; parsing is not a bottleneck.
+**NFR-1: Render Performance** — KaTeX `renderToString()` is synchronous. For documents with up to 50 math expressions, the full `StateField` recomputation (scanning + rendering all non-cursor expressions) must complete within 50ms. For documents with more than 50 expressions, rendering is still synchronous but the Architect should evaluate whether incremental recomputation (only re-render changed ranges) is needed.
 
-**NFR-2: Write-back Atomicity** — A field edit must dispatch a single CM6 transaction that atomically replaces the front matter block. No intermediate states should be visible in the editor's undo history for a single logical edit.
+**NFR-2: IIFE Bundle Size** — KaTeX minified is approximately 80 KB (JS only, excluding fonts). The plugin IIFE `math.js` is expected to be approximately 100–120 KB. This is acceptable given KaTeX's rendering quality and the js-yaml precedent (~40 KB bundled in yaml-pane).
 
-**NFR-3: Undo/Redo Compatibility** — Front matter edits dispatched via CM6 `view.dispatch()` must be undoable via Cmd-Z in the editor. Each committed field edit (blur or Enter) creates one undo step.
+**NFR-3: IIFE Self-Containment** — The plugin follows all IIFE rules: no app-internal imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag, all third-party dependencies bundled.
 
-**NFR-4: CSS Theme Compatibility** — All panel UI uses CSS variables (`--bg-primary`, `--bg-secondary`, `--text-primary`, `--text-secondary`, `--border-color`, `--accent-color`, `--selection-bg`). The panel automatically adopts the active theme.
+**NFR-4: Theme Compatibility** — Math widget containers (`cm-math-inline`, `cm-math-block`) use CSS variables for margin, padding, and background so they adopt the active theme. KaTeX's own internal CSS is self-contained and must not conflict with Markable theme variables.
 
-**NFR-5: IIFE Self-Containment** — The plugin follows all IIFE self-containment rules: no app-internal module imports at runtime, CSS injected via `<style>` tag, CM6 accessed exclusively via `window.__CM_VIEW__` and `window.__CM_STATE__` globals.
+**NFR-5: Undo/Redo Safety** — The `StateField` decorations are derived state; they do not participate in the undo history. Undo/redo of the underlying LaTeX source text works normally via CM6's built-in history.
 
-**NFR-6: No External YAML Library Bundled** — The YAML parsing and serialization is implemented using a lightweight in-bundle parser sufficient for the front matter use case (no complex YAML features: anchors, aliases, multi-document streams). A small, MIT-licensed YAML parser may be bundled into the IIFE (e.g., `js-yaml` or a subset). This is an open question for architecture (see Open Questions OQ-1).
-
-**NFR-7: Schema File Size** — The schema loader must handle schema files up to 500 fields without perceptible delay. Schema loading is a one-time operation at enable time.
+**NFR-6: No KaTeX CDN Dependency** — The app is designed to work offline. KaTeX must be fully bundled.
 
 ---
 
 ## Architectural Decisions (Proposed — for Architect to confirm)
 
-**AD-1: YAML Parser Strategy** — A small YAML parser is bundled into the plugin IIFE. The parser must handle: scalars, sequences, mappings, block scalars (`|`, `>`), and quoted strings. It does not need to handle anchors, aliases, or multi-document streams. Candidate: `js-yaml` (minified subset). The Architect must evaluate whether `js-yaml` can be bundled cleanly as an IIFE and whether a smaller alternative exists.
+**AD-1: StateField over ViewPlugin** — A `StateField<DecorationSet>` is required (not a `ViewPlugin`) because multi-line `$$...$$` blocks require block-level `ReplaceDecoration`, which must be stable across transactions and is only reliable in a `StateField`. Single-line ViewPlugin decorations are insufficient for the block math case.
 
-**AD-2: Comment Preservation via Line-Diffing** — Standard YAML serializers discard comments. To preserve them, the write-back strategy is: parse the original YAML source into a line-indexed map; when a field value changes, find the line(s) corresponding to that key using the parser's source-position output; rewrite only those lines; leave all other lines (including comment lines) verbatim. This avoids a full-round-trip serialization. The Architect must validate that the chosen parser provides source positions.
+**AD-2: Full Document Scan per Transaction** — The `StateField.provide()` computes decorations by scanning the full document on every relevant transaction. This is O(N) in document size. For typical note-taking documents (under 10,000 lines), this is acceptable. The Architect may propose incremental scan optimization if benchmarks indicate a problem.
 
-**AD-3: CM6 Transaction Strategy** — Front matter write-back uses a single `view.dispatch({ changes: { from: 0, to: closingDelimiterEnd, insert: newFrontMatterString } })`. No StateField is used — the YAML Pane does not need to decorate the document. The panel is pure DOM driven by the plugin's own state, not a CM6 decoration.
+**AD-3: KaTeX Bundled as IIFE Dependency** — KaTeX is imported at the top of `math.plugin.ts` (`import katex from "katex"`). The build system's `external: [/^@codemirror\//]` rule does not affect KaTeX; Vite/Rollup will bundle it into `math.js`. This is identical to how js-yaml is bundled into `yaml-pane.js`.
 
-**AD-4: Schema File Format** — JSON (not YAML) for the schema file. Rationale: the schema file must be parseable without the YAML parser (bootstrapping problem). JSON is simpler to validate and author. YAML schema files are out of scope.
+**AD-4: Font Strategy (Architect Must Decide)** — The two options for KaTeX fonts are:
+- Option A: Inline fonts as base64 in the injected CSS. Pro: single self-contained `<style>` tag. Con: increases injected CSS size by ~500 KB.
+- Option B: Copy KaTeX font files into `src-tauri/plugins/core/katex-fonts/` and reference them via Tauri's `asset://` protocol in the injected CSS. Pro: smaller CSS injection, fonts cached by browser. Con: requires Tauri resource bundling configuration.
+The Architect must evaluate and select one option.
 
 ---
 
 ## Open Questions (for Architecture Phase)
 
-**OQ-1: YAML Parser Library** — Which YAML parser should be bundled? Options: (a) `js-yaml` (~40KB minified), (b) a custom minimal parser written for this use case, (c) `yaml` (the `npm:yaml` package). The Architect must research current options, check IIFE bundle compatibility, and confirm comment-with-source-position support before committing.
+**OQ-1: KaTeX CSS Import Strategy** — How should KaTeX's CSS be imported at build time into the IIFE? Options: (a) `import katexCss from "katex/dist/katex.min.css?inline"` (Vite raw import), (b) manually copy the CSS into a string constant, (c) post-process the build output. The Architect must confirm which approach works cleanly with the IIFE build format and does not introduce `require()` calls.
 
-**OQ-2: YAML Serializer Strategy** — Confirm whether the line-diffing approach (AD-2) is sufficient for all field types, or whether certain edits (e.g., converting a scalar to an array) require a full re-serialization. If full re-serialization is needed, define the comment-loss policy.
+**OQ-2: Font Delivery** — See AD-4 above. The Architect must select Option A or Option B and specify the exact implementation.
 
-**OQ-3: New Tauri Command Needed?** — The schema file is read via `readFile()` from `src/lib/bridge.ts`. No new Tauri command is needed unless the schema file can be outside the app sandbox. Confirm whether `readFile()` can read arbitrary absolute paths on macOS (it can via `tauri-plugin-fs` with appropriate scope config) or whether a new `read_arbitrary_file` command is needed.
+**OQ-3: `__CM_STATE__` Exports** — `StateField` and `RangeSetBuilder` are accessed from `window.__CM_STATE__`. Confirm that `RangeSetBuilder` is exported by `@codemirror/state` and is present in `window.__CM_STATE__` (currently `cm-globals.ts` exports `import * as _cmState from "@codemirror/state"`, so all named exports are included — this should be confirmed).
 
-**OQ-4: Tag Deduplication UX** — The FEATURES.md spec says the YAML Pane must support "term restriction to eliminate similar/duplicate terms (Notion-style)." This implies fuzzy matching or case-insensitive deduplication on `tags`/`categories`. Define the exact behavior: (a) block exact duplicates only, (b) warn on case-insensitive duplicates, (c) fuzzy match within the schema `values[]` list. The user must clarify before architecture.
+**OQ-4: `WidgetType` Access** — `WidgetType` is in `@codemirror/view`. Confirm it is accessible as `(window as any).__CM_VIEW__.WidgetType` (it should be, per the `import * as _cmView` pattern in `cm-globals.ts`).
 
-**OQ-5: Field Add UX — Key Name Input** — When the user clicks "Add Field" (FR-3.5), should the key name be: (a) a free-text input (any valid YAML key), (b) restricted to a predefined list from the schema, or (c) a hybrid (schema suggestions + free-text allowed)? This affects the complexity of the "Add Field" widget.
+**OQ-5: Inline Math Regex Edge Cases** — The regex for detecting `$...$` must handle: escaped dollar signs (`\$`), dollar signs inside code spans (`` ` `` ... `` ` ``), and dollar signs inside fenced code blocks. The Architect must specify whether the scanner uses a simple regex or a lightweight parser that respects code fences.
+
+**OQ-6: KaTeX Version** — Confirm the current stable KaTeX version (expected: 0.16.x). Check for any known IIFE bundling issues with the current release.
 
 ---
 
 ## Out of Scope
 
-1. **Nested YAML beyond one level** — Second-level nesting is read-only (raw YAML string display). Full nested editing is not in scope.
-2. **YAML anchors and aliases** — Not supported. If detected, the block scalar containing them is displayed as a read-only raw text area.
-3. **YAML schema file authoring UI** — The schema file is authored manually in a text editor. No schema builder UI is provided.
-4. **Automatic front matter insertion on document open** — Auto-population only triggers via the explicit "Add Front Matter" button. Not on document open.
-5. **Front matter validation blocking save** — Required-field violations are flagged visually only. The user can save a document with missing required fields.
-6. **YAML Pane in the editor itself (inline)** — The YAML Pane is a sidebar panel only. No inline front matter editing widget is provided.
-7. **Front matter syncing to Templates** — The Templates plugin's content is verbatim. There is no mechanism to "push" YAML Pane field edits back to a template file.
-8. **Multi-document YAML streams** — Documents beginning with multiple `---`-delimited sections are out of scope. Only the first front matter block (lines 1 through the first closing `---`) is processed.
-9. **YAML comments in the middle of values** — Inline comments (e.g., `title: My Doc # comment`) are preserved by the line-diff strategy, but only for unmodified lines. If a user edits the `title` field, the inline comment on that line will be lost.
+1. **MathJax** — Not supported; KaTeX only.
+2. **SVG output** — KaTeX `output: "svg"` is not used; HTML output only.
+3. **Custom macro definitions via settings UI** — No settings UI in this phase. Macros may be considered as a future enhancement.
+4. **Math rendering in exported HTML** — The HTML export command (`Cmd-Opt-E`) is out of scope for this feature; it uses `marked` for rendering, not CM6 decorations.
+5. **Multi-cursor math editing** — CM6's built-in multi-cursor works on the source text; no special handling of multi-cursor interactions with math widgets is required.
+6. **Inline math spanning multiple lines** — Multi-line inline math (`$...\n...$`) is not supported. Only single-line inline math is rendered. Multi-line inline math is displayed as raw text (no widget).
+7. **Nested math delimiters** — `$a $ b$` (dollar sign inside an inline math span) is out of scope. The scanner uses the first valid pair match.
+8. **Server-side or pre-rendering** — All rendering is client-side via KaTeX in the IIFE.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1: Document has no front matter** — `window.__CM_VIEW__` document text does not begin with `---`. Expected: panel shows empty-state message "No front matter" with an "Add Front Matter" button. No parse attempt is made.
+**EC-1: Cursor exactly on the opening `$`** — The cursor is at the position of the `$` character that opens an inline math span. Expected: raw LaTeX is shown (cursor is "inside" the expression). The widget is not rendered.
 
-**EC-2: Front matter block contains invalid YAML** — The content between `---` delimiters is not valid YAML (e.g., tab indentation, mismatched quotes, duplicate keys). Expected: panel displays a parse-error state with the message "Front matter contains invalid YAML. Edit the raw text to fix it." No fields are rendered. No auto-edit is attempted.
+**EC-2: Cursor exactly on the closing `$`** — The cursor is at the position of the `$` character that closes an inline math span. Expected: raw LaTeX is shown. Same rule as EC-1.
 
-**EC-3: Front matter opening delimiter is present but closing delimiter is missing** — The document starts with `---` but there is no matching closing `---` or `...`. Expected: treated as "no valid front matter" (same as EC-1). The "Add Front Matter" button is shown. The unclosed `---` remains untouched.
+**EC-3: Cursor on the line containing `$$` (block math delimiter)** — The cursor is on the opening or closing `$$` line of a display block. Expected: raw LaTeX block is shown (entire block is "active").
 
-**EC-4: Front matter is valid YAML but has no keys (empty block)** — Content between `---` delimiters is empty or only whitespace/comments. Expected: panel shows "No fields" with the "Add Field" button and the auto-populate prompt. The block is valid and will be written back correctly.
+**EC-4: Two adjacent inline math spans on the same line** — E.g., `$a$ and $b$` with cursor between them (outside both). Expected: both are rendered as separate widgets. The inter-expression text `" and "` is shown as-is.
 
-**EC-5: Front matter contains only a YAML comment** — E.g., `---\n# comment only\n---`. Expected: parsed as an empty mapping (YAML comments are not key-value pairs). Same behavior as EC-4.
+**EC-5: Inline math immediately adjacent to other syntax** — E.g., `**bold $x^2$ bold**`. The `$...$` span is inside a bold run. Expected: the inner math renders as a widget; the outer bold decoration (from the live preview layer) applies independently.
 
-**EC-6: Front matter contains deeply nested YAML (2+ levels)** — E.g., `meta:\n  author:\n    name: Alice\n    email: a@b.com`. Expected: the `meta` key is displayed with a collapsible sub-section showing one level of nesting. The `author` sub-object is displayed as a raw YAML string textarea (read-only). Editing the raw string is not supported in v1 (future enhancement).
+**EC-6: Empty inline math — `$$` (two dollars, no content)** — This is actually the block math opening delimiter pattern when followed by a newline. When both `$` characters are on the same line with no content between them: the inline scanner finds zero-length content and should NOT produce a decoration (zero-length math is not valid). Treated as raw text.
 
-**EC-7: Front matter value is a multi-line block scalar** — E.g., `description: |\n  Line one.\n  Line two.`. Expected: rendered as a multi-line textarea. Write-back preserves the `|` block scalar syntax.
+**EC-7: Block math with only whitespace content** — `$$\n   \n$$`. Expected: KaTeX renders an empty expression (whitespace-only LaTeX renders as empty). The widget shows an empty display box.
 
-**EC-8: Front matter `date` field already exists when "Add Front Matter" is clicked** — Should never happen (the button only appears when no front matter exists). Defensive check: if for any reason a `date` field already exists, do not overwrite it.
+**EC-8: Block math immediately at start of document** — The opening `$$` is on line 1 of the document. Expected: no special handling needed; block detection is position-agnostic.
 
-**EC-9: User attempts to add a tag not in the schema's `values[]` list** — E.g., types "fiction" into a `tags` field whose schema restricts values to `["tech", "design", "business"]`. Expected: the chip is not added; an inline validation message appears: "\"fiction\" is not in the allowed values list." The input field retains the typed text for correction.
+**EC-9: Invalid LaTeX inside an inline span** — E.g., `$\frac{1}{$` (unclosed brace). Expected: error placeholder widget per FR-5.2. The expression is not rendered; the error indicator is shown when cursor is away.
 
-**EC-10: Schema file path is set but the file does not exist** — Expected: non-fatal warning in the panel header per FR-5.8. All fields fall back to type inference. A "Reload Schema" button is shown.
+**EC-10: Invalid LaTeX inside a display block** — Same as EC-9 but for block math. Expected: block-level error placeholder (`<div class="cm-math-error">`).
 
-**EC-11: Schema file exists but contains invalid JSON** — Expected: same as EC-10. The JSON.parse error message is included in the warning.
+**EC-11: Dollar sign inside a fenced code block** — A `$...$` pattern appears inside a ` ``` ` fenced code block. Expected: the scanner must not produce a decoration for math inside code fences. This is a code block; no math rendering occurs.
 
-**EC-12: Schema file is valid JSON but uses an unrecognised field `type`** — E.g., `"type": "color"`. Expected: the unrecognised type is treated as `"string"` (graceful degradation). A console warning is logged.
+**EC-12: Dollar sign inside an inline code span** — E.g., `` `$x$` `` — a dollar sign inside backtick-delimited code. Expected: no math decoration; the content is a code span, not math.
 
-**EC-13: User edits a field while the CM6 document is being modified by another source (e.g., undo)** — Expected: the debounced `updateListener` fires after the undo, re-parses the front matter, and re-renders the panel with the post-undo state. If the user was mid-edit, their in-progress change is discarded (the panel re-renders from the document source of truth). This is acceptable behavior for v1.
+**EC-13: Escaped dollar sign — `\$`** — A backslash-escaped dollar sign. Expected: the scanner must recognize `\$` as a literal dollar sign and not treat it as a math delimiter. The `\$` sequence must not open or close a math span.
 
-**EC-14: User deletes the last field in the front matter** — Expected: the front matter block becomes empty (`---\n---\n`). The panel switches to the "No fields" state (EC-4). The empty block remains in the document — it is not auto-removed.
+**EC-14: Math plugin disabled while cursor is inside a math span** — `onDisable` calls `api.removeExtensions()`, which removes the `StateField`. Expected: all widgets are removed; the raw LaTeX source text is visible throughout the document. No error or stale DOM elements.
 
-**EC-15: User deletes the front matter block manually in the editor while the YAML Pane is open** — The document update listener detects that the document no longer starts with `---`. Expected: panel transitions to empty-state (EC-1) without error.
+**EC-15: Math plugin re-enabled (toggle off, then on)** — Expected: a fresh `StateField` is created in `onEnable`; all math spans in the current document are rendered correctly. No residual state from the previous enable cycle.
 
-**EC-16: Front matter block is very large (50+ fields)** — Expected: the panel renders all fields. Scroll within the panel content area is handled by CSS `overflow-y: auto` on the content container.
+**EC-16: Very large math expression — LaTeX string > 1000 characters** — KaTeX must handle this without hanging. Expected: KaTeX renders it (or returns an error placeholder if it exceeds internal limits). No UI freeze.
 
-**EC-17: Active tab is switched to a document with different front matter while a field edit is in progress** — Expected: the in-progress edit is discarded (not committed to the old document). The panel re-renders with the new document's front matter. No partial writes occur.
+**EC-17: Block math delimiter `$$` appears inside an inline code span** — E.g., `` `$$` ``. Expected: same as EC-12 — code spans take precedence; no math decoration produced.
 
-**EC-18: `title` auto-population — document has no H1 and no file path** — Untitled document, no heading. Expected: `title` is auto-populated as `"Untitled"` per FR-6.1.3.
+**EC-18: Multiple display blocks in the document** — Ten or more `$$...$$` blocks, none of which the cursor is in. Expected: all blocks render as widgets. Performance must remain within NFR-1 bounds.
 
-**EC-19: Front matter YAML contains a key that is a YAML reserved word** — E.g., a key named `true` or `null`. Expected: the parser should handle these as string keys (per YAML 1.2 mapping key rules). Display in the panel uses the raw key string. If the parser coerces the key, it is shown as-is.
+**EC-19: Display block with no closing `$$`** — An opening `$$` on its own line with no matching closing `$$` before end of document. Expected: the scanner treats this as an unterminated block and produces no widget. The raw `$$` and subsequent text are shown as-is.
 
-**EC-20: Write-back produces a CM6 transaction on a document that has been closed** — Race condition: the user commits a field edit and immediately closes the tab before the dispatch fires. Expected: the plugin checks that `window.__CM_VIEW__` still refers to a live view before dispatching. If the view is destroyed, the dispatch is silently skipped.
+**EC-20: Inline math containing a newline (multi-line inline)** — `$a\n+b$`. Expected: the inline scanner requires single-line content (FR-1.1). This is not rendered as a widget; raw text is shown.
 
-**EC-21: "Add Field" — user enters a key name that already exists** — Expected: duplicate key is detected before write-back. An inline validation message: "Field \"{key}\" already exists." The add operation is aborted; the existing field is highlighted/scrolled into view.
+**EC-21: Tab switch while a math widget is displayed** — User switches to a different tab. The new document may contain different math. Expected: the `StateField` recomputes on the new document state (tab switch triggers a document change or editor re-mount); widgets for the new document are rendered correctly.
 
-**EC-22: "Add Field" — user enters an invalid YAML key (contains special characters)** — YAML keys with spaces or special characters must be quoted. Expected: the plugin auto-quotes the key in the written YAML if it requires quoting. The label in the panel shows the unquoted display form.
+**EC-22: Undo past a math expression deletion** — User types over and deletes a `$x^2$` span, then presses Cmd-Z. Expected: the undo restores the source text; the `StateField` recomputes and the widget re-renders. No stale widget fragments remain.
 
-**EC-23: Plugin disabled while a field edit is in progress** — Expected: `onDisable` calls `destroy()` on the panel container, removing all DOM. The in-progress edit is discarded. The CM6 document is not modified.
-
-**EC-24: Schema `values[]` list is empty** — `"type": "select"` with `"values": []`. Expected: the field renders as a `<select>` with no options. The user cannot select any value. A console warning is logged: "Schema field \"{name}\" has type \"select\" but no values defined."
-
-**EC-25: Front matter first line has trailing whitespace** — `---   ` (with trailing spaces). Expected: detection is whitespace-tolerant. The line is treated as a valid opening delimiter if its trimmed content is `---`.
+**EC-23: KaTeX CSS injection — toggle off then on** — `onDisable` removes the `<style>` tag. `onEnable` re-injects it. Expected: the CSS injection is idempotent (guarded by a fixed element id per focus-mode pattern). No duplicate `<style>` tags accumulate across toggle cycles.
 
 ---
 
@@ -321,10 +276,9 @@ In the absence of a schema entry (FR-5), the panel infers the control type from 
 
 | Component | Target File | Notes |
 |---|---|---|
-| YAML Pane plugin | `src/plugins/yaml-pane/yaml-pane.plugin.ts` (new) | IIFE plugin: panel render, field form, YAML parse/serialize, schema load |
-| YAML parser (bundled) | Bundled into plugin IIFE | TBD by Architect (OQ-1); likely `js-yaml` or custom minimal parser |
-| Plugin build registration | `scripts/build-plugins.mjs` | Add yaml-pane to PLUGINS array |
-| Plugin settings store | `~/Library/.../plugins/yaml-pane/settings.json` | Created at runtime via `api.saveSettings()` |
-| YAML Pane tests | `tests/plugins/yaml-pane/yaml-pane.test.ts` (new) | Unit tests for all pure functions + edge cases |
-| Schema loader tests | Included in above test file | EC-10, EC-11, EC-12, EC-24 |
-| Bridge `readFile` scope check | `src/lib/bridge.ts` / Tauri config | Confirm arbitrary-path reads work for schema (OQ-3) |
+| Math plugin | `src/plugins/math/math.plugin.ts` (new) | IIFE plugin: StateField, KaTeX widget, CSS injection |
+| Plugin build registration | `scripts/build-plugins.mjs` | Add `["math", "src/plugins/math/math.plugin.ts"]` to PLUGINS array |
+| KaTeX npm dependency | `package.json` | Add `"katex": "^0.16.x"` to `dependencies`; add `"@types/katex"` to `devDependencies` |
+| KaTeX font strategy | TBD by Architect (OQ-2 / AD-4) | Either base64 inline or Tauri resource bundle |
+| Plugin settings store | None required | No user settings in Phase 1 |
+| Math plugin tests | `tests/plugins/math/math.test.ts` (new) | Unit tests for scanner pure functions (EC-11 through EC-20 are highest priority) |

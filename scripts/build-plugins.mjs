@@ -46,6 +46,7 @@ const PLUGINS = [
   ["backlinks",         "src/plugins/backlinks/backlinks.plugin.ts"],
   ["templates",         "src/plugins/templates/templates.plugin.ts"],
   ["yaml-pane",         "src/plugins/yaml-pane/yaml-pane.plugin.ts"],
+  ["math",              "src/plugins/math/math.plugin.ts"],
 ];
 
 /**
