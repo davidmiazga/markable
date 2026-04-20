@@ -950,6 +950,13 @@ async function initApp() {
   buildThemeOrder();
   console.log(`Found ${customThemes.length} custom theme(s)`);
 
+  // Expose custom themes as command bar entries. COMMANDS is the same array
+  // reference held by window.__MARKABLE_COMMANDS__, so pushing here makes
+  // them available to the command bar on its next open without any extra wiring.
+  for (const theme of customThemes) {
+    COMMANDS.push({ id: `custom:${theme.filename}`, label: theme.name, defaultKey: "", section: "Theme" });
+  }
+
   // Update the native Theme menu with custom themes
   if (customThemes.length > 0) {
     await updateThemeMenu(customThemes);
