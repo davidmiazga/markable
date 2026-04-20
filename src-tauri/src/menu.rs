@@ -14,7 +14,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "app-settings", "Settings", true, Some("CmdOrCtrl+Comma"))?,
             &MenuItem::with_id(handle, "app-keybindings", "Keyboard Shortcuts", true, Some("CmdOrCtrl+Alt+Shift+K"))?,
-            &MenuItem::with_id(handle, "app-plugins", "Plugins", true, Some("CmdOrCtrl+Shift+P"))?,
+            &MenuItem::with_id(handle, "app-plugins", "Plugins", true, Some("CmdOrCtrl+Alt+P"))?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,

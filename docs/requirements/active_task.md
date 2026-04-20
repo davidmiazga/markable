@@ -1,342 +1,342 @@
 ---
-title: "Media Preview — FC2 #7"
+title: "Command Bar"
 last-updated: "2026-04-19"
 review-cadence-days: 7
 status: active
 ---
 
-# Media Preview (FC2 #7) Requirements Spec
+# Command Bar (FC2 #11) Requirements Spec
 
 ## Summary
 
-As a user, I want inline images (and optionally other media) to render as actual visual elements in the live editor — so that my notes display images in place rather than raw Markdown syntax — while still revealing the raw source when my cursor enters the image region for editing.
+As a user, I want to open a floating palette with Cmd-Shift-P that lets me fuzzy-search commands, heading jumps, and recent files — then execute the selected result — so that I can navigate and trigger actions without lifting my hands from the keyboard.
 
 ---
 
 ## Background and Motivation
 
-FEATURES.md item 7 is labeled "Advanced Media Preview — inserting/previewing images, video, embedded `.md`." The scope for this implementation covers **images as the core deliverable**; other media types are explicitly deferred (see Out of Scope).
+FEATURES.md item 11 is labeled "Command Bar." This is a floating command palette overlaid on the editor window. It mirrors the pattern established by VS Code, Obsidian, and similar tools: a single modal input that provides access to multiple categories of results through one unified search surface.
 
 ### What Already Exists
 
-Image rendering in Markable already exists in `src/editor/live-preview.ts` as part of the core live-preview `ViewPlugin`. It is not a plugin — it is wired directly into the editor and cannot be toggled. The Media Preview plugin will:
+The following infrastructure is available and must be used by this feature:
 
-1. Replace the existing non-toggleable image rendering in `live-preview.ts` with a proper, toggleable plugin that owns the image `WidgetType` and the `StateField`.
-2. Keep the `resolveImageSrc` / `convertFileSrc` URL conversion logic — it already correctly handles relative paths, absolute paths, and remote URLs.
-3. Add missing capabilities: broken-image error state, GIF/SVG edge cases, load-error fallback, accessibility attributes, and settings.
-
-The existing implementation in `live-preview.ts` is the **authoritative reference** for how images are currently rendered. Key facts:
-- `resolveImageSrc()` uses `convertFileSrc` from `@tauri-apps/api/core` (which converts a local path to the Tauri `asset://` protocol).
-- Images are matched via the lezer syntax tree (`Image` node), not a regex scanner.
-- Dimensions are parsed from alt text using the `alt|WxH` convention (e.g., `![photo|400x300](img.png)`).
-- The `ImageWidget` passes `ignoreEvent(): true` (clicks pass through to the editor), which means clicking a rendered image does NOT reveal raw source today — this must change.
-
-### IIFE Constraint
-
-The plugin is a bundled IIFE file loaded at runtime. It cannot use `@tauri-apps/api/core` directly because that is an app-internal module not available via window globals. The `convertFileSrc` function must be exposed via `window.__MARKABLE_CONVERT_FILE_SRC__` (see FR-3 and the Architecture Decisions section).
+- **`COMMANDS` list in `src/keybindings/keybindings-panel.ts`** — an authoritative array of `CommandDef` objects (id, label, defaultKey, section). The Command Bar sources its command results from this same list. Commands are executed via the existing `handleAction()` / `resolveAction()` pattern in `main.ts`.
+- **`resolveAction()` / `eventMatchesKey()`** — The keybinding resolution layer used by the document keydown handler. The Command Bar must register `"command-bar-open"` as a standard command in the `COMMANDS` array so its binding (default: Cmd-Shift-P) can be remapped in the Keybindings panel.
+- **Plugin system** — The Command Bar is implemented as a core plugin, consistent with focus-mode, word-count, and all other FC2 features.
+- **Plugin settings API** — `api.loadSettings()` / `api.saveSettings()` for persisting category-visibility preferences.
+- **Sidebar panel system** — Not used by the Command Bar (it is a modal overlay, not a sidebar panel).
+- **`window.__MARKABLE_TAB_MANAGER__`** — Provides access to recent files for category C results.
+- **`window.__MARKABLE_CURRENT_FILE__`** — Used for heading scan: the scanner reads the current document's content.
+- **`window.__CM_VIEW__`** / `window.__CM_STATE__`** — Used for heading jump (scroll + cursor placement) and for scanning headings from the live CM6 document state.
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Image Rendering in Live Preview
+### FR-01: Activation and Deactivation
 
-**FR-1.1** The plugin renders any standard CommonMark inline image syntax `![alt](url)` as a visual `<img>` element in the editor, replacing the raw Markdown syntax when the cursor is not on the image's line(s).
+**FR-01.1** The Command Bar opens via Cmd-Shift-P (default). This binding must be registered in the `COMMANDS` array in `keybindings-panel.ts` as a first-class remappable command (id: `"command-bar-open"`).
 
-**FR-1.2** The rendered image widget is a CM6 `ReplaceDecoration` wrapping an `<img>` element. The image element carries:
-- `src` set to the resolved URL (see FR-3 for URL resolution rules).
-- `alt` set to the cleaned alt text (after dimension annotations and CSS annotations are stripped, per FR-2).
-- `class="cm-media-image"` for CSS targeting, plus any additional CSS classes derived from alt text annotation (per FR-2.4).
+**FR-01.2** The Command Bar closes on any of the following:
+- Pressing Escape.
+- Clicking outside the palette overlay.
+- Activating any result (after execution).
+- The active tab closing while the bar is open (the bar must close defensively).
 
-**FR-1.3** Cursor-on-reveal (Typora-style contract): when the cursor is on any position within the image's source range `[from, to)`, the raw Markdown syntax is shown and the widget is not rendered. When the cursor leaves the range, the widget re-renders.
+**FR-01.3** On open, the input field receives keyboard focus immediately.
 
-**FR-1.4** "Cursor inside" is defined identically to the Math plugin: any position where `selFrom < to && selTo >= from` (using normalized selection). Inclusive on both delimiter characters.
+**FR-01.4** The bar always opens with an empty input field. No query is persisted between opens.
 
-**FR-1.5** Clicking on a rendered image widget moves the cursor into the image's source range (which triggers FR-1.3 to reveal the raw source). The `ignoreEvent()` method on the widget must return `false`. This is a behavior change from the current live-preview.ts implementation (which uses `ignoreEvent: true`).
+**FR-01.5** On open, the result list is populated with the full unfiltered result set from all enabled categories (see FR-03 for category definitions). The full set is shown before the user has typed anything.
 
-**FR-1.6** The plugin uses a CM6 `StateField<DecorationSet>` (not a `ViewPlugin`) for the decoration set. Rationale: consistency with the Math plugin pattern; block decorations require StateField stability; and the plugin needs to be independently registered/removed via `api.addExtensions()`.
+**FR-01.6** Cmd-Shift-P while the bar is already open closes the bar (toggle behavior). This prevents a second open from stacking an overlay on top.
 
-**FR-1.7** The `StateField` recomputes on every `docChanged` or `selectionSet` transaction.
+### FR-02: Fuzzy Matching
 
-### FR-2: Alt Text Annotation Parsing
+**FR-02.1** Matching is substring-based fuzzy search: a result is shown if every character of the query string appears in the result label in order (not necessarily consecutively). Example: query `"fmd"` matches `"Focus Mode"` (f...m...d via "Fo**c**us **M**o**d**e" — no, this specific example depends on the algorithm; the Architect chooses the algorithm, but it must be character-order subsequence matching, not a word-prefix filter).
 
-**FR-2.1** The existing `alt|WxH` and `alt|W` dimension-annotation convention is preserved:
-- `![photo|400x300](img.png)` → `width: 400px; height: 300px`
-- `![photo|400](img.png)` → `width: 400px; height: auto`
-- `![photo](img.png)` → no explicit size (natural image size, capped by `maxDisplayWidth`)
+**FR-02.2** Matching is case-insensitive.
 
-**FR-2.2** The separator may be `|` (pipe) with optional surrounding spaces. The Unicode multiply character `×` is accepted as an alternative to `x` for dimensions (matching the existing implementation).
+**FR-02.3** Results are ranked. The ranking algorithm must prioritize, in descending order:
+1. Exact prefix match on the label (e.g., query `"fo"` ranks `"Focus Mode"` above `"Toggle Focus"`).
+2. Word-boundary match (query starts a word in the label).
+3. Substring match (query appears consecutively anywhere in the label).
+4. Non-consecutive subsequence match.
 
-**FR-2.3** The cleaned alt text (with all annotation tokens stripped) is used as the `<img alt="">` attribute.
+Within the same ranking tier, results are sorted alphabetically by label.
 
-**FR-2.4** The plugin supports two CSS annotation mechanisms in alt text, both of which may coexist with dimension annotations:
+**FR-02.4** The matched characters within each result label are highlighted (e.g., wrapped in `<mark>` or a `cm-match` span) to show the user which characters caused the match. The rendering must handle overlapping annotations gracefully (the Architect chooses the highlight strategy).
 
-**Class shorthand** — A dot-prefixed token in alt text (e.g., `![photo.center](img.png)`) maps to a CSS class on the `<img>` element:
-- `![photo.center](img.png)` → `<img class="cm-media-image center" ...>`
-- Multiple classes are supported: `![photo.center.shadow](img.png)` → class list includes `center` and `shadow`.
-- The class shorthand may appear before or after a dimension annotation. All dot-class tokens are stripped from the alt text passed to `<img alt="">`.
+**FR-02.5** When the query is empty, all results from all enabled categories are shown, unfiltered, in category order (A then B then C). No ranking is applied to an empty query — results appear in their natural order within each category.
 
-**Inline CSS properties** — An arbitrary CSS string may be included using the `{...}` syntax (e.g., `![photo{border:2px solid red}](img.png)`):
-- The content between `{` and `}` is treated as a CSS `style` attribute value and applied to the `<img>` element via `element.style.cssText`.
-- Multiple properties are supported, comma-separated in standard CSS shorthand form.
-- The `{...}` token is stripped from the alt text passed to `<img alt="">`.
+**FR-02.6** There is no minimum query length. A single character triggers filtering.
 
-Security constraint: inline CSS values are applied via the DOM `style` attribute only (not injected as raw HTML). JavaScript protocol values (`javascript:`) in CSS are ignored. (See EC-31 in the Edge Case Inventory.)
+### FR-03: Result Categories
 
-**FR-2.5** Zero or negative dimension values are ignored (treated as "no explicit size").
+Three categories of results are shown in the Command Bar. Each category is independently toggleable via plugin settings (see FR-07). Categories always appear in the order A → B → C, with a visible section header separating each group.
 
-### FR-3: URL Resolution
+**FR-03.A: Commands (Category A)**
 
-**FR-3.1** The plugin must correctly render images from three URL categories:
+**FR-03.A.1** Category A provides one result per entry in the `COMMANDS` array in `keybindings-panel.ts`. Each result displays:
+- The command label (e.g., `"Focus Mode Enabled"` or `"Focus Mode"`). See FR-04 for the two-result pattern for plugin toggles.
+- The currently assigned keybinding (custom binding if set, otherwise default). Displayed right-aligned in the result row, styled as a keyboard shortcut badge.
+- No keybinding badge is shown if the command has no default key and no custom binding (e.g., `view-toggle-statusbar` which has `defaultKey: ""`).
 
-| Category | Example | Resolution |
+**FR-03.A.2** The command list is rebuilt on every open. This ensures that current plugin states are reflected (e.g., if Focus Mode was just enabled, its label changes from "Focus Mode" to "Focus Mode Enabled").
+
+**FR-03.A.3** The section header reads "Commands."
+
+**FR-03.B: Heading Jumps (Category B)**
+
+**FR-03.B.1** Category B scans the current open document for ATX headings (lines beginning with one to six `#` characters followed by a space and heading text). Each heading produces one result.
+
+**FR-03.B.2** Results display:
+- The heading text (stripped of leading `#` characters and the space).
+- A visual indicator of heading level (e.g., an H1/H2/H3... badge, or indentation proportional to level).
+- No keybinding badge.
+
+**FR-03.B.3** Results are shown in document order (top to bottom), not sorted alphabetically. The fuzzy filter applies to the heading text.
+
+**FR-03.B.4** Activating a heading result moves the CM6 cursor to the first character of that heading line AND scrolls it into view. The bar closes after activation (FR-01.2).
+
+**FR-03.B.5** The heading scan reads from the live CM6 document state (`window.__CM_STATE__`) to ensure it reflects unsaved edits. It is NOT a file-system scan.
+
+**FR-03.B.6** If the current document has no headings, category B shows no results and no section header is rendered for that category (the section collapses entirely).
+
+**FR-03.B.7** The section header reads "Headings."
+
+**FR-03.C: Recent Files (Category C)**
+
+**FR-03.C.1** Category C lists recently opened files sourced from `window.__MARKABLE_TAB_MANAGER__`'s recent-files list (same source as the "Open Recent" native submenu). Each file produces one result.
+
+**FR-03.C.2** Results display:
+- The filename (basename only, e.g., `"my-note.md"`).
+- The abbreviated directory path (e.g., `"~/Documents/Notes/"`), displayed as secondary text below or beside the filename.
+- No keybinding badge.
+
+**FR-03.C.3** Results are shown in recency order (most recently accessed first).
+
+**FR-03.C.4** Activating a recent-file result opens that file in a new tab (using the same mechanism as "Open Recent" in the File menu). The bar closes after activation.
+
+**FR-03.C.5** If no recent files exist, category C shows no results and its section header collapses.
+
+**FR-03.C.6** The section header reads "Recent Files."
+
+### FR-04: Plugin Toggle Dual-Result Pattern
+
+**FR-04.1** For each plugin that is currently registered and available, the Command Bar generates TWO command entries in Category A:
+
+- **Action result**: Label reads `"[Plugin Name] Enabled"` when the plugin is currently disabled (activating it will enable it), or `"[Plugin Name] Disabled"` when the plugin is currently enabled (activating it will disable it). This result executes the enable/disable toggle action.
+- **Navigate result**: Label reads `"[Plugin Name]"` (the plugin name alone, no qualifier). Activating this result opens the Plugins Panel and scrolls/focuses the plugin's detail entry. It does not toggle the plugin state.
+
+**FR-04.2** The two results are adjacent in the result list (the action result appears first, the navigate result second).
+
+**FR-04.3** The "navigate" result is always available, even when no file is open (it navigates to the Plugins Panel, which is UI — not file-dependent). The "action" result follows the context-invalid rule in FR-05 if toggling requires an active editor context, but for most plugins it does not (plugin enable/disable does not require a file to be open).
+
+**FR-04.4** This pattern applies to plugins in the `COMMANDS` array that correspond to plugin toggles (e.g., `view-toggle-focus`, `view-toggle-typewriter`). The Architect must enumerate the complete set of eligible plugins and define the label mapping.
+
+### FR-05: Context-Invalid Actions
+
+**FR-05.1** Some commands are only meaningful when a file is open (e.g., `"Save"`, heading jumps). When no file is open (all tabs are untitled or no tabs exist), such commands are shown in the result list but rendered as dimmed/disabled. They cannot be activated while dimmed.
+
+**FR-05.2** Dimmed results are skipped when navigating with arrow keys (they are not selectable via keyboard).
+
+**FR-05.3** The set of context-invalid commands (when no file is open) includes at minimum:
+- All format commands (bold, italic, etc.).
+- File-related commands that require a file path: Save, Save As, Export.
+- All Category B results (heading jumps require an open document).
+
+**FR-05.4** Commands that are always valid regardless of file context include: New, Open, Open Recent, Close All, and all plugin navigate-results (FR-04.1).
+
+### FR-06: Keyboard Navigation and Execution
+
+**FR-06.1** Arrow keys (Up / Down) navigate through the visible, non-dimmed results. Navigation wraps: pressing Down on the last result moves to the first; pressing Up on the first result moves to the last.
+
+**FR-06.2** Enter activates the currently selected result. The bar closes immediately after activation.
+
+**FR-06.3** On open, the first non-dimmed result in the list is pre-selected.
+
+**FR-06.4** Tab may optionally advance selection (the Architect decides). If implemented, Tab and Shift-Tab navigate forward/backward respectively.
+
+**FR-06.5** Mouse hover highlights a result. Mouse click activates the result. The bar closes immediately.
+
+**FR-06.6** There is no "multi-select" or "batch execute." One result is activated per open.
+
+### FR-07: Settings
+
+**FR-07.1** The plugin exposes three boolean settings controlling which result categories are shown:
+
+| Setting Key | Default | Description |
 |---|---|---|
-| Remote (http/https) | `![](https://example.com/a.png)` | Used as-is — no conversion needed |
-| Absolute local path | `![](/Users/foo/img.png)` | Convert via `__MARKABLE_CONVERT_FILE_SRC__()` to `asset://` |
-| Relative local path | `![](./img.png)` or `![](img.png)` | Resolve against current file's directory, then convert via `__MARKABLE_CONVERT_FILE_SRC__()` |
+| `showCommands` | `true` | Show Category A (Commands) in results |
+| `showHeadings` | `true` | Show Category B (Heading jumps) in results |
+| `showRecentFiles` | `true` | Show Category C (Recent files) in results |
 
-**FR-3.2** The current file path is accessed via `window.__MARKABLE_CURRENT_FILE__`. This global is confirmed to be updated synchronously on every tab switch via `_applyActiveTab()` in `tab-manager.ts` — no race conditions.
+**FR-07.2** Settings are loaded via `api.loadSettings()` in `onEnable` and saved via `api.saveSettings()` when changed via settings UI.
 
-**FR-3.3** `file://` URLs must be rejected and treated as broken-image (EC-09). Tauri's security policy does not allow `file://` for local assets.
+**FR-07.3** A disabled category is entirely absent from the result list (not dimmed — truly absent). If all three categories are disabled, the bar opens with an empty list and displays a "No results" placeholder.
 
-**FR-3.4** `data:` URLs (base64-embedded images) are supported as-is — they require no conversion.
+**FR-07.4** Settings UI is provided in the plugin detail view (toggle checkboxes for each category).
 
-**FR-3.5** An empty URL `![]()` or `![alt]()` produces a broken-image placeholder (EC-03), not a rendering attempt.
+### FR-08: Visual Design
 
-### FR-4: Image Scanning Strategy
+**FR-08.1** The Command Bar is a floating modal overlay, centered horizontally and positioned in the upper third of the window vertically. It is not attached to any sidebar, toolbar, or status bar.
 
-The plugin uses **Option A: lezer syntax tree via `window.__CM_LANGUAGE__`**. The `__CM_LANGUAGE__` global already exists in the codebase (`cm-globals.ts`). The plugin calls `syntaxTree(state)` (accessed from `window.__CM_LANGUAGE__`) to walk the parsed AST for `Image` nodes, identical to how `live-preview.ts` currently scans images.
+**FR-08.2** Maximum result list height is capped (e.g., 8–12 visible rows). When results exceed the cap, the list scrolls. The Architect chooses the exact cap value.
 
-This is more accurate than a regex scanner and is not fragile for edge cases such as images inside fenced code blocks or inline code spans. The lezer parser natively excludes image syntax inside code fences from the `Image` node type.
+**FR-08.3** The overlay has a backdrop (semi-transparent dark scrim) covering the editor area. Clicking the backdrop closes the bar.
 
-**FR-4.1** The scanner must not produce decorations for image syntax appearing inside:
-- Fenced code blocks (` ``` `)
-- Inline code spans (`` ` ``)
+**FR-08.4** The input field is styled consistently with the app's existing UI variables (`--ui-font`, `--accent-color`, etc.). No hardcoded font stacks.
 
-These cases are handled automatically by the lezer AST — no additional filtering is required.
+**FR-08.5** Section headers (category labels) are visually distinct from result rows (e.g., smaller text, muted color, non-selectable).
 
-**FR-4.2** The scanner returns an array of `ImageRange` objects sorted ascending by `from` (required by `RangeSetBuilder`).
+**FR-08.6** The selected result row is highlighted with `--accent-color` or a theme-compatible highlight variable.
 
-**FR-4.3** Each `ImageRange` contains: `from`, `to` (document offsets for the full `![alt](url)` span), `src` (raw URL string), `alt` (raw alt text including all annotations), `cssClasses` (string[] of class shorthand tokens), `cssStyle` (raw CSS string from `{...}` token or undefined), and `displayWidth`/`displayHeight` (parsed integers or undefined).
+**FR-08.7** Keybinding badges in command results use `--key-font` (already defined in `:root`).
 
-**FR-4.4** Edge case: if `syntaxTree(state)` returns an incomplete tree on the very first render (document not yet fully parsed), the scanner may produce an empty result. The StateField will recompute on the next transaction and recover. This is acceptable behavior (EC-32).
+### FR-09: Plugin Lifecycle
 
-### FR-5: Broken Image Handling
+**FR-09.1** The plugin file is: `src/plugins/command-bar/command-bar.plugin.ts`.
 
-**FR-5.1** When an image fails to load (network error, file not found, permission denied), the widget displays a broken-image placeholder instead of a blank area or broken browser icon. The placeholder contains:
-- A visual icon (SVG inline, or CSS-drawn broken-image symbol).
-- The `alt` text displayed as a caption below the icon.
-- A `title` attribute on the container with the raw URL, so the user can hover to see what path failed.
-
-**FR-5.2** The broken-image state is set via the `<img>` element's `onerror` event. The handler replaces the `<img>` with the placeholder DOM or applies a CSS error class.
-
-**FR-5.3** An empty URL (EC-03) produces the broken-image placeholder immediately, without attempting to load anything.
-
-**FR-5.4** The placeholder is styled with a CSS variable-compatible approach for theme compatibility (e.g., `color: var(--media-error-color, #c0392b)`).
-
-**FR-5.5** A broken image is still subject to the cursor-on-reveal rule: the placeholder is shown when the cursor is away; the raw Markdown source is shown when the cursor enters the image range.
-
-### FR-6: Plugin Lifecycle
-
-**FR-6.1** The plugin is a new file: `src/plugins/media-preview/media-preview.plugin.ts`.
-
-**FR-6.2** Image rendering coordination with `live-preview.ts`: a minimal image fallback remains in `live-preview.ts` even when the plugin is disabled. When the media-preview plugin is enabled, it must suppress the core fallback to prevent double rendering. The agreed mechanism is a global flag (`window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__`) that `live-preview.ts` checks: when true, the core fallback skips image decorations. The plugin sets this flag in `onEnable` and clears it in `onDisable`.
-
-The minimal core fallback in `live-preview.ts` exists so users who have never installed or enabled the plugin still see images rendered. The plugin is not required to be enabled-by-default (though the Architect may choose that if the implementation is cleaner).
-
-**FR-6.3** Plugin metadata:
-- `id`: `"media-preview"`
-- `name`: `"Media Preview"`
+**FR-09.2** Plugin metadata:
+- `id`: `"command-bar"`
+- `name`: `"Command Bar"`
 - `version`: `"1.0.0"`
-- `description`: `"Render images inline in the live editor"`
-- `detail`: A longer description explaining that `![alt](url)` image syntax is rendered inline; clicking a rendered image reveals the source Markdown for editing; supports local files (relative and absolute paths) and remote URLs; alt text supports CSS class shorthand (`.classname`) and inline style (`{property:value}`) annotations.
+- `description`: `"Fuzzy command palette for commands, headings, and recent files"`
 
-**FR-6.4** `onEnable` sequence:
+**FR-09.3** `onEnable` sequence:
 1. Inject plugin CSS as a `<style>` tag (idempotent, guarded by element id).
-2. Set `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__ = true` to suppress the core fallback in `live-preview.ts`.
-3. Construct a fresh `StateField<DecorationSet>`.
-4. Register via `api.addExtensions([mediaPreviewField])`.
+2. Build the overlay DOM and attach to `document.body` (hidden initially).
+3. Register the `keydown` listener that responds to Cmd-Shift-P (or the user's remapped key).
 
-**FR-6.5** `onDisable` sequence:
-1. `api.removeExtensions()` — removes decorations; raw Markdown syntax becomes visible.
-2. Clear `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__` — re-enables the core fallback in `live-preview.ts`.
+**FR-09.4** `onDisable` sequence:
+1. Remove the overlay DOM from `document.body`.
+2. Remove the `keydown` listener.
 3. Remove injected CSS `<style>` tag.
 
-### FR-7: Settings
+**FR-09.5** The `"command-bar-open"` entry must be added to the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` as part of this feature. Default key: `"Cmd-Shift-P"`. Section: `"View"`.
 
-**FR-7.1** Phase 1 user-configurable settings (minimal):
-- `maxDisplayWidth: number` — Serves as both a **global cap** and the **default width** for images with no size annotation. Default: `600`. Applied as `width: Xpx; height: auto` (standard CSS proportional scaling — no issues). Images with an explicit dimension annotation in alt text use that annotation instead, subject to the cap. Set to `0` to disable the constraint entirely.
-
-**FR-7.2** Settings are loaded via `api.loadSettings()` in `onEnable` and saved via `api.saveSettings()` when changed.
-
-**FR-7.3** No settings UI is required for Phase 1 beyond the standard plugin toggle. Settings can be configured via the plugin panel's detail view if the Architect chooses.
-
----
-
-## Architecture Decisions (Resolved)
-
-These decisions were confirmed during requirements analysis and must be honored during architecture.
-
-**AD-1: `convertFileSrc` exposure** — `convertFileSrc` is a pure synchronous JS function from `@tauri-apps/api/core`. It requires no Rust round-trip. It is exposed as `window.__MARKABLE_CONVERT_FILE_SRC__` in `main.ts` using the pattern:
-```
-(window as unknown as Record<string, unknown>)["__MARKABLE_CONVERT_FILE_SRC__"] = convertFileSrc;
-```
-This matches the existing pattern for `__MARKABLE_EDITOR_VIEW__`, `__TAURI_DIALOG__`, and similar globals.
-
-**AD-2: `__MARKABLE_CURRENT_FILE__` timing** — Confirmed updated synchronously on every tab switch via `_applyActiveTab()` in `tab-manager.ts`. No race conditions on tab switch.
-
-**AD-3: Image scanner** — Uses lezer `syntaxTree(state)` via `window.__CM_LANGUAGE__` (Option A). The `__CM_LANGUAGE__` global already exists in `cm-globals.ts`. Regex scanning is not used.
-
-**AD-4: SVG rendering** — SVG files render as `<img src="asset://...">` (raster mode). No inline SVG DOM injection.
-
-**AD-5: `maxDisplayWidth` semantics** — Acts as both a global width cap and the default width for unsized images. Uses `width: Xpx; height: auto` CSS (proportional scaling).
-
-**AD-6: Core fallback preservation** — A minimal image rendering path stays in `live-preview.ts`. Plugin suppresses it via `window.__MARKABLE_MEDIA_PREVIEW_ACTIVE__` flag while active.
+**FR-09.6** The `handleAction()` dispatch in `main.ts` must handle `"command-bar-open"` by calling the plugin's open function (or a global the plugin registers at enable time).
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1: Render Performance** — The `StateField` recomputation (full document scan + widget construction) must complete within 30ms for documents with up to 100 image references. Image loading itself is async (browser network/disk) and does not block the StateField update.
+**NFR-01: Open Latency** — From Cmd-Shift-P keydown to the overlay being visible and focused must be under 80ms. Command list rebuild (reading `COMMANDS` array + plugin states + heading scan + recent files) must complete synchronously within this budget for documents up to 500 headings.
 
-**NFR-2: IIFE Bundle Size** — This plugin bundles no large third-party libraries. The IIFE output (`media-preview.js`) is expected to be under 30 KB. Well within the 500 KB cap.
+**NFR-02: Fuzzy Filter Latency** — From last keystroke to updated result list render must be under 50ms for result sets up to 300 items. Debounce is not required (synchronous update is preferred for responsiveness at this scale).
 
-**NFR-3: IIFE Self-Containment** — All IIFE rules apply: no app-internal module imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag.
+**NFR-03: IIFE Self-Containment** — All IIFE plugin rules apply: no app-internal module imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag.
 
-**NFR-4: Theme Compatibility** — Image widget containers use CSS variables for border, background, padding, and error state color.
+**NFR-04: Theme Compatibility** — All colors, fonts, and spacing use CSS variables from `:root`. No hardcoded hex values or font names.
 
-**NFR-5: Accessibility** — All rendered `<img>` elements must carry a non-empty `alt` attribute. When the alt text is empty in the Markdown, use an empty-string `alt=""` (which is valid for decorative images) rather than omitting the attribute.
+**NFR-05: Accessibility Basics** — The overlay must:
+- Trap focus while open (Tab/Shift-Tab must not escape to the editor or browser chrome).
+- Return focus to the editor's CM6 view when closed.
+- The input element carries `role="combobox"` and `aria-expanded`; the result list carries `role="listbox"`; each result row carries `role="option"` and `aria-selected`.
+- The backdrop does not receive focus.
 
-**NFR-6: No Image Caching Required** — The browser/WebView handles image caching. The plugin does not implement its own cache.
+**NFR-06: No External Dependencies** — The fuzzy-match algorithm is implemented inline (no third-party fuzzy library). At this scale (< 300 items), a hand-written subsequence ranker is sufficient and avoids bundle bloat.
 
-**NFR-7: No Heavy Media Libraries** — No third-party image processing libraries (sharp, jimp, etc.). The plugin uses only native browser `<img>`, `<video>`, and `<audio>` elements.
+**NFR-07: Single Instance** — Only one Command Bar overlay may exist in the DOM at any time. Re-opening while already open toggles it closed (FR-01.6), not stacks a second instance.
+
+---
+
+## Architecture Decisions (Resolved)
+
+**AD-01: Plugin vs. core feature** — The Command Bar is a core plugin (like focus-mode, templates). It is toggleable from the Plugins Panel. This is consistent with all FC2 features.
+
+**AD-02: Keybinding registration** — `"command-bar-open"` is added to the `COMMANDS` array in `keybindings-panel.ts`. The document `keydown` handler in `main.ts` calls `resolveAction()`, which already checks the full `COMMANDS` array. The plugin hooks into this by handling `"command-bar-open"` in `handleAction()`. No separate event listener on `document` is needed beyond what already exists — however, since the plugin must add/remove its handler on enable/disable, it may register a supplementary keydown listener that checks the `command-bar-open` action id resolved from `resolveAction()`.
+
+**AD-03: Command list source** — Category A reads directly from the exported `COMMANDS` array in `keybindings-panel.ts`. The Architect must ensure this array is exported (it currently is not exported — this is new work). Alternatively, the plugin can receive the command list via a global registered by the app at startup (`window.__MARKABLE_COMMANDS__`). The Architect chooses the cleanest approach.
+
+**AD-04: Heading scan** — Reads from `window.__CM_STATE__` (the live CM6 document state) using a line-by-line scan for `# ` prefixes. The lezer AST is not required for this scan — a simple regex per line (`/^(#{1,6})\s+(.+)$/`) on `state.doc.iterLines()` is sufficient and simpler.
+
+**AD-05: Recent files source** — Sourced from `window.__MARKABLE_TAB_MANAGER__`'s existing recent-files array (same array used by the "Open Recent" native submenu). The Architect must identify the exact accessor.
+
+**AD-06: Category section collapse** — When a category produces zero results after filtering, its section header is hidden (not rendered). This is a render-time decision, not a settings-level decision.
+
+**AD-07: Fuzzy algorithm** — Implement a character-order subsequence ranker inline. The ranking tiers defined in FR-02.3 are the specification. The Architect proposes the implementation; the Lead Developer follows it.
 
 ---
 
 ## Out of Scope
 
-The following items from FEATURES.md #7 description ("video, embedded `.md`") are explicitly deferred from this implementation:
-
-1. **Video rendering** — `![](video.mp4)` as a `<video>` element. Deferred to a future phase.
-2. **Audio rendering** — `![](audio.mp3)` as an `<audio>` element. Deferred.
-3. **Embedded Markdown** — `![](other-note.md)` rendering the content of another `.md` file inline. Deferred (this is a complex transclusion feature, closer to Obsidian embeds).
-4. **Iframe embeds** — Rendering `<iframe>` or embedded links (YouTube, etc.) inline. Deferred.
-5. **Image insertion UI** — The "insert image" action (Cmd-E, toolbar button) is already handled by the markdown-toolbar plugin and is out of scope for media-preview.
-6. **Image alignment/float UI** — The image toolbar (resize, align controls) is already handled by `markdown-toolbar.plugin.ts`. Media-preview owns rendering only.
-7. **Export rendering** — Images in exported HTML use a separate rendering path (`marked`); this plugin's decorations are CM6-only and do not affect exports.
-8. **Image file management** — Copy-paste image embedding, drag-and-drop file import. Out of scope.
-9. **Lazy loading / virtualization** — For very large documents with many images, off-screen images may load eagerly. Virtualization is a future optimization.
-10. **AVIF / WebP format-specific handling** — All raster formats supported by the macOS WebView are supported automatically; no format-specific code paths are needed.
-11. **Reference-style images** — `![alt][ref]` CommonMark reference-style image syntax is not handled. The scanner only processes inline `![alt](url)` syntax. Reference-style images are rendered as raw text.
-12. **Interactive SVG** — SVG files are rendered as raster images via `<img>`. No inline `<svg>` DOM injection, no CSS styling of SVG internals, no interactivity.
-
----
-
-## Acceptance Criteria
-
-**AC-1** An `![alt](relative/path.png)` image reference renders as a visual `<img>` element when the cursor is not on that line.
-
-**AC-2** Clicking the rendered image moves the cursor into the image source, revealing the raw `![alt](url)` Markdown for editing.
-
-**AC-3** A relative path image (e.g., `![](./screenshot.png)`) loads correctly when the file is in the same directory as the open document.
-
-**AC-4** An `https://` remote image URL loads and renders correctly.
-
-**AC-5** A path to a non-existent file displays the broken-image placeholder (not a blank space or browser error icon), with the failed URL visible on hover.
-
-**AC-6** Disabling the plugin in the Plugins panel removes all image widgets; raw `![alt](url)` syntax is visible throughout the document.
-
-**AC-7** Re-enabling the plugin re-renders all images correctly from a clean state.
-
-**AC-8** A GIF image animates in the widget (no special handling needed — native `<img>` supports animated GIFs).
-
-**AC-9** An image with alt-text dimension annotation `![photo|400x300](img.png)` renders at exactly 400x300 px.
-
-**AC-10** An image with a very long URL containing special characters (spaces, parentheses, Unicode) renders correctly (URL is used as-is; encoding is the author's responsibility per CommonMark).
-
-**AC-11** The `maxDisplayWidth` setting caps the displayed size of images exceeding that width, and also sets the default width for unsized images.
-
-**AC-12** No console errors are thrown during normal operation (typing, cursor movement, image load, image load failure).
-
-**AC-13** `![photo.center](img.png)` produces an `<img>` element with CSS class `center` applied in addition to `cm-media-image`.
-
-**AC-14** `![photo{border:2px solid red}](img.png)` produces an `<img>` element with `border: 2px solid red` in its inline `style` attribute.
-
-**AC-15** When the media-preview plugin is disabled, the core `live-preview.ts` fallback resumes rendering images (basic rendering, no CSS annotations or broken-image placeholder).
+1. **Command preview pane** — A secondary panel showing a description or preview of the selected command. Deferred.
+2. **Recent searches / search history** — Persisting the last N queries. The bar always opens empty (FR-01.4).
+3. **Command aliases** — Alternate names or abbreviations for commands. Not supported in this iteration.
+4. **Snippet insertion via Command Bar** — Templates are accessed via the File menu / Templates plugin. The Command Bar does not insert content snippets.
+5. **Plugin installation from Command Bar** — The bar navigates to the Plugins Panel (FR-04.1 navigate result) but does not itself install or download plugins.
+6. **File creation from Command Bar** — Typing a filename and pressing Enter to create a new file. This is a "new file" shortcut; use Cmd-N or the File menu instead.
+7. **Cross-vault / multi-workspace search** — The bar operates on the current open window only.
+8. **Inline calculator or URL launcher** — No "smart" result types beyond the three categories.
+9. **Result count badge** — A total count of results is not required in the UI.
+10. **Persistent window state** — The bar always opens fresh. No memory of scroll position in the result list.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-01: Cursor exactly on the opening `!` character** — Cursor is at the `!` of `![alt](url)`. Expected: raw source is shown (cursor is inside the image range). Widget is not rendered.
+**EC-01: No file open, heading jump requested** — Category B results are shown dimmed when no file is open (FR-05.3). If the user somehow activates one (e.g., via a race condition), nothing happens — the handler must guard against a null `__CM_STATE__`.
 
-**EC-02: Cursor exactly on the closing `)` character** — Cursor is at the closing `)` of `![alt](url)`. Expected: raw source is shown.
+**EC-02: No file open, format command selected** — Format commands are dimmed (FR-05.3) and cannot be activated via keyboard (FR-05.2). Mouse click on a dimmed result must be a no-op.
 
-**EC-03: Empty URL — `![alt]()`** — The URL is empty. Expected: broken-image placeholder shown when cursor away; raw source shown when cursor inside. No attempt to load a blank URL.
+**EC-03: Document with no headings** — Category B produces zero results. Its section header is not rendered (AD-06). The bar opens showing only Categories A and C (if enabled).
 
-**EC-04: Empty alt text — `![](url)`** — Alt text is empty. Expected: image renders normally with `alt=""`. No dimension parsing attempted.
+**EC-04: Query matches zero results across all categories** — The result list is empty. A "No results" placeholder is shown in place of the list (no empty whitespace). The placeholder is not selectable.
 
-**EC-05: URL contains spaces — `![](my photo.png)`** — CommonMark does not require space-encoding in image URLs. Expected: URL is passed through as-is to `convertFileSrc` / the `<img src>` attribute. If the browser rejects it, the `onerror` handler fires and the broken-image placeholder appears.
+**EC-05: Cmd-Shift-P pressed while bar is already open** — Bar closes. Focus returns to the CM6 editor. No second overlay is created.
 
-**EC-06: URL contains parentheses — `![](path/to/(file).png)`** — CommonMark has specific rules about balanced parens in link destinations. Expected: the scanner (via lezer AST) correctly captures the full URL including the parentheses. The Architect must verify the lezer parser's behavior for this case.
+**EC-06: Escape pressed while input is empty** — Bar closes. This must be consistent: Escape always closes, regardless of input content.
 
-**EC-07: Relative path with no current file path known** — The plugin attempts to resolve a relative URL but `__MARKABLE_CURRENT_FILE__` is null (new unsaved document). Expected: the relative path cannot be resolved. The plugin should attempt to use the path as-is, which will fail to load. The `onerror` handler fires and the broken-image placeholder appears.
+**EC-07: Very long command label** — A label that overflows the result row width. Expected: the row clips or truncates with an ellipsis. The row height does not expand. The full label is visible on hover via `title` attribute or tooltip.
 
-**EC-08: Absolute path outside the allowed scope** — Tauri's `asset://` protocol may be restricted to certain directories based on the capability configuration. A path outside the scope (e.g., `/etc/passwd`) would fail. Expected: `onerror` fires, broken-image placeholder shown.
+**EC-08: Very long heading text** — Same treatment as EC-07.
 
-**EC-09: `file://` URL** — `![](file:///Users/foo/img.png)`. Expected: rejected per FR-3.3. `file://` is treated as a broken URL — broken-image placeholder shown.
+**EC-09: Heading text contains Markdown syntax** — `## **Bold Heading**`. The scan produces the raw heading text including Markdown tokens. The result displays `**Bold Heading**` as plain text (no rendering of bold). This is acceptable.
 
-**EC-10: `data:` URI** — `![](data:image/png;base64,...)`. Expected: rendered directly as `src` without any `convertFileSrc` conversion. Must work correctly even for very large base64 strings (subject to WebView memory, not the plugin's concern).
+**EC-10: Fuzzy match highlight on a label with special HTML characters** — A label containing `<`, `>`, or `&` (unlikely but possible in future command names). The highlight rendering must not inject raw HTML. Use `textContent` or escape the label before inserting match highlights.
 
-**EC-11: GIF image** — Animated GIF file referenced via relative path. Expected: renders and animates normally. No special handling needed.
+**EC-11: Arrow key navigation skips all results (all dimmed)** — When no file is open and all Category A format commands are dimmed, and Categories B and C are empty or disabled, arrow key navigation has nothing to land on. The bar should handle gracefully: no selection, Enter does nothing.
 
-**EC-12: SVG image** — `.svg` file referenced via relative path. Expected: renders as `<img src="asset://...">` (raster mode). No DOM injection of SVG content.
+**EC-12: Tab closes while bar is open** — The active tab closes (Cmd-W). The bar must close defensively and return focus cleanly. No stale reference to the now-closed tab's state.
 
-**EC-13: Image syntax inside a fenced code block** — ` ```\n![alt](url)\n``` `. Expected: no image widget. Handled automatically by lezer AST (code block nodes do not contain `Image` nodes).
+**EC-13: Plugin toggled off while bar is open** — A race scenario: the user triggers plugin disable from another path (unlikely in practice, but the bar must not crash if the plugin list changes mid-session). On next open the list rebuilds fresh (FR-03.A.2).
 
-**EC-14: Image syntax inside an inline code span** — `` `![alt](url)` ``. Expected: no image widget. Handled automatically by lezer AST.
+**EC-14: Cmd-Shift-P is remapped** — The user remaps `"command-bar-open"` to a different key in the Keybindings panel. The new key must open the bar. The old key (Cmd-Shift-P) must not. The plugin's keydown handler must read the current resolved keybinding, not hard-code `"Cmd-Shift-P"`.
 
-**EC-15: Very large image file (10+ MB)** — A multi-megabyte PNG referenced by path. Expected: the `<img>` element begins loading asynchronously. The StateField does not block on image load. The widget is placed immediately; the image paints when the WebView finishes loading it. No plugin-level timeout or size gate.
+**EC-15: Cmd-Shift-P conflicts with another command** — The user remaps another command to Cmd-Shift-P, creating a conflict. The Keybindings panel's existing conflict detection system handles this (it already highlights conflicts). The Command Bar itself has no special behavior here — it follows the standard resolution order (`resolveAction`: custom bindings first, then defaults).
 
-**EC-16: Very wide image without dimension annotation** — A 4000px-wide image. Expected: constrained to `maxDisplayWidth` (default 600px) with `height: auto`.
+**EC-16: Recent files list is empty (first launch)** — Category C produces zero results. Its section header collapses (AD-06). The bar opens with only Categories A and B visible.
 
-**EC-17: Image with only width annotation — `![photo|400](img.png)`** — Expected: `width: 400px; height: auto` applied.
+**EC-17: Recent file no longer exists on disk** — A file in the recent list has been deleted. The result is shown in the bar. Activating it triggers the same error path as "Open Recent" on a missing file (error dialog or notification). The Command Bar does not pre-validate file existence.
 
-**EC-18: Image on the first line of the document** — No special handling needed. The scanner is position-agnostic.
+**EC-18: All three categories disabled in settings** — The bar opens with an empty list and the "No results" placeholder. The bar is still functional (the user can type a query and see the placeholder, then re-enable categories in plugin settings).
 
-**EC-19: Two images on the same line** — `![a](a.png) and ![b](b.png)`. Both should render as separate widgets. Cursor inside the first reveals the first's source; cursor inside the second reveals the second's source. Both rendered when cursor is between them.
+**EC-19: Command Bar plugin disabled via Plugins Panel** — The overlay is removed from the DOM. Pressing Cmd-Shift-P does nothing (the keydown listener is removed). The `"command-bar-open"` entry remains in the `COMMANDS` array (it is still remappable in the Keybindings panel), but the action handler is a no-op when the plugin is disabled.
 
-**EC-20: Image immediately adjacent to other syntax** — `**bold ![img](url) bold**`. Expected: image widget renders inside the bold region. The live-preview bold decoration and the image replace-decoration coexist independently.
+**EC-20: Rapid open/close toggles** — User presses Cmd-Shift-P multiple times quickly. Expected: no duplicate overlays, no focus trapping errors, no stale event listeners. Each open/close cycle must be idempotent.
 
-**EC-21: Image reference-style links — `![alt][ref]`** — These are out of scope (see Out of Scope item 11). The scanner only handles inline `![alt](url)` syntax. Reference-style images are shown as raw text.
+**EC-21: Input field receives a paste of a long string** — The user pastes a 500-character string. Expected: the query is used as-is for fuzzy matching. Performance must stay within NFR-02 bounds. Result: likely zero matches; "No results" placeholder shown.
 
-**EC-22: Image inside a blockquote — `> ![alt](url)`** — Expected: image renders normally. The lezer AST includes `Image` nodes inside blockquote contexts.
+**EC-22: Document is very large (500+ headings)** — Category B scan must complete within NFR-01's 80ms budget. A line-by-line regex scan (AD-04) is O(n) in document length; 500 headings in a 50,000-line document should complete well within budget. The Architect must verify.
 
-**EC-23: Plugin disabled mid-document with images loaded** — User disables the plugin while images are displayed. Expected: `api.removeExtensions()` removes all decorations; raw Markdown syntax is visible throughout. No stale `<img>` elements remain in the DOM. Core `live-preview.ts` fallback resumes.
+**EC-23: Highlight rendering with non-consecutive match characters** — A query like `"fcs"` matches `"Focus Mode"` at positions 0, 2, 4. The highlight must mark exactly those three characters, not a contiguous run. The implementation must not accidentally highlight a superset or produce malformed DOM.
 
-**EC-24: Plugin re-enabled (toggle off, then on)** — Expected: a fresh `StateField` is created; all images in the current document render correctly from a clean state.
+**EC-24: Focus Mode "action" result label accuracy** — When Focus Mode is currently ON, the action result label must read `"Focus Mode Disabled"` (activating will disable it). When OFF, `"Focus Mode Enabled"` (activating will enable it). The label reflects the action that will occur, not the current state. The Command Bar must read the current plugin enabled/disabled state at rebuild time.
 
-**EC-25: Tab switch while images are displayed** — User switches to a different tab. Expected: the StateField recomputes on the new document; images in the new document render; images from the previous document do not bleed through.
+**EC-25: Plugin with no keybinding (defaultKey: "")** — Several commands (`view-toggle-statusbar`, `view-toggle-focus`, `view-toggle-typewriter`) have `defaultKey: ""`. Their result rows must not display a keybinding badge. No empty badge or phantom whitespace should appear.
 
-**EC-26: Undo of an image insertion** — User types `![alt](url)`, cursor moves away (image renders), then presses Cmd-Z. Expected: undo restores the pre-insertion text; the StateField recomputes and the image widget disappears. No stale widget remains.
+**EC-26: Window loses focus while bar is open** — The user Cmd-Tabs to another app. On return, the overlay is still open and the input field should regain focus. The bar does not auto-close on window blur (this would be jarring). The Architect may choose to close on blur; this must be specified in the architecture doc.
 
-**EC-27: Image `src` URL changes while cursor is away** — User is in another part of the document; they switch tabs, edit the image URL, then switch back. Expected: the StateField's `docChanged` trigger recomputes; the new URL is reflected in the widget.
+**EC-27: Screen reader interaction** — With `role="combobox"` on the input and `role="listbox"` on the results (NFR-05), a screen reader must announce the selected result as the user navigates. `aria-activedescendant` on the input must point to the currently selected `role="option"` element.
 
-**EC-28: Image path with special filename characters — spaces, parentheses, Unicode, emoji** — `![](café photo (1).png)`. Expected: the scanner captures the full URL including special characters. `__MARKABLE_CONVERT_FILE_SRC__` is called with the raw path string. If the filesystem path is valid, the image loads. If not, `onerror` fires.
+**EC-28: Heading at line 1 of document** — No special case. The heading scan is position-agnostic. Activating this result scrolls to line 1 and positions the cursor there.
 
-**EC-29: Multiple image widgets + cursor movement performance** — Document with 50 images, cursor moving line by line. Expected: StateField recomputes on each selection change within NFR-1 bounds (30ms). No visible lag.
+**EC-29: Duplicate heading text** — Two headings with identical text (e.g., two `## Notes` sections). Both appear as separate results. Activating the first jumps to the first occurrence; activating the second jumps to the second. They are distinguished by their document position, not their text.
 
-**EC-30: CSS style tag accumulation across toggles** — `onDisable` removes the plugin `<style>` tag. `onEnable` re-injects it. Expected: idempotent injection (guarded by fixed element id). No duplicate `<style>` tags after multiple toggle cycles.
-
-**EC-31: CSS injection via alt text — XSS / script injection attempt** — A malicious alt text like `![x{background:url(javascript:alert(1))}](img.png)` must not execute scripts. Expected: the `{...}` CSS string is applied only via `element.style.cssText` (DOM property), not via `innerHTML` or `setAttribute("style", rawString)`. Browser CSS engines ignore `javascript:` values in `style.cssText`. No script execution. The Architect must verify that `element.style.cssText = userValue` is used, not `element.setAttribute("style", userValue)`.
-
-**EC-32: Incomplete lezer syntax tree on first render** — On the very first render of a newly opened document, `syntaxTree(state)` may return a partial tree if the lezer parser has not finished its incremental parse pass. Expected: the scanner produces a partial or empty `ImageRange` list. The StateField places no decorations (or decorations only for the parsed region). On the next transaction (`docChanged` or `selectionSet`), the tree is complete and all images render. No crash; graceful degradation.
-
-**EC-33: CSS class shorthand with invalid class name characters** — `![photo.my class!](img.png)` — spaces or special characters in the dot-class token. Expected: the annotation parser strips the dot-class token from alt text but does not apply the invalid class name to the DOM. The Architect must decide whether to sanitize (strip invalid characters) or silently discard invalid class tokens.
-
-**EC-34: Both dimension annotation and CSS annotation present** — `![photo.center|400x300{opacity:0.8}](img.png)`. Expected: all three annotations are parsed independently. The `<img>` has `width: 400px; height: 300px`, class `center`, and `style="opacity:0.8"`. The clean alt text is `photo`.
-
-**EC-35: `__MARKABLE_CONVERT_FILE_SRC__` not yet defined when plugin initializes** — The plugin's `onEnable` runs before `main.ts` has assigned the global (race condition during app startup). Expected: `onEnable` should guard with a check; if the global is undefined, log a warning and fall back to passing URLs through unconverted (which will fail for local paths but not crash). This case should not occur in normal flow since plugins load after `main.ts`, but the guard is defensive.
+**EC-30: Category A rebuilds reflect mid-session plugin installs** — If the user installs a new user plugin while the app is open (hot-loaded), the next Command Bar open should include that plugin's toggle entries. Since the list is rebuilt on every open (FR-03.A.2), this is handled automatically provided the plugin manager's list is current at rebuild time.
 
 ---
 
@@ -344,11 +344,10 @@ The following items from FEATURES.md #7 description ("video, embedded `.md`") ar
 
 | Component | Target File | Notes |
 |---|---|---|
-| Media Preview plugin | `src/plugins/media-preview/media-preview.plugin.ts` (new) | IIFE plugin: StateField, ImageWidget, broken-image placeholder, CSS annotation parsing, CSS injection |
-| Plugin build registration | `scripts/build-plugins.mjs` | Add `["media-preview", "src/plugins/media-preview/media-preview.plugin.ts"]` to PLUGINS array |
-| `convertFileSrc` global exposure | `src/main.ts` | `window.__MARKABLE_CONVERT_FILE_SRC__ = convertFileSrc` (AD-1) |
-| Current file path global | Already exists as `window.__MARKABLE_CURRENT_FILE__` | Confirmed synchronous on tab switch — no changes needed |
-| `live-preview.ts` core fallback | `src/editor/live-preview.ts` | Keep minimal image fallback; add `__MARKABLE_MEDIA_PREVIEW_ACTIVE__` check to suppress when plugin active (FR-6.2) |
-| Plugin settings | Via `api.loadSettings()` / `api.saveSettings()` | `maxDisplayWidth` setting (dual-purpose: cap and default width) |
-| Media preview tests | `tests/plugins/media-preview/media-preview.test.ts` (new) | Unit tests for scanner, URL resolution (mocked), broken-image, dimension parsing, CSS annotation parsing (FR-2.4), EC-31 XSS guard, EC-32 incomplete tree |
-| `__CM_LANGUAGE__` global (if not already sufficient) | `src/lib/cm-globals.ts` | Confirm `syntaxTree` is accessible from the existing `__CM_LANGUAGE__` global; extend if needed (AD-3) |
+| Command Bar plugin | `src/plugins/command-bar/command-bar.plugin.ts` (new) | IIFE plugin: overlay DOM, fuzzy ranker, category builders, keyboard navigation, focus trap, CSS injection |
+| Plugin build registration | `scripts/build-plugins.mjs` | Add `["command-bar", "src/plugins/command-bar/command-bar.plugin.ts"]` to PLUGINS array |
+| `"command-bar-open"` command entry | `src/keybindings/keybindings-panel.ts` | Add to `COMMANDS` array (id: `"command-bar-open"`, defaultKey: `"Cmd-Shift-P"`, section: `"View"`) |
+| `COMMANDS` array export | `src/keybindings/keybindings-panel.ts` | Export `COMMANDS` (or expose via a new window global) so the plugin can read command labels and default keys |
+| `handleAction()` dispatch | `src/main.ts` | Add `"command-bar-open"` case that calls the plugin's open function |
+| Plugin open function global | `window` | Plugin registers `window.__MARKABLE_COMMAND_BAR_OPEN__` (or equivalent) at enable time; `handleAction` calls it |
+| Command Bar tests | `tests/plugins/command-bar/command-bar.test.ts` (new) | Unit tests: fuzzy ranker tiers (FR-02.3), match highlight (FR-02.4), heading scan (FR-03.B), context-invalid dimming (FR-05), EC-04 empty results, EC-10 HTML escape, EC-23 non-consecutive highlight, EC-24 plugin label accuracy |

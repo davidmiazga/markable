@@ -553,6 +553,11 @@ export class TabManager {
 
     this._applyActiveTab();
     this._notifyRenderer();
+
+    // Notify the Command Bar plugin (EC-12 in command-bar/00_index.md) so it
+    // can close defensively if a tab closes while the palette is open.
+    document.dispatchEvent(new CustomEvent("markable-tab-closed"));
+
     void this.saveSession();
   }
 

@@ -5,16 +5,18 @@ import { getCurrentSettings, updateSettings } from "../lib/settings";
 // Command definitions
 // ---------------------------------------------------------------------------
 
-interface CommandDef {
+export interface CommandDef {
   id: string;
   label: string;
   defaultKey: string;
   section: string;
 }
 
-const COMMANDS: CommandDef[] = [
+export const COMMANDS: CommandDef[] = [
   // File
-  { id: "file-new",        label: "New",                    defaultKey: "Cmd-N",           section: "File" },
+  { id: "file-new",               label: "New",                    defaultKey: "Cmd-N",           section: "File" },
+  { id: "file-new-from-template", label: "New from Template",      defaultKey: "Cmd-Shift-N",     section: "File" },
+  { id: "file-save-as-template",  label: "Save as Template",       defaultKey: "",                section: "File" },
   // Tab commands — added in step_06.
   // "tab-new" and "file-new" intentionally produce the same behaviour (AD-7):
   // handleAction() redirects both to tabManager.openNewTab(). Keeping two
@@ -53,8 +55,13 @@ const COMMANDS: CommandDef[] = [
   { id: "edit-copy-html",      label: "Copy as HTML",             defaultKey: "Cmd-Alt-C", section: "Edit" },
   { id: "edit-duplicate-line", label: "Duplicate Line",           defaultKey: "Cmd-D",     section: "Edit" },
   { id: "edit-delete-line",    label: "Delete Line",              defaultKey: "Cmd-Alt-Shift-Backspace", section: "Edit" },
-  { id: "edit-goto-line",      label: "Go to Line",              defaultKey: "Ctrl-G",    section: "Edit" },
+  { id: "edit-select-none",    label: "Select None",             defaultKey: "Cmd-Shift-D",               section: "Edit" },
+  { id: "edit-goto-line",      label: "Go to Line",              defaultKey: "Ctrl-G",                    section: "Edit" },
   // View
+  { id: "command-bar-open",    label: "Command Bar",          defaultKey: "Cmd-Shift-P",     section: "View" },
+  { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },
+  { id: "app-keybindings",     label: "Keyboard Shortcuts",   defaultKey: "Cmd-Alt-Shift-K", section: "View" },
+  { id: "app-plugins",         label: "Plugins Panel",        defaultKey: "Cmd-Alt-P",       section: "View" },
   { id: "view-toggle-preview", label: "Toggle Preview", defaultKey: "Cmd-E",  section: "View" },
   { id: "view-zoom-in",        label: "Zoom In",        defaultKey: "Cmd-=",  section: "View" },
   { id: "view-zoom-out",       label: "Zoom Out",       defaultKey: "Cmd--",  section: "View" },
@@ -75,12 +82,35 @@ const COMMANDS: CommandDef[] = [
   { id: "format-bullet-list",   label: "Bullet List",      defaultKey: "Cmd-Shift--",  section: "Format" },
   { id: "format-ordered-list",  label: "Ordered List",     defaultKey: "Cmd-Shift-1",  section: "Format" },
   { id: "format-task-list",     label: "Task List",        defaultKey: "Cmd-Shift-;",  section: "Format" },
+  { id: "format-superscript",   label: "Superscript",      defaultKey: "Cmd-Shift-6",  section: "Format" },
+  { id: "format-subscript",     label: "Subscript",        defaultKey: "Cmd-Shift-9",  section: "Format" },
   { id: "format-hr",            label: "Horizontal Rule",  defaultKey: "Cmd-Shift-R",  section: "Format" },
+  { id: "format-indent",        label: "Indent",           defaultKey: "Cmd-]",        section: "Format" },
+  { id: "format-outdent",       label: "Outdent",          defaultKey: "Cmd-[",        section: "Format" },
+  { id: "format-image",         label: "Insert Image",     defaultKey: "Cmd-Shift-I",  section: "Format" },
+  { id: "format-table",         label: "Insert Table",     defaultKey: "Cmd-Shift-T",  section: "Format" },
+  { id: "format-front-matter",  label: "Insert Front Matter", defaultKey: "Cmd-Shift-Y", section: "Format" },
+  { id: "format-math-inline",   label: "Insert Math",      defaultKey: "Cmd-Shift-M",  section: "Format" },
+  { id: "format-math-block",    label: "Insert Math Block", defaultKey: "",            section: "Format" },
+  { id: "format-list-style-standard",     label: "List Style: Standard",     defaultKey: "",       section: "Format" },
+  { id: "format-list-style-alphanumeric", label: "List Style: Alphanumeric", defaultKey: "Ctrl-R", section: "Format" },
+  { id: "format-list-style-decimal",      label: "List Style: Decimal",      defaultKey: "Ctrl-N", section: "Format" },
+  { id: "format-list-style-steps",        label: "List Style: Steps",        defaultKey: "Ctrl-L", section: "Format" },
   { id: "format-clear",         label: "Clear Formatting", defaultKey: "Cmd-\\",       section: "Format" },
   { id: "format-comment",       label: "Comment",          defaultKey: "Cmd-Shift-\\", section: "Format" },
+  // Theme
+  { id: "theme-next",   label: "Next Theme",     defaultKey: "Cmd-Alt-.", section: "Theme" },
+  { id: "theme-prev",   label: "Previous Theme", defaultKey: "Cmd-Alt-,", section: "Theme" },
+  { id: "theme-light",  label: "Light Theme",    defaultKey: "",          section: "Theme" },
+  { id: "theme-dark",   label: "Dark Theme",     defaultKey: "",          section: "Theme" },
+  { id: "theme-system", label: "System Theme",   defaultKey: "",          section: "Theme" },
+  // Help
+  { id: "help-quickstart", label: "Quickstart",          defaultKey: "", section: "Help" },
+  { id: "help-help",       label: "Help",                defaultKey: "", section: "Help" },
+  { id: "help-cheatsheet", label: "Markdown Cheatsheet", defaultKey: "", section: "Help" },
 ];
 
-const SECTIONS = ["File", "Edit", "View", "Format"];
+const SECTIONS = ["File", "Edit", "View", "Format", "Theme", "Help"];
 
 // ---------------------------------------------------------------------------
 // Key formatting / matching helpers

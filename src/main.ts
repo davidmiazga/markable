@@ -69,7 +69,7 @@ import {
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
-import { createKeybindingsPanel, toggleKeybindingsPanel, resolveAction } from "./keybindings/keybindings-panel";
+import { createKeybindingsPanel, toggleKeybindingsPanel, resolveAction, COMMANDS } from "./keybindings/keybindings-panel";
 import {
   createPluginsPanel,
   togglePluginsPanel,
@@ -537,6 +537,16 @@ function handleAction(action: string): void {
     case "app-plugins":
       togglePluginsPanel(pluginManager.getStates());
       break;
+
+    // Command Bar plugin open dispatch (AD-03 in command-bar/00_index.md).
+    // The plugin registers window.__MARKABLE_COMMAND_BAR_OPEN__ at onEnable and
+    // sets it to null at onDisable. If the plugin is off, the global is null and
+    // this is a safe no-op (EC-19).
+    case "command-bar-open": {
+      const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+      if (typeof openCB === "function") openCB();
+      break;
+    }
     case "edit-select-none":
       if (editor) {
         // Collapse selection to remove highlight, then enter view mode
@@ -869,6 +879,15 @@ async function initApp() {
   // already present. Must run after editor creation and setEditorView().
   initSidebar();
 
+  // ── Command Bar globals (set before loadPlugins so the IIFE can read them
+  // at onEnable time, not just at openBar() time) ────────────────────────────
+  (window as unknown as Record<string, unknown>)["__MARKABLE_COMMANDS__"] = COMMANDS;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_PLUGIN_MANAGER__"] = pluginManager;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_GET_SETTINGS__"] = getCurrentSettings;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_HANDLE_ACTION__"] = handleAction;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_IS_OPEN__"] = false;
+  (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_OPEN__"] = null;
+
   // Load all plugins (core + user) from disk. Must run after setEditorView()
   // so any plugin calling api.addExtensions() in onEnable has a live view.
   // Errors are isolated per-plugin — a failing plugin does not block the rest.
@@ -1095,6 +1114,12 @@ async function initApp() {
   window.addEventListener("focus", () => {
     if (findWidget?.isOpen()) {
       // FindWidget manages its own focus. No action needed here.
+      return;
+    }
+    // Do not steal focus from the Command Bar overlay when the window regains
+    // focus (EC-26, AD-08 in command-bar/00_index.md). The flag is set to true
+    // by the plugin at open time and back to false at close time.
+    if ((window as any).__MARKABLE_COMMAND_BAR_IS_OPEN__) {
       return;
     }
     if (editor) editor.focus();
