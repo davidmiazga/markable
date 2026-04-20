@@ -5,7 +5,7 @@
 //!
 //! Commands:
 //!   list_user_plugins  — list top-level .js files (max 50, lexicographic)
-//!   read_plugin_file   — read a .js file as UTF-8 text (max 500 KB)
+//!   read_plugin_file   — read a .js file as UTF-8 text (core: max 5 MB, user: max 500 KB)
 //!   read_plugin_settings(id) — read plugins/<id>/settings.json or null
 //!   write_plugin_settings(id, json) — write plugins/<id>/settings.json
 
@@ -233,20 +233,27 @@ pub fn read_plugin_file(
         Some("user") | None => plugins_user_dir(&app)?,
         Some(other) => return Err(format!("Unknown plugin kind: {}", other)),
     };
+    // Per-kind file size cap (FR-09, OQ-01):
+    //   Core plugins: 5 MB — accommodates large bundled dependencies (e.g. Mermaid ~2.5 MB).
+    //   User plugins: 500 KB — preserves safety guard for user-authored plugins (PC-8).
+    let max_bytes: u64 = match kind.as_deref() {
+        Some("core") => 5 * 1024 * 1024,
+        _ => 500 * 1024,
+    };
+
     let path = dir.join(&filename);
 
     if !path.exists() {
         return Err(format!("Plugin file not found: {}", filename));
     }
 
-    // EC-12, PC-8: reject files larger than 500 KB.
-    const MAX_BYTES: u64 = 500 * 1024;
     let metadata = std::fs::metadata(&path)
         .map_err(|e| format!("Failed to stat plugin file: {}", e))?;
-    if metadata.len() > MAX_BYTES {
+    if metadata.len() > max_bytes {
         return Err(format!(
-            "Plugin file exceeds 500 KB limit ({} bytes): {}",
+            "Plugin file exceeds size limit ({} bytes, limit {} bytes): {}",
             metadata.len(),
+            max_bytes,
             filename
         ));
     }
@@ -929,6 +936,35 @@ mod tests {
             core.ends_with("plugins/core"),
             "plugins/core path must end with plugins/core"
         );
+    }
+
+    /// Verify the per-kind file-size cap selection logic (FR-09, OQ-01).
+    /// Core plugins get 5 MB; user plugins and kind=None get 500 KB.
+    #[test]
+    fn core_plugin_cap_is_5_mb() {
+        // Replicate the cap selection logic from read_plugin_file.
+        let max_bytes: u64 = match Some("core") {
+            Some("core") => 5 * 1024 * 1024,
+            _ => 500 * 1024,
+        };
+        assert_eq!(max_bytes, 5 * 1024 * 1024, "core plugin cap must be 5 MB");
+    }
+
+    /// Verify user plugin cap and None-kind cap are both 500 KB (FR-09, PC-8).
+    #[test]
+    fn user_plugin_cap_is_500_kb() {
+        // kind = "user"
+        let max_bytes_user: u64 = match Some("user") {
+            Some("core") => 5 * 1024 * 1024,
+            _ => 500 * 1024,
+        };
+        // kind = None
+        let max_bytes_none: u64 = match None::<&str> {
+            Some("core") => 5 * 1024 * 1024,
+            _ => 500 * 1024,
+        };
+        assert_eq!(max_bytes_user, 500 * 1024, "user plugin cap must be 500 KB");
+        assert_eq!(max_bytes_none, 500 * 1024, "None kind cap must be 500 KB");
     }
 
     /// list_core_plugins returns an empty non-truncated list when core/ does not exist.

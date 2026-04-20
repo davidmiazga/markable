@@ -1,342 +1,398 @@
 ---
-title: "Command Bar"
-last-updated: "2026-04-19"
+title: "Mermaid Diagrams Plugin"
+last-updated: "2026-04-20"
 review-cadence-days: 7
 status: active
 ---
 
-# Command Bar (FC2 #11) Requirements Spec
+# Mermaid Diagrams Plugin (FC2 #9) Requirements Spec
 
 ## Summary
 
-As a user, I want to open a floating palette with Cmd-Shift-P that lets me fuzzy-search commands, heading jumps, and recent files — then execute the selected result — so that I can navigate and trigger actions without lifting my hands from the keyboard.
+As a user, I want to write Mermaid diagram syntax inside fenced code blocks tagged ` ```mermaid ` and have them rendered as SVG diagrams in live-preview mode — with the raw source revealed when my cursor enters the block — so that I can embed flowcharts, sequence diagrams, and other Mermaid diagram types directly in my Markdown notes without leaving the editor.
 
 ---
 
 ## Background and Motivation
 
-FEATURES.md item 11 is labeled "Command Bar." This is a floating command palette overlaid on the editor window. It mirrors the pattern established by VS Code, Obsidian, and similar tools: a single modal input that provides access to multiple categories of results through one unified search surface.
+FEATURES.md item FC2 #9 reads: "Diagrams support: Mermaid diagram support or excalidraw (or separate into separate plugins)." This spec covers Mermaid only. Excalidraw is explicitly deferred to FC3 #17 and is out of scope here.
 
-### What Already Exists
+Mermaid is the de facto standard for text-based diagrams in Markdown tools (GitHub, Obsidian, Notion all support it). Users author diagrams as fenced code blocks with the language tag `mermaid`. The plugin intercepts these blocks in the CM6 document, renders them as SVG, and applies the same Typora-style cursor-on-reveal interaction used by the Math plugin (FC2 #8).
 
-The following infrastructure is available and must be used by this feature:
+The closest analog in this codebase is `src/plugins/math/math.plugin.ts` (KaTeX StateField, block decorations, cursor-reveals-source, IIFE pattern). The Media Preview plugin (`src/plugins/media-preview/media-preview.plugin.ts`) is a secondary analog for Lezer AST-based block detection.
 
-- **`COMMANDS` list in `src/keybindings/keybindings-panel.ts`** — an authoritative array of `CommandDef` objects (id, label, defaultKey, section). The Command Bar sources its command results from this same list. Commands are executed via the existing `handleAction()` / `resolveAction()` pattern in `main.ts`.
-- **`resolveAction()` / `eventMatchesKey()`** — The keybinding resolution layer used by the document keydown handler. The Command Bar must register `"command-bar-open"` as a standard command in the `COMMANDS` array so its binding (default: Cmd-Shift-P) can be remapped in the Keybindings panel.
-- **Plugin system** — The Command Bar is implemented as a core plugin, consistent with focus-mode, word-count, and all other FC2 features.
-- **Plugin settings API** — `api.loadSettings()` / `api.saveSettings()` for persisting category-visibility preferences.
-- **Sidebar panel system** — Not used by the Command Bar (it is a modal overlay, not a sidebar panel).
-- **`window.__MARKABLE_TAB_MANAGER__`** — Provides access to recent files for category C results.
-- **`window.__MARKABLE_CURRENT_FILE__`** — Used for heading scan: the scanner reads the current document's content.
-- **`window.__CM_VIEW__`** / `window.__CM_STATE__`** — Used for heading jump (scroll + cursor placement) and for scanning headings from the live CM6 document state.
+---
+
+## Goals
+
+- Render ` ```mermaid ` fenced code blocks as SVG diagrams in live-preview mode.
+- Reveal raw Mermaid source when the cursor is inside the fenced block.
+- Support the most common Mermaid diagram types (see FR-03).
+- Respect the existing source-mode guard (`__MARKABLE_PREVIEW_ENABLED__`) — no widgets in raw/source view.
+- Adapt diagram theme to the active app theme (dark/light CSS variable awareness).
+- Ship as a toggleable core plugin consistent with all other FC2 plugins.
+- Address the Mermaid bundle size problem (Mermaid minified is approximately 2.5 MB) before implementation begins — the current 500 KB Rust `read_plugin_file` cap must be resolved.
+
+## Non-Goals (Explicitly Out of Scope)
+
+- **Excalidraw support** — deferred to FC3 #17. A separate plugin will be created for that.
+- **Diagram editing UI** — no drag-and-drop canvas, no shape palette, no visual editing. Raw text only.
+- **Export of individual diagrams** — the Extended Exports plugin (FC2 #16) handles document-level export. Per-diagram SVG export is not in scope for this plugin.
+- **Mermaid config file support** — `mermaid.config.json` or `%%{init}` front matter configuration is not supported in this iteration. The Architect may revisit in a later pass.
+- **Click-to-edit on rendered SVG** — clicking a rendered diagram moves the cursor into the source block (same as Math). There is no "click a shape to select it" mode.
+- **Mermaid Live Editor integration** — no external URL launch or embedded browser pane.
+
+---
+
+## User Stories and Acceptance Criteria
+
+**US-01: Basic Rendering**
+Given a document in live-preview mode containing a fenced code block tagged `mermaid` with valid syntax, when I move the cursor away from the block, the block is replaced by a rendered SVG diagram.
+
+Acceptance: the rendered SVG is visible, correctly scaled, and does not overflow the editor's content width.
+
+**US-02: Cursor-On Reveals Source**
+Given a rendered diagram, when I click anywhere inside it (or move my cursor into the block's line range), the SVG decoration is removed and the raw Mermaid source text becomes visible and editable.
+
+Acceptance: the raw text is fully editable. Moving the cursor away re-renders the diagram.
+
+**US-03: Invalid Syntax Error Display**
+Given a fenced mermaid block with invalid Mermaid syntax, when I move the cursor away, the block is replaced by a visible error indicator (not a crash, not a blank space) that identifies the block as containing a diagram syntax error.
+
+Acceptance: an error placeholder with a brief message is shown. The raw source is revealed when the cursor re-enters.
+
+**US-04: Source-Mode Guard**
+Given the app is in source/raw mode (`__MARKABLE_PREVIEW_ENABLED__` is false), no diagram widgets are rendered. The fenced code block appears as plain Markdown source text.
+
+Acceptance: toggling preview mode off and on causes diagrams to disappear and reappear correctly.
+
+**US-05: Theme Adaptation**
+Given the user switches the active theme (dark to light or vice versa), diagram rendering matches the new theme (background, text, and arrow colors are appropriate for the theme).
+
+Acceptance: diagrams do not show a white-box-on-dark-background problem or vice versa after a theme switch.
+
+**US-06: Multiple Diagrams Per Document**
+Given a document with three or more mermaid fenced blocks, all blocks render independently. Moving the cursor into one block reveals only that block's source; the others remain rendered.
+
+Acceptance: no cross-contamination of decoration state between blocks.
+
+**US-07: Plugin Disable Removes All Decorations**
+Given the Mermaid plugin is enabled and diagrams are rendered, when I disable the plugin via the Plugins Panel, all diagram widgets are removed and the raw fenced blocks are visible as plain text.
+
+Acceptance: no residual SVG elements remain in the DOM after disable.
 
 ---
 
 ## Functional Requirements
 
-### FR-01: Activation and Deactivation
+### FR-01: Fenced Block Detection
 
-**FR-01.1** The Command Bar opens via Cmd-Shift-P (default). This binding must be registered in the `COMMANDS` array in `keybindings-panel.ts` as a first-class remappable command (id: `"command-bar-open"`).
+**FR-01.1** The plugin detects fenced code blocks whose opening fence line exactly matches ` ```mermaid ` (three or more backticks followed by the language tag `mermaid`, case-insensitive). The language tag may have leading or trailing whitespace on the fence line.
 
-**FR-01.2** The Command Bar closes on any of the following:
-- Pressing Escape.
-- Clicking outside the palette overlay.
-- Activating any result (after execution).
-- The active tab closing while the bar is open (the bar must close defensively).
+**FR-01.2** Detection uses the Lezer syntax tree (`syntaxTree` from `window.__CM_LANGUAGE__`) to locate `FencedCode` nodes, consistent with the media-preview plugin pattern. This avoids false positives for mermaid text inside inline code spans or non-code block contexts.
 
-**FR-01.3** On open, the input field receives keyboard focus immediately.
+**FR-01.3** The Lezer AST approach ensures mermaid blocks nested inside blockquotes or other container elements are correctly detected (the tree walk handles nesting naturally).
 
-**FR-01.4** The bar always opens with an empty input field. No query is persisted between opens.
+**FR-01.4** The `from` and `to` offsets for the decoration span the entire fenced block: from the first character of the opening fence line to the last character of the closing fence line (exclusive end, CM6 convention). This is the range that is replaced by the widget decoration when the cursor is away.
 
-**FR-01.5** On open, the result list is populated with the full unfiltered result set from all enabled categories (see FR-03 for category definitions). The full set is shown before the user has typed anything.
+**FR-01.5** A fenced block with no closing fence (unclosed block) produces no decoration. The raw text remains visible. (See EC-03.)
 
-**FR-01.6** Cmd-Shift-P while the bar is already open closes the bar (toggle behavior). This prevents a second open from stacking an overlay on top.
+### FR-02: StateField and Decoration
 
-### FR-02: Fuzzy Matching
+**FR-02.1** Diagram decorations are managed by a CM6 `StateField<DecorationSet>`, not a `ViewPlugin`. Block decorations require `StateField` per project convention (D-1).
 
-**FR-02.1** Matching is substring-based fuzzy search: a result is shown if every character of the query string appears in the result label in order (not necessarily consecutively). Example: query `"fmd"` matches `"Focus Mode"` (f...m...d via "Fo**c**us **M**o**d**e" — no, this specific example depends on the algorithm; the Architect chooses the algorithm, but it must be character-order subsequence matching, not a word-prefix filter).
+**FR-02.2** The `StateField` is constructed fresh on each `onEnable` call (factory function, not a module-level constant), consistent with the Math plugin pattern. This eliminates residual state across enable/disable cycles.
 
-**FR-02.2** Matching is case-insensitive.
+**FR-02.3** The `StateField.update()` method recomputes decorations when `tr.docChanged` or `tr.selection` is truthy. Transactions with neither document change nor selection change skip recomputation (performance optimization for O(N) Lezer tree walk).
 
-**FR-02.3** Results are ranked. The ranking algorithm must prioritize, in descending order:
-1. Exact prefix match on the label (e.g., query `"fo"` ranks `"Focus Mode"` above `"Toggle Focus"`).
-2. Word-boundary match (query starts a word in the label).
-3. Substring match (query appears consecutively anywhere in the label).
-4. Non-consecutive subsequence match.
+**FR-02.4** The decoration uses `Decoration.replace({ widget, block: true })` to replace the entire fenced block (opening fence, content, closing fence) with the rendered SVG widget. `block: true` is mandatory for multi-line block decorations in CM6.
 
-Within the same ranking tier, results are sorted alphabetically by label.
+**FR-02.5** Cursor overlap detection uses the same `isCursorInsideRange(anchor, head, from, to)` logic as the Math plugin: if any part of the selection overlaps `[from, to)`, the decoration is suppressed and the raw source is visible.
 
-**FR-02.4** The matched characters within each result label are highlighted (e.g., wrapped in `<mark>` or a `cm-match` span) to show the user which characters caused the match. The rendering must handle overlapping annotations gracefully (the Architect chooses the highlight strategy).
+**FR-02.6** The `StateField.provide()` callback wires the field to `EditorView.decorations.from(field)` for CM6-idiomatic decoration rendering.
 
-**FR-02.5** When the query is empty, all results from all enabled categories are shown, unfiltered, in category order (A then B then C). No ranking is applied to an empty query — results appear in their natural order within each category.
+### FR-03: Mermaid Diagram Type Support
 
-**FR-02.6** There is no minimum query length. A single character triggers filtering.
+**FR-03.1** The following Mermaid diagram types must render correctly in this version:
 
-### FR-03: Result Categories
+| Type | Mermaid keyword |
+|---|---|
+| Flowchart | `flowchart`, `graph` |
+| Sequence Diagram | `sequenceDiagram` |
+| Gantt Chart | `gantt` |
+| Class Diagram | `classDiagram` |
+| State Diagram | `stateDiagram`, `stateDiagram-v2` |
+| Entity Relationship | `erDiagram` |
+| Pie Chart | `pie` |
+| User Journey | `journey` |
+| Timeline | `timeline` |
+| Mindmap | `mindmap` |
+| Quadrant Chart | `quadrantChart` |
+| XY Chart | `xychart-beta` |
 
-Three categories of results are shown in the Command Bar. Each category is independently toggleable via plugin settings (see FR-07). Categories always appear in the order A → B → C, with a visible section header separating each group.
+**FR-03.2** Diagram types not in the table above are passed to Mermaid's renderer as-is. If Mermaid supports them natively (e.g., future additions), they render. If not, the error display path (FR-05) handles the failure.
 
-**FR-03.A: Commands (Category A)**
+**FR-03.3** The plugin does not whitelist or blacklist specific diagram types at the source-detection level. All ` ```mermaid ` fences are processed; Mermaid itself determines whether the type is supported.
 
-**FR-03.A.1** Category A provides one result per entry in the `COMMANDS` array in `keybindings-panel.ts`. Each result displays:
-- The command label (e.g., `"Focus Mode Enabled"` or `"Focus Mode"`). See FR-04 for the two-result pattern for plugin toggles.
-- The currently assigned keybinding (custom binding if set, otherwise default). Displayed right-aligned in the result row, styled as a keyboard shortcut badge.
-- No keybinding badge is shown if the command has no default key and no custom binding (e.g., `view-toggle-statusbar` which has `defaultKey: ""`).
+### FR-04: Rendering Strategy and Widget
 
-**FR-03.A.2** The command list is rebuilt on every open. This ensures that current plugin states are reflected (e.g., if Focus Mode was just enabled, its label changes from "Focus Mode" to "Focus Mode Enabled").
+**FR-04.1** Each diagram block is rendered by calling `mermaid.render(id, source)` (or `mermaid.renderAsync`, whichever the bundled version exposes). The result is an SVG string, which is injected into a container `<div>` via `innerHTML`. The container `<div>` is the widget's DOM element.
 
-**FR-03.A.3** The section header reads "Commands."
+**FR-04.2** The SVG container has `class="cm-mermaid-block"`. It is styled to be `display: block`, horizontally scrollable for wide diagrams, and horizontally centered within the editor's content width.
 
-**FR-03.B: Heading Jumps (Category B)**
+**FR-04.3** Mermaid rendering is asynchronous (returns a Promise). The `toDOM()` method on the widget must handle the async nature: it must return a placeholder `<div>` immediately and update it once the render resolves. This deferred-render approach avoids blocking the CM6 render cycle. (The Architect must specify the exact deferred-DOM-update strategy.)
 
-**FR-03.B.1** Category B scans the current open document for ATX headings (lines beginning with one to six `#` characters followed by a space and heading text). Each heading produces one result.
+**FR-04.4** Each widget instance carries the Mermaid source string. The `eq()` method compares source strings so CM6 can reuse the DOM node when the source has not changed (cursor movement that does not modify the block should not re-render the SVG).
 
-**FR-03.B.2** Results display:
-- The heading text (stripped of leading `#` characters and the space).
-- A visual indicator of heading level (e.g., an H1/H2/H3... badge, or indentation proportional to level).
-- No keybinding badge.
+**FR-04.5** Widget DOM element `ignoreEvent()` returns `false`, allowing mouse clicks to pass through to CM6, which moves the cursor into the block range and triggers source reveal.
 
-**FR-03.B.3** Results are shown in document order (top to bottom), not sorted alphabetically. The fuzzy filter applies to the heading text.
+**FR-04.6** Each Mermaid render call requires a unique element ID. The plugin must generate stable, unique IDs per block to avoid Mermaid's internal ID-collision errors. IDs should be deterministic based on block position or a document-stable hash (the Architect specifies the approach).
 
-**FR-03.B.4** Activating a heading result moves the CM6 cursor to the first character of that heading line AND scrolls it into view. The bar closes after activation (FR-01.2).
+### FR-05: Error Display
 
-**FR-03.B.5** The heading scan reads from the live CM6 document state (`window.__CM_STATE__`) to ensure it reflects unsaved edits. It is NOT a file-system scan.
+**FR-05.1** When Mermaid rendering fails (thrown error or rejected Promise), the widget displays an error placeholder `<div class="cm-mermaid-error">` with:
+- The text "Diagram error" as the visible label.
+- The raw Mermaid source shown in a `<pre>` block below the label, or available via `title` attribute on hover, so the user can identify and fix the syntax.
 
-**FR-03.B.6** If the current document has no headings, category B shows no results and no section header is rendered for that category (the section collapses entirely).
+**FR-05.2** Error placeholders use CSS variables for theme compatibility: `--mermaid-error-color` (with fallback `#c0392b` or equivalent).
 
-**FR-03.B.7** The section header reads "Headings."
+**FR-05.3** The error placeholder has `cursor: help` to signal to the user that there is actionable information available (hover or click to edit).
 
-**FR-03.C: Recent Files (Category C)**
+**FR-05.4** Moving the cursor into the error placeholder's range reveals the raw source for editing, identical to the non-error path.
 
-**FR-03.C.1** Category C lists recently opened files sourced from `window.__MARKABLE_TAB_MANAGER__`'s recent-files list (same source as the "Open Recent" native submenu). Each file produces one result.
+### FR-06: Source-Mode Guard
 
-**FR-03.C.2** Results display:
-- The filename (basename only, e.g., `"my-note.md"`).
-- The abbreviated directory path (e.g., `"~/Documents/Notes/"`), displayed as secondary text below or beside the filename.
-- No keybinding badge.
+**FR-06.1** The `buildDiagramDecorations()` function checks `window.__MARKABLE_PREVIEW_ENABLED__` before processing any ranges. If false, it returns `Decoration.none` immediately with no Lezer tree walk.
 
-**FR-03.C.3** Results are shown in recency order (most recently accessed first).
+**FR-06.2** This guard applies to both the `create` and `update` paths of the `StateField`.
 
-**FR-03.C.4** Activating a recent-file result opens that file in a new tab (using the same mechanism as "Open Recent" in the File menu). The bar closes after activation.
+**FR-06.3** When preview mode is toggled back on after being off, the next `tr.docChanged` or `tr.selection` event triggers a full recomputation and diagrams re-render.
 
-**FR-03.C.5** If no recent files exist, category C shows no results and its section header collapses.
+### FR-07: Theme Awareness
 
-**FR-03.C.6** The section header reads "Recent Files."
+**FR-07.1** Mermaid exposes a `theme` configuration option accepting values `"default"`, `"dark"`, `"neutral"`, `"forest"`, `"base"`. The plugin must select the appropriate Mermaid theme based on the active Markable theme.
 
-### FR-04: Plugin Toggle Dual-Result Pattern
+**FR-07.2** The mapping strategy: the plugin reads the current computed background color of the editor container (via `getComputedStyle` on a known element) and determines dark vs. light mode. Dark mode maps to Mermaid `"dark"` theme; light mode maps to Mermaid `"default"` theme. The Architect may refine this with a CSS variable check (e.g., reading a dedicated `--color-scheme` variable if one exists in the theme system).
 
-**FR-04.1** For each plugin that is currently registered and available, the Command Bar generates TWO command entries in Category A:
+**FR-07.3** When the active theme changes (detected via the `__MARKABLE_HANDLE_ACTION__` dispatch for theme-switch actions, or via a MutationObserver on `document.body`'s class/attribute), rendered diagrams must re-render with the new theme. The StateField recompute cycle handles this if the plugin triggers a CM6 transaction on theme change.
 
-- **Action result**: Label reads `"[Plugin Name] Enabled"` when the plugin is currently disabled (activating it will enable it), or `"[Plugin Name] Disabled"` when the plugin is currently enabled (activating it will disable it). This result executes the enable/disable toggle action.
-- **Navigate result**: Label reads `"[Plugin Name]"` (the plugin name alone, no qualifier). Activating this result opens the Plugins Panel and scrolls/focuses the plugin's detail entry. It does not toggle the plugin state.
+**FR-07.4** Mermaid's `initialize()` must be called before the first render. Re-initialization with a new theme configuration is required when the theme changes. The Architect must specify whether Mermaid supports re-initialization or requires re-import.
 
-**FR-04.2** The two results are adjacent in the result list (the action result appears first, the navigate result second).
+**FR-07.5** The SVG container background must not be hardcoded white. Mermaid's SVG output sets its own background; the plugin must not override it with a conflicting color.
 
-**FR-04.3** The "navigate" result is always available, even when no file is open (it navigates to the Plugins Panel, which is UI — not file-dependent). The "action" result follows the context-invalid rule in FR-05 if toggling requires an active editor context, but for most plugins it does not (plugin enable/disable does not require a file to be open).
+### FR-08: Plugin Settings
 
-**FR-04.4** This pattern applies to plugins in the `COMMANDS` array that correspond to plugin toggles (e.g., `view-toggle-focus`, `view-toggle-typewriter`). The Architect must enumerate the complete set of eligible plugins and define the label mapping.
+**FR-08.1** The plugin exposes the following settings (persisted via `api.loadSettings()` / `api.saveSettings()`):
 
-### FR-05: Context-Invalid Actions
+| Setting Key | Type | Default | Description |
+|---|---|---|---|
+| `mermaidTheme` | `"auto" \| "dark" \| "default" \| "neutral" \| "forest"` | `"auto"` | Override Mermaid theme. `"auto"` uses theme-detection logic (FR-07.2). |
+| `maxRenderWidth` | `number` | `900` | Maximum SVG container width in pixels. Diagrams wider than this scroll horizontally. |
+| `showErrorSource` | `boolean` | `true` | When true, error placeholder shows the raw source in a `<pre>` block. When false, shows only "Diagram error." |
 
-**FR-05.1** Some commands are only meaningful when a file is open (e.g., `"Save"`, heading jumps). When no file is open (all tabs are untitled or no tabs exist), such commands are shown in the result list but rendered as dimmed/disabled. They cannot be activated while dimmed.
+**FR-08.2** Settings are loaded in `onEnable` via `api.loadSettings()`. If null (first run), defaults above are used.
 
-**FR-05.2** Dimmed results are skipped when navigating with arrow keys (they are not selectable via keyboard).
+**FR-08.3** Settings UI is provided in the plugin detail view via the `renderDetailExtra` hook on the `UnifiedPlugin` descriptor.
 
-**FR-05.3** The set of context-invalid commands (when no file is open) includes at minimum:
-- All format commands (bold, italic, etc.).
-- File-related commands that require a file path: Save, Save As, Export.
-- All Category B results (heading jumps require an open document).
+### FR-09: Bundle Size Strategy
 
-**FR-05.4** Commands that are always valid regardless of file context include: New, Open, Open Recent, Close All, and all plugin navigate-results (FR-04.1).
+**FR-09.1** Mermaid's minified bundle is approximately 2.5 MB. The current `read_plugin_file` Rust command enforces a 500 KB cap. This is a hard blocker that must be resolved before the plugin can be loaded.
 
-### FR-06: Keyboard Navigation and Execution
+**FR-09.2** Three candidate strategies exist. The Architect must choose one and document the decision in the architecture spec:
 
-**FR-06.1** Arrow keys (Up / Down) navigate through the visible, non-dimmed results. Navigation wraps: pressing Down on the last result moves to the first; pressing Up on the first result moves to the last.
+**Strategy A — Raise the Rust cap.** Modify `read_plugin_file` in `src-tauri/src/commands/plugins.rs` to raise `MAX_BYTES` from 500 KB to a value that accommodates the full Mermaid bundle (3 MB or higher to provide headroom). This is the simplest approach. The tradeoff is that the cap no longer protects against accidentally large user plugins; a separate per-kind cap (core vs. user) could mitigate this.
 
-**FR-06.2** Enter activates the currently selected result. The bar closes immediately after activation.
+**Strategy B — Tauri `asset://` protocol for Mermaid.** Bundle Mermaid as a static `.js` file in `src-tauri/plugins/core/` or `src-tauri/resources/` and load it via `<script src="asset://...">` injection rather than via `read_plugin_file`. The plugin IIFE itself would be small (< 50 KB) and only contain the CM6 StateField and widget logic; Mermaid would be loaded as a separate asset. This avoids modifying the file-size cap entirely. The tradeoff is increased complexity: the plugin must defer execution until the Mermaid script has loaded, and the asset URL must be resolved via `window.__MARKABLE_CONVERT_FILE_SRC__` or a new Tauri protocol handler.
 
-**FR-06.3** On open, the first non-dimmed result in the list is pre-selected.
+**Strategy C — Split IIFE (chunked load).** Mermaid is imported dynamically inside `onEnable` using a Tauri `invoke` call that reads the Mermaid bundle in chunks or via a streaming read command. This is the most complex strategy and is not recommended unless Strategies A and B are ruled out.
 
-**FR-06.4** Tab may optionally advance selection (the Architect decides). If implemented, Tab and Shift-Tab navigate forward/backward respectively.
+**FR-09.3** Strategy A is the recommended default. The Architect should verify whether a per-kind cap (larger for core, 500 KB for user) is a worthwhile guard before prescribing the exact new limit.
 
-**FR-06.5** Mouse hover highlights a result. Mouse click activates the result. The bar closes immediately.
+**FR-09.4** Regardless of the chosen strategy, the Mermaid library must be bundled or loaded in a way that makes it available synchronously at `onEnable` time (or deferred but resolved before the first render attempt). It must not block the app startup path.
 
-**FR-06.6** There is no "multi-select" or "batch execute." One result is activated per open.
+### FR-10: Plugin Lifecycle
 
-### FR-07: Settings
+**FR-10.1** Plugin file: `src/plugins/diagrams/diagrams.plugin.ts`
 
-**FR-07.1** The plugin exposes three boolean settings controlling which result categories are shown:
-
-| Setting Key | Default | Description |
-|---|---|---|
-| `showCommands` | `true` | Show Category A (Commands) in results |
-| `showHeadings` | `true` | Show Category B (Heading jumps) in results |
-| `showRecentFiles` | `true` | Show Category C (Recent files) in results |
-
-**FR-07.2** Settings are loaded via `api.loadSettings()` in `onEnable` and saved via `api.saveSettings()` when changed via settings UI.
-
-**FR-07.3** A disabled category is entirely absent from the result list (not dimmed — truly absent). If all three categories are disabled, the bar opens with an empty list and displays a "No results" placeholder.
-
-**FR-07.4** Settings UI is provided in the plugin detail view (toggle checkboxes for each category).
-
-### FR-08: Visual Design
-
-**FR-08.1** The Command Bar is a floating modal overlay, centered horizontally and positioned in the upper third of the window vertically. It is not attached to any sidebar, toolbar, or status bar.
-
-**FR-08.2** Maximum result list height is capped (e.g., 8–12 visible rows). When results exceed the cap, the list scrolls. The Architect chooses the exact cap value.
-
-**FR-08.3** The overlay has a backdrop (semi-transparent dark scrim) covering the editor area. Clicking the backdrop closes the bar.
-
-**FR-08.4** The input field is styled consistently with the app's existing UI variables (`--ui-font`, `--accent-color`, etc.). No hardcoded font stacks.
-
-**FR-08.5** Section headers (category labels) are visually distinct from result rows (e.g., smaller text, muted color, non-selectable).
-
-**FR-08.6** The selected result row is highlighted with `--accent-color` or a theme-compatible highlight variable.
-
-**FR-08.7** Keybinding badges in command results use `--key-font` (already defined in `:root`).
-
-### FR-09: Plugin Lifecycle
-
-**FR-09.1** The plugin file is: `src/plugins/command-bar/command-bar.plugin.ts`.
-
-**FR-09.2** Plugin metadata:
-- `id`: `"command-bar"`
-- `name`: `"Command Bar"`
+**FR-10.2** Plugin metadata:
+- `id`: `"diagrams"`
+- `name`: `"Diagrams"`
 - `version`: `"1.0.0"`
-- `description`: `"Fuzzy command palette for commands, headings, and recent files"`
+- `description`: `"Render Mermaid diagrams in live preview mode"`
+- `detail`: describing the supported diagram types and the cursor-on-reveal interaction.
 
-**FR-09.3** `onEnable` sequence:
-1. Inject plugin CSS as a `<style>` tag (idempotent, guarded by element id).
-2. Build the overlay DOM and attach to `document.body` (hidden initially).
-3. Register the `keydown` listener that responds to Cmd-Shift-P (or the user's remapped key).
+**FR-10.3** `onEnable` sequence:
+1. Load settings via `api.loadSettings()`.
+2. Initialize Mermaid (`mermaid.initialize()`) with the resolved theme.
+3. Inject plugin CSS (`<style>` tag, idempotent, guarded by element ID).
+4. If Strategy B (asset:// load): inject a `<script>` tag pointing to the Mermaid asset URL and wait for it to load before proceeding.
+5. Construct a fresh `StateField` instance (factory, not module-level constant).
+6. Register the StateField via `api.addExtensions([diagramsField])`.
+7. Register a theme-change listener (MutationObserver or action dispatch hook) to trigger re-initialization and StateField recompute on theme switches.
 
-**FR-09.4** `onDisable` sequence:
-1. Remove the overlay DOM from `document.body`.
-2. Remove the `keydown` listener.
-3. Remove injected CSS `<style>` tag.
+**FR-10.4** `onDisable` sequence:
+1. `api.removeExtensions()` — removes the StateField and all diagram decorations.
+2. Remove injected CSS `<style>` tags.
+3. If Strategy B: remove the injected `<script>` tag for Mermaid.
+4. Remove the theme-change listener.
+5. Clear module-level state references to null.
 
-**FR-09.5** The `"command-bar-open"` entry must be added to the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` as part of this feature. Default key: `"Cmd-Shift-P"`. Section: `"View"`.
+**FR-10.5** The plugin must be added to `scripts/build-plugins.mjs`'s `PLUGINS` array:
+`["diagrams", "src/plugins/diagrams/diagrams.plugin.ts"]`
 
-**FR-09.6** The `handleAction()` dispatch in `main.ts` must handle `"command-bar-open"` by calling the plugin's open function (or a global the plugin registers at enable time).
+**FR-10.6** The plugin must be added to the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` as a toggle command (id: `"view-toggle-diagrams"`, defaultKey: `""`, section: `"View"`) consistent with other plugin toggles. This makes it discoverable and toggleable via the Command Bar.
+
+### FR-11: Command Bar Discoverability
+
+**FR-11.1** Because the Command Bar (FC2 #11) reads from the `COMMANDS` array at open time and generates dual-results for plugin toggles, the Diagrams plugin is automatically discoverable in the Command Bar once its toggle command is added to the array (FR-10.6). No additional Command Bar work is required.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-01: Open Latency** — From Cmd-Shift-P keydown to the overlay being visible and focused must be under 80ms. Command list rebuild (reading `COMMANDS` array + plugin states + heading scan + recent files) must complete synchronously within this budget for documents up to 500 headings.
+**NFR-01: Initial Render Latency** — From cursor leaving a mermaid block to the SVG widget being visible must be under 300ms for diagrams with fewer than 100 nodes. Mermaid's async render call may take longer for complex diagrams; the user must see a loading placeholder within 16ms (one frame) while the async render completes.
 
-**NFR-02: Fuzzy Filter Latency** — From last keystroke to updated result list render must be under 50ms for result sets up to 300 items. Debounce is not required (synchronous update is preferred for responsiveness at this scale).
+**NFR-02: Re-render on Edit** — After the user edits mermaid source and moves the cursor away, the updated SVG must render within 500ms. Debounce of 200–300ms on the StateField recompute is acceptable for large documents to avoid re-rendering on every keystroke while the cursor is outside the block.
 
-**NFR-03: IIFE Self-Containment** — All IIFE plugin rules apply: no app-internal module imports at runtime, CM6 accessed via window globals only, CSS injected via `<style>` tag.
+**NFR-03: IIFE Self-Containment** — All IIFE plugin rules apply. No app-internal module imports at runtime. CM6 accessed via window globals only (`__CM_VIEW__`, `__CM_STATE__`, `__CM_LANGUAGE__`). CSS injected via `<style>` tags. Mermaid accessed via the bundled or asset-loaded library.
 
-**NFR-04: Theme Compatibility** — All colors, fonts, and spacing use CSS variables from `:root`. No hardcoded hex values or font names.
+**NFR-04: Theme Compatibility** — All plugin-defined CSS uses variables from `:root`. No hardcoded hex values or font names except as fallbacks in `var()` declarations.
 
-**NFR-05: Accessibility Basics** — The overlay must:
-- Trap focus while open (Tab/Shift-Tab must not escape to the editor or browser chrome).
-- Return focus to the editor's CM6 view when closed.
-- The input element carries `role="combobox"` and `aria-expanded`; the result list carries `role="listbox"`; each result row carries `role="option"` and `aria-selected`.
-- The backdrop does not receive focus.
+**NFR-05: No Persistent DOM Leaks** — `onDisable` must remove all `<style>` tags, all SVG DOM nodes injected by widgets, and all event listeners registered during `onEnable`. The editor must return to a clean state after the plugin is toggled off.
 
-**NFR-06: No External Dependencies** — The fuzzy-match algorithm is implemented inline (no third-party fuzzy library). At this scale (< 300 items), a hand-written subsequence ranker is sufficient and avoids bundle bloat.
+**NFR-06: SVG Output Only** — The plugin uses Mermaid's SVG output mode. Canvas output is not acceptable: canvas elements cannot be serialized for export and do not integrate well with CM6 block decorations.
 
-**NFR-07: Single Instance** — Only one Command Bar overlay may exist in the DOM at any time. Re-opening while already open toggles it closed (FR-01.6), not stacks a second instance.
+**NFR-07: No Network Requests** — Mermaid rendering is entirely offline. The plugin must not make any HTTP requests. All resources (Mermaid library, fonts) are bundled or loaded from `asset://` protocol paths.
+
+**NFR-08: XSS Safety** — Mermaid diagram source is author-controlled content, not untrusted user input from a network. However, the SVG output must not be injected into the document in a way that allows embedded `<script>` elements to execute. The plugin must verify that Mermaid's SVG output is safe to inject via `innerHTML` (Mermaid strips scripts from its SVG output by default; the Architect must confirm this for the bundled version).
 
 ---
 
-## Architecture Decisions (Resolved)
+## Architecture Decisions (Pre-Resolved Constraints)
 
-**AD-01: Plugin vs. core feature** — The Command Bar is a core plugin (like focus-mode, templates). It is toggleable from the Plugins Panel. This is consistent with all FC2 features.
+These constraints are established by the codebase and must be encoded in the architecture spec, not re-debated.
 
-**AD-02: Keybinding registration** — `"command-bar-open"` is added to the `COMMANDS` array in `keybindings-panel.ts`. The document `keydown` handler in `main.ts` calls `resolveAction()`, which already checks the full `COMMANDS` array. The plugin hooks into this by handling `"command-bar-open"` in `handleAction()`. No separate event listener on `document` is needed beyond what already exists — however, since the plugin must add/remove its handler on enable/disable, it may register a supplementary keydown listener that checks the `command-bar-open` action id resolved from `resolveAction()`.
+**AD-01: IIFE plugin pattern** — The plugin is an IIFE bundle (`export default` object implementing `UnifiedPlugin`). No ESM imports at runtime. Built by `scripts/build-plugins.mjs` into `src-tauri/plugins/core/diagrams.js`.
 
-**AD-03: Command list source** — Category A reads directly from the exported `COMMANDS` array in `keybindings-panel.ts`. The Architect must ensure this array is exported (it currently is not exported — this is new work). Alternatively, the plugin can receive the command list via a global registered by the app at startup (`window.__MARKABLE_COMMANDS__`). The Architect chooses the cleanest approach.
+**AD-02: CM6 globals** — `__CM_VIEW__`, `__CM_STATE__`, `__CM_LANGUAGE__` are module namespaces, not instances. Instance methods (`dispatch()`, `focus()`, `.doc`) are only available on `window.__MARKABLE_EDITOR_VIEW__`. The plugin destructures CM6 class constructors from these globals at IIFE evaluation time.
 
-**AD-04: Heading scan** — Reads from `window.__CM_STATE__` (the live CM6 document state) using a line-by-line scan for `# ` prefixes. The lezer AST is not required for this scan — a simple regex per line (`/^(#{1,6})\s+(.+)$/`) on `state.doc.iterLines()` is sufficient and simpler.
+**AD-03: Block decorations require StateField** — `ViewPlugin` is insufficient for multi-line block replacements. `StateField<DecorationSet>` with `block: true` decorations is mandatory.
 
-**AD-05: Recent files source** — Sourced from `window.__MARKABLE_TAB_MANAGER__`'s existing recent-files array (same array used by the "Open Recent" native submenu). The Architect must identify the exact accessor.
+**AD-04: Source-mode guard is mandatory** — `buildDiagramDecorations()` must check `window.__MARKABLE_PREVIEW_ENABLED__` and short-circuit to `Decoration.none` when false.
 
-**AD-06: Category section collapse** — When a category produces zero results after filtering, its section header is hidden (not rendered). This is a render-time decision, not a settings-level decision.
+**AD-05: Lezer AST for block detection** — Use `syntaxTree(state).cursor()` to walk `FencedCode` nodes (same pattern as media-preview plugin). This is preferred over a line-by-line text scan because the Lezer tree correctly excludes mermaid-tagged text inside inline code, blockquotes, and other contexts where a regex scan would false-positive.
 
-**AD-07: Fuzzy algorithm** — Implement a character-order subsequence ranker inline. The ranking tiers defined in FR-02.3 are the specification. The Architect proposes the implementation; the Lead Developer follows it.
+**AD-06: StateField factory** — The StateField is created inside a factory function called from `onEnable`, not as a module-level constant. This ensures fresh slot IDs on each enable/disable cycle.
+
+**AD-07: Async render deferred-DOM pattern** — Mermaid's render is async. `toDOM()` must return synchronously (CM6 requirement). The widget returns a placeholder div immediately and resolves the SVG into it when the Promise settles. The Architect must specify whether this uses a `requestAnimationFrame` update, a direct DOM mutation after `await`, or a separate ViewPlugin update cycle.
+
+**AD-08: Unique render IDs** — Mermaid requires a unique string ID per `render()` call. Use a module-level counter or a position-based hash to generate stable IDs. Unstable IDs (e.g., `Math.random()`) cause unnecessary re-renders when `eq()` on the widget returns true but Mermaid still creates a new SVG element.
+
+---
+
+## Integration Points
+
+| System | Integration | Notes |
+|---|---|---|
+| Plugin system (IIFE loader) | Plugin loaded as `plugins/core/diagrams.js` | Add to `build-plugins.mjs` PLUGINS array and `copy_core_plugins` bundle |
+| CM6 StateField | `api.addExtensions([diagramsField])` in `onEnable` | Block decoration pattern |
+| CM6 Lezer AST | `syntaxTree` from `window.__CM_LANGUAGE__` | FencedCode node detection |
+| `read_plugin_file` Rust command | Cap must be raised (FR-09) | Mermaid bundle ~2.5 MB; current cap is 500 KB |
+| `__MARKABLE_PREVIEW_ENABLED__` global | Checked in `buildDiagramDecorations()` | Source-mode guard |
+| `__MARKABLE_EDITOR_VIEW__` global | Used for triggering StateField recompute on theme change | Not `__CM_VIEW__` (that is a module namespace) |
+| Plugin settings persistence | `api.loadSettings()` / `api.saveSettings()` | Theme override, max width, error source display |
+| Plugin detail view | `renderDetailExtra` hook on `UnifiedPlugin` | Settings UI row |
+| COMMANDS array | Add `"view-toggle-diagrams"` toggle entry | Command Bar discoverability (FC2 #11) |
+| Plugins Panel | Automatic via plugin system | Toggle, detail view, sidebar assignment (not applicable — no sidebar panel) |
+
+---
+
+## Open Questions
+
+The following questions are unresolved and must be answered before architecture begins. The Architect may research and answer them as part of the architecture phase.
+
+**OQ-01: Bundle size strategy** — Which of the three strategies in FR-09.2 should be implemented? The Architect must evaluate Strategy A (raise Rust cap) versus Strategy B (asset:// load) and choose one. Recommendation: Strategy A with a per-kind cap (core plugins: 5 MB, user plugins: 500 KB) to preserve user-plugin safety while accommodating Mermaid.
+
+**OQ-02: Mermaid version** — What version of Mermaid should be bundled? The latest stable release at architecture time should be used. The Architect must verify that the chosen version supports all diagram types in FR-03.1 and produces safe SVG output (NFR-08).
+
+**OQ-03: Mermaid re-initialization** — Does `mermaid.initialize()` support being called multiple times in the same JS context with different configurations (e.g., switching from dark to light theme)? If not, does the plugin need to track "initialized theme" state and only re-initialize when the theme changes? The Architect must test this with the chosen Mermaid version.
+
+**OQ-04: Async render in toDOM()** — What is the cleanest pattern for deferred SVG injection into a CM6 widget DOM element? Options: (a) `toDOM()` sets up a Promise chain that mutates the placeholder div directly after `await mermaid.render()`; (b) the widget triggers a StateField update that replaces the placeholder decoration with the real SVG decoration. Option (a) is simpler but mutates DOM outside CM6's transaction model; option (b) is more correct but requires additional StateField machinery. The Architect must specify and justify the choice.
+
+**OQ-05: Mermaid SVG and dark mode** — Does Mermaid's `"dark"` theme produce correct SVG output when the SVG is embedded in a non-white DOM background? Are there known issues with SVG `currentColor` inheritance in Mermaid's output that require additional CSS overrides? The Architect should test against the two most common Markable themes.
+
+**OQ-06: `syntaxTree` FencedCode info node** — In the Lezer Markdown grammar, the language tag (e.g., `mermaid`) is accessible via the `CodeInfo` child node of `FencedCode`. The Architect must confirm the exact node type name in `@lezer/markdown` for the language tag and the content span, as this drives the detection implementation (FR-01.2).
 
 ---
 
 ## Out of Scope
 
-1. **Command preview pane** — A secondary panel showing a description or preview of the selected command. Deferred.
-2. **Recent searches / search history** — Persisting the last N queries. The bar always opens empty (FR-01.4).
-3. **Command aliases** — Alternate names or abbreviations for commands. Not supported in this iteration.
-4. **Snippet insertion via Command Bar** — Templates are accessed via the File menu / Templates plugin. The Command Bar does not insert content snippets.
-5. **Plugin installation from Command Bar** — The bar navigates to the Plugins Panel (FR-04.1 navigate result) but does not itself install or download plugins.
-6. **File creation from Command Bar** — Typing a filename and pressing Enter to create a new file. This is a "new file" shortcut; use Cmd-N or the File menu instead.
-7. **Cross-vault / multi-workspace search** — The bar operates on the current open window only.
-8. **Inline calculator or URL launcher** — No "smart" result types beyond the three categories.
-9. **Result count badge** — A total count of results is not required in the UI.
-10. **Persistent window state** — The bar always opens fresh. No memory of scroll position in the result list.
+1. **Excalidraw** — FC3 #17, separate plugin.
+2. **Mermaid `%%{init}` configuration** — per-diagram initialization overrides. Deferred.
+3. **Per-diagram SVG export** — handled by Extended Exports (FC2 #16).
+4. **Diagram click-to-edit shapes** — raw source only, no visual editing.
+5. **Mermaid Live Editor URL launch** — no external browser integration.
+6. **Syntax highlighting inside mermaid fences** — the raw source is plain text when revealed. No custom Lezer grammar for Mermaid syntax tokens.
+7. **Diagram caching across sessions** — diagrams are re-rendered on each document open. No persistent SVG cache.
+8. **Mermaid `securityLevel` configuration** — the Architect sets an appropriate `securityLevel` value in `mermaid.initialize()`. End users cannot override it via plugin settings.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-01: No file open, heading jump requested** — Category B results are shown dimmed when no file is open (FR-05.3). If the user somehow activates one (e.g., via a race condition), nothing happens — the handler must guard against a null `__CM_STATE__`.
+The following edge cases are the mandatory test checklist for the Code Reviewer. Every item must be covered by a test or a documented manual verification step.
 
-**EC-02: No file open, format command selected** — Format commands are dimmed (FR-05.3) and cannot be activated via keyboard (FR-05.2). Mouse click on a dimmed result must be a no-op.
+**EC-01: Empty mermaid block** — A ` ```mermaid ` fence with no content (empty lines only between fences). Expected: Mermaid receives an empty string. The result is either an empty SVG, a Mermaid error, or a blank render. The error path (FR-05) handles any failure gracefully; no crash.
 
-**EC-03: Document with no headings** — Category B produces zero results. Its section header is not rendered (AD-06). The bar opens showing only Categories A and C (if enabled).
+**EC-02: Block with only whitespace content** — Same as EC-01 but with spaces/tabs between fences. Expected: same behavior as EC-01.
 
-**EC-04: Query matches zero results across all categories** — The result list is empty. A "No results" placeholder is shown in place of the list (no empty whitespace). The placeholder is not selectable.
+**EC-03: Unclosed fence (no closing ```)** — The opening ` ```mermaid ` line exists but there is no closing fence before end-of-document. Expected: no decoration is produced for this block. The raw source remains visible. (Lezer's FencedCode node does not produce a well-formed node for unclosed fences; the detection logic must handle this gracefully.)
 
-**EC-05: Cmd-Shift-P pressed while bar is already open** — Bar closes. Focus returns to the CM6 editor. No second overlay is created.
+**EC-04: Invalid Mermaid syntax** — A closed fenced block with valid fence delimiters but invalid Mermaid content (e.g., `graph TD\n  A --INVALID--> B`). Expected: Mermaid render rejects with an error. Error placeholder displayed (FR-05). Raw source revealed on cursor entry.
 
-**EC-06: Escape pressed while input is empty** — Bar closes. This must be consistent: Escape always closes, regardless of input content.
+**EC-05: Very large diagram** — A flowchart with 500+ nodes. Expected: the async render completes eventually (may exceed NFR-01 timing; a loading placeholder must be shown). The editor must not freeze or become unresponsive while Mermaid renders.
 
-**EC-07: Very long command label** — A label that overflows the result row width. Expected: the row clips or truncates with an ellipsis. The row height does not expand. The full label is visible on hover via `title` attribute or tooltip.
+**EC-06: Multiple diagrams in document** — Three or more mermaid blocks. Expected: all render independently. Cursor inside block 2 reveals block 2's source; blocks 1 and 3 remain rendered as SVG.
 
-**EC-08: Very long heading text** — Same treatment as EC-07.
+**EC-07: Diagram immediately after YAML front matter** — A mermaid block at the very top of the document, below a `---` YAML fence. Expected: the Lezer tree correctly identifies this as a FencedCode node (not confused by the YAML fence). Renders correctly.
 
-**EC-09: Heading text contains Markdown syntax** — `## **Bold Heading**`. The scan produces the raw heading text including Markdown tokens. The result displays `**Bold Heading**` as plain text (no rendering of bold). This is acceptable.
+**EC-08: Mermaid block inside blockquote** — ` > ```mermaid ` syntax. Expected: the Lezer tree walks blockquote-contained FencedCode nodes. The plugin must handle this case (render or skip — the Architect decides whether blockquote diagrams are supported; if skipped, the block remains as raw source with no crash).
 
-**EC-10: Fuzzy match highlight on a label with special HTML characters** — A label containing `<`, `>`, or `&` (unlikely but possible in future command names). The highlight rendering must not inject raw HTML. Use `textContent` or escape the label before inserting match highlights.
+**EC-09: Source-mode toggle while cursor is inside a diagram block** — User disables preview mode while their cursor is in a mermaid block. Expected: the decoration is not applied (guard fires), the raw source is visible. Re-enabling preview mode with cursor still inside the block: the block is visible as raw source (cursor overlap suppresses the decoration). Moving the cursor away: the diagram renders.
 
-**EC-11: Arrow key navigation skips all results (all dimmed)** — When no file is open and all Category A format commands are dimmed, and Categories B and C are empty or disabled, arrow key navigation has nothing to land on. The bar should handle gracefully: no selection, Enter does nothing.
+**EC-10: Theme switch while diagrams are rendered** — User switches theme from light to dark (or vice versa). Expected: all rendered diagrams re-render with the new Mermaid theme. No old-theme SVG artifacts remain.
 
-**EC-12: Tab closes while bar is open** — The active tab closes (Cmd-W). The bar must close defensively and return focus cleanly. No stale reference to the now-closed tab's state.
+**EC-11: Plugin disabled while diagrams are rendered** — User toggles the Diagrams plugin off from the Plugins Panel. Expected: all SVG widgets are removed from the editor. The raw fenced blocks are visible. No SVG DOM nodes remain. Re-enabling the plugin re-renders all diagrams.
 
-**EC-13: Plugin toggled off while bar is open** — A race scenario: the user triggers plugin disable from another path (unlikely in practice, but the bar must not crash if the plugin list changes mid-session). On next open the list rebuilds fresh (FR-03.A.2).
+**EC-12: Enable/disable cycle (rapid toggle)** — Plugin enabled, disabled, and re-enabled in quick succession. Expected: no duplicate StateFields, no duplicate CSS style tags, no duplicate Mermaid initialization. Each enable cycle starts from a clean state.
 
-**EC-14: Cmd-Shift-P is remapped** — The user remaps `"command-bar-open"` to a different key in the Keybindings panel. The new key must open the bar. The old key (Cmd-Shift-P) must not. The plugin's keydown handler must read the current resolved keybinding, not hard-code `"Cmd-Shift-P"`.
+**EC-13: Diagram source edited while cursor is inside** — User edits the mermaid source. When they move the cursor away, the updated source is rendered. Expected: the `eq()` comparison on the widget detects that the source has changed and creates a new render. The old SVG is replaced with the new one.
 
-**EC-15: Cmd-Shift-P conflicts with another command** — The user remaps another command to Cmd-Shift-P, creating a conflict. The Keybindings panel's existing conflict detection system handles this (it already highlights conflicts). The Command Bar itself has no special behavior here — it follows the standard resolution order (`resolveAction`: custom bindings first, then defaults).
+**EC-14: Diagram source unchanged, cursor moves in and out** — User moves cursor into a mermaid block and immediately back out without editing. Expected: `eq()` returns true on the re-created widget (same source), CM6 reuses the existing DOM node, and no re-render of the SVG occurs.
 
-**EC-16: Recent files list is empty (first launch)** — Category C produces zero results. Its section header collapses (AD-06). The bar opens with only Categories A and B visible.
+**EC-15: Mermaid render produces an SVG with embedded `<script>` tags** — A maliciously crafted or edge-case diagram source that causes Mermaid's SVG output to include a `<script>` element. Expected: the plugin's `innerHTML` injection must not execute the script. (Mermaid strips scripts by default; the Architect must verify this claim for the bundled version and document the finding. If not guaranteed, the plugin must sanitize the SVG output before injection.)
 
-**EC-17: Recent file no longer exists on disk** — A file in the recent list has been deleted. The result is shown in the bar. Activating it triggers the same error path as "Open Recent" on a missing file (error dialog or notification). The Command Bar does not pre-validate file existence.
+**EC-16: Mermaid library load failure** — Strategy B only: the `<script>` tag for the Mermaid asset fails to load (asset file missing or corrupt). Expected: `onEnable` must detect the failure, log an error, and leave the editor in a clean state (no StateField registered, no broken references to an unavailable `mermaid` global). The plugin should display a warning in the Plugins Panel detail view if possible.
 
-**EC-18: All three categories disabled in settings** — The bar opens with an empty list and the "No results" placeholder. The bar is still functional (the user can type a query and see the placeholder, then re-enable categories in plugin settings).
+**EC-17: Mermaid block content contains HTML entities** — Diagram source containing `&`, `<`, `>` in label text (e.g., `A["value < 10"]`). Expected: Mermaid handles these as part of its own parsing. The plugin passes the raw source string to `mermaid.render()` without pre-escaping. Mermaid's output SVG is correct.
 
-**EC-19: Command Bar plugin disabled via Plugins Panel** — The overlay is removed from the DOM. Pressing Cmd-Shift-P does nothing (the keydown listener is removed). The `"command-bar-open"` entry remains in the `COMMANDS` array (it is still remappable in the Keybindings panel), but the action handler is a no-op when the plugin is disabled.
+**EC-18: Extremely wide diagram (overflows content area)** — A sequence diagram or Gantt chart that renders wider than `maxRenderWidth` pixels. Expected: the SVG container scrolls horizontally (CSS `overflow-x: auto` on `.cm-mermaid-block`). The surrounding editor layout is not broken.
 
-**EC-20: Rapid open/close toggles** — User presses Cmd-Shift-P multiple times quickly. Expected: no duplicate overlays, no focus trapping errors, no stale event listeners. Each open/close cycle must be idempotent.
+**EC-19: Render ID collision** — Two mermaid blocks in the same document that somehow generate the same render ID (edge case in the ID generation strategy). Expected: Mermaid detects the ID collision and throws an error, which the error path (FR-05) handles. The ID generation strategy must be designed to make this practically impossible (the Architect specifies the strategy — see AD-08).
 
-**EC-21: Input field receives a paste of a long string** — The user pastes a 500-character string. Expected: the query is used as-is for fuzzy matching. Performance must stay within NFR-02 bounds. Result: likely zero matches; "No results" placeholder shown.
+**EC-20: Document with zero mermaid blocks** — The plugin is enabled but the document has no mermaid fences. Expected: the Lezer tree walk produces no results; `Decoration.none` is returned; no performance regression. The StateField update path is O(N) in document size but effectively a no-op for non-mermaid documents.
 
-**EC-22: Document is very large (500+ headings)** — Category B scan must complete within NFR-01's 80ms budget. A line-by-line regex scan (AD-04) is O(n) in document length; 500 headings in a 50,000-line document should complete well within budget. The Architect must verify.
+**EC-21: Mermaid block at end of document with no trailing newline** — The closing fence is the last byte of the document with no `\n` after it. Expected: Lezer still produces a valid FencedCode node; the `to` offset is at the document's last position; the decoration is applied correctly.
 
-**EC-23: Highlight rendering with non-consecutive match characters** — A query like `"fcs"` matches `"Focus Mode"` at positions 0, 2, 4. The highlight must mark exactly those three characters, not a contiguous run. The implementation must not accidentally highlight a superset or produce malformed DOM.
+**EC-22: Tab switch while a diagram is being rendered** — The user switches to a different tab while Mermaid's async render is in flight. Expected: when the async render completes, its DOM mutation targets the widget placeholder. If the widget is no longer in the active view (tab switched), the mutation should be harmless (the DOM node is detached). No error is thrown; no crash.
 
-**EC-24: Focus Mode "action" result label accuracy** — When Focus Mode is currently ON, the action result label must read `"Focus Mode Disabled"` (activating will disable it). When OFF, `"Focus Mode Enabled"` (activating will enable it). The label reflects the action that will occur, not the current state. The Command Bar must read the current plugin enabled/disabled state at rebuild time.
+**EC-23: Settings load returns null (first run)** — `api.loadSettings()` returns null. Expected: all default values from FR-08.1 are used. The plugin initializes correctly with defaults and does not attempt to read properties from a null object.
 
-**EC-25: Plugin with no keybinding (defaultKey: "")** — Several commands (`view-toggle-statusbar`, `view-toggle-focus`, `view-toggle-typewriter`) have `defaultKey: ""`. Their result rows must not display a keybinding badge. No empty badge or phantom whitespace should appear.
+**EC-24: Settings save failure** — `api.saveSettings()` rejects (e.g., disk full). Expected: the plugin logs the error but continues running. The in-memory settings remain active for the session; on next launch, the default or previously saved values are used.
 
-**EC-26: Window loses focus while bar is open** — The user Cmd-Tabs to another app. On return, the overlay is still open and the input field should regain focus. The bar does not auto-close on window blur (this would be jarring). The Architect may choose to close on blur; this must be specified in the architecture doc.
+**EC-25: Preview mode toggled rapidly** — User rapidly toggles between source and preview mode (e.g., via a keybinding). Expected: the StateField guard fires correctly on each toggle. No leftover decorations when source mode is active. No missing decorations when preview mode re-activates.
 
-**EC-27: Screen reader interaction** — With `role="combobox"` on the input and `role="listbox"` on the results (NFR-05), a screen reader must announce the selected result as the user navigates. `aria-activedescendant` on the input must point to the currently selected `role="option"` element.
-
-**EC-28: Heading at line 1 of document** — No special case. The heading scan is position-agnostic. Activating this result scrolls to line 1 and positions the cursor there.
-
-**EC-29: Duplicate heading text** — Two headings with identical text (e.g., two `## Notes` sections). Both appear as separate results. Activating the first jumps to the first occurrence; activating the second jumps to the second. They are distinguished by their document position, not their text.
-
-**EC-30: Category A rebuilds reflect mid-session plugin installs** — If the user installs a new user plugin while the app is open (hot-loaded), the next Command Bar open should include that plugin's toggle entries. Since the list is rebuilt on every open (FR-03.A.2), this is handled automatically provided the plugin manager's list is current at rebuild time.
+**EC-26: Mermaid `initialize()` called before library is available** — Strategy B timing issue: `onEnable` calls `mermaid.initialize()` before the `<script>` tag's `onload` fires. Expected: the plugin must await the library load before calling any Mermaid API. An `onload` or Promise-based guard is required.
 
 ---
 
@@ -344,10 +400,11 @@ Three categories of results are shown in the Command Bar. Each category is indep
 
 | Component | Target File | Notes |
 |---|---|---|
-| Command Bar plugin | `src/plugins/command-bar/command-bar.plugin.ts` (new) | IIFE plugin: overlay DOM, fuzzy ranker, category builders, keyboard navigation, focus trap, CSS injection |
-| Plugin build registration | `scripts/build-plugins.mjs` | Add `["command-bar", "src/plugins/command-bar/command-bar.plugin.ts"]` to PLUGINS array |
-| `"command-bar-open"` command entry | `src/keybindings/keybindings-panel.ts` | Add to `COMMANDS` array (id: `"command-bar-open"`, defaultKey: `"Cmd-Shift-P"`, section: `"View"`) |
-| `COMMANDS` array export | `src/keybindings/keybindings-panel.ts` | Export `COMMANDS` (or expose via a new window global) so the plugin can read command labels and default keys |
-| `handleAction()` dispatch | `src/main.ts` | Add `"command-bar-open"` case that calls the plugin's open function |
-| Plugin open function global | `window` | Plugin registers `window.__MARKABLE_COMMAND_BAR_OPEN__` (or equivalent) at enable time; `handleAction` calls it |
-| Command Bar tests | `tests/plugins/command-bar/command-bar.test.ts` (new) | Unit tests: fuzzy ranker tiers (FR-02.3), match highlight (FR-02.4), heading scan (FR-03.B), context-invalid dimming (FR-05), EC-04 empty results, EC-10 HTML escape, EC-23 non-consecutive highlight, EC-24 plugin label accuracy |
+| Diagrams plugin source | `src/plugins/diagrams/diagrams.plugin.ts` (new) | IIFE plugin: Lezer FencedCode detection, StateField, MermaidWidget, error placeholder, CSS injection, theme-change listener |
+| Diagrams plugin directory | `src/plugins/diagrams/` (new directory) | |
+| Plugin build registration | `scripts/build-plugins.mjs` | Add `["diagrams", "src/plugins/diagrams/diagrams.plugin.ts"]` to PLUGINS array |
+| Mermaid bundle | `src-tauri/plugins/core/` or `src-tauri/resources/` | Depends on bundle strategy (FR-09). If Strategy A: bundled into IIFE. If Strategy B: copied as a separate `.js` asset. |
+| Rust file-size cap | `src-tauri/src/commands/plugins.rs` | Raise `MAX_BYTES` in `read_plugin_file` (Strategy A) or add asset protocol handler (Strategy B) |
+| COMMANDS array toggle entry | `src/keybindings/keybindings-panel.ts` | Add `view-toggle-diagrams` to COMMANDS array |
+| handleAction dispatch | `src/main.ts` | Add `"view-toggle-diagrams"` case that calls `pluginManager.toggle("diagrams", ...)` |
+| Plugin tests | `tests/plugins/diagrams/diagrams.test.ts` (new) | Unit tests: FencedCode detection, cursor overlap suppression, EC-01 (empty block), EC-03 (unclosed fence), EC-04 (invalid syntax), EC-06 (multiple blocks), EC-09 (source-mode guard), EC-12 (enable/disable cycle), EC-13 (source changed re-renders), EC-14 (source unchanged reuses DOM), EC-20 (no mermaid blocks) |

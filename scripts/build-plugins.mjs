@@ -34,7 +34,11 @@ const outDir = resolve(root, "src-tauri/plugins/core");
 
 /**
  * Ordered list of plugins to build.
- * Each entry: [outputFileStem, relativePathToEntry]
+ * Each entry: [outputFileStem, relativePathToEntry, extraOptions?]
+ *   extraOptions.inlineDynamicImports — set true for plugins that bundle large
+ *   libraries with their own internal dynamic imports (e.g. Mermaid). When true,
+ *   Rollup inlines all dynamic import() calls into the IIFE output, which is
+ *   required because IIFE format does not support code-splitting (EC-31).
  * The first entry triggers the output directory clear (emptyOutDir: true).
  */
 const PLUGINS = [
@@ -49,6 +53,9 @@ const PLUGINS = [
   ["math",              "src/plugins/math/math.plugin.ts"],
   ["media-preview",     "src/plugins/media-preview/media-preview.plugin.ts"],
   ["command-bar",       "src/plugins/command-bar/command-bar.plugin.ts"],
+  // FC2 #9: Mermaid bundles ~2.5 MB and has internal dynamic imports.
+  // inlineDynamicImports: true is required for IIFE format compatibility.
+  ["diagrams",          "src/plugins/diagrams/diagrams.plugin.ts", { inlineDynamicImports: true }],
 ];
 
 /**
@@ -63,12 +70,21 @@ function clearOutputDir() {
 /**
  * Build a single plugin as a self-contained IIFE bundle.
  *
- * @param {string} name      - Output filename stem (e.g. "focus-mode" → "focus-mode.js")
- * @param {string} entryPath - Relative path from project root to the .plugin.ts file
+ * @param {string}  name      - Output filename stem (e.g. "focus-mode" → "focus-mode.js")
+ * @param {string}  entryPath - Relative path from project root to the .plugin.ts file
+ * @param {object}  [extra]   - Optional per-plugin overrides:
+ *   extra.inlineDynamicImports {boolean} — when true, Rollup inlines all dynamic
+ *     import() calls into the IIFE. Required for plugins that bundle libraries
+ *     (e.g. Mermaid) that use internal dynamic imports. IIFE format does not
+ *     support code-splitting, so any dynamic import must be inlined (EC-31).
  */
-async function buildPlugin(name, entryPath) {
+async function buildPlugin(name, entryPath, extra = {}) {
   const entry = resolve(root, entryPath);
   console.log(`Building ${name}.js ...`);
+
+  // inlineDynamicImports defaults to false (no-op for most plugins).
+  // Set to true for plugins whose bundled dependencies use dynamic imports.
+  const inlineDynamicImports = extra.inlineDynamicImports ?? false;
 
   await build({
     root,
@@ -105,8 +121,11 @@ async function buildPlugin(name, entryPath) {
         // which are safe inside the new Function() sandbox at runtime.
         external: [/^@codemirror\//],
         output: {
-          // Each plugin is a single file — no code splitting.
-          inlineDynamicImports: false,
+          // inlineDynamicImports: true is required when bundling libraries that
+          // use internal dynamic import() (e.g. Mermaid). IIFE format does not
+          // support code-splitting — all imports must be inlined into one file.
+          // For all other plugins false keeps the output identical to before.
+          inlineDynamicImports,
         },
       },
     },
@@ -121,9 +140,9 @@ clearOutputDir();
 
 let failed = false;
 
-for (const [name, entry] of PLUGINS) {
+for (const [name, entry, extra] of PLUGINS) {
   try {
-    await buildPlugin(name, entry);
+    await buildPlugin(name, entry, extra);
   } catch (err) {
     // EC-30: Report the failure and continue building remaining plugins so
     // the developer sees all errors in one run. Exit code will be non-zero.

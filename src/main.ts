@@ -654,6 +654,9 @@ function handleAction(action: string): void {
     case "view-toggle-typewriter":
       if (editor) void pluginManager.toggle("typewriter-mode", !pluginManager.getStates()["typewriter-mode"]);
       break;
+    case "view-toggle-diagrams":
+      if (editor) void pluginManager.toggle("diagrams", !pluginManager.getStates()["diagrams"]);
+      break;
     case "sidebar.toggleLeft":
       toggleSidebarSide("left");
       break;

@@ -69,6 +69,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "view-toggle-statusbar",  label: "Status Bar",      defaultKey: "",       section: "View" },
   { id: "view-toggle-focus",      label: "Focus Mode",      defaultKey: "",       section: "View" },
   { id: "view-toggle-typewriter", label: "Typewriter Mode", defaultKey: "",       section: "View" },
+  { id: "view-toggle-diagrams",   label: "Diagrams",        defaultKey: "",       section: "View" },
   { id: "sidebar.toggleLeft",  label: "Toggle Left Sidebar",  defaultKey: "Cmd-Shift-[", section: "View" },
   { id: "sidebar.toggleRight", label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
   // Format

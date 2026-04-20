@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@codemirror/basic-setup": "^0.20.0",
-    "katex": "^0.16.0",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.12.3",
     "@codemirror/language-data": "^6.5.2",
@@ -30,8 +29,10 @@
     "@tauri-apps/plugin-opener": "^2",
     "codemirror": "^6.0.2",
     "js-yaml": "^4.1.1",
+    "katex": "^0.16.0",
     "marked": "^18.0.0",
-    "marked-footnote": "^1.4.0"
+    "marked-footnote": "^1.4.0",
+    "mermaid": "^11.14.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

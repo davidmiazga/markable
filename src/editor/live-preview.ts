@@ -758,6 +758,22 @@ function buildDecorations(view: EditorView): DecorationSet {
             if (activeLines.has(ln)) { cursorInBlock = true; break; }
           }
           if (!cursorInBlock) {
+            // When the diagrams plugin is active, skip mermaid fenced blocks so
+            // the plugin's own block decoration renders without conflict.
+            // Same pattern as __MARKABLE_MEDIA_PREVIEW_ACTIVE__ for images.
+            /* eslint-disable @typescript-eslint/no-explicit-any */
+            if ((window as any).__MARKABLE_DIAGRAMS_ACTIVE__) {
+              const cur = node.node.cursor();
+              if (cur.firstChild()) {
+                do {
+                  if (cur.name === "CodeInfo") {
+                    const lang = state.doc.sliceString(cur.from, cur.to).trim().toLowerCase();
+                    if (lang === "mermaid") return false;
+                  }
+                } while (cur.nextSibling());
+              }
+            }
+            /* eslint-enable @typescript-eslint/no-explicit-any */
             handleFencedCode(node, state, decorations);
           }
         }
