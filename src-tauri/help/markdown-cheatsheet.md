@@ -215,6 +215,8 @@ Three dashes on their own line:
 
 **Inline math:** `$E = mc^2$`
 
+$E = mc^2$
+
 **Block math:**
 ```
 $$
@@ -222,7 +224,11 @@ $$
 $$
 ```
 
-> Math is inserted as syntax only in Phase 1 — rendering requires a future plugin.
+$$
+\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}
+$$
+
+> Enable the **Math** plugin to render equations using KaTeX.
 
 ---
 
