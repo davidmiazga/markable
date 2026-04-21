@@ -111,21 +111,21 @@ describe("formatValue", () => {
     expect(formatValue(1, 1, "", 4)).toBe("5");
   });
 
-  // EC-10: no token in wrap → number appended after the wrap string.
-  it("appends number after wrap string when no __COUNTER__ token", () => {
+  // EC-10: no "#" token in pattern → number appended after the pattern string.
+  it("appends number after pattern string when no # token", () => {
     expect(formatValue(1, 1, "Item ", 0)).toBe("Item 1");
     expect(formatValue(1, 1, "Item ", 2)).toBe("Item 3");
   });
 
-  // EC-11: single __COUNTER__ token → replaced with number.
-  it("replaces __COUNTER__ token with number", () => {
-    expect(formatValue(1, 1, "Step __COUNTER__:", 2)).toBe("Step 3:");
+  // EC-11: single "#" token → replaced with number.
+  it("replaces # token with number", () => {
+    expect(formatValue(1, 1, "Step #:", 2)).toBe("Step 3:");
   });
 
-  // EC-12: multiple __COUNTER__ tokens → all replaced (replaceAll behaviour).
-  it("replaces ALL occurrences of __COUNTER__ (replaceAll)", () => {
-    expect(formatValue(3, 1, "__COUNTER__/__COUNTER__", 0)).toBe("3/3");
-    expect(formatValue(3, 1, "__COUNTER__/__COUNTER__", 1)).toBe("4/4");
+  // EC-12: multiple "#" tokens → all replaced (replaceAll behaviour).
+  it("replaces ALL occurrences of # (replaceAll)", () => {
+    expect(formatValue(3, 1, "#/#", 0)).toBe("3/3");
+    expect(formatValue(3, 1, "#/#", 1)).toBe("4/4");
   });
 
   // EC-09: negative step should decrement the sequence.
@@ -283,7 +283,7 @@ describe("buildChanges", () => {
       { offset: 0, index: 0 },
       { offset: 10, index: 1 },
     ];
-    const config: InsertCountSettings = { start: 5, step: 2, wrap: "x__COUNTER__" };
+    const config: InsertCountSettings = { start: 5, step: 2, wrap: "x#" };
     const changes = buildChanges(positions, config);
     expect(changes[0].insert).toBe("x5");
     expect(changes[1].insert).toBe("x7");

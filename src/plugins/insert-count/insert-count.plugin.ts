@@ -14,7 +14,7 @@
  *   AD-04 Single-transaction insertion — all changes dispatched at once.
  *   AD-05 Three modes: Multi-cursor (A) → Multi-line selection (B) → Single (C).
  *   AD-06 Settings persisted on successful Insert only.
- *   AD-07 Wrap-string substitution via __COUNTER__ token or suffix append.
+ *   AD-07 Text pattern substitution via "#" token or suffix append.
  *   AD-08 Focus trap keeps Tab inside dialog; Escape always cancels.
  *   AD-09 Post-insertion cursor collapses after last inserted string.
  */
@@ -350,7 +350,7 @@ function applyValidationUI(
  *
  * @param startInput  The "Start at" text input.
  * @param stepInput   The "Count by" text input.
- * @param wrapInput   The "Wrap with" text input.
+ * @param wrapInput   The "Text pattern" text input.
  * @param insertBtn   The primary Insert button (used for validation check).
  * @param startError  Inline error span for startInput.
  * @param stepError   Inline error span for stepInput.
@@ -485,7 +485,7 @@ function buildInputElements(): {
   const wrapInput = document.createElement("input") as HTMLInputElement;
   wrapInput.id = "ic-wrap"; wrapInput.type = "text";
   wrapInput.className = "ic-input"; wrapInput.value = currentSettings.wrap;
-  wrapInput.placeholder = "e.g. Step __COUNTER__:";
+  wrapInput.placeholder = "(e.g. Prefix # Suffix)";
 
   return { startInput, startError, stepInput, stepError, wrapInput };
 }
@@ -565,7 +565,7 @@ function buildDialogDOM(view: any): HTMLElement {
   dialog.append(
     buildRow("Start at", startInput, startError),
     buildRow("Count by", stepInput, stepError),
-    buildRow("Wrap with", wrapInput, null),
+    buildRow("Text pattern", wrapInput, null),
     buildActions(cancelBtn, insertBtn),
   );
 
@@ -634,6 +634,8 @@ Modes:
   Multi-cursor (Mode A): multiple cursors — each gets the next value.
   Selection (Mode B): one selection spanning multiple lines — each line gets the next value, inserted at the cursor column.
   Single cursor (Mode C): one cursor, no selection — inserts the Start value once.
+
+Text pattern: use # as a placeholder for the number (e.g. "Step #:" inserts "Step 1:", "Step 2:", ...). If no # is present, the number is appended after the pattern.
 
 Invoke via Edit > Insert Count... (Cmd-Opt-3) or Command Bar.`,
 

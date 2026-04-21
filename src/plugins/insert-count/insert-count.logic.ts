@@ -22,8 +22,8 @@ export interface InsertCountSettings {
   /** Added to `start` once per position: value = start + index * step. Defaults to 1. */
   step: number;
   /**
-   * Optional wrap template. If it contains "__COUNTER__", all occurrences are
-   * replaced with the number. If it has no token, the number is appended.
+   * Optional text pattern. If it contains "#", all occurrences are replaced
+   * with the number. If it has no "#", the number is appended after the pattern.
    * Empty string → bare number only.
    */
   wrap: string;
@@ -75,12 +75,12 @@ export interface ChangeSpec {
  *
  * FR-03.6 substitution rules (in priority order):
  *  1. wrap is empty  → return the bare number string.
- *  2. wrap contains "__COUNTER__"  → replace ALL occurrences via replaceAll (EC-12).
- *  3. wrap has no token  → append the number after the wrap string (EC-10).
+ *  2. wrap contains "#"  → replace ALL occurrences via replaceAll (EC-12).
+ *  3. wrap has no "#"  → append the number after the wrap string (EC-10).
  *
  * @param start  Starting value (value at index 0).
  * @param step   Increment per position.
- * @param wrap   Optional wrap/template string.
+ * @param wrap   Optional text pattern string.
  * @param index  Zero-based position index.
  * @returns      The formatted string to insert.
  */
@@ -89,15 +89,15 @@ export function formatValue(start: number, step: number, wrap: string, index: nu
   const value = start + index * step;
   const numStr = String(value);
 
-  // Rule 1: empty wrap → bare number.
+  // Rule 1: empty pattern → bare number.
   if (!wrap) return numStr;
 
-  // Rule 2: token present → replace all occurrences (replaceAll handles EC-12).
-  if (wrap.includes("__COUNTER__")) {
-    return wrap.replaceAll("__COUNTER__", numStr);
+  // Rule 2: "#" token present → replace all occurrences (replaceAll handles EC-12).
+  if (wrap.includes("#")) {
+    return wrap.replaceAll("#", numStr);
   }
 
-  // Rule 3: no token → append number after wrap string.
+  // Rule 3: no "#" token → append number after pattern string.
   return wrap + numStr;
 }
 
