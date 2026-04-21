@@ -583,6 +583,13 @@ describe("evaluateTableFormulas — happy path", () => {
     expect(body[0][0]).toBe("A");
   });
 
+  it("cells starting with == are NOT treated as formulas (regression: ==highlight== was #ERR)", () => {
+    const md = `| Syntax | Result |\n|---|---|\n| ==highlight== | ==highlight== |`;
+    const { body } = evaluateTableFormulas(md);
+    expect(body[0][0]).toBe("==highlight==");
+    expect(body[0][1]).toBe("==highlight==");
+  });
+
   it("header cells are never evaluated as formulas (EC-01)", () => {
     const md = `| =SUM(A1:A3) | B |\n|---|---|\n| 1 | 2 |`;
     const { header } = evaluateTableFormulas(md);

@@ -1004,7 +1004,9 @@ export function evaluateTableFormulas(rawMarkdown: string): EvaluatedTable {
 
       // Non-formula cell: return the raw trimmed string.
       // TableWidget.toDOM() will apply marked.parseInline() to it.
-      if (!trimmed.startsWith("=")) return trimmed;
+      // Require "=" followed by a non-"=" character so "==highlight==" is not
+      // mistakenly treated as a formula (would parse as #ERR).
+      if (!trimmed.startsWith("=") || trimmed.startsWith("==")) return trimmed;
 
       // Formula cell: evaluate and format for display
       const formulaBody = trimmed.slice(1); // strip leading "="

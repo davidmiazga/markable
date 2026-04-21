@@ -16,7 +16,7 @@ import { FootnoteExtension } from "./footnote-ext";
 import { Compartment, type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { search, searchKeymap } from "@codemirror/search";
-import { livePreviewExtension, tablePreviewField, viewModeField } from "./live-preview";
+import { livePreviewExtension, tablePreviewField, fencedCodePreviewField, viewModeField } from "./live-preview";
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 import { listKeymap } from "./list-keybindings";
@@ -77,7 +77,7 @@ const themeHighlight = HighlightStyle.define([
 ]);
 
 /** All preview-mode extensions bundled together. */
-export const previewExtensions: Extension = [livePreviewExtension, tablePreviewField, previewTheme];
+export const previewExtensions: Extension = [livePreviewExtension, tablePreviewField, fencedCodePreviewField, previewTheme];
 
 /** Compartment that holds the live preview extensions (toggleable). */
 export const previewCompartment = new Compartment();

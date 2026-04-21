@@ -80,6 +80,7 @@ vi.mock("../../src/editor/live-preview", () => ({
   setViewMode: { of: vi.fn(() => ({})) },
   livePreviewExtension: [],
   tablePreviewField: {},
+  fencedCodePreviewField: {},
   viewModeField: {},
 }));
 vi.mock("../../src/sidebar/sidebar-manager", () => ({

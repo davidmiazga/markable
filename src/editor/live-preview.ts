@@ -13,6 +13,92 @@ import { marked } from "marked";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
 import type { EvaluatedTable } from "./table-formula";
+import hljs from "highlight.js/lib/core";
+import hljsJavascript from "highlight.js/lib/languages/javascript";
+import hljsTypescript from "highlight.js/lib/languages/typescript";
+import hljsPython from "highlight.js/lib/languages/python";
+import hljsRust from "highlight.js/lib/languages/rust";
+import hljsGo from "highlight.js/lib/languages/go";
+import hljsBash from "highlight.js/lib/languages/bash";
+import hljsJson from "highlight.js/lib/languages/json";
+import hljsYaml from "highlight.js/lib/languages/yaml";
+import hljsCss from "highlight.js/lib/languages/css";
+import hljsXml from "highlight.js/lib/languages/xml";
+import hljsSql from "highlight.js/lib/languages/sql";
+import hljsCpp from "highlight.js/lib/languages/cpp";
+
+hljs.registerLanguage("javascript", hljsJavascript);
+hljs.registerLanguage("typescript", hljsTypescript);
+hljs.registerLanguage("python", hljsPython);
+hljs.registerLanguage("rust", hljsRust);
+hljs.registerLanguage("go", hljsGo);
+hljs.registerLanguage("bash", hljsBash);
+hljs.registerLanguage("json", hljsJson);
+hljs.registerLanguage("yaml", hljsYaml);
+hljs.registerLanguage("css", hljsCss);
+hljs.registerLanguage("xml", hljsXml);
+hljs.registerLanguage("sql", hljsSql);
+hljs.registerLanguage("cpp", hljsCpp);
+
+const LANG_ALIASES: Record<string, string> = {
+  js: "javascript", ts: "typescript", py: "python",
+  sh: "bash", shell: "bash", zsh: "bash",
+  html: "xml", htm: "xml", yml: "yaml",
+  rs: "rust", c: "cpp",
+};
+
+function normalizeLang(lang: string): string {
+  const lower = lang.toLowerCase();
+  return LANG_ALIASES[lower] ?? lower;
+}
+
+// ── Extend marked for Markable custom inline syntax ───────────────────────────
+// These extensions ensure table cells render ==highlight==, ^superscript^, and
+// ~subscript~ correctly, matching the live-preview CM6 decorations.
+marked.use({
+  extensions: [
+    {
+      name: "markable-highlight",
+      level: "inline" as const,
+      start(src: string) { return src.indexOf("=="); },
+      tokenizer(src: string) {
+        const m = /^==([^=\n]+)==/.exec(src);
+        if (m) return { type: "markable-highlight", raw: m[0], text: m[1] };
+        return undefined;
+      },
+      renderer(token) {
+        return `<span class="cm-live-highlight">${token.text}</span>`;
+      },
+    },
+    {
+      name: "markable-superscript",
+      level: "inline" as const,
+      start(src: string) { return src.indexOf("^"); },
+      tokenizer(src: string) {
+        const m = /^\^([^^]+)\^/.exec(src);
+        if (m) return { type: "markable-superscript", raw: m[0], text: m[1] };
+        return undefined;
+      },
+      renderer(token) {
+        return `<sup class="cm-live-superscript">${token.text}</sup>`;
+      },
+    },
+    {
+      name: "markable-subscript",
+      level: "inline" as const,
+      start(src: string) { return src.indexOf("~"); },
+      tokenizer(src: string) {
+        // Match single ~ but not ~~ (strikethrough uses ~~)
+        const m = /^~(?!~)([^~\n]+)~(?!~)/.exec(src);
+        if (m) return { type: "markable-subscript", raw: m[0], text: m[1] };
+        return undefined;
+      },
+      renderer(token) {
+        return `<sub class="cm-live-subscript">${token.text}</sub>`;
+      },
+    },
+  ],
+});
 
 // ── Table sort state ───────────────────────────────────────────────────────────
 
@@ -312,35 +398,6 @@ class TableWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
-class CopyButtonWidget extends WidgetType {
-  constructor(private code: string) {
-    super();
-  }
-
-  toDOM(): HTMLElement {
-    const btn = document.createElement("button");
-    btn.className = "cm-codeblock-copy";
-    btn.setAttribute("aria-label", "Copy code");
-    // Two overlapping rounded squares icon
-    btn.innerHTML = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
-    btn.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      navigator.clipboard.writeText(this.code).then(() => {
-        btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
-      });
-    });
-    return btn;
-  }
-
-  eq(other: CopyButtonWidget): boolean {
-    return this.code === other.code;
-  }
-
-  ignoreEvent(): boolean {
-    return true; // Let the button handle its own events
-  }
-}
 
 function getActiveLines(state: EditorState): Set<number> {
   if (state.field(viewModeField, false)) return new Set();
@@ -413,58 +470,6 @@ function handleInlineMarkers(
       );
     }
   }
-}
-
-function handleFencedCode(
-  node: SyntaxNodeRef,
-  state: EditorState,
-  decorations: Range<Decoration>[]
-) {
-  const cursor = node.node.cursor();
-  if (!cursor.firstChild()) return;
-
-  // Collect CodeText range for line decorations
-  let codeFrom = -1;
-  let codeTo = -1;
-
-  do {
-    if (cursor.name === "CodeMark" || cursor.name === "CodeInfo") {
-      const line = state.doc.lineAt(cursor.from);
-      decorations.push(Decoration.replace({}).range(line.from, line.to));
-    } else if (cursor.name === "CodeText") {
-      codeFrom = cursor.from;
-      codeTo = cursor.to;
-    }
-  } while (cursor.nextSibling());
-
-  if (codeFrom < 0 || codeTo < 0) return;
-
-  const codeText = state.doc.sliceString(codeFrom, codeTo);
-
-  // Apply line decorations with first/middle/last classes for border-radius
-  const firstLine = state.doc.lineAt(codeFrom);
-  const lastLine = state.doc.lineAt(codeTo);
-
-  for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
-    const line = state.doc.line(ln);
-    let cls = "cm-live-codeblock";
-    if (ln === firstLine.number && ln === lastLine.number) {
-      cls += " cm-live-codeblock-only";
-    } else if (ln === firstLine.number) {
-      cls += " cm-live-codeblock-first";
-    } else if (ln === lastLine.number) {
-      cls += " cm-live-codeblock-last";
-    }
-    decorations.push(Decoration.line({ class: cls }).range(line.from));
-  }
-
-  // Copy button widget on the first content line
-  decorations.push(
-    Decoration.widget({
-      widget: new CopyButtonWidget(codeText),
-      side: 1, // after line content
-    }).range(firstLine.from)
-  );
 }
 
 /** Matches `> [!type]` or `> [!type] Title` on the first line of a blockquote. */
@@ -707,6 +712,115 @@ export const tablePreviewField = StateField.define<DecorationSet>({
   provide(f) { return EditorView.decorations.from(f); },
 });
 
+// ── Fenced Code Block: syntax-highlighted widget ───────────────────────────────
+
+class FencedCodeWidget extends WidgetType {
+  constructor(private lang: string, private code: string) { super(); }
+
+  toDOM(): HTMLElement {
+    const container = document.createElement("div");
+    container.className = "cm-live-fenced-code";
+
+    const btn = document.createElement("button");
+    btn.className = "cm-codeblock-copy";
+    btn.setAttribute("aria-label", "Copy code");
+    btn.innerHTML = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      navigator.clipboard.writeText(this.code).then(() => {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1500);
+      });
+    });
+    container.appendChild(btn);
+
+    const pre = document.createElement("pre");
+    const codeEl = document.createElement("code");
+
+    const normalized = normalizeLang(this.lang);
+    try {
+      if (normalized && hljs.getLanguage(normalized)) {
+        codeEl.innerHTML = hljs.highlight(this.code, { language: normalized, ignoreIllegals: true }).value;
+      } else {
+        codeEl.textContent = this.code;
+      }
+    } catch {
+      codeEl.textContent = this.code;
+    }
+
+    pre.appendChild(codeEl);
+    container.appendChild(pre);
+    return container;
+  }
+
+  eq(other: FencedCodeWidget): boolean {
+    return this.lang === other.lang && this.code === other.code;
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+function buildFencedCodeDecorations(state: EditorState): DecorationSet {
+  const activeLines = getActiveLines(state);
+  const decorations: Range<Decoration>[] = [];
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const diagramsActive = (window as any).__MARKABLE_DIAGRAMS_ACTIVE__;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "FencedCode") return;
+
+      const startLine = state.doc.lineAt(node.from).number;
+      const endLine = state.doc.lineAt(node.to).number;
+      for (let ln = startLine; ln <= endLine; ln++) {
+        if (activeLines.has(ln)) return false;
+      }
+
+      let lang = "";
+      let codeFrom = -1;
+      let codeTo = -1;
+
+      const cursor = node.node.cursor();
+      if (cursor.firstChild()) {
+        do {
+          if (cursor.name === "CodeInfo") {
+            lang = state.doc.sliceString(cursor.from, cursor.to).trim();
+          } else if (cursor.name === "CodeText") {
+            codeFrom = cursor.from;
+            codeTo = cursor.to;
+          }
+        } while (cursor.nextSibling());
+      }
+
+      if (diagramsActive && lang.toLowerCase() === "mermaid") return false;
+
+      const code = codeFrom >= 0 ? state.doc.sliceString(codeFrom, codeTo) : "";
+
+      decorations.push(
+        Decoration.replace({ widget: new FencedCodeWidget(lang, code), block: true })
+          .range(node.from, node.to)
+      );
+
+      return false;
+    },
+  });
+
+  return Decoration.set(decorations, true);
+}
+
+export const fencedCodePreviewField = StateField.define<DecorationSet>({
+  create(state) { return buildFencedCodeDecorations(state); },
+  update(deco, tr) {
+    if (tr.docChanged || tr.selection ||
+        syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+      return buildFencedCodeDecorations(tr.state);
+    }
+    return deco.map(tr.changes);
+  },
+  provide(f) { return EditorView.decorations.from(f); },
+});
+
 function handleHorizontalRule(
   node: SyntaxNodeRef,
   state: EditorState,
@@ -841,31 +955,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         } else if (name === "HorizontalRule") {
           handleHorizontalRule(node, state, decorations);
         } else if (name === "FencedCode") {
-          // For multi-line blocks, check if cursor is on ANY line in the block
-          const endLine = state.doc.lineAt(node.to).number;
-          let cursorInBlock = false;
-          for (let ln = line.number; ln <= endLine; ln++) {
-            if (activeLines.has(ln)) { cursorInBlock = true; break; }
-          }
-          if (!cursorInBlock) {
-            // When the diagrams plugin is active, skip mermaid fenced blocks so
-            // the plugin's own block decoration renders without conflict.
-            // Same pattern as __MARKABLE_MEDIA_PREVIEW_ACTIVE__ for images.
-            /* eslint-disable @typescript-eslint/no-explicit-any */
-            if ((window as any).__MARKABLE_DIAGRAMS_ACTIVE__) {
-              const cur = node.node.cursor();
-              if (cur.firstChild()) {
-                do {
-                  if (cur.name === "CodeInfo") {
-                    const lang = state.doc.sliceString(cur.from, cur.to).trim().toLowerCase();
-                    if (lang === "mermaid") return false;
-                  }
-                } while (cur.nextSibling());
-              }
-            }
-            /* eslint-enable @typescript-eslint/no-explicit-any */
-            handleFencedCode(node, state, decorations);
-          }
+          // Handled entirely by fencedCodePreviewField (StateField). Skip here
+          // so the ViewPlugin doesn't produce conflicting line decorations.
+          return false;
         }
       },
     });

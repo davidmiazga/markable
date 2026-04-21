@@ -71,6 +71,43 @@ Use **Cmd-K** to paste a copied URL as a link over selected text.
 > It can span multiple lines.
 ```
 
+> This is a blockquote.
+> It can span multiple lines.
+
+---
+
+## Callouts
+
+Callouts are styled blockquotes with a type tag on the first line:
+
+```
+> [!NOTE]
+> This is a note callout.
+
+> [!WARNING] Watch out!
+> You can add a custom title after the tag.
+```
+
+> [!NOTE]
+> This is a note callout.
+
+> [!WARNING] Watch out!
+> You can add a custom title after the tag.
+
+**Supported types:**
+
+| Type | Colour |
+|---|---|
+| `note`, `info`, `todo` | Blue |
+| `tip`, `hint`, `important` | Green |
+| `warning`, `caution`, `attention` | Yellow |
+| `danger`, `error`, `failure`, `bug` | Red |
+| `success`, `check`, `done` | Green |
+| `question`, `help`, `faq` | Purple |
+| `example` | Purple |
+| `quote`, `cite` | Grey |
+| `abstract`, `summary`, `tldr` | Light blue |
+
 ---
 
 ## Code
@@ -86,6 +123,26 @@ console.log(greeting);
 ~~~
 
 Specify a language after the opening fence for syntax context.
+
+```javascript
+// Keywords, strings, numbers, functions, comments
+function greet(name) {
+  const count = 42;
+  if (count > 0) {
+    return `Hello, ${name}! Count: ${count}`;
+  }
+  return null;
+}
+```
+
+```python
+# Python: types, built-ins, decorators
+def greet(name: str) -> str:
+    count = 42
+    if count > 0:
+        return f"Hello, {name}! Count: {count}"
+    return None
+```
 
 ---
 
