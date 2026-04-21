@@ -1,292 +1,220 @@
 ---
-title: "Mermaid Diagrams Plugin"
+title: "Insert Count Command"
 last-updated: "2026-04-20"
 review-cadence-days: 7
-status: active
+status: reference
 ---
 
-# Mermaid Diagrams Plugin (FC2 #9) Requirements Spec
+# Insert Count Command (FC2 #15) Requirements Spec
+
+## Validation Status
+
+**VALIDATED — 2026-04-20**. All unknowns resolved. Requirements approved. Ready for architecture phase.
+
+---
 
 ## Summary
 
-As a user, I want to write Mermaid diagram syntax inside fenced code blocks tagged ` ```mermaid ` and have them rendered as SVG diagrams in live-preview mode — with the raw source revealed when my cursor enters the block — so that I can embed flowcharts, sequence diagrams, and other Mermaid diagram types directly in my Markdown notes without leaving the editor.
+As a user, I want to open a small configuration panel, specify a starting number N and a step value X, and then insert an auto-incrementing counter at each of my cursor positions (or at each line in my selection) so that I can number items, steps, or rows without manually typing sequential numbers.
 
 ---
 
 ## Background and Motivation
 
-FEATURES.md item FC2 #9 reads: "Diagrams support: Mermaid diagram support or excalidraw (or separate into separate plugins)." This spec covers Mermaid only. Excalidraw is explicitly deferred to FC3 #17 and is out of scope here.
+FEATURES.md item FC2 #15 reads: "Insert Count Command (Insert a number and increment by 1, or start at N and count by X)."
 
-Mermaid is the de facto standard for text-based diagrams in Markdown tools (GitHub, Obsidian, Notion all support it). Users author diagrams as fenced code blocks with the language tag `mermaid`. The plugin intercepts these blocks in the CM6 document, renders them as SVG, and applies the same Typora-style cursor-on-reveal interaction used by the Math plugin (FC2 #8).
+This is a power-user text-transformation command in the spirit of VS Code's "Insert Numeric Sequence" or Sublime Text's "Number Offset" features. The core use case is multi-cursor numbering: the user places cursors on several lines (or selects a range of lines), invokes the command, and each position receives the next value in the configured sequence. The secondary use case is single-cursor insertion of a single number at point.
 
-The closest analog in this codebase is `src/plugins/math/math.plugin.ts` (KaTeX StateField, block decorations, cursor-reveals-source, IIFE pattern). The Media Preview plugin (`src/plugins/media-preview/media-preview.plugin.ts`) is a secondary analog for Lezer AST-based block detection.
+The closest analogue in the codebase is the Advanced Lists plugin (`src/plugins/diagrams/diagrams.plugin.ts` for plugin structure) and the Command Bar plugin for modal overlay UI patterns. The feature ships as a toggleable core plugin with a discoverable command in the Command Bar.
 
 ---
 
 ## Goals
 
-- Render ` ```mermaid ` fenced code blocks as SVG diagrams in live-preview mode.
-- Reveal raw Mermaid source when the cursor is inside the fenced block.
-- Support the most common Mermaid diagram types (see FR-03).
-- Respect the existing source-mode guard (`__MARKABLE_PREVIEW_ENABLED__`) — no widgets in raw/source view.
-- Adapt diagram theme to the active app theme (dark/light CSS variable awareness).
+- Let users insert an incrementing numeric sequence at multiple cursor positions or across selected lines via a single command invocation.
+- Provide a lightweight configuration UI (starting value N, step value X, optional prefix/suffix) that appears as an inline overlay anchored to the cursor position.
+- Integrate with the Command Bar (Cmd-Shift-P) so the command is discoverable by name.
 - Ship as a toggleable core plugin consistent with all other FC2 plugins.
-- Address the Mermaid bundle size problem (Mermaid minified is approximately 2.5 MB) before implementation begins — the current 500 KB Rust `read_plugin_file` cap must be resolved.
-
-## Non-Goals (Explicitly Out of Scope)
-
-- **Excalidraw support** — deferred to FC3 #17. A separate plugin will be created for that.
-- **Diagram editing UI** — no drag-and-drop canvas, no shape palette, no visual editing. Raw text only.
-- **Export of individual diagrams** — the Extended Exports plugin (FC2 #16) handles document-level export. Per-diagram SVG export is not in scope for this plugin.
-- **Mermaid config file support** — `mermaid.config.json` or `%%{init}` front matter configuration is not supported in this iteration. The Architect may revisit in a later pass.
-- **Click-to-edit on rendered SVG** — clicking a rendered diagram moves the cursor into the source block (same as Math). There is no "click a shape to select it" mode.
-- **Mermaid Live Editor integration** — no external URL launch or embedded browser pane.
-
----
-
-## User Stories and Acceptance Criteria
-
-**US-01: Basic Rendering**
-Given a document in live-preview mode containing a fenced code block tagged `mermaid` with valid syntax, when I move the cursor away from the block, the block is replaced by a rendered SVG diagram.
-
-Acceptance: the rendered SVG is visible, correctly scaled, and does not overflow the editor's content width.
-
-**US-02: Cursor-On Reveals Source**
-Given a rendered diagram, when I click anywhere inside it (or move my cursor into the block's line range), the SVG decoration is removed and the raw Mermaid source text becomes visible and editable.
-
-Acceptance: the raw text is fully editable. Moving the cursor away re-renders the diagram.
-
-**US-03: Invalid Syntax Error Display**
-Given a fenced mermaid block with invalid Mermaid syntax, when I move the cursor away, the block is replaced by a visible error indicator (not a crash, not a blank space) that identifies the block as containing a diagram syntax error.
-
-Acceptance: an error placeholder with a brief message is shown. The raw source is revealed when the cursor re-enters.
-
-**US-04: Source-Mode Guard**
-Given the app is in source/raw mode (`__MARKABLE_PREVIEW_ENABLED__` is false), no diagram widgets are rendered. The fenced code block appears as plain Markdown source text.
-
-Acceptance: toggling preview mode off and on causes diagrams to disappear and reappear correctly.
-
-**US-05: Theme Adaptation**
-Given the user switches the active theme (dark to light or vice versa), diagram rendering matches the new theme (background, text, and arrow colors are appropriate for the theme).
-
-Acceptance: diagrams do not show a white-box-on-dark-background problem or vice versa after a theme switch.
-
-**US-06: Multiple Diagrams Per Document**
-Given a document with three or more mermaid fenced blocks, all blocks render independently. Moving the cursor into one block reveals only that block's source; the others remain rendered.
-
-Acceptance: no cross-contamination of decoration state between blocks.
-
-**US-07: Plugin Disable Removes All Decorations**
-Given the Mermaid plugin is enabled and diagrams are rendered, when I disable the plugin via the Plugins Panel, all diagram widgets are removed and the raw fenced blocks are visible as plain text.
-
-Acceptance: no residual SVG elements remain in the DOM after disable.
+- Persist the user's last-used N and X values so repeat invocations do not require re-entry.
 
 ---
 
 ## Functional Requirements
 
-### FR-01: Fenced Block Detection
+### FR-01: Command Invocation
 
-**FR-01.1** The plugin detects fenced code blocks whose opening fence line exactly matches ` ```mermaid ` (three or more backticks followed by the language tag `mermaid`, case-insensitive). The language tag may have leading or trailing whitespace on the fence line.
+**FR-01.1** The plugin registers a single primary action: `"edit-insert-count"`. This action is dispatched via `handleAction()` in `src/main.ts`.
 
-**FR-01.2** Detection uses the Lezer syntax tree (`syntaxTree` from `window.__CM_LANGUAGE__`) to locate `FencedCode` nodes, consistent with the media-preview plugin pattern. This avoids false positives for mermaid text inside inline code spans or non-code block contexts.
+**FR-01.2** The action can be triggered from:
+- The Command Bar (Cmd-Shift-P) by searching "Insert Count" or "Number sequence."
+- An Edit menu item (Edit > Insert Count...) with the keyboard shortcut `Cmd-Shift-3`.
+- Directly via `window.__MARKABLE_HANDLE_ACTION__("edit-insert-count")` for testability.
 
-**FR-01.3** The Lezer AST approach ensures mermaid blocks nested inside blockquotes or other container elements are correctly detected (the tree walk handles nesting naturally).
+**FR-01.3** Invoking the action while no editor is open (no active tab, or editor is null) is a silent no-op. No error dialog is shown.
 
-**FR-01.4** The `from` and `to` offsets for the decoration span the entire fenced block: from the first character of the opening fence line to the last character of the closing fence line (exclusive end, CM6 convention). This is the range that is replaced by the widget decoration when the cursor is away.
+### FR-02: Configuration UI
 
-**FR-01.5** A fenced block with no closing fence (unclosed block) produces no decoration. The raw text remains visible. (See EC-03.)
+**FR-02.1** When `"edit-insert-count"` fires, the plugin opens a small configuration panel (hereafter "the Count Dialog"). The UI form is an **inline overlay anchored to the cursor position** (VS Code style) — a floating panel that appears near the cursor in the editor, not a centred modal. Dismissible with Escape or clicking outside the panel.
 
-### FR-02: StateField and Decoration
+**FR-02.2** The Count Dialog exposes exactly three inputs:
 
-**FR-02.1** Diagram decorations are managed by a CM6 `StateField<DecorationSet>`, not a `ViewPlugin`. Block decorations require `StateField` per project convention (D-1).
-
-**FR-02.2** The `StateField` is constructed fresh on each `onEnable` call (factory function, not a module-level constant), consistent with the Math plugin pattern. This eliminates residual state across enable/disable cycles.
-
-**FR-02.3** The `StateField.update()` method recomputes decorations when `tr.docChanged` or `tr.selection` is truthy. Transactions with neither document change nor selection change skip recomputation (performance optimization for O(N) Lezer tree walk).
-
-**FR-02.4** The decoration uses `Decoration.replace({ widget, block: true })` to replace the entire fenced block (opening fence, content, closing fence) with the rendered SVG widget. `block: true` is mandatory for multi-line block decorations in CM6.
-
-**FR-02.5** Cursor overlap detection uses the same `isCursorInsideRange(anchor, head, from, to)` logic as the Math plugin: if any part of the selection overlaps `[from, to)`, the decoration is suppressed and the raw source is visible.
-
-**FR-02.6** The `StateField.provide()` callback wires the field to `EditorView.decorations.from(field)` for CM6-idiomatic decoration rendering.
-
-### FR-03: Mermaid Diagram Type Support
-
-**FR-03.1** The following Mermaid diagram types must render correctly in this version:
-
-| Type | Mermaid keyword |
-|---|---|
-| Flowchart | `flowchart`, `graph` |
-| Sequence Diagram | `sequenceDiagram` |
-| Gantt Chart | `gantt` |
-| Class Diagram | `classDiagram` |
-| State Diagram | `stateDiagram`, `stateDiagram-v2` |
-| Entity Relationship | `erDiagram` |
-| Pie Chart | `pie` |
-| User Journey | `journey` |
-| Timeline | `timeline` |
-| Mindmap | `mindmap` |
-| Quadrant Chart | `quadrantChart` |
-| XY Chart | `xychart-beta` |
-
-**FR-03.2** Diagram types not in the table above are passed to Mermaid's renderer as-is. If Mermaid supports them natively (e.g., future additions), they render. If not, the error display path (FR-05) handles the failure.
-
-**FR-03.3** The plugin does not whitelist or blacklist specific diagram types at the source-detection level. All ` ```mermaid ` fences are processed; Mermaid itself determines whether the type is supported.
-
-### FR-04: Rendering Strategy and Widget
-
-**FR-04.1** Each diagram block is rendered by calling `mermaid.render(id, source)` (or `mermaid.renderAsync`, whichever the bundled version exposes). The result is an SVG string, which is injected into a container `<div>` via `innerHTML`. The container `<div>` is the widget's DOM element.
-
-**FR-04.2** The SVG container has `class="cm-mermaid-block"`. It is styled to be `display: block`, horizontally scrollable for wide diagrams, and horizontally centered within the editor's content width.
-
-**FR-04.3** Mermaid rendering is asynchronous (returns a Promise). The `toDOM()` method on the widget must handle the async nature: it must return a placeholder `<div>` immediately and update it once the render resolves. This deferred-render approach avoids blocking the CM6 render cycle. (The Architect must specify the exact deferred-DOM-update strategy.)
-
-**FR-04.4** Each widget instance carries the Mermaid source string. The `eq()` method compares source strings so CM6 can reuse the DOM node when the source has not changed (cursor movement that does not modify the block should not re-render the SVG).
-
-**FR-04.5** Widget DOM element `ignoreEvent()` returns `false`, allowing mouse clicks to pass through to CM6, which moves the cursor into the block range and triggers source reveal.
-
-**FR-04.6** Each Mermaid render call requires a unique element ID. The plugin must generate stable, unique IDs per block to avoid Mermaid's internal ID-collision errors. IDs should be deterministic based on block position or a document-stable hash (the Architect specifies the approach).
-
-### FR-05: Error Display
-
-**FR-05.1** When Mermaid rendering fails (thrown error or rejected Promise), the widget displays an error placeholder `<div class="cm-mermaid-error">` with:
-- The text "Diagram error" as the visible label.
-- The raw Mermaid source shown in a `<pre>` block below the label, or available via `title` attribute on hover, so the user can identify and fix the syntax.
-
-**FR-05.2** Error placeholders use CSS variables for theme compatibility: `--mermaid-error-color` (with fallback `#c0392b` or equivalent).
-
-**FR-05.3** The error placeholder has `cursor: help` to signal to the user that there is actionable information available (hover or click to edit).
-
-**FR-05.4** Moving the cursor into the error placeholder's range reveals the raw source for editing, identical to the non-error path.
-
-### FR-06: Source-Mode Guard
-
-**FR-06.1** The `buildDiagramDecorations()` function checks `window.__MARKABLE_PREVIEW_ENABLED__` before processing any ranges. If false, it returns `Decoration.none` immediately with no Lezer tree walk.
-
-**FR-06.2** This guard applies to both the `create` and `update` paths of the `StateField`.
-
-**FR-06.3** When preview mode is toggled back on after being off, the next `tr.docChanged` or `tr.selection` event triggers a full recomputation and diagrams re-render.
-
-### FR-07: Theme Awareness
-
-**FR-07.1** Mermaid exposes a `theme` configuration option accepting values `"default"`, `"dark"`, `"neutral"`, `"forest"`, `"base"`. The plugin must select the appropriate Mermaid theme based on the active Markable theme.
-
-**FR-07.2** The mapping strategy: the plugin reads the current computed background color of the editor container (via `getComputedStyle` on a known element) and determines dark vs. light mode. Dark mode maps to Mermaid `"dark"` theme; light mode maps to Mermaid `"default"` theme. The Architect may refine this with a CSS variable check (e.g., reading a dedicated `--color-scheme` variable if one exists in the theme system).
-
-**FR-07.3** When the active theme changes (detected via the `__MARKABLE_HANDLE_ACTION__` dispatch for theme-switch actions, or via a MutationObserver on `document.body`'s class/attribute), rendered diagrams must re-render with the new theme. The StateField recompute cycle handles this if the plugin triggers a CM6 transaction on theme change.
-
-**FR-07.4** Mermaid's `initialize()` must be called before the first render. Re-initialization with a new theme configuration is required when the theme changes. The Architect must specify whether Mermaid supports re-initialization or requires re-import.
-
-**FR-07.5** The SVG container background must not be hardcoded white. Mermaid's SVG output sets its own background; the plugin must not override it with a conflicting color.
-
-### FR-08: Plugin Settings
-
-**FR-08.1** The plugin exposes the following settings (persisted via `api.loadSettings()` / `api.saveSettings()`):
-
-| Setting Key | Type | Default | Description |
+| Field | Label | Default | Constraints |
 |---|---|---|---|
-| `mermaidTheme` | `"auto" \| "dark" \| "default" \| "neutral" \| "forest"` | `"auto"` | Override Mermaid theme. `"auto"` uses theme-detection logic (FR-07.2). |
-| `maxRenderWidth` | `number` | `900` | Maximum SVG container width in pixels. Diagrams wider than this scroll horizontally. |
-| `showErrorSource` | `boolean` | `true` | When true, error placeholder shows the raw source in a `<pre>` block. When false, shows only "Diagram error." |
+| Start value | "Start at" | `1` | Any integer (positive, zero, or negative). Decimal values are rejected. |
+| Step value | "Count by" | `1` | Any non-zero integer. Decimal values are rejected. A step of `0` is invalid and must be flagged. |
+| Prefix/Suffix | "Wrap with" | `""` (empty) | Optional. A single string of the form `prefix__COUNTER__suffix` where `__COUNTER__` is the placeholder token. If the string contains no placeholder, the number is appended after the string. See FR-02.3. |
 
-**FR-08.2** Settings are loaded in `onEnable` via `api.loadSettings()`. If null (first run), defaults above are used.
+**FR-02.3** Prefix/Suffix format: the "Wrap with" field accepts a single free-text string. The plugin replaces all occurrences of the literal token `__COUNTER__` in that string with the computed number. Examples:
 
-**FR-08.3** Settings UI is provided in the plugin detail view via the `renderDetailExtra` hook on the `UnifiedPlugin` descriptor.
+- Input `Step __COUNTER__:` → inserts `Step 1:`, `Step 2:`, etc.
+- Input `(__COUNTER__)` → inserts `(1)`, `(2)`, etc.
+- Input `Item ` (no token) → number is appended after the string: `Item 1`, `Item 2`, etc.
+- If the field is empty, the plugin inserts bare numbers: `1`, `2`, `3`.
 
-### FR-09: Bundle Size Strategy
+The Architect may choose to implement this as a single "Wrap with" token-substitution field (as specified) or as separate Prefix and Suffix fields that are joined around the number. Either implementation is acceptable provided the user-visible behaviour matches the examples above.
 
-**FR-09.1** Mermaid's minified bundle is approximately 2.5 MB. The current `read_plugin_file` Rust command enforces a 500 KB cap. This is a hard blocker that must be resolved before the plugin can be loaded.
+**FR-02.4** The Count Dialog has two action buttons:
+- **Insert** (primary): applies the sequence and closes the dialog.
+- **Cancel** (secondary): closes the dialog without any document changes.
 
-**FR-09.2** Three candidate strategies exist. The Architect must choose one and document the decision in the architecture spec:
+**FR-02.5** Pressing Enter while the dialog is focused is equivalent to clicking Insert.
 
-**Strategy A — Raise the Rust cap.** Modify `read_plugin_file` in `src-tauri/src/commands/plugins.rs` to raise `MAX_BYTES` from 500 KB to a value that accommodates the full Mermaid bundle (3 MB or higher to provide headroom). This is the simplest approach. The tradeoff is that the cap no longer protects against accidentally large user plugins; a separate per-kind cap (core vs. user) could mitigate this.
+**FR-02.6** Pressing Escape while the dialog is focused is equivalent to clicking Cancel.
 
-**Strategy B — Tauri `asset://` protocol for Mermaid.** Bundle Mermaid as a static `.js` file in `src-tauri/plugins/core/` or `src-tauri/resources/` and load it via `<script src="asset://...">` injection rather than via `read_plugin_file`. The plugin IIFE itself would be small (< 50 KB) and only contain the CM6 StateField and widget logic; Mermaid would be loaded as a separate asset. This avoids modifying the file-size cap entirely. The tradeoff is increased complexity: the plugin must defer execution until the Mermaid script has loaded, and the asset URL must be resolved via `window.__MARKABLE_CONVERT_FILE_SRC__` or a new Tauri protocol handler.
+**FR-02.7** The dialog must not block keyboard input to the rest of the UI in a way that prevents Escape from working. Focus must be trapped inside the dialog while it is open (Tab cycles between the three inputs and the two buttons only).
 
-**Strategy C — Split IIFE (chunked load).** Mermaid is imported dynamically inside `onEnable` using a Tauri `invoke` call that reads the Mermaid bundle in chunks or via a streaming read command. This is the most complex strategy and is not recommended unless Strategies A and B are ruled out.
+### FR-03: Insertion Logic
 
-**FR-09.3** Strategy A is the recommended default. The Architect should verify whether a per-kind cap (larger for core, 500 KB for user) is a worthwhile guard before prescribing the exact new limit.
+**FR-03.1** When Insert is confirmed, the plugin reads the current editor state and determines the set of insertion positions. There are two modes, resolved in priority order:
 
-**FR-09.4** Regardless of the chosen strategy, the Mermaid library must be bundled or loaded in a way that makes it available synchronously at `onEnable` time (or deferred but resolved before the first render attempt). It must not block the app startup path.
+**Mode A — Multi-cursor (multiple selections)**: If `editor.state.selection.ranges` has more than one range, each range receives the next value in the sequence. Ranges are processed in document order (ascending `from` position). The first range receives `start`, the second receives `start + step`, the third `start + 2 * step`, and so on.
 
-### FR-10: Plugin Lifecycle
+**Mode B — Selection range (single selection spanning multiple lines)**: If there is exactly one selection range and `from !== to`, the plugin counts the lines that are fully or partially covered by the selection. Each line receives a counter value at its start (column 0) or at the line's current insertion point (see FR-03.3). Lines are processed top to bottom.
 
-**FR-10.1** Plugin file: `src/plugins/diagrams/diagrams.plugin.ts`
+**Mode C — Single cursor (no selection)**: If there is exactly one selection range with `from === to` (a bare cursor), the plugin inserts the single value `start` at that position. No incrementing occurs.
 
-**FR-10.2** Plugin metadata:
-- `id`: `"diagrams"`
-- `name`: `"Diagrams"`
+**FR-03.2** A "position" in Modes A and C is the `from` offset of the selection range (the anchor or head, whichever is smaller). The counter value is inserted as a string at that offset, pushing existing text to the right.
+
+**FR-03.3** In Mode B (selection spanning lines), insertion happens at the **cursor's current column** on each covered line (maintaining alignment). Each line's insertion offset is computed as `lineStart + cursorColumn`, where `cursorColumn` is the column offset of the selection's `head` position. If a line is shorter than `cursorColumn`, the counter is appended at the end of that line (no padding is added).
+
+**FR-03.4** All insertions in a single invocation must be applied as a single CM6 transaction (`editor.dispatch({ changes: [...] })`). This ensures a single Undo step reverts the entire insertion, not N separate steps (EC-05).
+
+**FR-03.5** After insertion, the editor selection **collapses to the position immediately after the last inserted value** (i.e., a bare cursor placed at `lastInsertionOffset + lastFormattedString.length`). No text is selected post-insertion. The editor is focused.
+
+**FR-03.6** The formatted value for position `i` (0-indexed) is computed as:
+```
+value = start + (i * step)
+formatted = wrapString.includes("__COUNTER__")
+  ? wrapString.replaceAll("__COUNTER__", String(value))
+  : wrapString + String(value)
+```
+If `wrapString` is empty, `formatted = String(value)`. All occurrences of `__COUNTER__` in the Wrap string are replaced (using `String.prototype.replaceAll`), not just the first. This is the intended behavior for patterns like `__COUNTER__/__COUNTER__` → `3/3`.
+
+### FR-04: Settings Persistence
+
+**FR-04.1** The plugin persists the last-used values of `start`, `step`, and `wrap` via `api.loadSettings()` / `api.saveSettings()`.
+
+**FR-04.2** When the Count Dialog opens, the three fields are pre-populated with the persisted values. On first run (null from `loadSettings`), the defaults from FR-02.2 apply.
+
+**FR-04.3** Settings are saved when the user clicks Insert (not on every keystroke in the dialog). Cancelled invocations do not update the persisted values.
+
+**FR-04.4** Settings key names: `{ "start": number, "step": number, "wrap": string }`.
+
+### FR-05: Input Validation
+
+**FR-05.1** The Start and Step fields accept only integer values. Non-numeric input must be flagged inline (e.g., red border or helper text) and the Insert button must be disabled until both fields contain valid integers.
+
+**FR-05.2** A Step of `0` is explicitly invalid. An inline error "Step cannot be zero" must be shown and the Insert button disabled.
+
+**FR-05.3** Start and Step values are not bounded (any integer is valid). Extremely large values (e.g., `Number.MAX_SAFE_INTEGER`) are not rejected; the resulting string is simply very long. The Architect may add a soft warning for values outside a reasonable range (e.g., ±10,000,000) but this is not required.
+
+**FR-05.4** The Wrap field is free-text with no validation. Any string is accepted, including empty.
+
+### FR-06: Plugin Lifecycle
+
+**FR-06.1** Plugin file: `src/plugins/insert-count/insert-count.plugin.ts`
+
+**FR-06.2** Plugin metadata:
+- `id`: `"insert-count"`
+- `name`: `"Insert Count"`
 - `version`: `"1.0.0"`
-- `description`: `"Render Mermaid diagrams in live preview mode"`
-- `detail`: describing the supported diagram types and the cursor-on-reveal interaction.
+- `description`: `"Insert an auto-incrementing numeric sequence at cursor positions"`
+- `detail`: A longer description explaining Mode A (multi-cursor), Mode B (selection), and Mode C (single cursor) behaviors.
 
-**FR-10.3** `onEnable` sequence:
-1. Load settings via `api.loadSettings()`.
-2. Initialize Mermaid (`mermaid.initialize()`) with the resolved theme.
-3. Inject plugin CSS (`<style>` tag, idempotent, guarded by element ID).
-4. If Strategy B (asset:// load): inject a `<script>` tag pointing to the Mermaid asset URL and wait for it to load before proceeding.
-5. Construct a fresh `StateField` instance (factory, not module-level constant).
-6. Register the StateField via `api.addExtensions([diagramsField])`.
-7. Register a theme-change listener (MutationObserver or action dispatch hook) to trigger re-initialization and StateField recompute on theme switches.
+**FR-06.3** `onEnable` sequence:
+1. Load settings via `api.loadSettings()`; store in module state.
+2. Inject CSS for the Count Dialog (`<style>` tag, idempotent, guarded by element ID).
+3. Register the `edit-insert-count` action handler via `window.__MARKABLE_INSERT_COUNT_OPEN__ = openDialog` (same pattern as `__MARKABLE_COMMAND_BAR_OPEN__`).
 
-**FR-10.4** `onDisable` sequence:
-1. `api.removeExtensions()` — removes the StateField and all diagram decorations.
-2. Remove injected CSS `<style>` tags.
-3. If Strategy B: remove the injected `<script>` tag for Mermaid.
-4. Remove the theme-change listener.
-5. Clear module-level state references to null.
+**FR-06.4** `onDisable` sequence:
+1. Remove any open Count Dialog from the DOM (if the user has the dialog open when they disable the plugin, close it without inserting).
+2. Remove injected CSS `<style>` tag.
+3. Set `window.__MARKABLE_INSERT_COUNT_OPEN__ = null`.
 
-**FR-10.5** The plugin must be added to `scripts/build-plugins.mjs`'s `PLUGINS` array:
-`["diagrams", "src/plugins/diagrams/diagrams.plugin.ts"]`
+**FR-06.5** The plugin does not add any CM6 extensions (`api.addExtensions` is not called). All functionality is triggered imperatively on command invocation, not continuously via CM6 state.
 
-**FR-10.6** The plugin must be added to the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` as a toggle command (id: `"view-toggle-diagrams"`, defaultKey: `""`, section: `"View"`) consistent with other plugin toggles. This makes it discoverable and toggleable via the Command Bar.
+**FR-06.6** The plugin is added to `scripts/build-plugins.mjs`'s `PLUGINS` array:
+`["insert-count", "src/plugins/insert-count/insert-count.plugin.ts"]`
 
-### FR-11: Command Bar Discoverability
+### FR-07: Command Bar Discoverability
 
-**FR-11.1** Because the Command Bar (FC2 #11) reads from the `COMMANDS` array at open time and generates dual-results for plugin toggles, the Diagrams plugin is automatically discoverable in the Command Bar once its toggle command is added to the array (FR-10.6). No additional Command Bar work is required.
+**FR-07.1** The `"edit-insert-count"` action is added to the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` (or wherever COMMANDS is defined) with:
+- `id`: `"edit-insert-count"`
+- `label`: `"Insert Count"`
+- `section`: `"Edit"`
+- `defaultKey`: `"Cmd-Shift-3"`
+
+**FR-07.1a** The Edit menu item (FR-08.1) must display `Cmd-Shift-3` as its keyboard shortcut accelerator. The Architect must verify that `Cmd-Shift-3` is not already bound in `src/keybindings/` and document the check in the architecture step files.
+
+**FR-07.2** The Command Bar's category A builder will automatically include this entry once it is in the COMMANDS array. No additional Command Bar work is required.
+
+### FR-08: Edit Menu Integration
+
+**FR-08.1** An "Insert Count..." menu item is added to the Edit menu in `src-tauri/src/menu.rs` (or the equivalent Tauri v2 menu construction file). The item dispatches `"edit-insert-count"` via the Tauri menu event mechanism.
+
+**FR-08.2** The menu item is always enabled regardless of plugin state. If the plugin is disabled when the menu item is clicked, the `handleAction` case for `"edit-insert-count"` checks `window.__MARKABLE_INSERT_COUNT_OPEN__`; if null, it shows a brief alert: "Enable the Insert Count plugin in Markable > Plugins to use this feature." (Consistent with the Templates plugin pattern in `src/main.ts`.)
+
+---
+
+## UX / Interaction Design
+
+### Trigger Flow
+
+1. User places cursors (one or many) or selects a range of lines.
+2. User invokes the command (Cmd-Shift-P → "Insert Count", or Edit > Insert Count..., or keyboard shortcut if assigned).
+3. Count Dialog opens. Fields are pre-filled from last-used values.
+4. User adjusts Start, Step, and Wrap as needed.
+5. User presses Enter or clicks Insert.
+6. Numbers are inserted at each cursor/line position in a single transaction.
+7. Dialog closes. Editor is focused.
+
+### Dialog Appearance
+
+- Small, minimal panel (approximately 280px wide).
+- Three labelled input fields stacked vertically: "Start at", "Count by", "Wrap with".
+- Inline validation error text below Start/Step fields when invalid.
+- Two buttons aligned right: Cancel (secondary), Insert (primary, disabled when invalid).
+- Styled using existing CSS variables (`--ui-font`, `--accent-color`, `--bg-color`, etc.) for theme compatibility.
+
+### Keyboard Shortcut
+
+The default keyboard shortcut is `Cmd-Shift-3`. This shortcut triggers the `"edit-insert-count"` action. The Architect must verify no conflict exists before committing. Users may override via `keybindings.json`.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-01: Initial Render Latency** — From cursor leaving a mermaid block to the SVG widget being visible must be under 300ms for diagrams with fewer than 100 nodes. Mermaid's async render call may take longer for complex diagrams; the user must see a loading placeholder within 16ms (one frame) while the async render completes.
+**NFR-01: Single Transaction** — All insertions for one invocation must be applied as a single CM6 transaction so Undo reverts the entire insertion in one step.
 
-**NFR-02: Re-render on Edit** — After the user edits mermaid source and moves the cursor away, the updated SVG must render within 500ms. Debounce of 200–300ms on the StateField recompute is acceptable for large documents to avoid re-rendering on every keystroke while the cursor is outside the block.
+**NFR-02: Performance** — Inserting at up to 500 cursor positions must complete in under 100ms from the time Insert is clicked to the time the editor reflects the changes.
 
-**NFR-03: IIFE Self-Containment** — All IIFE plugin rules apply. No app-internal module imports at runtime. CM6 accessed via window globals only (`__CM_VIEW__`, `__CM_STATE__`, `__CM_LANGUAGE__`). CSS injected via `<style>` tags. Mermaid accessed via the bundled or asset-loaded library.
+**NFR-03: No CM6 Extensions** — The plugin does not register any CM6 extensions. It is purely an imperative command plugin. This keeps the editor's extension compartment clean when the feature is not in active use.
 
-**NFR-04: Theme Compatibility** — All plugin-defined CSS uses variables from `:root`. No hardcoded hex values or font names except as fallbacks in `var()` declarations.
+**NFR-04: Theme Compatibility** — All plugin CSS uses variables from `:root`. No hardcoded hex values except as fallbacks in `var()` declarations.
 
-**NFR-05: No Persistent DOM Leaks** — `onDisable` must remove all `<style>` tags, all SVG DOM nodes injected by widgets, and all event listeners registered during `onEnable`. The editor must return to a clean state after the plugin is toggled off.
+**NFR-05: Focus Management** — When the dialog closes (Insert or Cancel), keyboard focus must be returned to the editor (`__MARKABLE_EDITOR_VIEW__.focus()`).
 
-**NFR-06: SVG Output Only** — The plugin uses Mermaid's SVG output mode. Canvas output is not acceptable: canvas elements cannot be serialized for export and do not integrate well with CM6 block decorations.
-
-**NFR-07: No Network Requests** — Mermaid rendering is entirely offline. The plugin must not make any HTTP requests. All resources (Mermaid library, fonts) are bundled or loaded from `asset://` protocol paths.
-
-**NFR-08: XSS Safety** — Mermaid diagram source is author-controlled content, not untrusted user input from a network. However, the SVG output must not be injected into the document in a way that allows embedded `<script>` elements to execute. The plugin must verify that Mermaid's SVG output is safe to inject via `innerHTML` (Mermaid strips scripts from its SVG output by default; the Architect must confirm this for the bundled version).
-
----
-
-## Architecture Decisions (Pre-Resolved Constraints)
-
-These constraints are established by the codebase and must be encoded in the architecture spec, not re-debated.
-
-**AD-01: IIFE plugin pattern** — The plugin is an IIFE bundle (`export default` object implementing `UnifiedPlugin`). No ESM imports at runtime. Built by `scripts/build-plugins.mjs` into `src-tauri/plugins/core/diagrams.js`.
-
-**AD-02: CM6 globals** — `__CM_VIEW__`, `__CM_STATE__`, `__CM_LANGUAGE__` are module namespaces, not instances. Instance methods (`dispatch()`, `focus()`, `.doc`) are only available on `window.__MARKABLE_EDITOR_VIEW__`. The plugin destructures CM6 class constructors from these globals at IIFE evaluation time.
-
-**AD-03: Block decorations require StateField** — `ViewPlugin` is insufficient for multi-line block replacements. `StateField<DecorationSet>` with `block: true` decorations is mandatory.
-
-**AD-04: Source-mode guard is mandatory** — `buildDiagramDecorations()` must check `window.__MARKABLE_PREVIEW_ENABLED__` and short-circuit to `Decoration.none` when false.
-
-**AD-05: Lezer AST for block detection** — Use `syntaxTree(state).cursor()` to walk `FencedCode` nodes (same pattern as media-preview plugin). This is preferred over a line-by-line text scan because the Lezer tree correctly excludes mermaid-tagged text inside inline code, blockquotes, and other contexts where a regex scan would false-positive.
-
-**AD-06: StateField factory** — The StateField is created inside a factory function called from `onEnable`, not as a module-level constant. This ensures fresh slot IDs on each enable/disable cycle.
-
-**AD-07: Async render deferred-DOM pattern** — Mermaid's render is async. `toDOM()` must return synchronously (CM6 requirement). The widget returns a placeholder div immediately and resolves the SVG into it when the Promise settles. The Architect must specify whether this uses a `requestAnimationFrame` update, a direct DOM mutation after `await`, or a separate ViewPlugin update cycle.
-
-**AD-08: Unique render IDs** — Mermaid requires a unique string ID per `render()` call. Use a module-level counter or a position-based hash to generate stable IDs. Unstable IDs (e.g., `Math.random()`) cause unnecessary re-renders when `eq()` on the widget returns true but Mermaid still creates a new SVG element.
+**NFR-06: IIFE Self-Containment** — All IIFE plugin rules apply. No app-internal module imports at runtime. CM6 accessed via `window.__MARKABLE_EDITOR_VIEW__` for the live view/state. CSS injected via `<style>` tags.
 
 ---
 
@@ -294,47 +222,28 @@ These constraints are established by the codebase and must be encoded in the arc
 
 | System | Integration | Notes |
 |---|---|---|
-| Plugin system (IIFE loader) | Plugin loaded as `plugins/core/diagrams.js` | Add to `build-plugins.mjs` PLUGINS array and `copy_core_plugins` bundle |
-| CM6 StateField | `api.addExtensions([diagramsField])` in `onEnable` | Block decoration pattern |
-| CM6 Lezer AST | `syntaxTree` from `window.__CM_LANGUAGE__` | FencedCode node detection |
-| `read_plugin_file` Rust command | Cap must be raised (FR-09) | Mermaid bundle ~2.5 MB; current cap is 500 KB |
-| `__MARKABLE_PREVIEW_ENABLED__` global | Checked in `buildDiagramDecorations()` | Source-mode guard |
-| `__MARKABLE_EDITOR_VIEW__` global | Used for triggering StateField recompute on theme change | Not `__CM_VIEW__` (that is a module namespace) |
-| Plugin settings persistence | `api.loadSettings()` / `api.saveSettings()` | Theme override, max width, error source display |
-| Plugin detail view | `renderDetailExtra` hook on `UnifiedPlugin` | Settings UI row |
-| COMMANDS array | Add `"view-toggle-diagrams"` toggle entry | Command Bar discoverability (FC2 #11) |
-| Plugins Panel | Automatic via plugin system | Toggle, detail view, sidebar assignment (not applicable — no sidebar panel) |
-
----
-
-## Open Questions
-
-The following questions are unresolved and must be answered before architecture begins. The Architect may research and answer them as part of the architecture phase.
-
-**OQ-01: Bundle size strategy** — Which of the three strategies in FR-09.2 should be implemented? The Architect must evaluate Strategy A (raise Rust cap) versus Strategy B (asset:// load) and choose one. Recommendation: Strategy A with a per-kind cap (core plugins: 5 MB, user plugins: 500 KB) to preserve user-plugin safety while accommodating Mermaid.
-
-**OQ-02: Mermaid version** — What version of Mermaid should be bundled? The latest stable release at architecture time should be used. The Architect must verify that the chosen version supports all diagram types in FR-03.1 and produces safe SVG output (NFR-08).
-
-**OQ-03: Mermaid re-initialization** — Does `mermaid.initialize()` support being called multiple times in the same JS context with different configurations (e.g., switching from dark to light theme)? If not, does the plugin need to track "initialized theme" state and only re-initialize when the theme changes? The Architect must test this with the chosen Mermaid version.
-
-**OQ-04: Async render in toDOM()** — What is the cleanest pattern for deferred SVG injection into a CM6 widget DOM element? Options: (a) `toDOM()` sets up a Promise chain that mutates the placeholder div directly after `await mermaid.render()`; (b) the widget triggers a StateField update that replaces the placeholder decoration with the real SVG decoration. Option (a) is simpler but mutates DOM outside CM6's transaction model; option (b) is more correct but requires additional StateField machinery. The Architect must specify and justify the choice.
-
-**OQ-05: Mermaid SVG and dark mode** — Does Mermaid's `"dark"` theme produce correct SVG output when the SVG is embedded in a non-white DOM background? Are there known issues with SVG `currentColor` inheritance in Mermaid's output that require additional CSS overrides? The Architect should test against the two most common Markable themes.
-
-**OQ-06: `syntaxTree` FencedCode info node** — In the Lezer Markdown grammar, the language tag (e.g., `mermaid`) is accessible via the `CodeInfo` child node of `FencedCode`. The Architect must confirm the exact node type name in `@lezer/markdown` for the language tag and the content span, as this drives the detection implementation (FR-01.2).
+| Plugin system (IIFE loader) | Plugin loaded as `plugins/core/insert-count.js` | Add to `build-plugins.mjs` PLUGINS array and `copy_core_plugins` bundle |
+| `handleAction` dispatcher | Add `"edit-insert-count"` case in `src/main.ts` | Delegates to `window.__MARKABLE_INSERT_COUNT_OPEN__` |
+| Edit menu | Add "Insert Count..." item in Tauri menu construction | Dispatches `"edit-insert-count"` |
+| COMMANDS array | Add `"edit-insert-count"` entry | Command Bar discoverability |
+| CM6 editor state | Reads `__MARKABLE_EDITOR_VIEW__.state.selection` | No extensions registered |
+| CM6 dispatch | `__MARKABLE_EDITOR_VIEW__.dispatch({ changes: [...] })` | Single-transaction insertion |
+| Plugin settings persistence | `api.loadSettings()` / `api.saveSettings()` | start, step, wrap |
+| Plugin detail view | `renderDetailExtra` hook | Optional settings summary; no complex settings needed |
+| Plugins Panel | Automatic via plugin system | Toggle, detail view |
 
 ---
 
 ## Out of Scope
 
-1. **Excalidraw** — FC3 #17, separate plugin.
-2. **Mermaid `%%{init}` configuration** — per-diagram initialization overrides. Deferred.
-3. **Per-diagram SVG export** — handled by Extended Exports (FC2 #16).
-4. **Diagram click-to-edit shapes** — raw source only, no visual editing.
-5. **Mermaid Live Editor URL launch** — no external browser integration.
-6. **Syntax highlighting inside mermaid fences** — the raw source is plain text when revealed. No custom Lezer grammar for Mermaid syntax tokens.
-7. **Diagram caching across sessions** — diagrams are re-rendered on each document open. No persistent SVG cache.
-8. **Mermaid `securityLevel` configuration** — the Architect sets an appropriate `securityLevel` value in `mermaid.initialize()`. End users cannot override it via plugin settings.
+1. **Roman numeral or alphabetic sequences** — Insert Count produces integers only. Roman numerals and letter sequences (A, B, C...) are a separate concern deferred to a future feature.
+2. **Date/time sequence generation** — Not part of this feature.
+3. **Decimal (floating-point) steps** — Start and Step are integers only. Decimal values (e.g., 0.5 step) are not supported in this version.
+4. **Clipboard-based counter** — Reading a starting value from the clipboard is not supported. The dialog is the only input mechanism.
+5. **Persistent counter state between sessions** — Each invocation starts fresh from the configured Start value. There is no "global counter" that increments across invocations automatically.
+6. **Regex-based find-and-replace numbering** — Numbering lines that match a pattern is out of scope. The plugin acts on cursor positions/selected lines only.
+7. **Visual preview of the sequence in the dialog** — A live preview showing the first N values is a nice-to-have but explicitly out of scope for the initial implementation.
+8. **Auto-save on Insert** — The plugin does not trigger a document save after insertion.
 
 ---
 
@@ -342,69 +251,86 @@ The following questions are unresolved and must be answered before architecture 
 
 The following edge cases are the mandatory test checklist for the Code Reviewer. Every item must be covered by a test or a documented manual verification step.
 
-**EC-01: Empty mermaid block** — A ` ```mermaid ` fence with no content (empty lines only between fences). Expected: Mermaid receives an empty string. The result is either an empty SVG, a Mermaid error, or a blank render. The error path (FR-05) handles any failure gracefully; no crash.
+**EC-01: No editor active** — `handleAction("edit-insert-count")` is called while no editor view exists (`__MARKABLE_EDITOR_VIEW__` is null or undefined). Expected: silent no-op; no dialog opens, no crash.
 
-**EC-02: Block with only whitespace content** — Same as EC-01 but with spaces/tabs between fences. Expected: same behavior as EC-01.
+**EC-02: Plugin disabled, menu item clicked** — User clicks Edit > Insert Count... while the Insert Count plugin is toggled off. Expected: `__MARKABLE_INSERT_COUNT_OPEN__` is null; `handleAction` falls through to the alert path showing "Enable the Insert Count plugin..." message.
 
-**EC-03: Unclosed fence (no closing ```)** — The opening ` ```mermaid ` line exists but there is no closing fence before end-of-document. Expected: no decoration is produced for this block. The raw source remains visible. (Lezer's FencedCode node does not produce a well-formed node for unclosed fences; the detection logic must handle this gracefully.)
+**EC-03: Single cursor, no selection (Mode C)** — One cursor, no selected text. Expected: dialog opens; user enters Start=5, Step=3, Wrap=""; dialog inserts `5` at cursor position. Only one number is inserted.
 
-**EC-04: Invalid Mermaid syntax** — A closed fenced block with valid fence delimiters but invalid Mermaid content (e.g., `graph TD\n  A --INVALID--> B`). Expected: Mermaid render rejects with an error. Error placeholder displayed (FR-05). Raw source revealed on cursor entry.
+**EC-04: Multiple cursors (Mode A)** — Three cursors on three different lines. Expected: the first cursor gets `start`, the second gets `start + step`, the third gets `start + 2 * step`. All three insertions are applied in a single CM6 transaction.
 
-**EC-05: Very large diagram** — A flowchart with 500+ nodes. Expected: the async render completes eventually (may exceed NFR-01 timing; a loading placeholder must be shown). The editor must not freeze or become unresponsive while Mermaid renders.
+**EC-05: Single undo reverts all insertions** — After Mode A insertion of 5 numbers, Cmd-Z must undo all 5 insertions at once (single transaction). Expected: the document returns to its pre-insertion state in one undo step.
 
-**EC-06: Multiple diagrams in document** — Three or more mermaid blocks. Expected: all render independently. Cursor inside block 2 reveals block 2's source; blocks 1 and 3 remain rendered as SVG.
+**EC-06: Selection spanning N lines (Mode B)** — User selects 4 lines, invokes Insert Count. Expected: each of the 4 lines receives an incrementing counter. The Architect specifies the exact insertion point (column 0 vs. cursor column).
 
-**EC-07: Diagram immediately after YAML front matter** — A mermaid block at the very top of the document, below a `---` YAML fence. Expected: the Lezer tree correctly identifies this as a FencedCode node (not confused by the YAML fence). Renders correctly.
+**EC-07: Selection that does not span a full line** — User selects partial text on a single line (e.g., characters 3-8 on one line). Expected: this is treated as Mode C (single cursor, `from` position used as insertion point) because only one line is involved.
 
-**EC-08: Mermaid block inside blockquote** — ` > ```mermaid ` syntax. Expected: the Lezer tree walks blockquote-contained FencedCode nodes. The plugin must handle this case (render or skip — the Architect decides whether blockquote diagrams are supported; if skipped, the block remains as raw source with no crash).
+**EC-08: Step of zero** — User enters Step=0 in the dialog. Expected: the Insert button is disabled and an inline error "Step cannot be zero" is shown. The dialog cannot be submitted with Step=0.
 
-**EC-09: Source-mode toggle while cursor is inside a diagram block** — User disables preview mode while their cursor is in a mermaid block. Expected: the decoration is not applied (guard fires), the raw source is visible. Re-enabling preview mode with cursor still inside the block: the block is visible as raw source (cursor overlap suppresses the decoration). Moving the cursor away: the diagram renders.
+**EC-09: Negative step** — User enters Start=10, Step=-2. Expected: valid input; dialog accepts it. Insertions produce 10, 8, 6, 4... in order across cursor positions.
 
-**EC-10: Theme switch while diagrams are rendered** — User switches theme from light to dark (or vice versa). Expected: all rendered diagrams re-render with the new Mermaid theme. No old-theme SVG artifacts remain.
+**EC-10: Wrap string with no placeholder** — User enters Wrap="Item ". Expected: bare string is prepended to each number: `Item 1`, `Item 2`, etc. (per FR-03.6 fallback logic).
 
-**EC-11: Plugin disabled while diagrams are rendered** — User toggles the Diagrams plugin off from the Plugins Panel. Expected: all SVG widgets are removed from the editor. The raw fenced blocks are visible. No SVG DOM nodes remain. Re-enabling the plugin re-renders all diagrams.
+**EC-11: Wrap string with placeholder** — User enters Wrap="Step __COUNTER__:". Expected: placeholder is replaced: `Step 1:`, `Step 2:`, etc.
 
-**EC-12: Enable/disable cycle (rapid toggle)** — Plugin enabled, disabled, and re-enabled in quick succession. Expected: no duplicate StateFields, no duplicate CSS style tags, no duplicate Mermaid initialization. Each enable cycle starts from a clean state.
+**EC-12: Wrap string with multiple placeholder occurrences** — User enters Wrap="__COUNTER__/__COUNTER__". Expected: all occurrences are replaced — `3/3`, `4/4`, etc. Implemented via `replaceAll` (FR-03.6). No crash.
 
-**EC-13: Diagram source edited while cursor is inside** — User edits the mermaid source. When they move the cursor away, the updated source is rendered. Expected: the `eq()` comparison on the widget detects that the source has changed and creates a new render. The old SVG is replaced with the new one.
+**EC-13: Non-integer input in Start field** — User types "abc" or "1.5" in the Start field. Expected: inline validation error shown, Insert button disabled, the dialog cannot be submitted.
 
-**EC-14: Diagram source unchanged, cursor moves in and out** — User moves cursor into a mermaid block and immediately back out without editing. Expected: `eq()` returns true on the re-created widget (same source), CM6 reuses the existing DOM node, and no re-render of the SVG occurs.
+**EC-14: Non-integer input in Step field** — Same as EC-13 but for the Step field.
 
-**EC-15: Mermaid render produces an SVG with embedded `<script>` tags** — A maliciously crafted or edge-case diagram source that causes Mermaid's SVG output to include a `<script>` element. Expected: the plugin's `innerHTML` injection must not execute the script. (Mermaid strips scripts by default; the Architect must verify this claim for the bundled version and document the finding. If not guaranteed, the plugin must sanitize the SVG output before injection.)
+**EC-15: Empty Start field** — User clears the Start field entirely. Expected: treated as invalid (not `0`); Insert button disabled.
 
-**EC-16: Mermaid library load failure** — Strategy B only: the `<script>` tag for the Mermaid asset fails to load (asset file missing or corrupt). Expected: `onEnable` must detect the failure, log an error, and leave the editor in a clean state (no StateField registered, no broken references to an unavailable `mermaid` global). The plugin should display a warning in the Plugins Panel detail view if possible.
+**EC-16: Cancel dismisses without insertion** — User opens the dialog, changes fields, then clicks Cancel or presses Escape. Expected: no document changes; persisted settings are NOT updated to reflect the cancelled changes; editor focus is restored.
 
-**EC-17: Mermaid block content contains HTML entities** — Diagram source containing `&`, `<`, `>` in label text (e.g., `A["value < 10"]`). Expected: Mermaid handles these as part of its own parsing. The plugin passes the raw source string to `mermaid.render()` without pre-escaping. Mermaid's output SVG is correct.
+**EC-17: Enter key submits dialog** — While focus is on any input field or the Insert button, pressing Enter triggers insertion. Expected: same result as clicking Insert.
 
-**EC-18: Extremely wide diagram (overflows content area)** — A sequence diagram or Gantt chart that renders wider than `maxRenderWidth` pixels. Expected: the SVG container scrolls horizontally (CSS `overflow-x: auto` on `.cm-mermaid-block`). The surrounding editor layout is not broken.
+**EC-18: Escape key dismisses dialog** — While dialog is open, pressing Escape closes it without insertion, regardless of which element has focus.
 
-**EC-19: Render ID collision** — Two mermaid blocks in the same document that somehow generate the same render ID (edge case in the ID generation strategy). Expected: Mermaid detects the ID collision and throws an error, which the error path (FR-05) handles. The ID generation strategy must be designed to make this practically impossible (the Architect specifies the strategy — see AD-08).
+**EC-19: Dialog already open, command invoked again** — User somehow triggers `edit-insert-count` while the dialog is already visible. Expected: no second dialog is created; the existing dialog receives focus.
 
-**EC-20: Document with zero mermaid blocks** — The plugin is enabled but the document has no mermaid fences. Expected: the Lezer tree walk produces no results; `Decoration.none` is returned; no performance regression. The StateField update path is O(N) in document size but effectively a no-op for non-mermaid documents.
+**EC-20: Plugin disabled while dialog is open** — User disables the Insert Count plugin via Plugins Panel while the Count Dialog is open. Expected: `onDisable` closes the dialog without inserting, removes the dialog DOM, and restores editor focus.
 
-**EC-21: Mermaid block at end of document with no trailing newline** — The closing fence is the last byte of the document with no `\n` after it. Expected: Lezer still produces a valid FencedCode node; the `to` offset is at the document's last position; the decoration is applied correctly.
+**EC-21: Tab switch while dialog is open** — User switches to a different document tab while the Count Dialog is open. Expected: the dialog **remains open**. When the user subsequently clicks Insert, the insertion applies to whichever document is active at that moment. The dialog's visual position should update to reflect the new editor's cursor position if possible; if position recomputation is not feasible, the dialog may remain anchored at its original screen position.
 
-**EC-22: Tab switch while a diagram is being rendered** — The user switches to a different tab while Mermaid's async render is in flight. Expected: when the async render completes, its DOM mutation targets the widget placeholder. If the widget is no longer in the active view (tab switched), the mutation should be harmless (the DOM node is detached). No error is thrown; no crash.
+**EC-22: Very large number of cursor positions** — User uses Cmd-Opt-Up/Down (multi-cursor) to create 200 cursors. Expected: 200 counter values are inserted in a single transaction. No performance freeze visible to the user (NFR-02).
 
-**EC-23: Settings load returns null (first run)** — `api.loadSettings()` returns null. Expected: all default values from FR-08.1 are used. The plugin initializes correctly with defaults and does not attempt to read properties from a null object.
+**EC-23: Cursors on same line** — Two cursors on the same line at different column positions. Expected: both receive counter values; offsets are calculated correctly accounting for the text inserted by the first cursor shifting subsequent offsets to the right. The plugin must adjust downstream offsets or sort ranges and apply changes using CM6's `ChangeSet` API which handles offset shifting automatically.
 
-**EC-24: Settings save failure** — `api.saveSettings()` rejects (e.g., disk full). Expected: the plugin logs the error but continues running. The in-memory settings remain active for the session; on next launch, the default or previously saved values are used.
+**EC-24: Start value results in very long string** — Start=9999999999 (10 digits). Expected: the string `9999999999` is inserted correctly. No truncation, no crash.
 
-**EC-25: Preview mode toggled rapidly** — User rapidly toggles between source and preview mode (e.g., via a keybinding). Expected: the StateField guard fires correctly on each toggle. No leftover decorations when source mode is active. No missing decorations when preview mode re-activates.
+**EC-25: First run (settings null)** — `api.loadSettings()` returns null. Expected: Start=1, Step=1, Wrap="" defaults are used for the dialog pre-fill. No attempt to read properties from a null object.
 
-**EC-26: Mermaid `initialize()` called before library is available** — Strategy B timing issue: `onEnable` calls `mermaid.initialize()` before the `<script>` tag's `onload` fires. Expected: the plugin must await the library load before calling any Mermaid API. An `onload` or Promise-based guard is required.
+**EC-26: Settings save failure** — `api.saveSettings()` rejects after a successful Insert. Expected: the insertion has already been applied to the document (it is not rolled back). The plugin logs the error but does not show a user-visible error. In-memory values remain correct for the session.
+
+**EC-27: Read-only document or content tab** — The active tab is a read-only help file (opened via `openHelpFileInTab`). Expected: the CM6 editor is in read-only mode; the `dispatch` call either fails silently or the transaction is rejected by CM6. No crash; the dialog should ideally detect this and show a message, or the insertion simply has no effect.
 
 ---
 
-## New Work Required
+## Resolved Decisions (formerly Unknowns)
 
-| Component | Target File | Notes |
-|---|---|---|
-| Diagrams plugin source | `src/plugins/diagrams/diagrams.plugin.ts` (new) | IIFE plugin: Lezer FencedCode detection, StateField, MermaidWidget, error placeholder, CSS injection, theme-change listener |
-| Diagrams plugin directory | `src/plugins/diagrams/` (new directory) | |
-| Plugin build registration | `scripts/build-plugins.mjs` | Add `["diagrams", "src/plugins/diagrams/diagrams.plugin.ts"]` to PLUGINS array |
-| Mermaid bundle | `src-tauri/plugins/core/` or `src-tauri/resources/` | Depends on bundle strategy (FR-09). If Strategy A: bundled into IIFE. If Strategy B: copied as a separate `.js` asset. |
-| Rust file-size cap | `src-tauri/src/commands/plugins.rs` | Raise `MAX_BYTES` in `read_plugin_file` (Strategy A) or add asset protocol handler (Strategy B) |
-| COMMANDS array toggle entry | `src/keybindings/keybindings-panel.ts` | Add `view-toggle-diagrams` to COMMANDS array |
-| handleAction dispatch | `src/main.ts` | Add `"view-toggle-diagrams"` case that calls `pluginManager.toggle("diagrams", ...)` |
-| Plugin tests | `tests/plugins/diagrams/diagrams.test.ts` (new) | Unit tests: FencedCode detection, cursor overlap suppression, EC-01 (empty block), EC-03 (unclosed fence), EC-04 (invalid syntax), EC-06 (multiple blocks), EC-09 (source-mode guard), EC-12 (enable/disable cycle), EC-13 (source changed re-renders), EC-14 (source unchanged reuses DOM), EC-20 (no mermaid blocks) |
+All items below were open during analysis and are now locked. The Architect must not re-open these without a requirements change request.
+
+**UK-01 — RESOLVED: Dialog UI pattern** — Inline overlay anchored to the cursor position (VS Code style). Not a centred modal. See FR-02.1.
+
+**UK-02 — RESOLVED: Mode B insertion point** — Insert at the cursor's current column on each covered line, not column 0. If a line is shorter than the cursor column, append at line end. See FR-03.3.
+
+**UK-03 — RESOLVED: Default keyboard shortcut** — `Cmd-Shift-3`. The Architect must verify no conflict exists in `src/keybindings/` and document the check. See FR-07.1 and FR-07.1a.
+
+**UK-04 — RESOLVED: Multi-placeholder behavior** — Replace ALL occurrences of `__COUNTER__` in the Wrap string using `replaceAll`. See FR-03.6 and EC-12.
+
+**UK-05 — RESOLVED: Tab switch mid-dialog** — Leave the dialog open. Insertion applies to whichever tab is active when the user clicks Insert. See EC-21.
+
+**UK-06 — RESOLVED: Post-insertion selection state** — Collapse selection to immediately after the last inserted value (bare cursor, nothing selected). See FR-03.5.
+
+---
+
+## Proposed Constraints
+
+1. All insertions in one invocation must be one CM6 transaction (NFR-01, EC-05).
+2. The plugin must not register CM6 extensions — imperative invocation only (FR-06.5, NFR-03).
+3. The dialog must be dismissible via Escape at all times (FR-02.6, EC-18).
+4. Validation must block submission when Step=0 or when Start/Step fields are non-integer (FR-05).
+5. Settings are saved only on successful Insert, never on Cancel (FR-04.3, EC-16).
+6. The global `__MARKABLE_INSERT_COUNT_OPEN__` must be set to null in `onDisable` to allow the `handleAction` fallback alert to function correctly (FR-06.4, EC-02).
+7. Offset collision when multiple cursors occupy the same line must be handled by CM6's `ChangeSet` API, not by manual offset arithmetic (EC-23).

@@ -221,7 +221,7 @@ describe("migratePluginSettings — non-mutation and field preservation", () => 
     expect(result.recentFiles).toBe(settings.recentFiles);
     expect(result.keybindings).toBe(settings.keybindings);
     // focusMode is preserved (not deleted — backward compat).
-    expect((result as Record<string, unknown>).focusMode).toBe(true);
+    expect((result as unknown as Record<string, unknown>).focusMode).toBe(true);
   });
 });
 

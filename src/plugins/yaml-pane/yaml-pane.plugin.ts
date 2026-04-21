@@ -948,6 +948,7 @@ type PanelState =
 // Module-level panel state
 let _panelContainer: HTMLElement | null = null;
 let _panelState: PanelState = { kind: "empty" };
+// @ts-ignore TS6133: assigned for future use / state tracking
 let _editingKey: string | null = null;
 let _addFieldVisible: boolean = false;
 let _nestedExpanded: Set<string> = new Set();

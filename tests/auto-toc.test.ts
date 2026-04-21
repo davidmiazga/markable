@@ -353,7 +353,8 @@ describe("scanHeadings", () => {
     });
 
     it("calling scanHeadings on an empty string after a populated call returns []", () => {
-      const _ = scanHeadings("# Full document\n## With headings");
+      const __ = scanHeadings("# Full document\n## With headings");
+      void __;
       expect(scanHeadings("")).toEqual([]);
     });
   });

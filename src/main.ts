@@ -712,6 +712,18 @@ function handleAction(action: string): void {
     case "edit-duplicate-line": if (editor) duplicateLine(editor); break;
     case "edit-delete-line":    if (editor) deleteLine(editor);    break;
     case "edit-goto-line":      showGoToLineOverlay();             break;
+    // "edit-insert-count" (Cmd-Shift-3): open the Insert Count dialog.
+    // Delegates to the Insert Count plugin via window global (same pattern as command-bar-open).
+    // If the plugin is disabled, __MARKABLE_INSERT_COUNT_OPEN__ is null → show alert (EC-02, FR-08.2).
+    case "edit-insert-count": {
+      const openIC = (window as any).__MARKABLE_INSERT_COUNT_OPEN__;
+      if (typeof openIC === "function") {
+        openIC();
+      } else {
+        alert("Enable the Insert Count plugin in Markable > Plugins to use this feature.");
+      }
+      break;
+    }
     case "format-comment":      if (editor) toggleInlineWrap(editor, "%%"); break;
     case "format-link":
     case "edit-paste-link": {

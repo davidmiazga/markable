@@ -57,6 +57,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "edit-delete-line",    label: "Delete Line",              defaultKey: "Cmd-Alt-Shift-Backspace", section: "Edit" },
   { id: "edit-select-none",    label: "Select None",             defaultKey: "Cmd-Shift-D",               section: "Edit" },
   { id: "edit-goto-line",      label: "Go to Line",              defaultKey: "Ctrl-G",                    section: "Edit" },
+  // FC2 #15: Insert Count — Cmd-Opt-3 (Cmd-Shift-3 is reserved by macOS for screenshots).
+  { id: "edit-insert-count",  label: "Insert Count",            defaultKey: "Cmd-Alt-3",                 section: "Edit" },
   // View
   { id: "command-bar-open",    label: "Command Bar",          defaultKey: "Cmd-Shift-P",     section: "View" },
   { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },

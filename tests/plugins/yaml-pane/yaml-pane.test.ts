@@ -29,7 +29,7 @@ import {
   inferType,
   findKeyLineIndex,
   detectBlockScalar,
-  escapeRegExp,
+  // escapeRegExp, // imported but not directly tested (tested via callers)
   // Step 02: Write-back
   requiresQuoting,
   formatScalarValue,
@@ -49,14 +49,14 @@ import {
   loadSettings,
   saveSettings,
   DEFAULT_SETTINGS,
-  VALID_SCHEMA_TYPES,
+  // VALID_SCHEMA_TYPES, // imported but value not directly asserted
   // Step 04: Panel DOM (exported for testing)
   renderEmptyState,
   renderErrorState,
   renderFieldRow,
   renderFieldsState,
   renderAddFieldRow,
-  renderFieldControl,
+  // renderFieldControl, // imported but not directly used in tests
   renderChipWidget,
   renderSelectControl,
   renderNestedSection,
@@ -1388,7 +1388,7 @@ describe("Step 04 — renderNestedSection (DOM)", () => {
     const container3 = document.createElement("div");
     renderNestedSection(field, container3);
     // At this point _nestedExpanded should include 'meta'; check for nested body
-    const rawTA = container3.querySelector(".yaml-pane-raw-value");
+    void container3.querySelector(".yaml-pane-raw-value");
     // Either the body is rendered (expanded) or not (collapsed). Both are valid
     // since we cannot reliably control the Set state across module reloads.
     // Assert: no error thrown is sufficient for this integration check.

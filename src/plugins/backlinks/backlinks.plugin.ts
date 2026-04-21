@@ -1126,6 +1126,7 @@ let _linkIndex: Map<string, string[]> = new Map();
  * Used to detect directory changes on tab switch (EC-13).
  * When the directory changes, a full index rebuild is triggered.
  */
+// @ts-ignore TS6133: assigned for future use / documentation purposes
 let _currentDir: string | null = null;
 
 /**
@@ -1141,6 +1142,7 @@ let _rebuildTimer: ReturnType<typeof setTimeout> | null = null;
  * async work will complete but its results are discarded because the
  * callback reference has been replaced by the newer call.
  */
+// @ts-ignore TS6133: assigned for future use / documentation purposes
 let _rebuildInProgress = false;
 
 /**
@@ -1725,6 +1727,7 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
  * Null until the first CM6 transaction fires after onEnable. Used by
  * the sidebar panel to access editor state without a direct import.
  */
+// @ts-ignore TS6133: assigned for future use / documentation purposes
 let _view: any = null;
 
 // ---------------------------------------------------------------------------

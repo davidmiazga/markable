@@ -94,7 +94,7 @@ import {
   buildSidebarPanel,
   updateSidebarButtonStates,
   detectTableContextFromState,
-  handleTableAction,
+  // handleTableAction, // imported but not directly used in tests (tested via integration)
   renderDetailExtra,
   onEnable,
   onDisable,
@@ -2108,8 +2108,19 @@ function makeMockApi() {
     addExtensions: vi.fn(),
     removeExtensions: vi.fn(),
     registerStatusBar: vi.fn(),
-    statusBar: null,
-  };
+    statusBar: {
+      left: document.createElement("div"),
+      center: document.createElement("div"),
+      right: document.createElement("div"),
+    },
+    ensureStatusBar: vi.fn(),
+    hideStatusBarIfUnused: vi.fn(),
+    registerStatusBarDependent: vi.fn(),
+    unregisterStatusBarDependent: vi.fn(),
+    registerSidebarPanel: vi.fn(),
+    unregisterSidebarPanel: vi.fn(),
+    restartSelf: vi.fn().mockResolvedValue(undefined),
+  } as unknown as import("../../../src/plugins/markable-plugin-api").MarkablePluginAPI;
 }
 
 /** Build a minimal mock EditorView with a controllable dispatch spy. */
@@ -2194,7 +2205,7 @@ describe("step_01 — settings and CSS lifecycle", () => {
   it("1.3 mergeWithDefaults({ unknownKey: 'foo' }) drops unknown keys (migrated)", () => {
     const result = mergeWithDefaults({ unknownKey: "foo" });
     // The unified plugin returns default settings (ignores unknown keys)
-    expect((result as Record<string, unknown>)["unknownKey"]).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>)["unknownKey"]).toBeUndefined();
     expect(result.toolbarMode).toBe("floating");
   });
 
@@ -3046,7 +3057,7 @@ describe("step_06 — wiring and lifecycle", () => {
   it("6.2 click with __MARKABLE_EDITOR_VIEW__ undefined returns early (EC-14)", async () => {
     const mod = await import("../../../src/plugins/markdown-toolbar/markdown-toolbar.plugin");
     // Access the default export (plugin object).
-    const plugin = mod as { onEnable: (api: ReturnType<typeof makeMockApi>) => Promise<void> } | undefined;
+    const plugin = mod as unknown as { onEnable: (api: ReturnType<typeof makeMockApi>) => Promise<void> } | undefined;
 
     // If the plugin export is not directly accessible, skip this via a
     // guard — the functionality is covered by the onEnable/onDisable tests.
@@ -3289,7 +3300,7 @@ describe("step_07 — handleAction and integration", () => {
     mockApi07 = makeMockApi();
 
     mockDispatch = vi.fn();
-    mockView = makeMockView(mockDispatch);
+    mockView = makeMockView(mockDispatch as any);
 
     // Stub CM6 globals needed by onEnable.
     vi.stubGlobal("__CM_VIEW__", {
@@ -3460,7 +3471,7 @@ describe("step_07 — handleAction and integration", () => {
 
   it("7.14 choose-file — dialog returns null — no dispatch, toolbar open (EC-12)", async () => {
     setupContext({ rawSource: "![photo](a.png)", url: "a.png" });
-    const popover = document.getElementById("__markable_img_toolbar__");
+    void document.getElementById("__markable_img_toolbar__");
 
     vi.stubGlobal("__TAURI_DIALOG__", {
       open: vi.fn().mockResolvedValue(null),
@@ -3607,8 +3618,6 @@ describe("step_07 — handleAction and integration", () => {
 // simulate CM6 editor state transitions.
 // ============================================================================
 
-import { markdownLanguage } from "@codemirror/lang-markdown";
-
 /** Parser used for integration test state stubs. */
 const integrationParser = markdownLanguage.parser;
 
@@ -3728,7 +3737,7 @@ describe("Integration: context switching", () => {
     const tableText = "| Col1 | Col2 |\n| --- | --- |\n| a | b |";
     // Ensure no image context
     hideToolbar();
-    const tblCtx = detectTableContextFromState(
+    void detectTableContextFromState(
       makeIntegrationState(tableText, tableText.indexOf("a") + 1)
     );
     // With proper CM_LANGUAGE stub, tblCtx may or may not be null depending on

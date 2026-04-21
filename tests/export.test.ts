@@ -18,7 +18,7 @@
  *   EC-20 is a build-time pre-condition verified by completing step_01.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   escapeHtml,
   extractTitle,

@@ -91,7 +91,7 @@ import { TabManager } from "../../src/tabs/tab-manager";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../../src/tabs/tab-types";
 import { readFile } from "../../src/lib/bridge";
 import { getCurrentSettings } from "../../src/lib/settings";
-import { makeTab, makeTabs } from "./test-helpers";
+import { makeTabs } from "./test-helpers";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockGetCurrentSettings = getCurrentSettings as ReturnType<typeof vi.fn>;

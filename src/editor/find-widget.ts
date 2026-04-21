@@ -57,30 +57,30 @@ export class FindWidget {
   /** Root container element appended to document.body. */
   private root: HTMLDivElement;
   /** Main text input for the search term. */
-  private findInput: HTMLInputElement;
+  private findInput!: HTMLInputElement;
   /** Text input for the replacement string (in the replace row). */
-  private replaceInput: HTMLInputElement;
+  private replaceInput!: HTMLInputElement;
   /** Span showing "N of M" or "No results" or "Invalid". */
-  private countLabel: HTMLSpanElement;
+  private countLabel!: HTMLSpanElement;
   /** Toggle button: match case (Aa). */
-  private toggleMatchCase: HTMLButtonElement;
+  private toggleMatchCase!: HTMLButtonElement;
   /** Toggle button: whole word (ab). */
-  private toggleWholeWord: HTMLButtonElement;
+  private toggleWholeWord!: HTMLButtonElement;
   /** Toggle button: regular expression (.*). */
-  private toggleRegexp: HTMLButtonElement;
+  private toggleRegexp!: HTMLButtonElement;
   /** Chevron button that shows/hides the replace row. */
-  private chevronBtn: HTMLButtonElement;
+  private chevronBtn!: HTMLButtonElement;
   /** The collapsible replace row. */
-  private replaceRow: HTMLDivElement;
+  private replaceRow!: HTMLDivElement;
   /** "Replace" button (replace current match). */
-  private replaceOneBtn: HTMLButtonElement;
+  private replaceOneBtn!: HTMLButtonElement;
   /** "All" button (replace all matches). */
-  private replaceAllBtn: HTMLButtonElement;
+  private replaceAllBtn!: HTMLButtonElement;
   /** Navigation buttons — store refs for click handlers. */
-  private prevBtn: HTMLButtonElement;
-  private nextBtn: HTMLButtonElement;
+  private prevBtn!: HTMLButtonElement;
+  private nextBtn!: HTMLButtonElement;
   /** Close × button. */
-  private closeBtn: HTMLButtonElement;
+  private closeBtn!: HTMLButtonElement;
 
   // ---- Widget state fields ----
 
@@ -111,12 +111,12 @@ export class FindWidget {
    * function reference can be passed to both addEventListener and
    * removeEventListener. Anonymous functions cannot be removed by reference.
    */
-  private _onMouseMove: (e: MouseEvent) => void;
+  private _onMouseMove!: (e: MouseEvent) => void;
 
   /**
    * Bound mouseup handler. Same rationale as _onMouseMove above.
    */
-  private _onMouseUp: () => void;
+  private _onMouseUp!: () => void;
 
   // ---------------------------------------------------------------------------
   // Constructor
@@ -658,7 +658,7 @@ export class FindWidget {
     while (!indexCursor.next().done) {
       currentIndex++;
       // Stop once we reach the match that covers or passes the cursor position.
-      if (indexCursor.value.to > selFrom) break;
+      if ((indexCursor as any).value.to > selFrom) break;
     }
 
     this.countLabel.textContent = `${currentIndex} of ${totalCount}`;

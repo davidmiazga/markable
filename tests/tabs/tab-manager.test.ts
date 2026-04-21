@@ -94,9 +94,9 @@ import { setLivePreviewFilePath } from "../../src/editor/live-preview";
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 // writeFile and saveFileDialog are imported for the mock but direct calls in
 // saveActiveTab / saveActiveTabAs tests are deferred to step_05 integration tests.
-// Keep the references typed so future test additions can use them without re-importing.
-const _mockWriteFile = writeFile as ReturnType<typeof vi.fn>;
-const _mockSaveFileDialog = saveFileDialog as ReturnType<typeof vi.fn>;
+// The casts below document the types for future test additions.
+void (writeFile as ReturnType<typeof vi.fn>);
+void (saveFileDialog as ReturnType<typeof vi.fn>);
 const mockGetCurrentSettings = getCurrentSettings as ReturnType<typeof vi.fn>;
 const mockUpdateSettings = updateSettings as ReturnType<typeof vi.fn>;
 const mockAddRecentFile = addRecentFile as ReturnType<typeof vi.fn>;

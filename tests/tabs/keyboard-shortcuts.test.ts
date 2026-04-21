@@ -227,7 +227,7 @@ describe("step_06 keyboard shortcuts", () => {
     // id is present in COMMANDS with a given defaultKey, resolveAction will
     // return that id for a matching synthetic event.
 
-    const tabCommandMap: [string, string, Parameters<typeof makeKeyEvent>][] = [
+    const tabCommandMap: [string, string, [{ meta?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }?]][] = [
       ["tab-new",   "T", [{ meta: true }]],
       ["tab-close", "W", [{ meta: true }]],
       ["tab-1",     "1", [{ meta: true }]],

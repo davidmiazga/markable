@@ -1079,7 +1079,7 @@ const plugin = {
   /**
    * Disable the plugin: close any open picker, remove CSS, and delete the global.
    */
-  onDisable(_api: MarkablePluginAPI): void {
+  onDisable(_disableApi: MarkablePluginAPI): void {
     _enabled = false;
 
     // FR-8.3 step 1: close picker if open.

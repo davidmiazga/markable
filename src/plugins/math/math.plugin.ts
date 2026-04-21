@@ -282,6 +282,7 @@ export function scanMathRanges(text: string): MathRange[] {
   /**
    * Return the trimmed content of line `lineIdx` (without the trailing \n).
    */
+  // @ts-ignore TS6133: retained for future use
   function getLineTrimmed(lineIdx: number): string {
     const start = lineStarts[lineIdx];
     const end = lineIdx + 1 < lineCount ? lineStarts[lineIdx + 1] - 1 : len;

@@ -84,12 +84,11 @@ function teardownDom() {
 describe("VerticalTabStrip — mount()", () => {
   let appRow: HTMLElement;
   let editor: HTMLElement;
-  let sidebarRight: HTMLElement;
   let container: HTMLElement;
   let renderer: VerticalTabStrip;
 
   beforeEach(() => {
-    ({ appRow, editor, sidebarRight, container } = buildDom());
+    ({ appRow, editor, container } = buildDom());
     renderer = new VerticalTabStrip(vi.fn(), vi.fn());
   });
 

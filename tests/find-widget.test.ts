@@ -126,7 +126,7 @@ function makeViewMock(
 // recently added one.
 // ---------------------------------------------------------------------------
 
-function getWidgetElements(widget: FindWidget) {
+function getWidgetElements(_widget: FindWidget) {
   // The widget root is appended to document.body on construction.
   const root = document.body.querySelector<HTMLDivElement>(".find-widget:last-child")!;
   return {
@@ -1096,7 +1096,7 @@ describe("Group 15: Viewport clamping via drag", () => {
   });
 
   it("EC-22: dragging widget to negative X clamps to 0", () => {
-    const { root, header } = getWidgetElements(widget);
+    const { root } = getWidgetElements(widget);
     // Mock getBoundingClientRect so drag-start math works.
     root.getBoundingClientRect = vi.fn(() => ({
       left: 10, top: 60, right: 330, bottom: 160,
@@ -1120,7 +1120,7 @@ describe("Group 15: Viewport clamping via drag", () => {
   });
 
   it("EC-22: dragging widget to X beyond viewport right edge clamps to max", () => {
-    const { root, header } = getWidgetElements(widget);
+    const { root } = getWidgetElements(widget);
     root.getBoundingClientRect = vi.fn(() => ({
       left: 10, top: 60, right: 330, bottom: 160,
       width: 320, height: 100, x: 10, y: 60,
@@ -1143,7 +1143,7 @@ describe("Group 15: Viewport clamping via drag", () => {
 
   it("drag end calls updateSettings with the final position", async () => {
     const { updateSettings } = await import("../src/lib/settings");
-    const { root, header } = getWidgetElements(widget);
+    const { root } = getWidgetElements(widget);
     root.getBoundingClientRect = vi.fn(() => ({
       left: 10, top: 60, right: 330, bottom: 160,
       width: 320, height: 100, x: 10, y: 60,
@@ -1164,7 +1164,7 @@ describe("Group 15: Viewport clamping via drag", () => {
   });
 
   it("drag suppresses text selection on document.body (FR-7.5)", () => {
-    const { root, header } = getWidgetElements(widget);
+    const { root } = getWidgetElements(widget);
     root.getBoundingClientRect = vi.fn(() => ({
       left: 10, top: 60, right: 330, bottom: 160,
       width: 320, height: 100, x: 10, y: 60,
@@ -1178,7 +1178,7 @@ describe("Group 15: Viewport clamping via drag", () => {
   });
 
   it("drag restores text selection on document.body after mouseup (FR-7.5)", () => {
-    const { root, header } = getWidgetElements(widget);
+    const { root } = getWidgetElements(widget);
     root.getBoundingClientRect = vi.fn(() => ({
       left: 10, top: 60, right: 330, bottom: 160,
       width: 320, height: 100, x: 10, y: 60,

@@ -318,7 +318,7 @@ pub fn run() {
                 | "edit-paste-link"
                 | "edit-copy-plain"
                 | "edit-copy-html"
-                | "edit-select-none" | "edit-duplicate-line" | "edit-delete-line" | "edit-goto-line"
+                | "edit-select-none" | "edit-duplicate-line" | "edit-delete-line" | "edit-goto-line" | "edit-insert-count"
                 | "view-toggle-preview" | "view-toggle-statusbar" | "view-toggle-focus" | "view-toggle-typewriter"
                 | "view-zoom-in" | "view-zoom-out" | "view-zoom-reset"
                 | "theme-next" | "theme-prev"

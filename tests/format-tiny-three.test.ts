@@ -62,7 +62,7 @@ function makeView(doc: string, anchor = 0, head?: number) {
       // No-op in test context — format functions call focus() for UX purposes
       // only; there is no DOM focus to manage in the Vitest environment.
     },
-  };
+  } as unknown as EditorView;
 }
 
 // ---------------------------------------------------------------------------

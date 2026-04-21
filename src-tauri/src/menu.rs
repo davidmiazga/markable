@@ -87,6 +87,9 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "edit-find", "Find...", true, Some("CmdOrCtrl+F"))?,
             &MenuItem::with_id(handle, "edit-find-replace", "Find and Replace...", true, Some("CmdOrCtrl+Alt+F"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            // FC2 #15: Insert Count — always enabled; handleAction checks plugin state.
+            &MenuItem::with_id(handle, "edit-insert-count", "Insert Count...", true, Some("CmdOrCtrl+Alt+3"))?,
         ],
     )?;
 

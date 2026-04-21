@@ -49,11 +49,11 @@ import backlinkPlugin, {
   rebuildBacklinksDOM,
   injectBacklinksCSS,
   removeBacklinksCSS,
-  injectWikiLinkStyles,
+  // injectWikiLinkStyles,
   removeWikiLinkStyles,
   _testing,
 } from "../../../src/plugins/backlinks/backlinks.plugin";
-import type { WikiLinkDecorationRange } from "../../../src/plugins/backlinks/backlinks.plugin";
+// import type { WikiLinkDecorationRange } from "../../../src/plugins/backlinks/backlinks.plugin";
 
 // ---------------------------------------------------------------------------
 // WIKI_LINK_RE
@@ -744,7 +744,7 @@ describe("handleWikiLinkClick", () => {
     alertSpy = vi.fn();
     warnSpy = vi.fn();
     (globalThis as any).alert = alertSpy;
-    vi.spyOn(console, "warn").mockImplementation(warnSpy);
+    vi.spyOn(console, "warn").mockImplementation(warnSpy as unknown as (...args: any[]) => void);
   });
 
   afterEach(() => {
@@ -1304,7 +1304,8 @@ describe("buildIndex", () => {
   });
 
   it("handles listMdFiles failure gracefully", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // @ts-ignore TS6133: spy created for side-effect (suppresses console.error output)
+    const _errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const mockInvoke = vi.fn().mockImplementation((cmd: string) => {
       if (cmd === "list_md_files") {

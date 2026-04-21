@@ -56,6 +56,8 @@ const PLUGINS = [
   // FC2 #9: Mermaid bundles ~2.5 MB and has internal dynamic imports.
   // inlineDynamicImports: true is required for IIFE format compatibility.
   ["diagrams",          "src/plugins/diagrams/diagrams.plugin.ts", { inlineDynamicImports: true }],
+  // FC2 #15: Insert Count — no dynamic imports; no inlineDynamicImports needed.
+  ["insert-count",      "src/plugins/insert-count/insert-count.plugin.ts"],
 ];
 
 /**

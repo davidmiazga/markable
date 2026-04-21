@@ -205,7 +205,7 @@ let currentImageContext: ImageContext | null = null;
  * "click" (user clicked rendered image). Null when hidden. Retained for state
  * tracking and future extension; write-only in the current implementation.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// @ts-ignore TS6133: assigned for state tracking; value not yet read
 let triggerMode: "edit" | "click" | null = null;
 
 /**
@@ -1463,7 +1463,7 @@ export function wrapWithDiv(
   alt: string,
   url: string,
   align: "center" | "right",
-  lineEnding: string, // eslint-disable-line @typescript-eslint/no-unused-vars
+  _lineEnding: string,
 ): string {
   // Single-line form as specified in FR-3a.
   return `<div align="${align}">![${alt}](${url})</div>`;
