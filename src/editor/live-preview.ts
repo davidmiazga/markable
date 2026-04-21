@@ -11,6 +11,21 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNodeRef } from "@lezer/common";
 import { marked } from "marked";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
+import type { EvaluatedTable } from "./table-formula";
+
+// ── Table sort state ───────────────────────────────────────────────────────────
+
+/** StateEffect dispatched by sort-button click handlers to trigger widget rebuild. */
+export const tableSortEffect = StateEffect.define<void>();
+
+interface SortState { col: number; dir: "asc" | "desc"; }
+
+/**
+ * Session-persistent sort state keyed by table markdown content.
+ * Survives widget recreation (cursor enter/exit); cleared on page reload.
+ */
+const tableSortState = new Map<string, SortState>();
 
 // --- View Mode: all lines render in preview (no active line) ---
 // Entering view mode: dispatch setViewMode.of(true)
@@ -175,49 +190,123 @@ function handleImage(
   );
 }
 
+/**
+ * Returns true if the string is a known formula error token.
+ * Formula error tokens start with "#" and are one of the fixed set defined
+ * in table-formula.ts. Used by TableWidget.toDOM() to apply cm-formula-error styling.
+ *
+ * @param s - The cell display string to test.
+ */
+function isFormulaError(s: string): boolean {
+  return s === "#ERR" || s === "#REF" || s === "#DIV/0" ||
+         s === "#CIRC" || s === "#VALUE" || s === "#NAME";
+}
+
+/**
+ * Returns true if the string looks like a computed formula result (numeric
+ * or AccountStyle-wrapped) rather than raw Markdown cell content.
+ *
+ * Formula results are either:
+ *  - Numeric strings: integers, decimals, or negative numbers
+ *  - Comma-formatted numbers: "1,234.56"
+ *  - AccountStyle-wrapped: "(123)" or "(1,234.56)"
+ *
+ * Must NOT be called for strings starting with "#" — those are handled by
+ * isFormulaError first. The regex covers all outputs of formatNumericResult()
+ * and applyModifiers().
+ *
+ * @param s - The cell display string to test.
+ */
+function isCellFormulaResult(s: string): boolean {
+  // Numeric with optional commas and decimal (positive or negative)
+  if (/^-?[\d,]+(\.\d+)?$/.test(s)) return true;
+  // AccountStyle-wrapped: (digits and commas, optional decimal)
+  if (/^\(\d[\d,]*(\.\d+)?\)$/.test(s)) return true;
+  return false;
+}
+
 class TableWidget extends WidgetType {
+  /** Encodes current sort state so eq() detects changes and triggers re-render. */
+  private readonly sortKey: string;
+
   constructor(private markdown: string) {
     super();
+    const s = tableSortState.get(markdown);
+    this.sortKey = s ? `${s.col}:${s.dir}` : "";
   }
 
-  toDOM(): HTMLElement {
-    const lines = this.markdown.split("\n").filter((l) => l.trim().length > 0);
-    const isDelim = (line: string) => /^[\|\s:\-]+$/.test(line.trim());
-    const parseCells = (line: string): string[] => {
-      const parts = line.split("|");
-      if (parts[0].trim() === "") parts.shift();
-      if (parts.length && parts[parts.length - 1].trim() === "") parts.pop();
-      return parts;
-    };
+  /**
+   * Builds the <table> DOM element for live preview. Formula evaluation runs on
+   * the (possibly sorted) body rows so formula results reflect the displayed order.
+   * Each header cell gets a sort button (▲ / ▼ / ⇅) that updates tableSortState
+   * and dispatches tableSortEffect to force a widget rebuild.
+   */
+  toDOM(view: EditorView): HTMLElement {
+    const evaluated: EvaluatedTable = evaluateTableFormulas(this.markdown);
+    const sort = tableSortState.get(this.markdown);
+    const body = sort ? sortBodyRows(evaluated.body, sort.col, sort.dir) : evaluated.body;
 
     const table = document.createElement("table");
     table.className = "cm-live-table";
-    let thead: HTMLTableSectionElement | null = null;
-    let tbody: HTMLTableSectionElement | null = null;
-    let inHeader = true;
 
-    for (const line of lines) {
-      if (isDelim(line)) { inHeader = false; continue; }
-      const cells = parseCells(line);
+    // Header row with sort buttons
+    if (evaluated.header.length > 0) {
+      const thead = document.createElement("thead");
       const tr = document.createElement("tr");
-      for (const cell of cells) {
-        const td = inHeader ? document.createElement("th") : document.createElement("td");
-        td.innerHTML = marked.parseInline(cell.trim()) as string;
-        tr.appendChild(td);
-      }
-      if (inHeader) {
-        if (!thead) { thead = document.createElement("thead"); table.appendChild(thead); }
-        thead.appendChild(tr);
-      } else {
-        if (!tbody) { tbody = document.createElement("tbody"); table.appendChild(tbody); }
+      evaluated.header.forEach((cellText, colIdx) => {
+        const th = document.createElement("th");
+        const label = document.createElement("span");
+        label.innerHTML = marked.parseInline(cellText) as string;
+        const btn = document.createElement("span");
+        btn.className = "cm-sort-btn";
+        btn.textContent = sort?.col === colIdx ? (sort.dir === "asc" ? " ▲" : " ▼") : " ⇅";
+        btn.setAttribute("aria-label", `Sort by column ${colIdx + 1}`);
+        th.appendChild(label);
+        th.appendChild(btn);
+        th.classList.add("cm-sortable-header");
+        th.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          const current = tableSortState.get(this.markdown);
+          if (current && current.col === colIdx) {
+            tableSortState.set(this.markdown, { col: colIdx, dir: current.dir === "asc" ? "desc" : "asc" });
+          } else {
+            tableSortState.set(this.markdown, { col: colIdx, dir: "asc" });
+          }
+          view.dispatch({ effects: tableSortEffect.of(undefined) });
+        });
+        tr.appendChild(th);
+      });
+      thead.appendChild(tr);
+      table.appendChild(thead);
+    }
+
+    // Body rows — formula results use textContent; non-formula cells use marked
+    if (body.length > 0) {
+      const tbody = document.createElement("tbody");
+      for (const row of body) {
+        const tr = document.createElement("tr");
+        for (const cellDisplay of row) {
+          const td = document.createElement("td");
+          if (cellDisplay.startsWith("#") && isFormulaError(cellDisplay)) {
+            td.textContent = cellDisplay;
+            td.classList.add("cm-formula-error");
+          } else if (isCellFormulaResult(cellDisplay)) {
+            td.textContent = cellDisplay;
+          } else {
+            td.innerHTML = marked.parseInline(cellDisplay) as string;
+          }
+          tr.appendChild(td);
+        }
         tbody.appendChild(tr);
       }
+      table.appendChild(tbody);
     }
+
     return table;
   }
 
   eq(other: TableWidget): boolean {
-    return this.markdown === other.markdown;
+    return this.markdown === other.markdown && this.sortKey === other.sortKey;
   }
 
   ignoreEvent(): boolean { return false; }
@@ -609,7 +698,8 @@ export const tablePreviewField = StateField.define<DecorationSet>({
   create(state) { return buildTableDecorations(state); },
   update(deco, tr) {
     if (tr.docChanged || tr.selection ||
-        syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+        syntaxTree(tr.state) !== syntaxTree(tr.startState) ||
+        tr.effects.some(e => e.is(tableSortEffect))) {
       return buildTableDecorations(tr.state);
     }
     return deco.map(tr.changes);

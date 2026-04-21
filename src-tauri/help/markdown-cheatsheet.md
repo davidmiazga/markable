@@ -105,6 +105,45 @@ Specify a language after the opening fence for syntax context.
 
 ---
 
+## Table Formulas
+
+Cells starting with `=` are evaluated as formulas in live preview. The raw formula is shown when your cursor is on that row.
+
+**Cell references** use column letters (A, B, C…) and row numbers starting at 1 (header row excluded):
+
+| Item   | Qty | Price | Total       |
+|--------|-----|-------|-------------|
+| Apple  | 3   | 1.50  | =B1*C1      |
+| Banana | 5   | 0.75  | =B2*C2      |
+| Total  |     |       | =SUM(D1:D2) |
+
+**Supported functions:** `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`, `ROUND`, `ABS`, `IF`
+
+```
+=SUM(A1:A4)          sum of A1 through A4
+=AVG(B1:B3)          average
+=ROUND(A1/B1, 2)     divide and round to 2 decimal places
+=IF(A1>10, 1, 0)     conditional (numeric comparisons only)
+```
+
+**Input tip:** commas in numbers are accepted — `1,000` is treated as `1000`.
+
+**Output modifiers** are appended with `-` after the formula:
+
+| Modifier | Example | Result |
+|---|---|---|
+| `-CommaFormat` | `=SUM(A1:A3)-CommaFormat` | `1,234,567` |
+| `-MoneyFormat` | `=A1*B1-MoneyFormat` | `$1,234.56` |
+| `-AccountFormat` | `=A1-AccountFormat` | `$1,234.56` or `$(1,234.56)` for negatives |
+| `-PercentFormat` | `=A1/B1-PercentFormat` | `75%` |
+| `-IntFormat` | `=A1/B1-IntFormat` | `3` (truncates decimals) |
+
+Modifiers can be chained: `=A1/B1-IntFormat-PercentFormat` → `33%`.
+
+**Error tokens:** `#ERR` (parse error), `#REF` (invalid cell), `#DIV/0` (division by zero), `#CIRC` (circular reference), `#VALUE` (non-numeric cell in arithmetic), `#NAME` (unknown modifier).
+
+---
+
 ## Horizontal Rule
 
 Three dashes on their own line:

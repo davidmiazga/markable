@@ -54,6 +54,9 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+
+  /* Formula error token colour — override in theme CSS files if needed */
+  --formula-error-color: #c0392b;
 }
 
 /* --- Dark Mode --- */
@@ -538,6 +541,29 @@ body.tab-mode-vertical #titlebar {
 .cm-live-table th {
   background: var(--code-bg);
   font-weight: 600;
+}
+
+/* Formula error tokens displayed inside table cells.
+   Color is theme-overridable via --formula-error-color (NFR-05). */
+.cm-formula-error {
+  color: var(--formula-error-color, #c0392b);
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+/* Sortable table column headers */
+.cm-sortable-header {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.cm-sortable-header:hover .cm-sort-btn {
+  opacity: 1;
+}
+.cm-sort-btn {
+  opacity: 0.35;
+  font-size: 0.75em;
+  transition: opacity 0.15s;
 }
 
 /* ============================================================

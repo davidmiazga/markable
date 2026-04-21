@@ -122,7 +122,8 @@
       "Bash(find /Users/davidmiazga/Documents/_code-workArea/markable-2.0/src-tauri/src/commands -name \"*.rs\" -type f -exec wc -l {} +)",
       "Bash(git merge:*)",
       "Bash(npm list:*)",
-      "Read(//Users/davidmiazga/Documents/_code-workArea/markable-2.0/BEGIN{max=0;fn=\"\"} /^\\(export \\)?\\(async \\)?function |^export class |^  \\(async \\)?[a-zA-Z].*\\\\\\(.*\\\\\\).*{/{start=NR;name=$0} /^}$/**)"
+      "Read(//Users/davidmiazga/Documents/_code-workArea/markable-2.0/BEGIN{max=0;fn=\"\"} /^\\(export \\)?\\(async \\)?function |^export class |^  \\(async \\)?[a-zA-Z].*\\\\\\(.*\\\\\\).*{/{start=NR;name=$0} /^}$/**)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
