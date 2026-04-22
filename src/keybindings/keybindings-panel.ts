@@ -45,7 +45,10 @@ export const COMMANDS: CommandDef[] = [
   { id: "file-export",     label: "Export...",              defaultKey: "Cmd-Alt-E",       section: "File" },
   { id: "file-import",     label: "Import",                 defaultKey: "Cmd-Alt-Shift-I", section: "File" },
   { id: "file-close-all",  label: "Close All",              defaultKey: "Cmd-Shift-W",     section: "File" },
-  { id: "file-print",      label: "Print",                  defaultKey: "Cmd-P",           section: "File" },
+  // Cmd-P is now reserved for "Open Files" (command-bar-open-files).
+  // file-print has no default keybinding and is accessible via the menu or
+  // the Commands bar (FR-01.5, AD-CB confirmed decision).
+  { id: "file-print",      label: "Print",                  defaultKey: "",                section: "File" },
   // Edit
   { id: "edit-find",           label: "Find",                     defaultKey: "Cmd-F",     section: "Edit" },
   { id: "edit-find-replace",   label: "Find & Replace",           defaultKey: "Cmd-Alt-F", section: "Edit" },
@@ -60,7 +63,12 @@ export const COMMANDS: CommandDef[] = [
   // FC2 #15: Insert Count — Cmd-Opt-3 (Cmd-Shift-3 is reserved by macOS for screenshots).
   { id: "edit-insert-count",  label: "Insert Count",            defaultKey: "Cmd-Alt-3",                 section: "Edit" },
   // View
-  { id: "command-bar-open",    label: "Command Bar",          defaultKey: "Cmd-Shift-P",     section: "View" },
+  { id: "command-bar-open",             label: "Command Bar",              defaultKey: "Cmd-Shift-P",     section: "View" },
+  // Modal command bar mode shortcuts (Step 01 — Modal Command Bar).
+  // command-bar-open-files replaces file-print's Cmd-P binding.
+  // command-bar-open-keybindings uses the new Cmd-Shift-K chord.
+  { id: "command-bar-open-files",       label: "Open Files",               defaultKey: "Cmd-P",           section: "View" },
+  { id: "command-bar-open-keybindings", label: "Open Keybindings",         defaultKey: "Cmd-Shift-K",     section: "View" },
   { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },
   { id: "app-keybindings",     label: "Keyboard Shortcuts",   defaultKey: "Cmd-Alt-Shift-K", section: "View" },
   { id: "app-plugins",         label: "Plugins Panel",        defaultKey: "Cmd-Alt-P",       section: "View" },

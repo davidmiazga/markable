@@ -508,9 +508,24 @@ function handleAction(action: string): void {
     // The plugin registers window.__MARKABLE_COMMAND_BAR_OPEN__ at onEnable and
     // sets it to null at onDisable. If the plugin is off, the global is null and
     // this is a safe no-op (EC-19).
+    //
+    // Modal command bar (Step 01): three action ids map to three modes:
+    //   command-bar-open          → Commands mode (legacy Cmd-Shift-P; preserved)
+    //   command-bar-open-files    → Files mode     (Cmd-P)
+    //   command-bar-open-keybindings → Keybindings mode (Cmd-Shift-K)
     case "command-bar-open": {
       const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
-      if (typeof openCB === "function") openCB();
+      if (typeof openCB === "function") openCB("commands");
+      break;
+    }
+    case "command-bar-open-files": {
+      const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+      if (typeof openCB === "function") openCB("files");
+      break;
+    }
+    case "command-bar-open-keybindings": {
+      const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+      if (typeof openCB === "function") openCB("keybindings");
       break;
     }
     case "edit-select-none":
@@ -1123,6 +1138,20 @@ async function initApp() {
   // The title bar is now managed entirely by TabManager._updateTitleBar(),
   // which is called by _applyActiveTab() on every tab switch and after init().
   // The standalone updateTitleBar() function has been removed in step_07.
+
+  // Modal Command Bar: listen for keybinding changes dispatched by the command-bar
+  // plugin after a shortcut is assigned. The plugin writes via Tauri invoke directly
+  // and then dispatches this event so the in-memory settings singleton stays current.
+  // This allows resolveAction() in the document keydown handler to reflect the new
+  // binding immediately, without requiring a page reload (AD-CB-06).
+  document.addEventListener("markable-keybindings-changed", (e: Event) => {
+    const detail = (e as CustomEvent<{ keybindings: Record<string, string> }>).detail;
+    if (detail?.keybindings) {
+      // updateSettings expects a pure updater function, not a partial object.
+      // Spread the current settings and overwrite only the keybindings field.
+      void updateSettings((s) => ({ ...s, keybindings: detail.keybindings }));
+    }
+  });
 
   // Show the window now that everything is rendered
   await showWindow();

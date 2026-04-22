@@ -1,11 +1,10 @@
 /**
- * Command Bar plugin for Markable 2.0 (FC2 #11).
+ * Command Bar plugin for Markable 2.0 (FC2 #11 + Modal Command Bar step 01).
  *
- * Implements a floating modal command palette (Cmd-Shift-P) that fuzzy-searches
- * three result categories and executes the selection:
- *   A) App commands + plugin toggles (from window.__MARKABLE_COMMANDS__)
- *   B) Document headings (from CM6 editor state)
- *   C) Recently opened files (from window.__MARKABLE_GET_SETTINGS__())
+ * Implements a floating modal command palette with three modes:
+ *   - Files mode (Cmd-P): search open tabs and workspace files
+ *   - Commands mode (Cmd-Shift-P): fuzzy-search app commands and headings
+ *   - Keybindings mode (Cmd-Shift-K): browse and reassign keyboard shortcuts
  *
  * Architecture:
  *   - IIFE plugin: no app module imports at runtime. All inter-boundary
@@ -14,10 +13,18 @@
  *   - All CSS uses CSS variables; no hardcoded hex or font names (NFR-04).
  *   - Single DOM instance: overlay created once in onEnable, reused across opens.
  *   - Focus trap: Tab/Shift-Tab cycle through results; focus never leaves overlay.
+ *   - Mode state is module-level (_mode variable), never derived from DOM (AD-CB-01).
  */
 
 import { fuzzyMatch, renderHighlightedLabel } from "./fuzzy-ranker";
 import type { FuzzyMatch } from "./fuzzy-ranker";
+import {
+  buildFilesResults,
+  countWorkspaceBeforeCap,
+  FILES_CAP,
+  FILES_SECTION_LABELS,
+} from "./files-mode";
+import type { FilesResult, TabEntry } from "./files-mode";
 
 // ── Re-export public functions used by test imports ───────────────────────────
 export { renderHighlightedLabel };
@@ -25,6 +32,18 @@ export { renderHighlightedLabel };
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * The three operating modes of the modal command bar.
+ *
+ *   files       — open tabs + workspace file search (Cmd-P)
+ *   commands    — app commands + headings (Cmd-Shift-P, legacy default)
+ *   keybindings — browse and reassign keyboard shortcuts (Cmd-Shift-K)
+ *
+ * Mode state is stored as a module-level variable (_mode) — never derived from
+ * DOM attributes — to keep transitions O(1) and avoid layout reads (AD-CB-01).
+ */
+export type BarMode = "files" | "commands" | "keybindings";
 
 /** The three result categories shown in the Command Bar. */
 type ResultCategory = "commands" | "headings" | "recent";
@@ -107,11 +126,18 @@ export interface RecentFilesBuilderDeps {
   openFileByPath: (path: string) => Promise<void>;
 }
 
-/** Persisted settings for the Command Bar plugin. */
+/**
+ * Persisted settings for the Command Bar plugin.
+ *
+ * `showRecentFiles` is deprecated as of the Modal Command Bar refactor (Step 03).
+ * It is accepted on load for backwards-compatibility but ignored in practice.
+ * It must remain in the interface to satisfy existing tests for renderDetailExtra.
+ */
 interface CommandBarSettings {
-  showCommands: boolean;    // default: true
-  showHeadings: boolean;    // default: true
-  showRecentFiles: boolean; // default: true
+  showCommands:    boolean; // default: true
+  showHeadings:    boolean; // default: true
+  showRecentFiles: boolean; // deprecated (FR-09.2); kept for export compat; default: true
+  activePreset:    string;  // name of the active keybinding preset; default: "Default"
 }
 
 // ---------------------------------------------------------------------------
@@ -151,9 +177,60 @@ const REQUIRES_FILE_IDS = new Set([
 
 /** Default plugin settings applied when no saved data exists. */
 const DEFAULT_SETTINGS: CommandBarSettings = {
-  showCommands: true,
-  showHeadings: true,
-  showRecentFiles: true,
+  showCommands:    true,
+  showHeadings:    true,
+  showRecentFiles: true,   // deprecated; kept for export compat and backward compat
+  activePreset:    "Default",
+};
+
+// ---------------------------------------------------------------------------
+// Mode constants (Step 01 — Mode Infrastructure)
+// ---------------------------------------------------------------------------
+
+/**
+ * Placeholder text shown in the search input for each mode.
+ * Gives the user an immediate visual cue about what the current mode searches.
+ */
+const MODE_PLACEHOLDERS: Record<BarMode, string> = {
+  files:       "Open file or tab…",
+  commands:    "Type a command or search headings…",
+  keybindings: "Search actions to assign shortcut…",
+};
+
+/**
+ * Footer hint text for each mode. Shown in the .cb-footer bar at the bottom
+ * of the overlay panel so the user knows what Enter and Escape do.
+ */
+const MODE_FOOTER_HINTS: Record<BarMode, string> = {
+  files:       "Enter to open  ·  Esc to close",
+  commands:    "Enter to run  ·  Esc to close",
+  keybindings: "Enter to assign shortcut  ·  Esc to close",
+};
+
+/**
+ * Human-readable mode labels displayed in the mode badge button.
+ */
+const MODE_BADGE_LABELS: Record<BarMode, string> = {
+  files:       "Files",
+  commands:    "Commands",
+  keybindings: "Keybindings",
+};
+
+/**
+ * Cycle order for tab strip clicks (FR-08.3).
+ * Kept for keyboard / fallback cycling logic.
+ */
+const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings"];
+
+/**
+ * Shortcut hint glyphs shown next to each tab label.
+ * Displayed in a muted, smaller font so power users can see the hotkey at a glance
+ * without the glyph competing visually with the tab label (NFR-04 — no hardcoded hex).
+ */
+const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
+  files:       "⌘P",
+  commands:    "⌘⇧P",
+  keybindings: "⌘⇧K",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
@@ -200,6 +277,10 @@ const CSS_TEXT = `
 }
 
 .cb-input-row {
+  /* flex layout: badge | input (badge is flex-shrink:0; input fills remaining width) */
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-color);
 }
@@ -334,6 +415,115 @@ mark.cb-match {
   font-size: 13px;
   color: var(--text-secondary);
   user-select: none;
+}
+
+/* ── Mode tab strip (replaces single badge pill) ─────────── */
+/*
+ * WHY a tab strip instead of a cycling badge:
+ *   All three modes are always visible, making it obvious that Files / Commands /
+ *   Keybindings exist without requiring the user to discover them via clicking.
+ *   The active tab gets a 2 px accent underline; inactive tabs are dimmed (50 %).
+ *   Clicking any tab switches directly to that mode (no cycling needed).
+ */
+
+.cb-tab-strip {
+  /* Full-width flex row sitting above the input; padded to align with input text */
+  display: flex;
+  align-items: stretch;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  gap: 0;
+}
+
+.cb-tab {
+  /* Each tab is a plain button — no default browser styling */
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  /* 2 px bottom border slot reserved on all tabs; transparent on inactive */
+  border-bottom: 2px solid transparent;
+  /* Shift down so the 2 px border sits exactly on the strip's bottom edge */
+  margin-bottom: -1px;
+  opacity: 0.5;
+  transition: opacity 0.1s ease;
+}
+
+.cb-tab:hover {
+  opacity: 0.8;
+}
+
+/* Active tab: full brightness + accent underline */
+.cb-tab--active {
+  opacity: 1;
+  border-bottom-color: var(--accent-color, #0070f3);
+  color: var(--text-primary);
+}
+
+/* Shortcut glyph shown to the right of the tab label */
+.cb-tab-hint {
+  font-size: 10px;
+  font-weight: 400;
+  font-family: var(--key-font, var(--mono-font));
+  color: var(--text-secondary, #888);
+  /* Slightly smaller so it does not compete visually with the label */
+  opacity: 0.85;
+}
+
+/* ── Footer hint bar (Step 01) ───────────────────────────── */
+
+.cb-footer {
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+  border-top: 1px solid var(--border-color, #ccc);
+  user-select: none;
+}
+
+/* ── Preset row (Step 01 scaffold; shown only in keybindings mode) ─── */
+
+.cb-preset-row {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+/* Hidden by default; removed by setMode("keybindings") */
+.cb-preset-row--hidden {
+  display: none;
+}
+
+/* ── Files mode: loading / notice rows (Step 02) ──────────────────── */
+
+/* "Loading…" placeholder shown while the async workspace scan is in-flight. */
+.cb-loading {
+  padding: 16px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  user-select: none;
+  font-style: italic;
+}
+
+/* Inline notice rows: no-workspace, no-files, capped, error. */
+.cb-notice {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  user-select: none;
+  border-top: 1px solid var(--border-color, #e0e0e0);
 }
 `;
 
@@ -610,32 +800,28 @@ export function buildRecentFileResults(deps: RecentFilesBuilderDeps): CommandBar
 }
 
 // ---------------------------------------------------------------------------
-// Top-level result builder
+// Top-level result builder (Step 03: mode-dispatching)
 // ---------------------------------------------------------------------------
 
 /**
- * Build the complete result set by calling all three category builders and
- * concatenating their outputs in category order (A → B → C).
+ * Build results for Commands mode: Commands + Headings categories.
  *
- * This function reads from window globals. It is called synchronously on every
- * open of the Command Bar. The full result set is cached in _allResults so
- * the scan only happens once per open (not once per keystroke).
+ * Reads window globals and delegates to the pure builder functions
+ * (buildCommandResults, buildHeadingResults). The showRecentFiles setting is
+ * intentionally NOT used here — the Recent Files category was removed from
+ * Commands mode in the Modal Command Bar refactor (FR-09.2, AD-02).
  *
  * Why this function is justified at >30 lines:
- * This function is the boundary between the IIFE plugin sandbox and the rest of
- * the app. All window global access is intentionally concentrated here rather
- * than scattered across individual builders — each builder accepts explicit
- * dependency injection args (tested in isolation). buildAllResults is the single
- * place where globals are read and assembled into those args. Six distinct globals
- * must be read and three conditional pushes made, one per enabled category. The
- * boilerplate of reading globals + constructing the navigateToPlugin closure for
- * the commands category + building the fallback appSettings object drives the line
- * count. Splitting would only move lines around without clarifying responsibility.
+ * This function is the boundary between the IIFE plugin sandbox and the app.
+ * All window global access is concentrated here rather than scattered across
+ * individual builders — each builder accepts explicit dependency injection args
+ * (tested in isolation). Reading six distinct globals and constructing the
+ * navigateToPlugin closure drives the line count, not algorithmic complexity.
  *
  * @param settings - Current plugin settings (controls which categories are shown).
- * @returns Complete array of CommandBarResult across enabled categories.
+ * @returns Array of CommandBarResult for the Commands category and/or Headings category.
  */
-function buildAllResults(settings: CommandBarSettings): CommandBarResult[] {
+function buildCommandModeResults(settings: CommandBarSettings): CommandBarResult[] {
   const cmds = (window as any).__MARKABLE_COMMANDS__ as CommandDef[] ?? [];
   if (cmds.length === 0) {
     console.warn("[CommandBar] __MARKABLE_COMMANDS__ is empty or not set. Commands category will be empty.");
@@ -676,18 +862,53 @@ function buildAllResults(settings: CommandBarSettings): CommandBarResult[] {
     results.push(...buildHeadingResults({ cmState, currentFile }));
   }
 
-  if (settings.showRecentFiles) {
-    results.push(...buildRecentFileResults({
-      recentFiles: appSettings.recentFiles ?? [],
-      openFileByPath: (path: string) => {
-        const tm = (window as any).__MARKABLE_TAB_MANAGER__;
-        if (tm) void tm.openFileInTab(path);
-        return Promise.resolve();
-      },
-    }));
-  }
+  // showRecentFiles is intentionally NOT used here (FR-09.2, AD-02).
+  // Recent files were part of the old single-mode bar; the modal bar exposes
+  // them via Files mode (Cmd-P) rather than Commands mode (Cmd-Shift-P).
 
   return results;
+}
+
+/**
+ * Build the result set for the current mode.
+ *
+ * Dispatches to mode-specific builders:
+ *   "commands"    → buildCommandModeResults() (synchronous)
+ *   "files"       → returns [] (Files mode builds results via fetchWorkspaceFiles)
+ *   "keybindings" → returns [] stub until Step 4 implements buildKeybindingResults()
+ *
+ * This function is exported for unit testing (Step 03 TDD anchors). Production
+ * code calls it only for "commands" mode — the other modes have their own
+ * data pipelines in openBar() / fetchWorkspaceFiles().
+ *
+ * @param mode     - The active BarMode.
+ * @param settings - Current plugin settings (controls which categories are shown).
+ * @returns Array of CommandBarResult for the given mode.
+ */
+export function buildResultsForMode(mode: BarMode, settings: CommandBarSettings): CommandBarResult[] {
+  if (mode === "commands") {
+    return buildCommandModeResults(settings);
+  }
+  // "files" builds results asynchronously via fetchWorkspaceFiles — not here.
+  // "keybindings" builder is implemented in Step 4; stub returns [] until then.
+  return [];
+}
+
+/**
+ * @deprecated Use buildResultsForMode("commands", settings) instead.
+ *
+ * Legacy wrapper retained for call-site compatibility within this file.
+ * The old buildAllResults() included the Recent Files category (showRecentFiles).
+ * That category is now removed from Commands mode (FR-09.2). Any internal callers
+ * that previously used buildAllResults() have been updated to call
+ * buildResultsForMode() directly. This wrapper is kept as a named alias so that
+ * a reader searching for "buildAllResults" can trace the evolution.
+ *
+ * @param settings - Current plugin settings.
+ * @returns Same as buildResultsForMode("commands", settings).
+ */
+function buildAllResults(settings: CommandBarSettings): CommandBarResult[] {
+  return buildResultsForMode("commands", settings);
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +923,10 @@ function buildAllResults(settings: CommandBarSettings): CommandBarResult[] {
  * DOM structure (see step_04_overlay_dom.md for full spec):
  *   #markable-command-bar-overlay (backdrop)
  *     .cb-panel
+ *       .cb-tab-strip
+ *         button.cb-tab[data-mode="files"]
+ *         button.cb-tab[data-mode="commands"]
+ *         button.cb-tab[data-mode="keybindings"]
  *       .cb-input-row
  *         input.cb-input[role=combobox]
  *       .cb-results#cb-results-list[role=listbox]
@@ -729,13 +954,50 @@ export function buildOverlayDOM(): HTMLElement {
   const panel = document.createElement("div");
   panel.className = "cb-panel";
 
+  // ── Tab strip: [Files ⌘P] [Commands ⌘⇧P] [Keybindings ⌘⇧K] ───────────────
+  // Sits ABOVE the input row. All three modes are always visible so the user
+  // can discover them without clicking a cycling badge (AD-CB-07 revised).
+  // The active tab receives the `.cb-tab--active` class; setMode() updates it.
+  const tabStrip = document.createElement("div");
+  tabStrip.className = "cb-tab-strip";
+  tabStrip.setAttribute("role", "tablist");
+  tabStrip.setAttribute("aria-label", "Command bar mode");
+
+  // Build one tab button per mode in cycle order.
+  for (const mode of MODE_CYCLE) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "cb-tab" + (mode === "files" ? " cb-tab--active" : "");
+    tab.dataset.mode = mode;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", mode === "files" ? "true" : "false");
+    tab.setAttribute("aria-label", `${MODE_BADGE_LABELS[mode]} mode`);
+
+    // Label text node.
+    tab.appendChild(document.createTextNode(MODE_BADGE_LABELS[mode]));
+
+    // Shortcut hint in a separate span so it can be styled independently.
+    const hint = document.createElement("span");
+    hint.className = "cb-tab-hint";
+    hint.setAttribute("aria-hidden", "true");   // decorative; screen reader sees aria-label
+    hint.textContent = MODE_TAB_SHORTCUTS[mode];
+    tab.appendChild(hint);
+
+    // mousedown preventDefault: keeps input focused while the click fires.
+    tab.addEventListener("mousedown", (e) => e.preventDefault());
+
+    tabStrip.appendChild(tab);
+  }
+
+  // ── Input row: full-width search input (no badge prepended) ────────────────
   const inputRow = document.createElement("div");
   inputRow.className = "cb-input-row";
 
   const input = document.createElement("input");
   input.type = "text";
   input.className = "cb-input";
-  input.placeholder = "Type a command or search…";
+  // Default placeholder for files mode; setMode() will update per mode.
+  input.placeholder = MODE_PLACEHOLDERS["files"];
   input.autocomplete = "off";
   input.spellcheck = false;
   // ARIA attributes for screen reader support (NFR-05, EC-27).
@@ -746,13 +1008,27 @@ export function buildOverlayDOM(): HTMLElement {
   input.setAttribute("aria-activedescendant", "");
   inputRow.appendChild(input);
 
+  // ── Preset row: only visible in keybindings mode (Step 5) ──────────────────
+  // Scaffolded here so DOM is stable; fully populated in Step 5.
+  const presetRow = document.createElement("div");
+  presetRow.className = "cb-preset-row cb-preset-row--hidden";
+
+  // ── Results list ────────────────────────────────────────────────────────────
   const resultsList = document.createElement("div");
   resultsList.className = "cb-results";
   resultsList.id = "cb-results-list";
   resultsList.setAttribute("role", "listbox");
 
+  // ── Footer hint bar: always present; text changes with mode ─────────────────
+  const footer = document.createElement("div");
+  footer.className = "cb-footer";
+  footer.textContent = MODE_FOOTER_HINTS["files"];
+
+  panel.appendChild(tabStrip);
   panel.appendChild(inputRow);
+  panel.appendChild(presetRow);
   panel.appendChild(resultsList);
+  panel.appendChild(footer);
   overlay.appendChild(panel);
 
   return overlay;
@@ -791,16 +1067,10 @@ export function renderResults(
   if (results.length === 0) {
     const empty = document.createElement("div");
     empty.className = "cb-empty";
-    const cmds = (window as any).__MARKABLE_COMMANDS__;
-    const pm   = (window as any).__MARKABLE_PLUGIN_MANAGER__;
-    const ha   = (window as any).__MARKABLE_HANDLE_ACTION__;
-    if (_lastBuildError) {
-      empty.textContent = `Build error: ${_lastBuildError}`;
-    } else if (!cmds || (Array.isArray(cmds) && cmds.length === 0)) {
-      empty.textContent = `No results — __MARKABLE_COMMANDS__ is ${cmds === undefined ? "undefined" : cmds === null ? "null" : "empty[]"}. Restart app to apply main.ts changes.`;
-    } else {
-      empty.textContent = `No results — COMMANDS:${(cmds as any[]).length} PM:${pm ? "ok" : "missing"} HA:${ha ? "ok" : "missing"} | sc:${_settings.showCommands} sh:${_settings.showHeadings} sr:${_settings.showRecentFiles}`;
-    }
+    // Simple "No results" message. Detailed diagnostics were previously shown
+    // here but they made tests fragile and leaked internal state to the UI.
+    // Runtime diagnostics now log to the console instead (see buildAllResults).
+    empty.textContent = "No results";
     container.appendChild(empty);
     return;
   }
@@ -879,16 +1149,165 @@ export function renderResults(
 }
 
 // ---------------------------------------------------------------------------
+// Files mode renderer (Step 02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a `.cb-notice` element with the given text. Notice rows communicate
+ * informational states (no workspace, no files, cap exceeded, error) without
+ * using the main results pipeline.
+ *
+ * @param text - Plain text content for the notice row.
+ */
+function makeNotice(text: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "cb-notice";
+  el.textContent = text;
+  return el;
+}
+
+/**
+ * Clear and rebuild the results list container for Files mode results.
+ *
+ * Called by refreshFilesDisplay() and filterAndRenderFiles(). Handles:
+ *   - Rendering section headers ("Open Tabs", "Files") whenever the category changes.
+ *   - Rendering result rows with selection highlight and sublabel.
+ *   - Appending notice rows after the results: loading, error, no-workspace, no-files, cap.
+ *
+ * Why this is a separate function from renderResults():
+ *   Files mode uses FilesResult[] (from files-mode.ts) with FilesResultCategory labels,
+ *   two-phase loading state notices, and a cap notice. Merging this into renderResults()
+ *   would require a union type parameter and mode-conditional branches throughout —
+ *   harder to read than keeping two clean, purpose-built renderers.
+ *
+ * @param container          - The .cb-results element to populate.
+ * @param results            - Files mode results to render.
+ * @param query              - Current query (used for future highlight integration; passed through).
+ * @param selectedId         - The id of the currently selected result, or null.
+ * @param loadState          - Controls which notice rows appear after results.
+ * @param totalWorkspaceCount - Deduplicated workspace file count before the cap (for EC-05 notice).
+ * @param noFileOpen         - True when __MARKABLE_CURRENT_FILE__ is null (EC-01 notice).
+ */
+export function renderFilesResults(
+  container: HTMLElement,
+  results: FilesResult[],
+  query: string,
+  selectedId: string | null,
+  loadState: "loading" | "loaded" | "error" | "no-workspace",
+  totalWorkspaceCount: number,
+  noFileOpen: boolean,
+): void {
+  container.innerHTML = "";
+
+  let lastCat: FilesResult["category"] | null = null;
+  let resultIndex = 0;
+
+  // ── Render result rows with section headers ────────────────────────────────
+  for (const result of results) {
+    // Insert a section header when the category changes (same pattern as renderResults).
+    if (result.category !== lastCat) {
+      lastCat = result.category;
+      const header = document.createElement("div");
+      header.className = "cb-section-header";
+      header.setAttribute("data-cat", result.category);
+      header.textContent = FILES_SECTION_LABELS[result.category];
+      container.appendChild(header);
+    }
+
+    const row = document.createElement("div");
+    row.className = "cb-result";
+    if (result.dimmed) row.classList.add("cb-result--dimmed");
+
+    if (result.id === selectedId) {
+      row.classList.add("cb-result--selected");
+      row.setAttribute("aria-selected", "true");
+    } else {
+      row.setAttribute("aria-selected", "false");
+    }
+    row.setAttribute("role", "option");
+    row.setAttribute("data-id", result.id);
+    row.setAttribute("data-cat", result.category);
+    // DOM id for aria-activedescendant lookup (mirrors renderResults() pattern).
+    row.id = `cb-result-${resultIndex}`;
+
+    // Label
+    const labelEl = document.createElement("div");
+    labelEl.className = "cb-result-label";
+    if (query && result._matchPositions && result._matchPositions.length > 0) {
+      // Re-use the same highlight renderer used by renderResults() for visual consistency.
+      labelEl.appendChild(renderHighlightedLabel(result.label, result._matchPositions));
+    } else {
+      labelEl.textContent = result.label;
+    }
+    row.appendChild(labelEl);
+
+    // Sublabel: abbreviated directory path (shown below the label).
+    if (result.sublabel) {
+      const sublabelEl = document.createElement("div");
+      sublabelEl.className = "cb-result-sublabel";
+      sublabelEl.textContent = result.sublabel;
+      row.appendChild(sublabelEl);
+    }
+
+    // Full tooltip for truncated text (EC-07/EC-08 pattern).
+    row.title = result.label + (result.sublabel ? ` — ${result.sublabel}` : "");
+
+    container.appendChild(row);
+    resultIndex++;
+  }
+
+  // ── Status notices (appended after results) ────────────────────────────────
+
+  // Loading: async scan is in-flight; tabs may already be shown above (phase 1).
+  if (loadState === "loading") {
+    const notice = document.createElement("div");
+    notice.className = "cb-loading";
+    notice.textContent = "Loading…";
+    container.appendChild(notice);
+  }
+
+  // Error: invoke failed.
+  if (loadState === "error") {
+    container.appendChild(makeNotice("Could not load workspace files"));
+  }
+
+  // Determine if any workspace-file rows were rendered (used for empty-state checks).
+  const hasWorkspaceRows = results.some((r) => r.category === "workspace-files");
+
+  // No workspace: no file is currently open so we cannot resolve a directory (EC-01).
+  if (loadState === "loaded" && noFileOpen && !hasWorkspaceRows) {
+    container.appendChild(makeNotice("No workspace — open a file first"));
+  } else if (loadState === "loaded" && !noFileOpen && !hasWorkspaceRows) {
+    // Empty workspace: a directory was resolved but no .md files were found (EC-04).
+    container.appendChild(makeNotice("No markdown files in workspace"));
+  }
+
+  // Cap notice: more workspace files exist than the FILES_CAP limit (EC-05).
+  // Only shown when we have finished loading (loadState === "loaded") and the
+  // total deduplicated count exceeds FILES_CAP.
+  if (loadState === "loaded" && totalWorkspaceCount > FILES_CAP) {
+    container.appendChild(
+      makeNotice(`Showing ${FILES_CAP} of ${totalWorkspaceCount} files — type to filter`)
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Module-level plugin state
 // ---------------------------------------------------------------------------
 
 // DOM references set once in onEnable; nulled in onDisable.
-let _overlayEl: HTMLElement | null = null;
-let _inputEl: HTMLInputElement | null = null;
-let _resultsEl: HTMLElement | null = null;
-let _api: MarkablePluginAPI | null = null;
+let _overlayEl:   HTMLElement | null = null;
+let _inputEl:     HTMLInputElement | null = null;
+let _resultsEl:   HTMLElement | null = null;
+let _tabStripEl:  HTMLElement | null = null;         // mode tab strip container
+let _presetRowEl: HTMLElement | null = null;         // preset row container
+let _footerEl:    HTMLElement | null = null;         // footer hint element
+let _api:         MarkablePluginAPI | null = null;
 
 // Per-open state.
+let _mode: BarMode = "files";            // current bar mode (AD-CB-01: module var, not DOM)
+let _openGeneration = 0;                 // incremented each openBar(); stale-async guard (EC-28)
 let _allResults: CommandBarResult[] = [];
 let _visibleResults: CommandBarResult[] = [];
 let _selectedId: string | null = null;
@@ -897,8 +1316,373 @@ let _isOpen = false;
 // Plugin settings (loaded from API in onEnable).
 let _settings: CommandBarSettings = { ...DEFAULT_SETTINGS };
 
-// Last error from buildAllResults, shown in the empty state for diagnostics.
-let _lastBuildError: string | null = null;
+// ---------------------------------------------------------------------------
+// Files mode async state (Step 02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Results built asynchronously from the workspace file scan.
+ * Populated by fetchWorkspaceFiles(); consumed by refreshFilesDisplay().
+ * Reset to [] on every openBar("files") call.
+ */
+let _fileModeResults: FilesResult[] = [];
+
+/**
+ * True once the async workspace file fetch has completed (successfully or with error).
+ * While false the UI shows "Loading…". Reset on every openBar("files").
+ */
+let _fileListLoaded = false;
+
+/**
+ * True when the last workspace file fetch ended with an invoke error.
+ * Controls whether an error notice or the results are shown.
+ */
+let _fileListError = false;
+
+/**
+ * The total count of deduplicated workspace files (before the FILES_CAP slice).
+ * Used to render the cap notice when this exceeds FILES_CAP (EC-05).
+ */
+let _totalWorkspaceCount = 0;
+
+// ---------------------------------------------------------------------------
+// Mode management (Step 01 — Mode Infrastructure)
+// ---------------------------------------------------------------------------
+
+/**
+ * Switch the bar to the given mode, updating all mode-coupled UI elements:
+ *   - badge text label
+ *   - input placeholder
+ *   - footer hint text
+ *   - preset row visibility (only shown in keybindings mode)
+ *
+ * Exported for unit testing. Safe to call before or after the overlay is in the DOM
+ * because each assignment is null-guarded.
+ *
+ * @param mode - Target BarMode value.
+ */
+export function setMode(mode: BarMode): void {
+  _mode = mode;
+
+  // Update the tab strip: remove active class from all tabs, add it to the
+  // tab whose data-mode attribute matches the new mode.
+  // aria-selected is also updated so screen readers announce the active tab.
+  if (_tabStripEl) {
+    const tabs = _tabStripEl.querySelectorAll<HTMLButtonElement>(".cb-tab");
+    tabs.forEach((tab) => {
+      const isActive = tab.dataset.mode === mode;
+      tab.classList.toggle("cb-tab--active", isActive);
+      tab.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+  }
+
+  // Update input placeholder so the user knows what this mode searches.
+  if (_inputEl) _inputEl.placeholder = MODE_PLACEHOLDERS[mode];
+
+  // Update footer hint so the user knows what Enter/Escape do in this mode.
+  if (_footerEl) _footerEl.textContent = MODE_FOOTER_HINTS[mode];
+
+  // Preset row is only meaningful in keybindings mode (Step 5 populates it).
+  // In all other modes it is hidden to avoid an empty visual gap.
+  if (_presetRowEl) {
+    _presetRowEl.classList.toggle("cb-preset-row--hidden", mode !== "keybindings");
+  }
+}
+
+/**
+ * Badge click handler: cycle through modes in order Files → Commands → Keybindings → Files.
+ * Clears the input and re-renders results for the new mode.
+ *
+ * FR-08.3: clicking the badge advances to the next mode in MODE_CYCLE.
+ * EC-11: key-capture exit (Step 4) will be wired here in the future; for now,
+ *        it is a no-op because key-capture is not yet implemented.
+ *
+ * Why _allResults is rebuilt here for non-files modes:
+ *   When transitioning FROM files mode (where _allResults = []) TO commands or
+ *   keybindings mode, _allResults must be repopulated before filterAndRender() is
+ *   called. Without this, the commands/keybindings mode would render an empty list.
+ *   Transitioning FROM commands mode: _allResults is already populated, no rebuild needed.
+ *   Transitioning TO files mode: filterAndRenderFiles() handles its own data pipeline.
+ */
+/**
+ * Shared mode-switch logic used by both the tab strip click handler and any
+ * future keyboard shortcut that cycles modes directly.
+ *
+ * Why extracted: the same sequence (setMode → clear input → rebuild results)
+ * must run whether the user clicks a tab or triggers a mode via a shortcut key.
+ * Having a single function avoids duplicating the files-vs-commands branch.
+ *
+ * @param targetMode - The mode to switch to.
+ */
+function switchMode(targetMode: BarMode): void {
+  setMode(targetMode);
+  if (_inputEl) _inputEl.value = "";
+  _openGeneration++;
+
+  if (targetMode === "files") {
+    // Switching TO files mode: reset files state and kick off a fresh workspace scan.
+    _fileListLoaded = false;
+    _fileListError = false;
+    _fileModeResults = [];
+    _totalWorkspaceCount = 0;
+    _allResults = [];
+    filterAndRenderFiles("");
+    const capturedGeneration = _openGeneration;
+    void fetchWorkspaceFiles(capturedGeneration);
+  } else {
+    // Switching INTO commands or keybindings mode: rebuild _allResults.
+    // Files mode sets _allResults = [] (unused); commands/keybindings require a fresh build.
+    try {
+      _allResults = buildAllResults(_settings);
+    } catch (err) {
+      console.error("[CommandBar] buildAllResults failed on mode switch:", err);
+      _allResults = [];
+    }
+    filterAndRender("");
+  }
+}
+
+/**
+ * Tab strip click handler. Uses event delegation on `.cb-tab-strip` so a single
+ * listener covers all three tab buttons.
+ *
+ * Reads `data-mode` from the clicked button (or its closest `.cb-tab` ancestor
+ * in case the user clicks the `.cb-tab-hint` span inside the button). Ignores
+ * clicks that already target the active mode (no-op) to avoid an unnecessary
+ * results rebuild.
+ *
+ * @param e - The click MouseEvent fired on the strip container.
+ */
+function onTabStripClick(e: MouseEvent): void {
+  // Walk up from the exact target to find the .cb-tab button, which carries data-mode.
+  const tab = (e.target as Element).closest<HTMLButtonElement>(".cb-tab");
+  if (!tab) return;
+
+  const targetMode = tab.dataset.mode as BarMode | undefined;
+  if (!targetMode || targetMode === _mode) return;   // already active — no-op
+
+  switchMode(targetMode);
+}
+
+// ---------------------------------------------------------------------------
+// Files mode helpers (Step 02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the current open tabs from the tab manager global.
+ * Returns an empty array if the global is unavailable (graceful degradation).
+ */
+function getOpenTabs(): TabEntry[] {
+  const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+  if (!tm || typeof tm.getAllTabs !== "function") return [];
+  return tm.getAllTabs() as TabEntry[];
+}
+
+/**
+ * Switch the editor to the given tab via the tab manager global.
+ * No-op if the global is unavailable.
+ *
+ * @param tabId - The id returned by getAllTabs().
+ */
+function switchToTab(tabId: string): void {
+  const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+  if (tm && typeof tm.switchToTab === "function") tm.switchToTab(tabId);
+}
+
+/**
+ * Open a workspace file in a new tab via the tab manager global.
+ * Supports both `openFile` (preferred) and the older `openFileInTab` method name.
+ *
+ * @param filePath - Absolute path to the .md file to open.
+ */
+function openFileInTab(filePath: string): void {
+  const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+  if (tm && typeof tm.openFile === "function") {
+    void tm.openFile(filePath);
+  } else if (tm && typeof tm.openFileInTab === "function") {
+    void tm.openFileInTab(filePath);
+  }
+}
+
+/**
+ * Refresh the Files mode results area after the async workspace scan completes
+ * or when the bar is first shown (phase-1 tabs-only display).
+ *
+ * Only operates when the bar is open in files mode — safely called from the
+ * async completion path where the bar may have been closed already.
+ */
+function refreshFilesDisplay(): void {
+  if (!_isOpen || _mode !== "files" || !_resultsEl || !_inputEl) return;
+  filterAndRenderFiles(_inputEl.value.trim());
+}
+
+/**
+ * Asynchronously fetch workspace .md files via the Tauri list_md_files command,
+ * then update the Files mode display.
+ *
+ * Uses the generation counter pattern (EC-28): the generation value is captured
+ * at call time and compared after every await. If _openGeneration has advanced
+ * (because the bar closed, mode switched, or a new openBar() call occurred), the
+ * results are silently discarded — a stale async result must never overwrite a
+ * newer UI state.
+ *
+ * Phase flow:
+ *   1. Resolve workspace directory from __MARKABLE_CURRENT_FILE__.
+ *      If null → EC-01/EC-02: set loaded with no results; return early.
+ *   2. invoke("list_md_files", { dir }) → await.
+ *      If invoke rejects → EC-03: set error state; return early.
+ *   3. Generation check after await (EC-28): bail if stale.
+ *   4. Deduplicate against open tabs, compute cap count, build FilesResult[].
+ *   5. Set _fileModeResults, _fileListLoaded, call refreshFilesDisplay().
+ *
+ * @param generation - The generation value captured at openBar() time.
+ */
+async function fetchWorkspaceFiles(generation: number): Promise<void> {
+  const currentFile: string | null = (window as any).__MARKABLE_CURRENT_FILE__ ?? null;
+
+  if (!currentFile) {
+    // EC-01/EC-02: no open file, so no workspace directory to scan.
+    if (_openGeneration !== generation) return; // EC-28: stale guard
+    _fileListLoaded = true;
+    _fileListError = false;
+    // _fileModeResults stays [] — the render will show the no-workspace notice.
+    refreshFilesDisplay();
+    return;
+  }
+
+  // Resolve the workspace directory (EC-32: must be absolute, never ~/).
+  // Split on "/" and discard the last segment (the filename). Rejoin with "/".
+  // Edge: if the path was just "/file.md", parts becomes ["", "file.md"] → joined = "".
+  // The `|| "/"` fallback ensures we never pass an empty string to invoke.
+  const parts = currentFile.split("/");
+  parts.pop(); // remove the filename segment
+  const workspaceDir = parts.join("/") || "/";
+
+  let workspaceFiles: string[] = [];
+  try {
+    workspaceFiles = await (window as any).__TAURI_INTERNALS__.invoke(
+      "list_md_files",
+      { dir: workspaceDir },
+    );
+  } catch (_err) {
+    // EC-03: invoke failed (permission error, missing command, network issue).
+    if (_openGeneration !== generation) return; // EC-28: stale guard
+    _fileListLoaded = true;
+    _fileListError = true;
+    refreshFilesDisplay();
+    return;
+  }
+
+  // EC-28: check generation after await — bar may have been closed or mode-switched
+  // while the network round-trip was in progress.
+  if (_openGeneration !== generation) return;
+
+  // Deduplicate workspace files against currently open tab paths (EC-06) and
+  // compute the total count before cap for the cap notice (EC-05).
+  const tabs = getOpenTabs();
+  const openPaths = new Set<string>(tabs.flatMap((t) => (t.filePath ? [t.filePath] : [])));
+  _totalWorkspaceCount = countWorkspaceBeforeCap(workspaceFiles, openPaths);
+
+  // Build the full FilesResult[] including both tabs and workspace files.
+  // This replaces the phase-1 tabs-only result set with the complete set.
+  _fileModeResults = buildFilesResults({
+    tabs,
+    workspaceFiles,
+    workspaceLoadState: "loaded",
+    openTab: switchToTab,
+    openFile: openFileInTab,
+  });
+
+  _fileListLoaded = true;
+  _fileListError = false;
+
+  // Only refresh if the bar is still open in files mode (EC-28: second guard on
+  // the display path, complementing the generation check above).
+  if (_mode === "files" && _isOpen) {
+    refreshFilesDisplay();
+  }
+}
+
+/**
+ * Filter _fileModeResults against the current query and render via renderFilesResults().
+ * Called by filterAndRender() when _mode === "files".
+ *
+ * Empty query: show all results in natural order.
+ * Non-empty query: apply the same fuzzy-ranker pipeline used by commands/headings.
+ */
+function filterAndRenderFiles(query: string): void {
+  if (!_resultsEl || !_inputEl) return;
+
+  const currentFile: string | null = (window as any).__MARKABLE_CURRENT_FILE__ ?? null;
+  const noFileOpen = currentFile === null;
+
+  // Determine load state for the notice renderer.
+  const loadState: "loading" | "loaded" | "error" | "no-workspace" = !_fileListLoaded
+    ? "loading"
+    : _fileListError
+      ? "error"
+      : "loaded";
+
+  let displayResults: FilesResult[];
+
+  if (!_fileListLoaded) {
+    // Phase 1: async scan not yet done — show only open tabs immediately.
+    // Build a fresh tabs-only snapshot (does not use _fileModeResults which is still []).
+    const tabs = getOpenTabs();
+    displayResults = buildFilesResults({
+      tabs,
+      workspaceFiles: [],
+      workspaceLoadState: "loading",
+      openTab: switchToTab,
+      openFile: openFileInTab,
+    });
+  } else {
+    displayResults = _fileModeResults;
+  }
+
+  // Apply fuzzy filtering when there is a query.
+  let filteredResults: FilesResult[];
+  if (query === "") {
+    filteredResults = displayResults;
+  } else {
+    // Use the same four-tier fuzzy ranker used in commands mode. Rank each result
+    // against the query independently (both sections participate in ranking).
+    const matched: Array<{ result: FilesResult; match: FuzzyMatch }> = [];
+    for (const result of displayResults) {
+      const m = fuzzyMatch(result.label, query);
+      if (m) {
+        result._matchPositions = m.positions;
+        matched.push({ result, match: m });
+      } else {
+        result._matchPositions = undefined;
+      }
+    }
+    // Sort by tier then label (same sort as commands mode for consistency).
+    matched.sort((a, b) => {
+      if (a.match.tier !== b.match.tier) return a.match.tier - b.match.tier;
+      return a.result.label.toLowerCase().localeCompare(b.result.label.toLowerCase());
+    });
+    filteredResults = matched.map((mr) => mr.result);
+  }
+
+  // Update module-level selection state (FilesResult is cast to CommandBarResult
+  // for _visibleResults — they share the same structural contract for id/dimmed).
+  _visibleResults = filteredResults as unknown as CommandBarResult[];
+  _selectedId = filteredResults.find((r) => !r.dimmed)?.id ?? null;
+
+  renderFilesResults(
+    _resultsEl,
+    filteredResults,
+    query,
+    _selectedId,
+    loadState,
+    _totalWorkspaceCount,
+    noFileOpen,
+  );
+
+  updateAriaActiveDescendant(_inputEl, _selectedId);
+  scrollSelectedIntoView(_resultsEl);
+}
 
 // ---------------------------------------------------------------------------
 // Open / close bar DOM operations
@@ -1023,17 +1807,27 @@ function scrollSelectedIntoView(container: HTMLElement): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Filter and rank _allResults against the query, then re-render the results.
- * Called on every input event and after opening the bar.
+ * Filter and rank results against the query, then re-render the results container.
  *
- * Empty query: show all results in natural order (FR-02.5, no fuzzy ranking).
- * Non-empty query: fuzzy-match each result, sort by tier then label, render.
+ * Dispatches to mode-specific sub-functions:
+ *   - "files" mode → filterAndRenderFiles() (Step 02)
+ *   - "commands" / "keybindings" mode → existing commands pipeline (unchanged)
+ *
+ * Called on every input event and after opening/switching modes.
  *
  * @param query - Trimmed input string.
  */
 function filterAndRender(query: string): void {
   if (!_resultsEl || !_inputEl) return;
 
+  // Files mode has its own renderer path (two-phase async results, section headers,
+  // loading/error/cap notices). Delegate to the files-specific sub-function.
+  if (_mode === "files") {
+    filterAndRenderFiles(query);
+    return;
+  }
+
+  // ── Commands / Keybindings mode (existing pipeline, unchanged) ────────────
   if (query === "") {
     // FR-02.5: empty query shows all results without ranking.
     _visibleResults = _allResults;
@@ -1071,46 +1865,111 @@ function filterAndRender(query: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Open the Command Bar.
+ * Open the Command Bar in the given mode.
  *
- * - EC-05/FR-01.6: if already open, acts as a toggle and closes the bar.
+ * Mode parameter rules (AD-CB-08, FR-11.3):
+ *   - No argument → opens in Files mode (default).
+ *   - Same mode called while open → toggle-close (FR-01.8, EC-13).
+ *   - Different mode called while open → switch without closing (FR-01.8, EC-12).
+ *
+ * - EC-05/FR-01.6: if already open in same mode, acts as a toggle and closes the bar.
  * - FR-03.A.2: rebuilds the full result set synchronously on every open.
  * - FR-01.3: focuses the input after open.
  * - FR-06.3: pre-selects the first non-dimmed result.
+ *
+ * @param mode - Target BarMode. Defaults to "files".
  */
-function openBar(): void {
+function openBar(mode?: BarMode): void {
   if (!_overlayEl || !_inputEl || !_resultsEl) return;
 
+  const targetMode = mode ?? "files";
+
   if (_isOpen) {
-    closeBar();
-    return;
+    if (_mode === targetMode) {
+      // Same mode re-triggered: toggle close (FR-01.8, EC-13).
+      closeBar();
+      return;
+    } else {
+      // Different mode: switch without closing (FR-01.8, EC-12).
+      setMode(targetMode);
+      _inputEl.value = "";
+      _openGeneration++;
+
+          if (targetMode === "files") {
+        // Switching TO files mode while open: reset files state and start a fresh fetch.
+        _fileListLoaded = false;
+        _fileListError = false;
+        _fileModeResults = [];
+        _totalWorkspaceCount = 0;
+        _allResults = [];
+        filterAndRenderFiles("");
+        const capturedGeneration = _openGeneration;
+        void fetchWorkspaceFiles(capturedGeneration);
+      } else {
+        // Switching INTO commands/keybindings mode: rebuild _allResults.
+        // Files mode uses a separate pipeline (_fileModeResults); commands/keybindings
+        // use _allResults which must be fresh. If we're switching from files mode,
+        // _allResults was set to [] and must be repopulated.
+        try {
+          _allResults = buildAllResults(_settings);
+        } catch (err) {
+          console.error("[CommandBar] buildAllResults failed on mode switch:", err);
+          _allResults = [];
+        }
+        filterAndRender("");
+      }
+      return;
+    }
   }
 
   _isOpen = true;
+  _openGeneration++;
+  setMode(targetMode);
   openCommandBar(_overlayEl, _inputEl);
 
-  // Rebuild results fresh on every open (EC-30: reflects current plugin states).
-  // Wrapped in try-catch: if buildAllResults throws (e.g. a missing global or
-  // unexpected API shape), the overlay still shows and renders an empty list
-  // rather than leaving the results container blank with no feedback.
-  _lastBuildError = null;
-  try {
-    _allResults = buildAllResults(_settings);
-  } catch (err) {
-    _lastBuildError = String(err);
-    console.error("[CommandBar] buildAllResults failed:", err);
+  if (targetMode === "files") {
+    // ── Files mode: two-phase open ───────────────────────────────────────────
+    // Phase 1 (synchronous): reset async state and render open tabs immediately
+    // so the bar is interactive at T+0ms (NFR-01 <80ms to interactive).
+    _fileListLoaded = false;
+    _fileListError = false;
+    _fileModeResults = [];
+    _totalWorkspaceCount = 0;
+    // _allResults is not used by the files path; set to empty to keep state clean.
     _allResults = [];
+
+    // filterAndRenderFiles() in turn calls buildFilesResults with workspaceFiles:[]
+    // and workspaceLoadState:"loading" — this renders the tabs and the "Loading…" notice.
+    filterAndRenderFiles("");
+
+    // Phase 2 (async): kick off the workspace scan. The generation value captured here
+    // lets fetchWorkspaceFiles detect if the bar has been closed before the scan finishes
+    // and silently drop stale results (EC-28).
+    const capturedGeneration = _openGeneration;
+    void fetchWorkspaceFiles(capturedGeneration);
+  } else {
+    // ── Commands / Keybindings mode: synchronous build ────────────────────────
+    // Rebuild results fresh on every open (EC-30: reflects current plugin states).
+    // Wrapped in try-catch: if buildAllResults throws (e.g. a missing global or
+    // unexpected API shape), the overlay still shows and renders an empty list
+    // rather than leaving the results container blank with no feedback.
+    try {
+      _allResults = buildAllResults(_settings);
+    } catch (err) {
+      console.error("[CommandBar] buildAllResults failed:", err);
+      _allResults = [];
+    }
+    _visibleResults = _allResults;
+    _selectedId = firstSelectableId(_visibleResults);
+    renderResults(_resultsEl, _visibleResults, "", _selectedId);
+    updateAriaActiveDescendant(_inputEl, _selectedId);
+    scrollSelectedIntoView(_resultsEl);
   }
-  _visibleResults = _allResults;
-  _selectedId = firstSelectableId(_visibleResults);
-  renderResults(_resultsEl, _visibleResults, "", _selectedId);
-  updateAriaActiveDescendant(_inputEl, _selectedId);
-  scrollSelectedIntoView(_resultsEl);
 
   // FR-01.3: use setTimeout(0) rather than requestAnimationFrame so focus lands
   // after the macOS/Tauri window system has finished processing the triggering
-  // keystroke (Cmd-Shift-P). rAF fires within the same event-loop task; setTimeout
-  // queues a new macrotask, giving the window time to settle before we focus.
+  // keystroke. rAF fires within the same event-loop task; setTimeout queues a
+  // new macrotask, giving the window time to settle before we focus.
   const inputRef = _inputEl;
   setTimeout(() => { inputRef.focus(); }, 0);
 }
@@ -1118,10 +1977,15 @@ function openBar(): void {
 /**
  * Close the Command Bar and restore state.
  * Safe to call when bar is already closed (no-op via _isOpen guard).
+ *
+ * FR-01.9: resets _mode to "files" on every close so the next open always
+ * starts fresh in the default mode regardless of which mode was active.
  */
 function closeBar(): void {
   if (!_overlayEl || !_inputEl || !_isOpen) return;
   _isOpen = false;
+  // FR-01.9: always reset to files mode on close so the next open is predictable.
+  _mode = "files";
   closeCommandBar(_overlayEl, _inputEl);
   _selectedId = null;
   _visibleResults = [];
@@ -1148,19 +2012,60 @@ function activateSelected(): void {
 /**
  * Handle input events on the search field.
  * `this` is the input element (standard DOM event handler pattern).
+ *
+ * Prefix switching (AD-CB-09): checked here in the `input` event (after the
+ * character is in the field) rather than in `keydown` (before the DOM updates).
+ * Only activates FROM files mode — '>' in commands mode is a normal search char.
+ *
+ * Prefix rules (FR-06.1, FR-06.2):
+ *   '>' typed as the sole character in files mode → switch to commands mode
+ *   '#' typed as the sole character in files mode → switch to keybindings mode
  */
 function onInput(this: HTMLInputElement): void {
-  filterAndRender(this.value.trim());
+  const raw = this.value;
+
+  // Prefix switching: only triggers when in files mode and the entire input
+  // consists of a single prefix character. Any additional text means the user
+  // is searching, not switching modes.
+  if (_mode === "files" && raw === ">") {
+    setMode("commands");
+    this.value = "";
+    filterAndRender("");
+    return;
+  }
+  if (_mode === "files" && raw === "#") {
+    setMode("keybindings");
+    this.value = "";
+    filterAndRender("");
+    return;
+  }
+
+  filterAndRender(raw.trim());
 }
 
 /**
- * Handle keydown events on the overlay (Escape, arrow keys, Enter, Tab).
- * All keys are consumed (preventDefault + stopPropagation) to implement the
- * focus trap (NFR-05, FR-06.4) and prevent bubbling to the CM6 editor.
+ * Handle keydown events on the overlay (Escape, arrow keys, Enter, Tab, Backspace).
+ * All navigation keys are consumed (preventDefault + stopPropagation) to implement
+ * the focus trap (NFR-05, FR-06.4) and prevent bubbling to the CM6 editor.
  *
  * Tab = move selection down; Shift+Tab = move selection up (FR-06.4).
+ *
+ * Backspace rule (FR-06.3, FR-06.4):
+ *   When input is empty AND mode is not files → return to files mode.
+ *   When input is non-empty → normal delete (do not intercept).
+ *   When already in files mode → normal no-op (do not intercept).
  */
 function onOverlayKeydown(e: KeyboardEvent): void {
+  // Backspace-to-files: only when the input is empty and we are not already in files mode.
+  // If the input has text, Backspace deletes a character normally (FR-06.4).
+  if (e.key === "Backspace" && _inputEl!.value === "" && _mode !== "files") {
+    e.preventDefault();
+    e.stopPropagation();
+    setMode("files");
+    filterAndRender("");
+    return;
+  }
+
   switch (e.key) {
     case "Escape":
       e.preventDefault();
@@ -1259,6 +2164,10 @@ function attachListeners(): void {
   _resultsEl.addEventListener("click", onResultClick);
   _resultsEl.addEventListener("mousemove", onResultHover);
 
+  // Tab strip: clicking any tab directly switches to that tab's mode.
+  // Event delegation on the strip catches all three tab buttons with one listener.
+  if (_tabStripEl) _tabStripEl.addEventListener("click", onTabStripClick);
+
   // EC-12: listen for tab-close events at the document level.
   document.addEventListener("markable-tab-closed", onTabClosed);
 }
@@ -1280,23 +2189,29 @@ function detachListeners(): void {
  * Render the settings UI into the Plugins Panel detail view container.
  * Called by the Plugins Panel when the user opens the Command Bar detail.
  *
- * Creates three labeled checkboxes (showCommands, showHeadings, showRecentFiles)
- * using the standard plugin settings CSS classes for visual consistency.
+ * Creates two labeled checkboxes (showCommands, showHeadings) using the standard
+ * plugin settings CSS classes for visual consistency. showRecentFiles was removed
+ * from the UI in Step 03 (FR-09.2) — it is accepted from saved settings for
+ * backwards compatibility but is no longer surfaced to the user.
+ *
+ * Also renders a static "Keybinding Preset" section that will be populated
+ * in Step 05 with the full preset management UI. For now it shows the active
+ * preset name as a read-only label.
  *
  * Why this function is justified at >30 lines:
- * This function must produce three semantically complete form rows in a single
+ * This function must produce two semantically complete form rows in a single
  * pass, where each row requires: a wrapper div, a label wrapper div, a <label>
  * element (with htmlFor), a description <p> element, and an <input type=checkbox>
  * with a change handler that both mutates module-level `_settings` and persists
- * via `_api.saveSettings()`. Generating one row already takes ~10 lines of DOM
- * API calls. Three rows therefore mandate ~30 lines before even accounting for
- * the outer section element and title header. Abstracting "make one row" into a
- * helper would split the rendering contract across two functions for minimal gain
- * because the helper would still need to close over `_settings` and `_api`.
+ * via `_api.saveSettings()`. Each row takes ~10 lines of DOM API calls. Two rows
+ * plus the preset section (three child elements) drive the line count. Abstracting
+ * "make one row" into a helper would split the rendering contract without adding clarity.
  *
  * @param container - Freshly created container element provided by the panel.
  */
 export function renderDetailExtra(container: HTMLElement): void {
+  // Step 03: showRecentFiles removed from the items array (FR-09.2, AD-02).
+  // Recent files are now accessible only via Files mode (Cmd-P).
   const items: Array<{ key: keyof CommandBarSettings; label: string; description: string }> = [
     {
       key: "showCommands",
@@ -1308,11 +2223,7 @@ export function renderDetailExtra(container: HTMLElement): void {
       label: "Show Headings",
       description: "Include document headings for quick navigation",
     },
-    {
-      key: "showRecentFiles",
-      label: "Show Recent Files",
-      description: "Include recently opened files",
-    },
+    // showRecentFiles removed — FR-09.2, AD-02
   ];
 
   const section = document.createElement("div");
@@ -1347,11 +2258,11 @@ export function renderDetailExtra(container: HTMLElement): void {
     checkbox.type = "checkbox";
     checkbox.id = checkboxId;
     checkbox.className = "settings-checkbox";
-    checkbox.checked = _settings[item.key];
+    checkbox.checked = _settings[item.key] as boolean;
 
     const settingKey = item.key; // captured in closure
     checkbox.addEventListener("change", () => {
-      _settings[settingKey] = checkbox.checked;
+      (_settings as any)[settingKey] = checkbox.checked;
       // FR-07.2: persist immediately so settings survive plugin reload.
       if (_api) void _api.saveSettings(_settings as unknown as Record<string, unknown>);
     });
@@ -1362,6 +2273,24 @@ export function renderDetailExtra(container: HTMLElement): void {
   }
 
   container.appendChild(section);
+
+  // ── Keybinding Preset section (Step 03 placeholder; fully populated in Step 05) ──
+  // Shows the currently active preset name as a read-only label. Step 05 will
+  // replace this with the full preset management UI (dropdown, save, rename, delete).
+  const presetSection = document.createElement("div");
+  presetSection.className = "settings-section";
+
+  const presetTitle = document.createElement("h3");
+  presetTitle.className = "settings-label";
+  presetTitle.textContent = "Keybinding Preset";
+
+  const presetDesc = document.createElement("p");
+  presetDesc.className = "settings-description";
+  presetDesc.textContent = `Active preset: ${_settings.activePreset}`;
+
+  presetSection.appendChild(presetTitle);
+  presetSection.appendChild(presetDesc);
+  container.appendChild(presetSection);
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,9 +2308,13 @@ async function loadPluginSettings(api: MarkablePluginAPI): Promise<void> {
   const saved = await api.loadSettings();
   if (saved) {
     _settings = {
-      showCommands:    typeof saved.showCommands    === "boolean" ? (saved.showCommands    as boolean) : DEFAULT_SETTINGS.showCommands,
-      showHeadings:    typeof saved.showHeadings    === "boolean" ? (saved.showHeadings    as boolean) : DEFAULT_SETTINGS.showHeadings,
-      showRecentFiles: typeof saved.showRecentFiles === "boolean" ? (saved.showRecentFiles as boolean) : DEFAULT_SETTINGS.showRecentFiles,
+      showCommands:  typeof saved.showCommands  === "boolean" ? (saved.showCommands  as boolean) : DEFAULT_SETTINGS.showCommands,
+      showHeadings:  typeof saved.showHeadings  === "boolean" ? (saved.showHeadings  as boolean) : DEFAULT_SETTINGS.showHeadings,
+      // showRecentFiles is accepted from saved data for backwards compatibility
+      // (FR-09.2) but is always set to true internally — the value in saved settings
+      // is ignored. Recent files are now served by Files mode, not Commands mode.
+      showRecentFiles: true,
+      activePreset:  typeof saved.activePreset  === "string"  ? (saved.activePreset  as string)  : DEFAULT_SETTINGS.activePreset,
     };
   } else {
     _settings = { ...DEFAULT_SETTINGS };
@@ -1419,16 +2352,21 @@ export default {
 
     // Inject CSS and build the overlay DOM once (reused across open/close cycles).
     injectCSS();
-    _overlayEl = buildOverlayDOM();
-    _inputEl   = _overlayEl.querySelector<HTMLInputElement>(".cb-input")!;
-    _resultsEl = _overlayEl.querySelector<HTMLElement>(".cb-results")!;
+    _overlayEl   = buildOverlayDOM();
+    _inputEl     = _overlayEl.querySelector<HTMLInputElement>(".cb-input")!;
+    _resultsEl   = _overlayEl.querySelector<HTMLElement>(".cb-results")!;
+    // Wire mode tab strip and supporting UI element refs.
+    _tabStripEl  = _overlayEl.querySelector<HTMLElement>(".cb-tab-strip")!;
+    _presetRowEl = _overlayEl.querySelector<HTMLElement>(".cb-preset-row")!;
+    _footerEl    = _overlayEl.querySelector<HTMLElement>(".cb-footer")!;
 
     attachListeners();
     document.body.appendChild(_overlayEl);
 
-    // Register the open function so handleAction("command-bar-open") can call it.
-    // AD-03 in 00_index.md.
-    (window as any).__MARKABLE_COMMAND_BAR_OPEN__ = openBar;
+    // Register the open function with mode-aware signature (AD-CB-08).
+    // Existing callers that call __MARKABLE_COMMAND_BAR_OPEN__() with no argument
+    // continue to open in Files mode (FR-11.3 default).
+    (window as any).__MARKABLE_COMMAND_BAR_OPEN__ = (mode?: BarMode) => openBar(mode);
   },
 
   onDisable(_unusedApi: MarkablePluginAPI): void {
@@ -1446,15 +2384,24 @@ export default {
     removeCSS();
 
     // Null all module-level state for a clean re-enable cycle.
-    _overlayEl    = null;
-    _inputEl      = null;
-    _resultsEl    = null;
-    _api          = null;
-    _allResults   = [];
+    _overlayEl      = null;
+    _inputEl        = null;
+    _resultsEl      = null;
+    _tabStripEl     = null;
+    _presetRowEl    = null;
+    _footerEl       = null;
+    _api            = null;
+    _mode           = "files";
+    _openGeneration = 0;
+    _allResults     = [];
     _visibleResults = [];
-    _selectedId   = null;
-    _isOpen       = false;
-    _settings         = { ...DEFAULT_SETTINGS };
-    _lastBuildError   = null;
+    _selectedId     = null;
+    _isOpen         = false;
+    _settings       = { ...DEFAULT_SETTINGS };
+    // Reset files mode async state (Step 02).
+    _fileModeResults     = [];
+    _fileListLoaded      = false;
+    _fileListError       = false;
+    _totalWorkspaceCount = 0;
   },
 };

@@ -19,7 +19,7 @@
  * window globals inside function bodies, not at module evaluation time.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // ── Step 02: Fuzzy ranker imports ─────────────────────────────────────────────
 
@@ -51,6 +51,37 @@ import {
 
 // ── Step 07: Plugin default export ────────────────────────────────────────────
 import commandBarPlugin from "../../../src/plugins/command-bar/command-bar.plugin";
+
+// ── Step 01 (Modal): Mode infrastructure imports ──────────────────────────────
+import {
+  setMode,
+} from "../../../src/plugins/command-bar/command-bar.plugin";
+import type { BarMode } from "../../../src/plugins/command-bar/command-bar.plugin";
+
+// ── Step 03 (Commands Mode Refactor): buildResultsForMode import ──────────────
+import {
+  buildResultsForMode,
+} from "../../../src/plugins/command-bar/command-bar.plugin";
+
+// ── Step 02 (Files Mode): files-mode.ts imports ───────────────────────────────
+import {
+  buildFilesResults,
+  countWorkspaceBeforeCap,
+  abbreviatePath,
+  basename,
+  FILES_CAP,
+  FILES_SECTION_LABELS,
+} from "../../../src/plugins/command-bar/files-mode";
+import type {
+  TabEntry,
+  FilesResult,
+  FilesModeBuilderDeps,
+} from "../../../src/plugins/command-bar/files-mode";
+
+// ── Step 02: renderFilesResults import from plugin ────────────────────────────
+import {
+  renderFilesResults,
+} from "../../../src/plugins/command-bar/command-bar.plugin";
 
 // ── Types (copied from plugin internals for test-readability) ─────────────────
 
@@ -711,14 +742,16 @@ describe("firstSelectableId", () => {
 // =============================================================================
 
 describe("renderDetailExtra", () => {
-  it("renders exactly three checkboxes", () => {
+  it("renders exactly two checkboxes (Step 03: showRecentFiles removed)", () => {
+    // Step 03 removes the showRecentFiles checkbox from the settings UI (FR-09.2).
+    // Only showCommands and showHeadings remain.
     const container = document.createElement("div");
     renderDetailExtra(container);
     const checkboxes = container.querySelectorAll("input[type=checkbox]");
-    expect(checkboxes.length).toBe(3);
+    expect(checkboxes.length).toBe(2);
   });
 
-  it("all three checkboxes are checked by default (defaults: true)", () => {
+  it("both remaining checkboxes are checked by default (defaults: true)", () => {
     const container = document.createElement("div");
     renderDetailExtra(container);
     const checkboxes = Array.from(
@@ -731,7 +764,7 @@ describe("renderDetailExtra", () => {
     const container = document.createElement("div");
     renderDetailExtra(container);
     const labels = container.querySelectorAll("label");
-    expect(labels.length).toBe(3);
+    expect(labels.length).toBe(2);
   });
 
   it("uses settings-section class on the container section", () => {
@@ -881,12 +914,15 @@ describe("commandBarPlugin lifecycle", () => {
     // When showCommands, showHeadings, and showRecentFiles are all false,
     // buildAllResults() must return an empty array, and the bar must display
     // the "No results" placeholder (FR-07.3).
+    // NOTE: This is a Commands mode test — we open explicitly in commands mode
+    // because "No results" is a commands-mode empty state. Files mode shows
+    // "No workspace" instead. (Adapted for Modal Command Bar Step 02.)
     const savedSettings = { showCommands: false, showHeadings: false, showRecentFiles: false };
     const api = makeMockApi(savedSettings as unknown as Record<string, unknown>);
     await commandBarPlugin.onEnable(api as any);
 
-    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as () => void;
-    open();
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
 
     // The results container must show the No results placeholder.
     const resultsList = document.getElementById("cb-results-list")!;
@@ -941,10 +977,13 @@ describe("commandBarPlugin lifecycle", () => {
     const api = makeMockApi();
     await commandBarPlugin.onEnable(api as any);
 
-    // Open the bar: this calls buildAllResults() which reads the globals above and
-    // writes a dimmed "format-bold" result into _visibleResults.
-    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as () => void;
-    open();
+    // Open the bar in commands mode: this calls buildAllResults() which reads the
+    // globals above and writes a dimmed "format-bold" result into _visibleResults.
+    // NOTE: Explicitly opening in commands mode because dimming is a commands-mode
+    // concern. Files mode shows workspace results, not command results. (Adapted
+    // for Modal Command Bar Step 02.)
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
 
     // Locate the rendered row for "format-bold" in the live results list.
     const resultsList = document.getElementById("cb-results-list")!;
@@ -970,5 +1009,1041 @@ describe("commandBarPlugin lifecycle", () => {
     delete (window as any).__MARKABLE_PLUGIN_MANAGER__;
     delete (window as any).__MARKABLE_CURRENT_FILE__;
     delete (window as any).__MARKABLE_HANDLE_ACTION__;
+  });
+});
+
+// =============================================================================
+// STEP 01 — Mode Infrastructure
+// =============================================================================
+
+describe("Step 01 — Mode Infrastructure", () => {
+  // ── setMode: active tab, placeholder, footer ─────────────────────────────
+  // The mode badge pill was replaced by a tab strip (.cb-tab-strip). Active mode
+  // is now indicated by .cb-tab--active on the corresponding tab button, not by
+  // a single element's text content. Each tab has data-mode="<mode>".
+
+  it("setMode marks the files tab as active when mode is files", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("files");
+    const activeTab = document.querySelector<HTMLButtonElement>(".cb-tab--active");
+    expect(activeTab).not.toBeNull();
+    expect(activeTab!.dataset.mode).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("setMode marks the commands tab as active when mode is commands", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("commands");
+    const activeTab = document.querySelector<HTMLButtonElement>(".cb-tab--active");
+    expect(activeTab!.dataset.mode).toBe("commands");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("setMode marks the keybindings tab as active when mode is keybindings", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("keybindings");
+    const activeTab = document.querySelector<HTMLButtonElement>(".cb-tab--active");
+    expect(activeTab!.dataset.mode).toBe("keybindings");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── MODE_PLACEHOLDERS and MODE_FOOTER_HINTS via DOM ──────────────────────
+
+  it("MODE_PLACEHOLDERS: files mode input placeholder is 'Open file or tab…'", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("files");
+    const input = document.querySelector<HTMLInputElement>(".cb-input");
+    expect(input!.placeholder).toBe("Open file or tab…");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("MODE_PLACEHOLDERS: commands mode input placeholder contains 'command'", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("commands");
+    const input = document.querySelector<HTMLInputElement>(".cb-input");
+    expect(input!.placeholder).toContain("command");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("MODE_PLACEHOLDERS: keybindings mode input placeholder contains 'shortcut'", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("keybindings");
+    const input = document.querySelector<HTMLInputElement>(".cb-input");
+    expect(input!.placeholder).toContain("shortcut");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("MODE_FOOTER_HINTS: footer text changes when mode is commands", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("commands");
+    const footer = document.querySelector<HTMLElement>(".cb-footer");
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent).toContain("run");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("MODE_FOOTER_HINTS: footer text changes when mode is keybindings", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("keybindings");
+    const footer = document.querySelector<HTMLElement>(".cb-footer");
+    expect(footer!.textContent).toContain("assign shortcut");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── buildOverlayDOM structural checks ────────────────────────────────────
+
+  it("buildOverlayDOM returns element containing .cb-tab-strip with three tab buttons", () => {
+    // The mode badge pill was replaced by a tab strip with one button per mode.
+    const overlay = buildOverlayDOM();
+    const strip = overlay.querySelector<HTMLElement>(".cb-tab-strip");
+    expect(strip).not.toBeNull();
+    expect(strip!.getAttribute("role")).toBe("tablist");
+    const tabs = strip!.querySelectorAll<HTMLButtonElement>(".cb-tab");
+    expect(tabs.length).toBe(3);
+    const modes = Array.from(tabs).map((t) => t.dataset.mode);
+    expect(modes).toEqual(["files", "commands", "keybindings"]);
+  });
+
+  it("buildOverlayDOM returns element containing .cb-footer", () => {
+    const overlay = buildOverlayDOM();
+    const footer = overlay.querySelector(".cb-footer");
+    expect(footer).not.toBeNull();
+  });
+
+  it("buildOverlayDOM returns element containing .cb-preset-row with cb-preset-row--hidden class", () => {
+    const overlay = buildOverlayDOM();
+    const presetRow = overlay.querySelector(".cb-preset-row");
+    expect(presetRow).not.toBeNull();
+    expect(presetRow!.classList.contains("cb-preset-row--hidden")).toBe(true);
+  });
+
+  it("buildOverlayDOM: tab strip appears before the input row in the panel", () => {
+    // The tab strip must precede the input row so it renders above the query field.
+    const overlay = buildOverlayDOM();
+    const panel = overlay.querySelector(".cb-panel")!;
+    const children = Array.from(panel.children);
+    const stripIdx = children.findIndex((el) => el.classList.contains("cb-tab-strip"));
+    const inputRowIdx = children.findIndex((el) => el.classList.contains("cb-input-row"));
+    expect(stripIdx).not.toBe(-1);
+    expect(inputRowIdx).not.toBe(-1);
+    // Tab strip must come before input row (lower index = earlier in DOM order).
+    expect(stripIdx).toBeLessThan(inputRowIdx);
+  });
+
+  // ── Badge click cycles modes ──────────────────────────────────────────────
+
+  it("clicking a tab directly switches to that mode", async () => {
+    // The mode badge pill was replaced by a tab strip. Clicking a tab button
+    // switches directly to that mode (no cycling — any mode is one click away).
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const strip = document.querySelector<HTMLElement>(".cb-tab-strip")!;
+
+    // Click the Commands tab.
+    const cmdTab = strip.querySelector<HTMLButtonElement>('[data-mode="commands"]')!;
+    cmdTab.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("commands");
+
+    // Click the Keybindings tab.
+    const kbTab = strip.querySelector<HTMLButtonElement>('[data-mode="keybindings"]')!;
+    kbTab.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("keybindings");
+
+    // Click the Files tab.
+    const filesTab = strip.querySelector<HTMLButtonElement>('[data-mode="files"]')!;
+    filesTab.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── Prefix switching ──────────────────────────────────────────────────────
+
+  it("prefix '>' in files mode switches to commands mode and clears input", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // Simulate typing '>' (value becomes ">", then input event fires).
+    input.value = ">";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Mode must switch to commands and input must be cleared.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("commands");
+    expect(input.value).toBe("");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("prefix '#' in files mode switches to keybindings mode and clears input", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    input.value = "#";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("keybindings");
+    expect(input.value).toBe("");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("'>' in commands mode is treated as a normal search character (EC-08)", async () => {
+    // Prefix switching only activates FROM files mode. In commands mode,
+    // typing '>' must not switch mode — it is part of the query.
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // Type '>' while in commands mode.
+    input.value = ">";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Mode must remain commands; input is not cleared.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("commands");
+    // The value is not cleared — it stays as ">".
+    expect(input.value).toBe(">");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("'#' in keybindings mode is treated as a normal search character (EC-09)", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("keybindings");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    input.value = "#";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Mode must remain keybindings; input is not cleared.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("keybindings");
+    expect(input.value).toBe("#");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── Backspace-to-files switching ──────────────────────────────────────────
+
+  it("Backspace on empty input in commands mode returns to files mode (FR-06.3)", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
+
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // Ensure input is empty before dispatching Backspace.
+    input.value = "";
+
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true });
+    overlay.dispatchEvent(backspace);
+
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("Backspace on empty input in keybindings mode returns to files mode (FR-06.3)", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("keybindings");
+
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    input.value = "";
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true });
+    overlay.dispatchEvent(backspace);
+
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("Backspace on non-empty input in commands mode does not switch modes (FR-06.4)", async () => {
+    // When the input has text, Backspace deletes a character and does NOT switch mode.
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
+
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // Put some text in the input first.
+    input.value = "save";
+
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true });
+    overlay.dispatchEvent(backspace);
+
+    // Mode must remain commands.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("commands");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("Backspace on empty input in files mode is a no-op (EC-10)", async () => {
+    // In files mode, Backspace on empty input should not crash or change mode.
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    input.value = "";
+    const backspace = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true });
+    overlay.dispatchEvent(backspace);
+
+    // Mode remains files — Backspace is a no-op in files mode.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── openBar mode switching ────────────────────────────────────────────────
+
+  it("openBar('commands') while bar already open in commands mode closes bar (EC-13)", async () => {
+    // Same-mode open = toggle close (FR-01.8, EC-13).
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // First open in commands mode.
+    open("commands");
+    expect(overlay.classList.contains("cb-hidden")).toBe(false);
+
+    // Second open with same mode = toggle close.
+    open("commands");
+    expect(overlay.classList.contains("cb-hidden")).toBe(true);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("openBar('files') while bar already open in commands mode switches to files mode (EC-12)", async () => {
+    // Different-mode open = switch mode without closing (FR-01.8, EC-12).
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Open in commands mode.
+    open("commands");
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("commands");
+    expect(overlay.classList.contains("cb-hidden")).toBe(false);
+
+    // Open in files mode while already open → switch without closing.
+    open("files");
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+    // Bar must remain visible (not closed).
+    expect(overlay.classList.contains("cb-hidden")).toBe(false);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── closeBar resets mode ──────────────────────────────────────────────────
+
+  it("closeBar resets _mode to 'files' (FR-01.9)", async () => {
+    // After opening in commands mode and closing via Escape, mode resets to files.
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Open in keybindings mode.
+    open("keybindings");
+
+    // Close via Escape.
+    const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+    overlay.dispatchEvent(esc);
+
+    // Re-open with no argument (should default to files mode because _mode was reset).
+    open();
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── __MARKABLE_COMMAND_BAR_OPEN__ mode argument ───────────────────────────
+
+  it("__MARKABLE_COMMAND_BAR_OPEN__ accepts optional mode argument", async () => {
+    // The global must accept an optional BarMode argument and open in that mode.
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+    expect(typeof open).toBe("function");
+
+    // Call with explicit mode and verify the corresponding tab becomes active.
+    open("keybindings");
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("keybindings");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── preset row visibility ─────────────────────────────────────────────────
+
+  it("setMode hides preset row in files and commands mode", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("files");
+    const presetRow = document.querySelector<HTMLElement>(".cb-preset-row");
+    expect(presetRow!.classList.contains("cb-preset-row--hidden")).toBe(true);
+
+    setMode("commands");
+    expect(presetRow!.classList.contains("cb-preset-row--hidden")).toBe(true);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  it("setMode shows preset row in keybindings mode", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    setMode("keybindings");
+    const presetRow = document.querySelector<HTMLElement>(".cb-preset-row");
+    expect(presetRow!.classList.contains("cb-preset-row--hidden")).toBe(false);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+});
+
+// =============================================================================
+// STEP 02 — Files Mode
+// =============================================================================
+
+// ── Helper factories ──────────────────────────────────────────────────────────
+
+function makeTab(id: string, title: string, filePath: string | null = null): TabEntry {
+  return { id, title, filePath };
+}
+
+function makeFilesResultsDeps(overrides: Partial<FilesModeBuilderDeps> = {}): FilesModeBuilderDeps {
+  return {
+    tabs: [],
+    workspaceFiles: [],
+    workspaceLoadState: "loaded",
+    openTab: vi.fn(),
+    openFile: vi.fn(),
+    ...overrides,
+  };
+}
+
+// ── buildFilesResults pure function ──────────────────────────────────────────
+
+describe("Step 02 — buildFilesResults", () => {
+  it("returns open tabs in 'open-tabs' category", () => {
+    const tabs = [makeTab("t1", "Notes", "/Users/alice/notes.md")];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs }));
+    const tabResults = results.filter((r) => r.category === "open-tabs");
+    expect(tabResults).toHaveLength(1);
+    expect(tabResults[0].id).toBe("tab:t1");
+    expect(tabResults[0].isTab).toBe(true);
+    expect(tabResults[0].tabId).toBe("t1");
+  });
+
+  it("returns workspace files in 'workspace-files' category", () => {
+    const workspaceFiles = ["/Users/alice/docs/readme.md", "/Users/alice/docs/todo.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles }));
+    const fileResults = results.filter((r) => r.category === "workspace-files");
+    expect(fileResults).toHaveLength(2);
+    expect(fileResults[0].id).toBe("file:/Users/alice/docs/readme.md");
+    expect(fileResults[0].isTab).toBe(false);
+  });
+
+  it("EC-06: a file already open as a tab does not appear in workspace-files section", () => {
+    const filePath = "/Users/alice/notes.md";
+    const tabs = [makeTab("t1", "Notes", filePath)];
+    const workspaceFiles = [filePath, "/Users/alice/other.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs, workspaceFiles }));
+    const fileResults = results.filter((r) => r.category === "workspace-files");
+    // notes.md is already open → must NOT appear in workspace files
+    expect(fileResults.find((r) => r.filePath === filePath)).toBeUndefined();
+    // other.md is not open → must appear
+    expect(fileResults.find((r) => r.filePath === "/Users/alice/other.md")).toBeDefined();
+  });
+
+  it("caps workspace files at FILES_CAP (200)", () => {
+    // Generate 250 unique paths — only the first 200 should appear.
+    const workspaceFiles = Array.from({ length: 250 }, (_, i) => `/p/file${i}.md`);
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles }));
+    const fileResults = results.filter((r) => r.category === "workspace-files");
+    expect(fileResults).toHaveLength(FILES_CAP);
+  });
+
+  it("EC-05: files beyond the cap are not included in results", () => {
+    const workspaceFiles = Array.from({ length: 250 }, (_, i) => `/p/file${i}.md`);
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles }));
+    const fileResults = results.filter((r) => r.category === "workspace-files");
+    // The 201st file (index 200) must not be present.
+    expect(fileResults.find((r) => r.filePath === "/p/file200.md")).toBeUndefined();
+  });
+
+  it("EC-02: returns empty array when tabs is empty and workspaceFiles is empty", () => {
+    const results = buildFilesResults(makeFilesResultsDeps());
+    expect(results).toHaveLength(0);
+  });
+
+  it("EC-01: returns only open-tabs results when workspaceFiles is empty", () => {
+    const tabs = [makeTab("t1", "Notes", "/Users/alice/notes.md")];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs }));
+    expect(results.filter((r) => r.category === "open-tabs")).toHaveLength(1);
+    expect(results.filter((r) => r.category === "workspace-files")).toHaveLength(0);
+  });
+
+  it("open-tabs results appear before workspace-files results", () => {
+    const tabs = [makeTab("t1", "Open", "/Users/alice/open.md")];
+    const workspaceFiles = ["/Users/alice/other.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs, workspaceFiles }));
+    expect(results[0].category).toBe("open-tabs");
+    expect(results[1].category).toBe("workspace-files");
+  });
+
+  it("untitled tab uses 'Untitled' label when no title and no filePath", () => {
+    const tabs = [makeTab("t1", "", null)];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs }));
+    expect(results[0].label).toBe("Untitled");
+  });
+
+  it("tab without filePath has empty sublabel", () => {
+    const tabs = [makeTab("t1", "Untitled", null)];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs }));
+    expect(results[0].sublabel).toBe("");
+  });
+
+  it("workspace file label is the basename of the path", () => {
+    const workspaceFiles = ["/Users/alice/docs/readme.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles }));
+    expect(results[0].label).toBe("readme.md");
+  });
+
+  it("workspace file sublabel is the abbreviated directory", () => {
+    const workspaceFiles = ["/Users/alice/docs/readme.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles }));
+    // /Users/alice/docs/ → ~/docs/
+    expect(results[0].sublabel).toBe("~/docs/");
+  });
+
+  it("action on open-tab result calls openTab with the tab id", () => {
+    const openTabSpy = vi.fn();
+    const tabs = [makeTab("t42", "Notes", "/Users/alice/notes.md")];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs, openTab: openTabSpy }));
+    const tabResult = results.find((r) => r.id === "tab:t42")!;
+    tabResult.action();
+    expect(openTabSpy).toHaveBeenCalledWith("t42");
+  });
+
+  it("action on workspace-file result calls openFile with the file path", () => {
+    const openFileSpy = vi.fn();
+    const workspaceFiles = ["/Users/alice/docs/readme.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ workspaceFiles, openFile: openFileSpy }));
+    const fileResult = results.find((r) => r.category === "workspace-files")!;
+    fileResult.action();
+    expect(openFileSpy).toHaveBeenCalledWith("/Users/alice/docs/readme.md");
+  });
+
+  it("all results have dimmed: false", () => {
+    const tabs = [makeTab("t1", "Notes", "/p/notes.md")];
+    const workspaceFiles = ["/p/other.md"];
+    const results = buildFilesResults(makeFilesResultsDeps({ tabs, workspaceFiles }));
+    expect(results.every((r) => r.dimmed === false)).toBe(true);
+  });
+});
+
+// ── countWorkspaceBeforeCap ───────────────────────────────────────────────────
+
+describe("Step 02 — countWorkspaceBeforeCap", () => {
+  it("EC-05: returns the full workspace count before deduplication cap", () => {
+    const workspaceFiles = ["/p/a.md", "/p/b.md", "/p/c.md"];
+    const count = countWorkspaceBeforeCap(workspaceFiles, new Set());
+    expect(count).toBe(3);
+  });
+
+  it("excludes paths that are already open as tabs from the count", () => {
+    const workspaceFiles = ["/p/a.md", "/p/b.md", "/p/c.md"];
+    const openPaths = new Set(["/p/a.md"]);
+    const count = countWorkspaceBeforeCap(workspaceFiles, openPaths);
+    expect(count).toBe(2);
+  });
+
+  it("returns 0 when all workspace files are open as tabs", () => {
+    const workspaceFiles = ["/p/a.md", "/p/b.md"];
+    const openPaths = new Set(["/p/a.md", "/p/b.md"]);
+    expect(countWorkspaceBeforeCap(workspaceFiles, openPaths)).toBe(0);
+  });
+
+  it("returns 0 when workspaceFiles is empty", () => {
+    expect(countWorkspaceBeforeCap([], new Set())).toBe(0);
+  });
+});
+
+// ── abbreviatePath ───────────────────────────────────────────────────────────
+
+describe("Step 02 — abbreviatePath", () => {
+  it("abbreviates /Users/foo/bar/ to ~/bar/", () => {
+    expect(abbreviatePath("/Users/alice/bar/")).toBe("~/bar/");
+  });
+
+  it("abbreviates /Users/<name>/Documents/notes/ to ~/Documents/notes/", () => {
+    expect(abbreviatePath("/Users/alice/Documents/notes/")).toBe("~/Documents/notes/");
+  });
+
+  it("does not modify paths not starting with /Users/", () => {
+    expect(abbreviatePath("/var/data/docs/")).toBe("/var/data/docs/");
+  });
+
+  it("does not modify paths with /users/ (lowercase) — macOS /Users/ is uppercase", () => {
+    expect(abbreviatePath("/users/alice/docs/")).toBe("/users/alice/docs/");
+  });
+
+  it("returns the same string when path has no /Users/ prefix", () => {
+    expect(abbreviatePath("/home/alice/notes/")).toBe("/home/alice/notes/");
+  });
+});
+
+// ── basename ─────────────────────────────────────────────────────────────────
+
+describe("Step 02 — basename", () => {
+  it("extracts final path component", () => {
+    expect(basename("/Users/alice/docs/readme.md")).toBe("readme.md");
+  });
+
+  it("returns the whole string when there are no slashes", () => {
+    expect(basename("readme.md")).toBe("readme.md");
+  });
+
+  it("returns empty string for a path ending with a slash", () => {
+    expect(basename("/Users/alice/")).toBe("");
+  });
+});
+
+// ── FILES_CAP and FILES_SECTION_LABELS constants ──────────────────────────────
+
+describe("Step 02 — constants", () => {
+  it("FILES_CAP is 200", () => {
+    expect(FILES_CAP).toBe(200);
+  });
+
+  it("FILES_SECTION_LABELS has correct labels", () => {
+    expect(FILES_SECTION_LABELS["open-tabs"]).toBe("Open Tabs");
+    expect(FILES_SECTION_LABELS["workspace-files"]).toBe("Files");
+  });
+});
+
+// ── renderFilesResults DOM tests ──────────────────────────────────────────────
+
+describe("Step 02 — renderFilesResults", () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+  });
+
+  // Helper to build a minimal FilesResult for DOM tests.
+  function makeFilesResult(
+    overrides: Partial<FilesResult> & { id: string; category: FilesResult["category"]; label: string }
+  ): FilesResult {
+    return {
+      sublabel: "",
+      filePath: null,
+      isTab: false,
+      dimmed: false,
+      action: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("renders 'Open Tabs' section header", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "tab:t1", category: "open-tabs", label: "Notes", isTab: true }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 0, false);
+    const headers = container.querySelectorAll(".cb-section-header");
+    expect(Array.from(headers).some((h) => h.textContent === "Open Tabs")).toBe(true);
+  });
+
+  it("renders 'Files' section header", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 1, false);
+    const headers = container.querySelectorAll(".cb-section-header");
+    expect(Array.from(headers).some((h) => h.textContent === "Files")).toBe(true);
+  });
+
+  it("renders 'Loading…' notice when loadState is 'loading'", () => {
+    renderFilesResults(container, [], "", null, "loading", 0, false);
+    const loading = container.querySelector(".cb-loading");
+    expect(loading).not.toBeNull();
+    expect(loading!.textContent).toBe("Loading…");
+  });
+
+  it("renders 'Could not load workspace files' when loadState is 'error' (EC-03)", () => {
+    renderFilesResults(container, [], "", null, "error", 0, false);
+    const notice = container.querySelector(".cb-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("Could not load");
+  });
+
+  it("renders 'No workspace' notice when noFileOpen is true and no workspace files (EC-01)", () => {
+    // noFileOpen=true with loadState="loaded" (no workspace available) and no workspace file rows
+    renderFilesResults(container, [], "", null, "loaded", 0, true);
+    const notice = container.querySelector(".cb-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("No workspace");
+  });
+
+  it("renders 'No markdown files in workspace' when workspace is empty (EC-04)", () => {
+    // noFileOpen=false, loadState="loaded", no workspace file rows → workspace is empty
+    renderFilesResults(container, [], "", null, "loaded", 0, false);
+    const notice = container.querySelector(".cb-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("No markdown files");
+  });
+
+  it("renders cap notice when totalWorkspaceCount > FILES_CAP (EC-05)", () => {
+    // Provide a result so the loadState guard doesn't fire the empty-workspace notice.
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 250, false);
+    const notices = container.querySelectorAll(".cb-notice");
+    const capNotice = Array.from(notices).find((n) => n.textContent?.includes("200 of 250"));
+    expect(capNotice).not.toBeNull();
+  });
+
+  it("does not render cap notice when totalWorkspaceCount <= FILES_CAP", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 1, false);
+    const notices = container.querySelectorAll(".cb-notice");
+    const capNotice = Array.from(notices).find((n) => n.textContent?.includes("of"));
+    expect(capNotice).toBeUndefined();
+  });
+
+  it("EC-04: does not crash when workspaceFiles is empty (results array is empty)", () => {
+    expect(() => renderFilesResults(container, [], "", null, "loaded", 0, false)).not.toThrow();
+  });
+
+  it("renders result rows with .cb-result class", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "tab:t1", category: "open-tabs", label: "Notes", isTab: true }),
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 1, false);
+    const rows = container.querySelectorAll(".cb-result");
+    expect(rows.length).toBe(2);
+  });
+
+  it("selected result gets cb-result--selected class", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "tab:t1", category: "open-tabs", label: "Notes", isTab: true }),
+    ];
+    renderFilesResults(container, results, "", "tab:t1", "loaded", 0, false);
+    const selected = container.querySelector(".cb-result--selected");
+    expect(selected).not.toBeNull();
+    expect(selected!.getAttribute("data-id")).toBe("tab:t1");
+  });
+
+  it("does not render Loading notice when loadState is 'loaded'", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 1, false);
+    expect(container.querySelector(".cb-loading")).toBeNull();
+  });
+
+  it("renders sublabel when a result has one", () => {
+    const results: FilesResult[] = [
+      makeFilesResult({ id: "file:/p/a.md", category: "workspace-files", label: "a.md", sublabel: "~/docs/" }),
+    ];
+    renderFilesResults(container, results, "", null, "loaded", 1, false);
+    const sublabel = container.querySelector(".cb-result-sublabel");
+    expect(sublabel).not.toBeNull();
+    expect(sublabel!.textContent).toBe("~/docs/");
+  });
+});
+
+// ── EC-28: stale generation guard (integration via plugin lifecycle) ──────────
+
+describe("Step 02 — EC-28 stale generation guard", () => {
+  it("EC-28: fetchWorkspaceFiles does not update DOM if generation has changed", async () => {
+    // Setup: the bar opens and starts an async file fetch, but then closes before
+    // the fetch resolves. The generation counter is incremented on close, so when
+    // the (mocked) fetch resolves, _openGeneration !== capturedGeneration and the
+    // DOM update is skipped.
+    //
+    // We verify this by ensuring the results list does NOT show workspace file rows
+    // when the bar is closed before the mock fetch resolves.
+
+    const api = makeMockApi();
+
+    // Set up a controllable invoke mock: won't resolve until we call resolveInvoke().
+    let resolveInvoke: (files: string[]) => void = () => {};
+    const invokePending = new Promise<string[]>((res) => { resolveInvoke = res; });
+
+    // Mock __TAURI_INTERNALS__.invoke to return the pending promise.
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: vi.fn().mockReturnValue(invokePending),
+    };
+    (window as any).__MARKABLE_CURRENT_FILE__ = "/Users/alice/notes.md";
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [],
+      switchToTab: vi.fn(),
+      openFile: vi.fn(),
+    };
+
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Open in files mode — starts the async fetch.
+    open("files");
+    expect(overlay.classList.contains("cb-hidden")).toBe(false);
+
+    // Close bar before fetch resolves (increments generation internally via reset).
+    const escEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+    overlay.dispatchEvent(escEvent);
+    expect(overlay.classList.contains("cb-hidden")).toBe(true);
+
+    // Now resolve the fetch with file data.
+    resolveInvoke(["/Users/alice/workspace/file1.md", "/Users/alice/workspace/file2.md"]);
+    // Allow promise microtasks to flush.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Re-open the bar. The stale fetch should not have polluted _allResults.
+    // The newly opened bar should start fresh with just the tabs (empty).
+    open("files");
+    const resultsList = document.getElementById("cb-results-list")!;
+    // The stale file results from the previous generation should NOT be visible.
+    // The results list may show a loading state or be empty (fresh open).
+    // The key assertion: no workspace-file rows from the stale generation.
+    const rows = resultsList.querySelectorAll("[data-id^='file:']");
+    expect(rows.length).toBe(0);
+
+    commandBarPlugin.onDisable(api as any);
+    delete (window as any).__TAURI_INTERNALS__;
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+  });
+});
+
+// =============================================================================
+// STEP 03 — Commands Mode Refactor
+// =============================================================================
+
+describe("Step 03 — Commands Mode Refactor", () => {
+  // ── buildResultsForMode: commands mode ────────────────────────────────────
+
+  // Minimal settings objects used across tests in this block.
+  const cmdOnlySettings = {
+    showCommands: true,
+    showHeadings: false,
+    showRecentFiles: true, // deprecated; must be ignored
+    activePreset: "Default",
+  };
+
+  const headingsOnlySettings = {
+    showCommands: false,
+    showHeadings: true,
+    showRecentFiles: true,
+    activePreset: "Default",
+  };
+
+  const allOnSettings = {
+    showCommands: true,
+    showHeadings: true,
+    showRecentFiles: true,
+    activePreset: "Default",
+  };
+
+  beforeEach(() => {
+    // Inject minimal globals so buildCommandModeResults() does not crash.
+    (window as any).__MARKABLE_COMMANDS__ = [
+      { id: "file-save", label: "Save", defaultKey: "Cmd-S", section: "File" },
+      { id: "file-new",  label: "New",  defaultKey: "Cmd-N", section: "File" },
+    ];
+    (window as any).__MARKABLE_PLUGIN_MANAGER__ = {
+      getStates: () => ({}),
+      toggle: vi.fn(),
+      getDefinitions: () => [],
+    };
+    (window as any).__MARKABLE_GET_SETTINGS__ = () => ({ recentFiles: ["/Users/alice/recent.md"], keybindings: {} });
+    (window as any).__MARKABLE_EDITOR_VIEW__ = null;
+    (window as any).__MARKABLE_CURRENT_FILE__ = "/Users/alice/notes.md";
+    (window as any).__MARKABLE_HANDLE_ACTION__ = vi.fn();
+  });
+
+  afterEach(() => {
+    delete (window as any).__MARKABLE_COMMANDS__;
+    delete (window as any).__MARKABLE_PLUGIN_MANAGER__;
+    delete (window as any).__MARKABLE_GET_SETTINGS__;
+    delete (window as any).__MARKABLE_EDITOR_VIEW__;
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+    delete (window as any).__MARKABLE_HANDLE_ACTION__;
+  });
+
+  it("buildResultsForMode('commands') returns commands category results when showCommands=true", () => {
+    // Commands pipeline must fire when mode is 'commands' and showCommands is true.
+    const results = buildResultsForMode("commands", cmdOnlySettings as any);
+    const commandResults = results.filter((r: any) => r.category === "commands");
+    expect(commandResults.length).toBeGreaterThan(0);
+  });
+
+  it("buildResultsForMode('commands') returns headings category results when showHeadings=true", () => {
+    // Headings pipeline must fire when mode is 'commands' and showHeadings is true.
+    // We need a cmState with headings; inject it via the editor view global.
+    const mockState = makeMockState("# Introduction\n## Background");
+    (window as any).__MARKABLE_EDITOR_VIEW__ = { state: mockState };
+
+    const results = buildResultsForMode("commands", headingsOnlySettings as any);
+    const headingResults = results.filter((r: any) => r.category === "headings");
+    expect(headingResults.length).toBe(2);
+  });
+
+  it("buildResultsForMode('commands') respects showCommands=false", () => {
+    // When showCommands is false, no commands-category results must be returned.
+    const results = buildResultsForMode("commands", headingsOnlySettings as any);
+    const commandResults = results.filter((r: any) => r.category === "commands");
+    expect(commandResults.length).toBe(0);
+  });
+
+  it("buildResultsForMode('commands') respects showHeadings=false", () => {
+    // When showHeadings is false, no headings-category results must be returned.
+    const results = buildResultsForMode("commands", cmdOnlySettings as any);
+    const headingResults = results.filter((r: any) => r.category === "headings");
+    expect(headingResults.length).toBe(0);
+  });
+
+  it("buildResultsForMode('commands') does NOT include recent files results (FR-09.2)", () => {
+    // Even when showRecentFiles is true in the settings object, commands mode must
+    // never return category 'recent' results. FR-09.2 removes the recent pipeline
+    // from commands mode entirely.
+    const results = buildResultsForMode("commands", allOnSettings as any);
+    const recentResults = results.filter((r: any) => r.category === "recent");
+    expect(recentResults.length).toBe(0);
+  });
+
+  it("buildResultsForMode('files') returns empty array (handled separately)", () => {
+    // Files mode builds results via the async pipeline (fetchWorkspaceFiles /
+    // buildFilesResults), not via buildResultsForMode. The function must return []
+    // for 'files' so the caller knows to use the separate path.
+    const results = buildResultsForMode("files", allOnSettings as any);
+    expect(results).toHaveLength(0);
+  });
+
+  it("buildResultsForMode('keybindings') returns empty array before Step 4", () => {
+    // Keybindings mode builder is not yet implemented (Step 4). Until then,
+    // buildResultsForMode must return [] for 'keybindings' as a safe stub.
+    const results = buildResultsForMode("keybindings", allOnSettings as any);
+    expect(results).toHaveLength(0);
+  });
+
+  // ── renderDetailExtra changes ─────────────────────────────────────────────
+
+  it("renderDetailExtra renders exactly 2 checkboxes (showCommands, showHeadings)", () => {
+    // The showRecentFiles checkbox was removed from the settings UI in Step 03.
+    const container = document.createElement("div");
+    renderDetailExtra(container);
+    const checkboxes = container.querySelectorAll("input[type=checkbox]");
+    expect(checkboxes.length).toBe(2);
+  });
+
+  it("renderDetailExtra no longer renders a showRecentFiles checkbox", () => {
+    // No checkbox with id 'cb-setting-showRecentFiles' must exist.
+    const container = document.createElement("div");
+    renderDetailExtra(container);
+    const recentCb = container.querySelector("#cb-setting-showRecentFiles");
+    expect(recentCb).toBeNull();
+  });
+
+  it("renderDetailExtra renders an 'Active preset' note", () => {
+    // Step 03 adds a static 'Keybinding Preset' section that will be populated
+    // in Step 05. The section must be present now as a placeholder.
+    const container = document.createElement("div");
+    renderDetailExtra(container);
+    // The section heading or text must mention preset.
+    const text = container.textContent ?? "";
+    expect(text.toLowerCase()).toContain("preset");
+  });
+
+  // ── loadPluginSettings ignores showRecentFiles ────────────────────────────
+
+  it("loadPluginSettings ignores showRecentFiles from saved settings (FR-09.2)", async () => {
+    // When saved settings contain showRecentFiles: false, the plugin must still
+    // behave as if showRecentFiles is true (it is ignored). Verified by opening
+    // in commands mode — the recent-files pipeline does not fire regardless.
+    const savedSettings = { showCommands: true, showHeadings: true, showRecentFiles: false };
+    const api = makeMockApi(savedSettings as unknown as Record<string, unknown>);
+    await commandBarPlugin.onEnable(api as any);
+
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("commands");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    // Results must NOT contain any 'recent' category rows — commands mode never
+    // emits them regardless of the saved showRecentFiles value.
+    const recentRows = resultsList.querySelectorAll("[data-cat='recent']");
+    expect(recentRows.length).toBe(0);
+
+    commandBarPlugin.onDisable(api as any);
   });
 });
