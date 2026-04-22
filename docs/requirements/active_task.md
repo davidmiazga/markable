@@ -1,453 +1,260 @@
 ---
-title: "Table Formula Cells"
+title: "Unified Export Command (HTML + PDF)"
 last-updated: "2026-04-21"
 review-cadence-days: 7
 status: reference
 ---
 
-# Table Formula Cells Requirements Spec
+# Unified Export Command (HTML + PDF) — Requirements Spec
 
 ## Validation Status
 
-**VALIDATED — 2026-04-21.** Requirements approved. Ready for Software Architect.
+**VALIDATED — requirements approved by user. Ready for architecture phase.**
 
 ---
 
 ## Summary
 
-As a user, I want to type spreadsheet-style formula expressions (e.g., `=SUM(B2:B4)`, `=A1*B2`) into Markdown table cells so that Markable computes and displays their numeric results in live preview, while the raw source continues to show the formula text.
+As a user, I want the existing "Export as HTML..." command to also offer PDF as a second format option, so that I can export to HTML or PDF from a single command without losing the Print menu item or its shortcut.
 
 ---
 
 ## Background and Motivation
 
-The existing Advanced Tables feature (`tablePreviewField` StateField in `src/editor/live-preview.ts` + toolbar logic in `src/plugins/markdown-toolbar/markdown-toolbar.plugin.ts`) renders GFM tables as HTML in live preview. Users already treat these tables like lightweight spreadsheets. The next natural step is formula evaluation: let cells contain `=<expression>` and show the computed value in the rendered table while preserving the formula in source.
+The app currently has two export-adjacent menu items in the File menu:
 
-This feature extends `TableWidget.toDOM()` in `live-preview.ts` to evaluate formula cells before setting `td.innerHTML`. No new CM6 `StateField` is required — the existing `tablePreviewField` already owns the table rendering lifecycle.
+- **"Export as HTML..."** (`Cmd-Alt-E`, menu ID `file-export`) — implemented in `src/lib/export.ts`. Reads raw Markdown from the editor, converts it with `marked`, assembles a self-contained HTML5 document (embedded `MINIMAL_CSS`), and writes it to a user-chosen path via the `save_html_dialog` Tauri command + `write_file` atomic swap. The keybinding is registered in `src/keybindings/keybindings-panel.ts` and the action is dispatched in `src/main.ts`.
+- **"Print..."** (`Cmd-P`, menu ID `file-print`) — implemented as `printDocument()` in `src/main.ts`. Injects a rendered HTML overlay + print-only stylesheet into the DOM, calls `window.print()` (which surfaces the macOS system print dialog, where the user can choose "Save as PDF"), then removes the overlay on close.
+
+The goal is to extend "Export as HTML..." into a unified **"Export..."** command that presents a format choice (HTML or PDF) before proceeding. The Print menu item, its shortcut `Cmd-P`, and its command bar entry remain completely untouched.
 
 ---
 
 ## Goals
 
-- Allow formula expressions beginning with `=` in any body cell (not header cells) of a GFM Markdown table.
-- Evaluate formulas at render time inside `TableWidget.toDOM()` using a custom mini-evaluator (no external formula library).
-- Support cell references (`A1`, `B3`), range references (`B2:B4`), basic arithmetic operators, a small set of aggregate functions, and postfix output modifiers.
-- Display computed results in live preview; show the raw formula in source/edit mode (cursor-on-line reveals source, consistent with existing Typora-style behavior).
-- Show clearly styled error tokens (`#ERR`, `#REF`, `#DIV/0`, `#CIRC`, `#VALUE`, `#NAME`) in-cell for invalid or unresolvable formulas.
-- Ship as a modification to `live-preview.ts` (core, always-on) rather than as a separate toggleable plugin, because formula cells only apply inside tables which already require `tablePreviewField` to be active.
+1. Rename the existing "Export as HTML..." menu item to **"Export..."**, keeping the same ID (`file-export`) and the same shortcut (`Cmd-Alt-E`). No shortcut change.
+2. When the export command fires, present a format selection step (HTML or PDF) before opening any save or print dialog.
+3. Preserve all existing HTML export behaviour exactly (`src/lib/export.ts` is not replaced — it is called by the new orchestrator).
+4. Preserve the existing PDF/print behaviour (`printDocument()` logic migrates into the new orchestrator and is also reachable via the format picker).
+5. No new Rust Tauri commands are required for the initial scope (the existing `save_html_dialog` and `write_file` commands are reused).
+6. **"Print..."** (`file-print`, `Cmd-P`) is left exactly as-is: menu item, shortcut, command bar entry, and handler are not touched.
 
 ---
 
 ## Functional Requirements
 
-### FR-01: Formula Cell Syntax
+### FR-01: Menu Changes
 
-**FR-01.1** A formula cell is any table body cell whose trimmed content begins with `=`. Header cells (first row, before the separator row) are never evaluated as formulas — their content is always rendered as literal text.
+**FR-01.1** The Rust `menu.rs` file must rename the existing `"Export as HTML..."` menu item label to `"Export..."`. The item ID (`file-export`) and accelerator (`CmdOrCtrl+Alt+E`) are unchanged.
 
-**FR-01.2** The `=` prefix is the sole trigger. A cell containing `=SUM(B2:B4)` is a formula cell; a cell containing `Sum: 10` is literal text.
+**FR-01.2** The `"Print..."` menu item (ID `file-print`, accelerator `CmdOrCtrl+P`) must remain in the File menu exactly as it is. No change to its label, ID, shortcut, position, or enabled state.
 
-**FR-01.3** The formula body (everything after the leading `=`) is parsed by the mini-evaluator. Whitespace immediately after `=` is stripped before parsing (i.e., `= A1 + B1` is equivalent to `=A1+B1`).
+**FR-01.3** The File menu order around the export area remains structurally identical to today. Only the label of `file-export` changes:
+```
+Save As...
+Save as Template...
+--- (separator)
+Export...          Cmd-Alt-E      ← renamed from "Export as HTML..."
+Import...          Cmd-Alt-Shift-I
+--- (separator)
+Print...           Cmd-P          ← untouched
+Close
+Close All
+```
 
-**FR-01.4** Formula cells may appear in any body row and any column. Multiple formula cells in the same table are independent and each evaluated separately.
+### FR-02: Keybinding Updates
 
-### FR-02: Cell Reference Scheme
+**FR-02.1** In `src/keybindings/keybindings-panel.ts`, the entry for `file-export` must update its label from `"Export as HTML"` to `"Export..."`. The `defaultKey` (`"Cmd-Alt-E"`) is unchanged.
 
-**FR-02.1** Cell addresses use **spreadsheet-style notation**: a column letter (A–Z, case-insensitive) followed by a 1-based row number. Examples: `A1`, `B3`, `Z99`.
+**FR-02.2** The entry for `file-print` must remain in `KEYBINDING_DEFS` exactly as-is.
 
-**FR-02.2** The **row number in a cell address counts only body rows** (rows after the separator row). Row 1 is the first body row. The header row is not addressable.
+**FR-02.3** The existing `resolveAction()` keybinding lookup continues to work for `file-export` with the unchanged default key.
 
-**FR-02.3** The **column letter maps to the column position** in the table (A = column 1, B = column 2, ..., Z = column 26). Tables with more than 26 columns are unsupported for column references beyond Z; references past Z resolve to `#REF`.
+### FR-03: Format Selection UX
 
-**FR-02.4** A cell address that refers to a row or column that does not exist in the table resolves to `#REF`.
+The user picks the export format before a file-picker or print dialog appears. Two implementation options are acceptable; the Architect must evaluate and commit to one.
 
-**FR-02.5** A referenced cell that is itself a formula cell is evaluated first (depth-first resolution). Circular reference detection is required (see FR-06).
+**Option A — Native accessory view (NSSavePanel NSPopUpButton)**
+A Rust/AppKit interop layer adds a "Format:" `NSPopUpButton` accessory view to the `NSSavePanel`. The user picks format and save location in a single native macOS sheet (identical to the TextEdit / Pages "Format:" dropdown pattern). This requires a new Tauri command that wraps `NSSavePanel` directly and accepts a format parameter.
 
-**FR-02.6** A referenced cell whose content is empty resolves to `0` for numeric contexts and `""` for string contexts.
+**Option B — Minimal in-app sheet (acceptable fallback)**
+A small HTML overlay anchored to the bottom of the editor window shows only a "Format: [HTML / PDF]" dropdown and an "Export" button. Confirming the sheet closes it and immediately opens either the Tauri native `save()` dialog (HTML path, with `.html` filter) or the macOS print dialog (PDF path). The overlay is not a full-viewport scrim modal; it is a compact sheet attached to the window chrome.
 
-**FR-02.7** A referenced cell whose content is non-numeric and cannot be coerced to a number resolves to `#VALUE` when used in a numeric operation, and to its literal string value when used in a string context (i.e., inside a string concatenation — string concat is out of scope for v1, see Out of Scope).
+The Architect must call out which option is more feasible given Tauri v2's Rust/AppKit interop story and select one approach for the implementation spec. If Option A is chosen, it supersedes the FR-08 modal details below (which apply only to Option B).
 
-### FR-03: Range References
+**FR-03.1** Regardless of which option is chosen, the user must be able to select HTML or PDF and Cancel in a single interaction step.
 
-**FR-03.1** A range is written as `StartCell:EndCell` (e.g., `B2:B4`, `A1:C1`). Ranges are only valid as arguments to aggregate functions (SUM, AVG, etc.); using a range in a bare arithmetic expression is an error resolved as `#ERR`.
+**FR-03.2** Cancelling (Escape, Cancel button, or closing the sheet) must dismiss with no further action — no save dialog, no print dialog, no error.
 
-**FR-03.2** Only single-column or single-row ranges are required for v1. A multi-row, multi-column rectangle (e.g., `A1:C3`) resolves to `#ERR` in v1 (explicitly documented so the Architect does not over-engineer the range resolver).
+**FR-03.3** Each invocation starts with HTML as the default / pre-selected format.
 
-**FR-03.3** If `StartCell` row > `EndCell` row, or `StartCell` column > `EndCell` column, the evaluator swaps them silently (normalises the range to ascending order).
+**FR-03.4** The format selection step is stateless — the last-chosen format is not persisted between sessions.
 
-**FR-03.4** A range where any endpoint falls outside the table resolves to `#REF`.
+### FR-04: HTML Export Path (Post Format Selection)
 
-### FR-04: Supported Functions
+**FR-04.1** When the user selects HTML, the flow must call the existing `exportAsHtml(editor, currentFilePath)` function from `src/lib/export.ts` without modification. All existing HTML export behaviour is preserved:
+- Native save dialog with `.html` filter and a suggested filename derived from the current file.
+- Self-contained HTML5 document assembled via `buildStandaloneHtml()` with `MINIMAL_CSS` embedded.
+- Atomic write via `writeFile()` (temp-file-swap).
+- Silent success; `alert()` on write failure.
+- No modification to `currentFilePath` / tab state.
 
-The following functions must be implemented in the mini-evaluator. All functions take a range or a comma-separated list of cell references/literals as arguments.
+**FR-04.2** The suggested filename is derived using the existing `deriveExportFilename()` function: replaces the file extension with `.html`; untitled documents use `"untitled.html"` (existing behaviour — no warning needed).
 
-| Function | Description | Example |
-|---|---|---|
-| `SUM` | Sum of all numeric values in range/list | `=SUM(B2:B5)` |
-| `AVG` | Arithmetic mean of numeric values | `=AVG(B2:B4)` |
-| `MIN` | Smallest numeric value | `=MIN(A1,A2,A3)` |
-| `MAX` | Largest numeric value | `=MAX(B2:B6)` |
-| `COUNT` | Count of cells containing a parseable number | `=COUNT(A1:A5)` |
-| `ROUND` | Round to N decimal places: `ROUND(value, digits)` | `=ROUND(A1/B1, 2)` |
-| `ABS` | Absolute value of a single numeric argument | `=ABS(A1-B1)` |
-| `IF` | Conditional: `IF(condition, true_val, false_val)` — condition is an arithmetic expression; non-zero = true | `=IF(A1>10, 1, 0)` |
+### FR-05: PDF Export Path (Post Format Selection)
 
-**FR-04.1** Function names are case-insensitive (`sum`, `SUM`, `Sum` are all valid).
+**FR-05.1** When the user selects PDF, the app must trigger the macOS system print dialog (which includes the native "Save as PDF" option). No bundled headless browser or third-party PDF library is used.
 
-**FR-04.2** Functions not in the above table resolve to `#NAME`.
+**FR-05.2** The PDF path must use the existing `printDocument()` mechanism: inject a rendered HTML overlay + print-only `@media print` stylesheet, call `window.print()`, then clean up.
 
-**FR-04.3** `ROUND` requires exactly two arguments: a numeric expression and an integer digits count. Negative digits values are valid and round to tens, hundreds, etc. (e.g., `ROUND(123.456, -1)` → `120`), matching Excel/Google Sheets behavior via `Math.round(v * 10^d) / 10^d`. Providing wrong argument count resolves to `#ERR`.
+**FR-05.3** `printDocument()` must be refactored out of `src/main.ts` and into `src/lib/export.ts` (alongside `exportAsHtml`). Function signature: `printDocument(editor: EditorView | null): void`. It receives the editor as a parameter (same pattern as `exportAsHtml`) to avoid circular imports.
 
-**FR-04.4** `ABS` requires exactly one argument. Wrong argument count resolves to `#ERR`.
+**FR-05.4** The print overlay is injected into `document.body` just before `window.print()` is called and removed immediately after `window.print()` returns.
 
-**FR-04.5** `IF` requires exactly three arguments. Wrong argument count resolves to `#ERR`. Conditions support numeric comparisons only; string comparisons in IF conditions are out of scope for v1.
+**FR-05.5** If `editor` is null when `printDocument()` is called, the function returns immediately.
 
-**FR-04.6** For aggregate functions (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`), non-numeric cells within the range are silently skipped (not treated as `#VALUE`). If the range contains no numeric cells, `SUM` returns `0`, `COUNT` returns `0`, `AVG` / `MIN` / `MAX` return `#ERR` (no numeric values to aggregate).
+**FR-05.6** The `@media print` stylesheet must hide the entire editor UI (`.cm-editor`, the sidebar, the toolbar, the status bar, the tab bar) and show only `#markable-print-overlay`.
 
-### FR-05: Arithmetic Operators and Expressions
+### FR-06: Main.ts Dispatch Changes
 
-**FR-05.1** Supported infix operators: `+` (add), `-` (subtract), `*` (multiply), `/` (divide), `%` (modulo), `^` (exponentiation).
+**FR-06.1** The `case "file-export"` branch in the `handleMenuEvent` switch must be replaced with a call to the new unified export orchestrator: `void openExportDialog(editor, tabManager.getActiveFilePath())`.
 
-**FR-05.2** Supported comparison operators for `IF` conditions: `>`, `<`, `>=`, `<=`, `=` (equality), `<>` (inequality). Comparison evaluates to `1` (true) or `0` (false).
+**FR-06.2** The `case "file-print"` branch must remain untouched in the switch. Its existing handler (`printDocument()` or equivalent) continues to work independently of the `file-export` path.
 
-**FR-05.3** Parentheses for grouping are required in the evaluator (`=(A1+B1)*C1`).
+**FR-06.3** The `openExportDialog` function is the entry point orchestrator. It is responsible for: (a) showing the format selection step, (b) routing to `exportAsHtml` or `printDocument` based on the user's selection, and (c) handling cancellation.
 
-**FR-05.4** Unary minus is supported (`=-A1`, `=-(A1+B1)`).
+**FR-06.4** `openExportDialog` must be defined in `src/lib/export.ts` and imported into `src/main.ts`. Function signature: `openExportDialog(editor: EditorView | null, currentFilePath: string | null): Promise<void>`.
 
-**FR-05.5** Division by zero (`/0` or `%0`) produces `#DIV/0`.
+### FR-07: Command Bar
 
-**FR-05.6** Exponentiation: `2^10` = 1024. Fractional exponents (e.g., `4^0.5` = 2) are allowed.
+**FR-07.1** The command bar entry for `"file-print"` must remain exactly as-is — label, context-invalid dimming, and ranking are unchanged.
 
-**FR-05.7** Numeric literals in formulas may be integers or decimals (`3`, `3.14`, `.5`). Scientific notation (e.g., `1e5`) is not required in v1.
+**FR-07.2** The label displayed in the command bar for `"file-export"` must update from `"Export as HTML"` to `"Export..."` to match the renamed menu item. If the command bar reads labels from `KEYBINDING_DEFS`, updating that array (FR-02.1) is sufficient. If it maintains its own label map, that map must also be updated.
 
-### FR-06: Circular Reference Detection
+**FR-07.3** The context-invalid dimming for `"file-export"` continues to work (the action remains in `REQUIRES_FILE_IDS`).
 
-**FR-06.1** Before evaluating a formula cell, the evaluator must track which cells are currently on the evaluation call stack. If a cell attempts to reference a cell that is already being evaluated (direct or transitive cycle), the evaluation for that cell returns `#CIRC`.
+### FR-08: In-App Sheet Details (Option B only)
 
-**FR-06.2** The circular reference check must be table-local — it does not need to span multiple tables.
+These requirements apply only if the Architect selects Option B from FR-03.
 
-**FR-06.3** All cells participating in the detected cycle display `#CIRC` (not just the cell that first triggered the detection).
+**FR-08.1** The format sheet is a pure TypeScript/HTML/CSS component. No third-party component library.
 
-**FR-06.4** Non-circular deep reference chains are capped at 50 levels. If a chain of cell-to-cell references exceeds 50 hops without forming a cycle, the evaluation returns `#REF`. This prevents pathological deep chains from causing stack overflows.
+**FR-08.2** The sheet must be keyboard-navigable: Tab/Shift-Tab cycles focus between format options and Cancel; Enter/Space activates the focused choice; Escape cancels.
 
-### FR-07: Error Tokens
+**FR-08.3** The sheet must be created and destroyed on each invocation (destroy-on-close, not hide-on-close). A guard must prevent double-instantiation if invoked while already open.
 
-The following error tokens are displayed in-cell when a formula cannot be evaluated:
+**FR-08.4** The sheet must close itself before handing off to the next step (save dialog or print dialog). It must not remain visible while the native OS dialog is showing.
 
-| Token | Meaning |
-|---|---|
-| `#ERR` | Syntax error, parse failure, wrong argument count, unsupported range shape, or any unclassified evaluation error |
-| `#REF` | Cell or range address falls outside the table, or reference chain depth exceeds 50 levels |
-| `#DIV/0` | Division (or modulo) by zero |
-| `#CIRC` | Circular reference detected |
-| `#VALUE` | A referenced cell's value cannot be coerced to a number in a numeric context |
-| `#NAME` | Unknown function name or unknown output modifier name |
+**FR-08.5** The sheet must be styled using `--ui-font`, `--accent-color`, and existing theme CSS variables so it adapts to light/dark theme automatically.
 
-**FR-07.1** Error tokens are rendered inside the `<td>` element with a CSS class `cm-formula-error` so they can be distinctly styled (e.g., red text). A single class is used for all error types — no severity differentiation.
-
-**FR-07.2** A cell displaying an error token still occupies its normal column position in the rendered table. The error does not cause the row to collapse or misalign.
-
-**FR-07.3** In source/edit mode (cursor on the table), the raw formula `=SUM(X1:X99)` is always shown, even if it evaluates to an error. The error display is a live-preview-only concern.
-
-### FR-08: Result Formatting
-
-**FR-08.1** Numeric results are rendered as JavaScript's default `Number.toString()` representation, with one exception: results that are floating-point numbers with more than 10 significant digits are rounded to 10 significant digits to prevent ugly precision noise (e.g., `0.1 + 0.2` renders as `0.3` not `0.30000000000000004`).
-
-**FR-08.2** The implementation uses `parseFloat(result.toPrecision(10))` to strip trailing zeros (e.g., `1.50000` becomes `1.5`).
-
-**FR-08.3** Integer results (no fractional part after floating-point arithmetic) are displayed without a decimal point (e.g., `6.0` renders as `6`).
-
-**FR-08.4** `ROUND(value, digits)` output is formatted to exactly `digits` decimal places in the rendered cell (e.g., `ROUND(1.005, 2)` renders as `1.01`, not `1.0100000000000002`).
-
-**FR-08.5** Default negative number display is a leading minus sign (e.g., `-5`). This can be overridden per-cell using the `-AccountStyle` output modifier (see FR-11).
-
-### FR-09: Live Preview Integration
-
-**FR-09.1** Formula evaluation happens inside `TableWidget.toDOM()` in `src/editor/live-preview.ts`. The `TableWidget` already receives the full raw Markdown of the table block. The evaluator receives this raw text, builds a cell-value matrix, evaluates formulas, and substitutes results before setting `td.innerHTML`.
-
-**FR-09.2** The existing Typora-style cursor-on-line behavior in `buildTableDecorations()` already handles source reveal: when any line of the table block is the "active line," the `TableWidget` decoration is not applied and the raw Markdown is visible. No additional cursor-tracking logic is required for formula cells.
-
-**FR-09.3** The `eq()` method of `TableWidget` compares raw Markdown strings. Since formula results are computed during `toDOM()`, the comparison remains correct — the same raw Markdown always produces the same evaluated result.
-
-**FR-09.4** The evaluator must be a pure function: `evaluateTableFormulas(rawMarkdown: string): EvaluatedTable`. It receives the raw Markdown table string and returns a 2D array of display strings (one per cell). `TableWidget.toDOM()` uses this array to populate `td.innerHTML` instead of using raw cell text directly.
-
-**FR-09.5** The evaluator and its types must be extracted into a separate file `src/editor/table-formula.ts` (mirroring the `insert-count.logic.ts` pattern) so that it can be unit-tested without DOM or CM6 setup.
-
-### FR-10: Scope and Isolation
-
-**FR-10.1** Each table is evaluated independently. A formula in Table 1 cannot reference cells in Table 2.
-
-**FR-10.2** The mini-evaluator does not have access to the document outside the table block. There is no document-wide named range support.
-
-**FR-10.3** Formula evaluation does not mutate the CM6 document. It is a pure read-only rendering transform.
-
-### FR-11: Output Modifiers
-
-Output modifiers are postfix directives appended to the formula expression using `-ModifierName` syntax. They transform how the numeric result is displayed without affecting the cell's value as seen by other formulas.
-
-**FR-11.1** Modifier syntax: zero or more modifiers may be appended after the formula expression, each introduced by a `-` separator followed by a PascalCase modifier name. Example: `=SUM(A1:A3)-CommaFormat-AccountStyle`.
-
-**FR-11.2** The `-ModifierName` suffix is parsed AFTER the formula expression is fully evaluated. The `-` introducing a modifier is syntactically distinct from arithmetic subtraction: subtraction only appears between numeric operands inside the formula expression; a modifier `-` appears at the top level of the formula body (after the closing paren of the last function call, or after the last operand).
-
-**FR-11.3** Modifiers apply to the **display string only**. The underlying numeric result used when another formula references this cell is the unmodified numeric value. Modifiers are a presentation-layer concern.
-
-**FR-11.4** Supported modifiers for v1:
-
-| Modifier | Effect | Example input | Example output |
-|---|---|---|---|
-| `-CommaFormat` | Formats result with locale thousands separators | `1234567.89` | `1,234,567.89` |
-| `-AccountStyle` | Displays negative numbers in parentheses instead of with a leading minus | `-123` | `(123)` |
-
-**FR-11.5** Modifiers may be chained in any order. `=SUM(A1:A3)-CommaFormat-AccountStyle` and `=SUM(A1:A3)-AccountStyle-CommaFormat` produce identical output.
-
-**FR-11.6** An unknown modifier name (any modifier not in the table above) causes the cell to render `#NAME`. This takes precedence over displaying the formula result.
-
-**FR-11.7** If the formula result is itself an error token (e.g., `#DIV/0`), modifiers are not applied — the error token is displayed as-is.
-
-**FR-11.8** `-CommaFormat` applied to a non-integer result preserves the decimal portion (e.g., `1234.56` → `1,234.56`).
-
-**FR-11.9** `-AccountStyle` applied to a zero or positive result has no visible effect (the value renders normally, without parentheses).
-
-**FR-11.10** `-AccountStyle` combined with `-CommaFormat` on a negative number produces a parenthesised, comma-formatted result (e.g., `-1234.56` → `(1,234.56)`).
-
-### FR-12: Settings and Discoverability
-
-**FR-12.1** Formula cell support is always active when `tablePreviewField` is active. There is no separate settings toggle for this feature.
-
-**FR-12.2** No new Command Bar command, menu item, or keyboard shortcut is introduced by this feature.
-
-**FR-12.3** A one-line note in the Plugins Panel detail view for the Advanced Tables feature (if one exists) is not required — this is a core rendering enhancement, not a plugin.
-
----
-
-## UX / Interaction Design
-
-### Source vs. Preview Behavior
-
-- **Preview mode (cursor not on the table)**: formula cells show their computed result or error token. The `=` prefix and formula text are invisible. Output modifiers are applied to the display string.
-- **Edit mode (cursor anywhere on the table block)**: the `tablePreviewField` decoration is suppressed; raw Markdown is visible, including the full formula text with modifiers (e.g., `=SUM(B2:B4)-CommaFormat`). This is the existing behavior of `buildTableDecorations()` — no additional work required.
-
-### Error Display
-
-- Error tokens (`#ERR`, `#REF`, etc.) appear inline in the cell with class `cm-formula-error`.
-- Color and style are theme-governed by CSS variable `--formula-error-color` (default: a muted red that works on both light and dark themes). Fallback: `#c0392b`.
-
-### Header Row Exclusion
-
-- The table header row (row above the separator) never shows formula results. Header cells with `=` content are rendered as literal text (including the `=`), making it clear to the user that headers are not computed.
+**FR-08.6** No animation is required in v1.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-01: Pure Evaluator** — `table-formula.ts` must be a pure module (no DOM access, no CM6 imports, no side effects). All logic is testable with plain Node/Vitest.
+**NFR-01: No Unneeded New Rust Commands** — If Option A is chosen, one new Tauri command wrapping `NSSavePanel` with an accessory view is acceptable. If Option B is chosen, no changes to `src-tauri/src/commands/` are required.
 
-**NFR-02: Performance** — A table with 10 rows x 10 columns (100 cells, up to 20 formula cells each referencing ranges of up to 10 cells) must evaluate in under 5ms. Evaluation happens synchronously in `toDOM()` — no async allowed.
+**NFR-02: Backward Compatibility** — Existing unit tests for `src/lib/export.ts` (pure functions: `escapeHtml`, `extractTitle`, `deriveExportFilename`, `enforceHtmlExtension`, `markdownToHtml`, `buildStandaloneHtml`) must continue to pass unchanged. The new code must not alter those function signatures.
 
-**NFR-03: No External Dependency** — The mini-evaluator must not import any formula/spreadsheet library. Only standard JavaScript. If the scope of supported functions later requires a library, that is a separate requirements change.
+**NFR-03: No Settings Persistence** — The last-chosen export format is not persisted to `settings.json`. The format selection step always defaults to HTML.
 
-**NFR-04: Result Precision** — Floating-point noise is suppressed via `toPrecision(10)` + `parseFloat()` (FR-08.2). No special-casing of individual operations.
+**NFR-04: Accessibility** — The format selection step must meet minimum ARIA requirements. Full WCAG AA compliance is a stretch goal, not a hard requirement for v1.
 
-**NFR-05: Theme Compatibility** — Error token CSS uses `--formula-error-color` CSS variable. No hardcoded hex except as `var()` fallback.
-
-**NFR-06: No CM6 Extension Overhead** — This feature adds no new CM6 `StateField`, `ViewPlugin`, or extension. It only modifies `TableWidget.toDOM()` and adds a pure helper module.
+**NFR-05: No Source-Mode Restriction** — The export command must be available regardless of whether the editor is in live-preview mode or source mode. Both HTML and PDF paths call `markdownToHtml()` independently of the CM6 view state.
 
 ---
 
 ## Integration Points
 
-| System | Integration | Notes |
+| Module | Change | Notes |
 |---|---|---|
-| `src/editor/live-preview.ts` | Modify `TableWidget.toDOM()` to call `evaluateTableFormulas()` | Primary integration point |
-| `src/editor/table-formula.ts` | New file — pure evaluator module including modifier parsing | Extracted for testability |
-| `tests/editor/table-formula.test.ts` | New Vitest test file | Unit tests for evaluator and modifier pipeline (no DOM) |
-| Existing `buildTableDecorations()` | No changes needed | Source-reveal behavior already correct |
-| CSS (existing theme files) | Add `--formula-error-color` variable and `.cm-formula-error` rule | Theme-compatible error styling |
+| `src-tauri/src/menu.rs` | Rename "Export as HTML..." label to "Export..." | ID (`file-export`) and accelerator (`CmdOrCtrl+Alt+E`) unchanged. `file-print` untouched. |
+| `src/lib/export.ts` | Add `openExportDialog()`, `printDocument()`, format selection step creation | `exportAsHtml` and all pure functions are unchanged |
+| `src/main.ts` | Update `case "file-export"` dispatch; keep `case "file-print"` unchanged; remove inline `printDocument()` definition; update import | `printDocument` moves to `export.ts` |
+| `src/keybindings/keybindings-panel.ts` | Update `file-export` label to "Export..."; keep `file-print` entry unchanged | `defaultKey` for `file-export` unchanged |
+| `src/plugins/command-bar/command-bar.plugin.ts` | Update `file-export` label if command bar has its own label map | `file-print` entry untouched |
 
 ---
 
 ## Out of Scope (v1)
 
-1. **String concatenation in formulas** — Formula cells produce numeric results only. String operations (`=A1 & " items"`) are not supported.
-2. **Multi-row, multi-column rectangle ranges** — Only single-row or single-column ranges (e.g., `A1:A5` or `A1:E1`) are required. `A1:C3` is `#ERR`.
-3. **Columns beyond Z (AA, AB…)** — Only A–Z column addressing. Tables with more than 26 columns work normally; columns past Z are not addressable in formulas.
-4. **Formula auto-fill / drag-fill** — No UI for extending a formula across a range of cells.
-5. **Named ranges** — No support for naming a cell or range.
-6. **Cross-table references** — A formula in one table cannot reference a cell in another table.
-7. **Date/time arithmetic** — No date functions or date-typed cells.
-8. **Sorting and filtering** — Deferred to a follow-on feature. The user's original request mentioned sorting/filtering; that is explicitly a separate increment.
-9. **Formula bar UI** — No dedicated formula input bar outside the table cell. Formulas are typed directly into the cell in source mode.
-10. **Undo isolation** — Formula re-evaluation happens at render time; it does not interact with the undo stack (no document mutations occur).
-11. **Scientific notation literals** — `1e5` as a literal in a formula is not required in v1.
-12. **String comparisons in IF conditions** — `IF` only evaluates numeric comparisons. `=IF(A1="yes", 1, 0)` is not supported in v1.
-13. **Additional output modifiers** — Only `-CommaFormat` and `-AccountStyle` are supported in v1. New modifiers (e.g., `-Percent`, `-Currency`) require a separate requirements change.
-
-### Known Limitation
-
-**Escaped pipes in table cells**: The GFM table parser does not support escaped pipe characters (`\|`) inside cell content. A formula or cell value containing a literal `|` will break the table column parsing. This is a pre-existing limitation of the Markdown table format and is explicitly out of scope for this feature.
+1. **Additional export formats** — DOCX, Markdown (copy), plain text, EPUB. The format picker lists exactly HTML and PDF.
+2. **Export settings panel** — No new settings UI for controlling export CSS, page size, margins, or paper orientation.
+3. **Custom print CSS per-document** — No per-document `@page` overrides beyond what exists in `printDocument()` today.
+4. **"Save as PDF" path without print dialog** — Directly producing a `.pdf` file without the system print dialog is explicitly out of scope.
+5. **Remember last format** — The format selection step always resets to HTML. Persistence is a v2 consideration.
+6. **Export from command bar as two separate commands** — No separate "Export as HTML" and "Export as PDF" commands are added to the command list. One `file-export` entry triggers the unified orchestrator.
+7. **Exporting images as embedded base64** — The existing HTML export does not embed local images. Fixing this is a separate feature request.
+8. **Any changes to Print** — `file-print`, `Cmd-P`, `printDocument()` as called from the print menu item, and the command bar Print entry are all outside the scope of this feature.
 
 ---
 
 ## Edge Case Inventory
 
-The following edge cases are the mandatory test checklist for the Code Reviewer. Every item must be covered by a Vitest test in `tests/editor/table-formula.test.ts` or a documented manual verification step.
+The following edge cases are the mandatory test checklist for the Code Reviewer.
 
-**EC-01: Formula in header cell** — A cell in the header row (row 0, before the separator) contains `=SUM(A1:A3)`. Expected: rendered as literal text `=SUM(A1:A3)`, not evaluated. Header cells must never be treated as formulas.
+**EC-01: No editor / null editor** — User triggers Export while the editor is null (app still initialising). Expected: `openExportDialog` returns immediately; no format selection step is shown; no error is thrown.
 
-**EC-02: Empty formula body** — A cell contains `=` with nothing after it (or only whitespace). Expected: renders `#ERR`. The evaluator must handle an empty expression without crashing.
+**EC-02: Empty document** — The editor contains zero characters. Expected: format selection step opens normally; HTML path produces a valid HTML document with an empty `<div class="content"></div>`; PDF path opens print dialog showing a blank page. No crash.
 
-**EC-03: Self-reference** — Cell `B2` contains `=B2`. Expected: renders `#CIRC`. Direct self-reference is a degenerate circular reference.
+**EC-03: Unsaved (untitled) document** — `currentFilePath` is null. Expected: format selection step opens; HTML save dialog pre-populates filename as `"untitled.html"`; PDF path opens print dialog. The tab/document dirty state is not modified by either path. No warning is shown (existing Untitled fallback is acceptable).
 
-**EC-04: Two-cell cycle** — `A1` contains `=B1` and `B1` contains `=A1`. Expected: both cells render `#CIRC`.
+**EC-04: User cancels at the format selection step** — User opens Export, then presses Escape or clicks Cancel. Expected: format selection step dismisses silently; no save dialog opens; no print dialog opens; no error; editor state unchanged.
 
-**EC-05: Multi-hop cycle** — `A1 = B1`, `B1 = C1`, `C1 = A1`. Expected: all three render `#CIRC`.
+**EC-05: User cancels at the HTML save dialog** — User selects HTML, then cancels the native save dialog. Expected: both the format step and save dialog close silently; no file is written; editor state unchanged. (Existing `dialogResult.cancelled` guard in `exportAsHtml`.)
 
-**EC-06: Reference to non-existent row** — Table has 3 body rows. A formula references `A10`. Expected: renders `#REF`.
+**EC-06: User cancels the macOS print dialog** — User selects PDF, the system print dialog appears, and the user presses Cancel. Expected: print dialog closes; print overlay is cleaned up from the DOM; no error is shown; editor state unchanged.
 
-**EC-07: Reference to non-existent column** — Table has 3 columns. A formula references `D1`. Expected: renders `#REF`.
+**EC-07: Write failure on HTML export** — `writeFile()` returns `{ ok: false, error }`. Expected: an `alert()` with the error message is shown (existing behaviour preserved). The format selection step is already closed at this point.
 
-**EC-08: Reference to column beyond Z** — Formula uses `AA1`. Expected: renders `#REF` (unsupported in v1).
+**EC-08: Export while in source mode (live preview off)** — The editor is in raw source mode. Expected: both HTML and PDF paths still produce correctly rendered output because they call `markdownToHtml()` independently of the CM6 view state. No `__MARKABLE_PREVIEW_ENABLED__` check is needed in the export path.
 
-**EC-09: Empty referenced cell** — Formula `=A1+B1` where `A1` is empty. Expected: empty cell contributes `0`; result is `B1`'s value.
+**EC-09: Export with unsaved edits (dirty state)** — The document has unsaved changes. Expected: export uses the current in-memory content (`editor.state.doc.toString()`), which includes the unsaved edits. The dirty state indicator and tab state are not modified by export.
 
-**EC-10: Non-numeric referenced cell in arithmetic** — Formula `=A1*2` where `A1` contains `"hello"`. Expected: renders `#VALUE`.
+**EC-10: Export with document that has only a YAML front matter block** — The Markdown body is empty but YAML front matter exists. Expected: `markdownToHtml()` renders the front matter as a code block or passes it through as raw text (existing `marked` behaviour); no crash; export completes.
 
-**EC-11: Non-numeric cell in aggregate range** — `=SUM(A1:A3)` where `A2` contains `"hello"`. Expected: `A2` is silently skipped; SUM returns `A1 + A3`.
+**EC-11: No shortcut conflict** — The existing `Cmd-Alt-E` shortcut is retained. The Architect must confirm it does not conflict with any system shortcut or other binding in the current `KEYBINDING_DEFS` (it is already registered and working today, so this is a verification step rather than a new risk).
 
-**EC-12: Division by zero** — `=A1/0` or `=10/B1` where `B1=0`. Expected: renders `#DIV/0`.
+**EC-12: Format selection step focus trap (Option B only)** — While the in-app sheet is open, pressing Tab repeatedly must cycle only between format options and the Cancel/Export button. No focus must escape to the editor or sidebar.
 
-**EC-13: Modulo by zero** — `=A1%0`. Expected: renders `#DIV/0`.
+**EC-13: Format selection step while another overlay is open (Option B only)** — If the command bar or find widget is open when Export fires. Expected: no undefined behaviour. Simplest acceptable behaviour: if the format sheet is already in the DOM, suppress duplicate instantiation.
 
-**EC-14: Unknown function** — `=MEDIAN(A1:A3)`. Expected: renders `#NAME`.
+**EC-14: Rapid double-trigger (Option B only)** — User presses `Cmd-Alt-E` twice quickly. Expected: at most one format selection sheet appears. Second invocation is suppressed if sheet is already in the DOM.
 
-**EC-15: Malformed function call — no closing paren** — `=SUM(A1:A3`. Expected: renders `#ERR` (parse error, not a crash).
+**EC-15: PDF export print overlay cleanup after print dialog error** — `window.print()` throws an unexpected exception. Expected: the print overlay and print stylesheet are still removed from the DOM (cleanup must occur in a `finally` block or equivalent).
 
-**EC-16: Malformed expression — double operator** — `=A1++B1`. Expected: renders `#ERR`.
+**EC-16: HTML export — file with special characters in path/name** — The current file path contains characters like `&`, `<`, spaces, or Unicode. Expected: `extractTitle()` and `deriveExportFilename()` handle these correctly (existing behaviour preserved, covered by existing tests).
 
-**EC-17: ROUND with wrong argument count** — `=ROUND(A1)` (missing digits). Expected: renders `#ERR`.
+**EC-17: Modal/sheet appears on correct screen in multi-display setups (Option B only)** — The sheet is appended to `document.body` and positioned with `position: fixed`, which inherits the webview's display. No special multi-display handling needed.
 
-**EC-18: ABS with two arguments** — `=ABS(A1, B1)`. Expected: renders `#ERR`.
+**EC-18: Export command in command bar when no file is open** — `"file-export"` is in `REQUIRES_FILE_IDS`. Expected: the command bar dims the Export entry and does not invoke `openExportDialog` (existing context-invalid behaviour preserved).
 
-**EC-19: IF with wrong argument count** — `=IF(A1>0, 1)` (missing false branch). Expected: renders `#ERR`.
-
-**EC-20: Range outside table** — `=SUM(A1:A99)` when the table has only 3 body rows. Expected: renders `#REF`.
-
-**EC-21: Multi-column/multi-row rectangle range** — `=SUM(A1:C3)`. Expected: renders `#ERR` (unsupported range shape in v1).
-
-**EC-22: Reversed range endpoints** — `=SUM(A3:A1)`. Expected: evaluator normalises to ascending order and returns the correct sum (`A1+A2+A3`). No `#REF`.
-
-**EC-23: Floating-point precision** — `=0.1+0.2`. Expected: renders `0.3`, not `0.30000000000000004` (NFR-04 precision suppression).
-
-**EC-24: Integer result from float arithmetic** — `=6.0/2.0`. Expected: renders `6`, not `6.0`.
-
-**EC-25: ROUND output format** — `=ROUND(1.005, 2)`. Expected: renders a two-decimal result (implementation note: JavaScript `toPrecision` rounding — the Architect must document the exact floating-point behavior and whether it deviates from Excel).
-
-**EC-26: Unary minus on literal** — `=-5`. Expected: renders `-5`.
-
-**EC-27: Unary minus on cell reference** — `=-A1` where `A1=3`. Expected: renders `-3`.
-
-**EC-28: Unary minus on expression** — `=-(A1+B1)` where `A1=2`, `B1=3`. Expected: renders `-5`.
-
-**EC-29: Exponentiation** — `=2^8`. Expected: renders `256`.
-
-**EC-30: Fractional exponent** — `=4^0.5`. Expected: renders `2`.
-
-**EC-31: Comparison in IF** — `=IF(A1>5, 10, 20)` where `A1=7`. Expected: renders `10`.
-
-**EC-32: IF false branch** — `=IF(A1>5, 10, 20)` where `A1=3`. Expected: renders `20`.
-
-**EC-33: Nested function call** — `=ROUND(SUM(A1:A3), 1)`. Expected: evaluates the inner SUM first, then applies ROUND.
-
-**EC-34: Formula referencing another formula cell** — `B1 = =A1*2` (where `A1=5`), `C1 = =B1+1`. Expected: `C1` renders `11` (B1 resolves to `10`).
-
-**EC-35: COUNT with mixed numeric and non-numeric cells** — `=COUNT(A1:A4)` where `A1=1`, `A2="text"`, `A3=3`, `A4=""`. Expected: renders `2` (only `A1` and `A3` are numeric; empty cell and "text" are not counted).
-
-**EC-36: AVG over entirely non-numeric range** — `=AVG(A1:A2)` where both cells contain text. Expected: renders `#ERR` (no numeric values to average).
-
-**EC-37: MIN/MAX over entirely non-numeric range** — Same as EC-36 for MIN and MAX.
-
-**EC-38: Large table — performance** — A table with 10 rows x 10 columns, 20 formula cells each referencing ranges of 10 cells, evaluates in under 5ms (NFR-02). Manual timing test acceptable.
-
-**EC-39: Table with one body row** — Formula `=SUM(A1:A1)` on a single-row table. Expected: evaluates to the value of `A1`.
-
-**EC-40: Formula in last column** — Table has 4 columns; formula `=A1+B1+C1` is in column D. Expected: evaluates correctly.
-
-**EC-41: Whitespace around `=`** — Cell content is `= A1 + B1` (space after `=`, spaces around operator). Expected: whitespace is normalised; evaluates as `=A1+B1`.
-
-**EC-42: Case-insensitive function names** — `=sum(A1:A3)`, `=Sum(A1:A3)`, `=SUM(A1:A3)` all produce the same result.
-
-**EC-43: Case-insensitive cell references** — `=a1+b1` is equivalent to `=A1+B1`.
-
-**EC-44: Formula cell referenced by aggregate** — `=SUM(A1:A3)` where `A2` itself contains `=5*2`. Expected: `A2` resolves to `10` and is included in the SUM.
-
-**EC-45: Table with no body rows (header + separator only)** — No formula evaluation occurs. `evaluateTableFormulas()` returns an empty body array. No crash.
-
-**EC-46: Single-column table** — Formula `=SUM(A1:A3)` is placed in column A of a 1-column table. Expected: evaluates to the sum of the three values in that column (excluding the formula cell itself, which resolves as `0` for the purpose of the range — or `#CIRC` if the formula cell is within the range).
-
-**EC-47: Formula cell inside its own SUM range** — `A3 = =SUM(A1:A3)` where the formula's own cell is within the range. Expected: renders `#CIRC` (the cell references itself transitively).
-
-**EC-48: ROUND with negative digits** — `=ROUND(123.456, -1)`. Expected: renders `120` (rounds to tens place). Standard Excel/Google Sheets behavior.
-
-**EC-49: ROUND with negative digits — hundreds** — `=ROUND(1567, -2)`. Expected: renders `1600`.
-
-**EC-50: Reference chain at depth limit** — A chain of 50 non-circular cell references (A1→A2→...→A50 each pointing to the next). Expected: the chain resolves correctly. A chain of 51 hops returns `#REF` (depth cap).
-
-**EC-51: Unknown modifier name** — `=SUM(A1:A3)-TotalFormat`. Expected: renders `#NAME` (unrecognised modifier).
-
-**EC-52: Modifier on error result** — `=A1/0-CommaFormat`. Expected: renders `#DIV/0` (modifier not applied to error token).
-
-**EC-53: CommaFormat on positive integer** — `=SUM(A1:A3)-CommaFormat` where result is `1234567`. Expected: renders `1,234,567`.
-
-**EC-54: CommaFormat on decimal** — `=SUM(A1:A3)-CommaFormat` where result is `1234.56`. Expected: renders `1,234.56`.
-
-**EC-55: AccountStyle on negative number** — `=A1-AccountStyle` where `A1=-123`. Expected: renders `(123)`.
-
-**EC-56: AccountStyle on positive number** — `=A1-AccountStyle` where `A1=50`. Expected: renders `50` (no effect on positive values).
-
-**EC-57: AccountStyle on zero** — `=A1-AccountStyle` where `A1=0`. Expected: renders `0` (no parentheses).
-
-**EC-58: Both modifiers — negative result** — `=SUM(A1:A3)-CommaFormat-AccountStyle` where result is `-1234.56`. Expected: renders `(1,234.56)`.
-
-**EC-59: Both modifiers — order independence** — `=SUM(A1:A3)-AccountStyle-CommaFormat` produces the same output as `=SUM(A1:A3)-CommaFormat-AccountStyle` for all inputs.
-
-**EC-60: Modifier on formula with arithmetic subtraction inside** — `=A1-B1-CommaFormat` where `A1=2000`, `B1=300`. Expected: evaluator correctly distinguishes the arithmetic `-` (between operands) from the postfix modifier `-` (at the top-level boundary after the last operand). Result: `1700` formatted as `1,700`.
+**EC-19: Print menu item continues to work after this feature ships** — `file-print` / `Cmd-P` must invoke `printDocument()` (via its existing `case "file-print"` handler) exactly as before. The refactor of `printDocument` into `export.ts` must not break this path.
 
 ---
 
 ## Resolved Decisions
 
-**AD-01 — Core feature, not a plugin**: Formula evaluation is implemented as a modification to `live-preview.ts` + a new pure helper `table-formula.ts`, not as a toggleable IIFE plugin. Rationale: it cannot function without `tablePreviewField`, which is a core always-on feature.
+**AD-01 — Reuse existing `exportAsHtml` unchanged**: The HTML export function in `src/lib/export.ts` has a full suite of unit tests and a clean parameter-based API. It is called as-is from the new orchestrator.
 
-**AD-02 — Custom mini-evaluator, no external library**: HyperFormula and similar libraries add 300KB+ to the bundle. The required function set (8 functions, 7 operators) is small enough to implement with a recursive descent parser. If future requirements add statistical functions (MEDIAN, STDEV, etc.) this decision should be revisited.
+**AD-02 — Move `printDocument` to `export.ts`**: Collocating both export functions in one module keeps the main.ts dispatch logic thin and makes both functions unit-testable. The same "pass editor as parameter to avoid circular imports" pattern already used by `exportAsHtml` applies.
 
-**AD-03 — Row addressing counts only body rows**: Headers are excluded from the row-number scheme. `A1` is always the first body row, regardless of how many header rows exist (GFM only supports one header row anyway).
+**AD-03 — Format selection step is preferred as a native NSSavePanel accessory view (Option A), with an in-app sheet (Option B) as an acceptable fallback**: The user prefers a native single-step UX identical to TextEdit/Pages. The Architect must assess Tauri v2 AppKit interop feasibility and select the appropriate option.
 
-**AD-04 — Floating-point normalisation via toPrecision(10)**: This handles `0.1+0.2` and similar cases. It may introduce small rounding on very large or very precise numbers, which is acceptable for a Markdown editor (not a financial calculator).
+**AD-04 — No persistent format preference in v1**: Keeping the format selection step stateless avoids a `settings.ts` schema change. Revisit if user feedback indicates the preference is tedious to re-select.
 
-**AD-05 — Aggregate functions skip non-numeric cells**: Consistent with Excel/Google Sheets behavior for SUM/AVG/MIN/MAX/COUNT. Non-numeric cells in arithmetic (non-aggregate) expressions produce `#VALUE`.
+**AD-05 — Print is untouched**: The existing `file-print` menu item, `Cmd-P` shortcut, command bar entry, and `printDocument()` invocation from the print handler are completely out of scope. PDF output is available via Export > PDF as an additional path, not as a replacement for Print.
 
-**AD-06 — Postfix modifier syntax uses `-ModifierName`**: Modifiers are appended after the formula expression at the top level. The parser must distinguish a top-level `-` followed by a PascalCase identifier (modifier) from an arithmetic `-` between operands. The disambiguating rule: a top-level `-` that is not preceded by a numeric operand, closing paren, or cell reference is unary minus; a top-level `-` that IS preceded by one of those and is followed by a PascalCase identifier starting with an uppercase letter is a modifier delimiter.
-
-**AD-07 — Modifiers affect display only, not cell value**: A formula cell's resolved numeric value (used when referenced by other formulas) is the raw result before modifier application. This is consistent with how Excel cell formatting works.
-
-**AD-08 — Negative number default is leading minus**: `-5` is the default. `-AccountStyle` overrides to `(5)`. No global setting; override is per-cell in the formula.
-
-**AD-09 — IF conditions are numeric comparisons only in v1**: String equality (e.g., `IF(A1="yes", ...)`) is out of scope. All comparison operands are evaluated as numbers.
-
-**AD-10 — ROUND with negative digits is valid**: `ROUND(123, -1)` = `120`. Implemented via `Math.round(v * Math.pow(10, d)) / Math.pow(10, d)` which handles negative `d` correctly. This matches Excel/Google Sheets behavior.
-
-**AD-11 — Reference chain depth cap is 50**: Chains exceeding 50 non-circular hops return `#REF`. This is a safety guardrail against accidental very-deep chains. It is distinct from `#CIRC` (which applies only to actual cycles).
+**AD-06 — Shortcut unchanged (`Cmd-Alt-E`)**: This is the same Export as HTML command with a format option added. No new shortcut is introduced. No old shortcut is changed.
 
 ---
 
 ## Proposed Constraints
 
-1. `table-formula.ts` must be a pure module — no DOM, no CM6, no side effects. All exported functions are pure (same inputs → same outputs). Enforced via Vitest unit tests without a DOM environment.
-2. The evaluator must detect and break circular references within a single `evaluateTableFormulas()` call. Detection uses a `Set<string>` of in-progress cell addresses passed through the call stack.
-3. Aggregate functions (`SUM`, `AVG`, etc.) silently skip non-numeric values; arithmetic expressions produce `#VALUE` for non-numeric operands. This asymmetry matches Excel convention and must be preserved.
-4. Header cells must never be evaluated as formulas, even if they begin with `=`. The row-0 exclusion must be enforced before the evaluator is invoked.
-5. The formula evaluator must not mutate the CM6 document or any module-level state. It is a pure read-only rendering transform.
-6. Error tokens (`#ERR`, `#REF`, `#DIV/0`, `#CIRC`, `#VALUE`, `#NAME`) must be plain ASCII strings so they render correctly without any HTML encoding concerns.
-7. Rectangle range references (`A1:C3`) must explicitly return `#ERR` in v1, not silently flatten or partially evaluate.
-8. Output modifier parsing occurs after formula evaluation. Modifiers never affect the numeric value used in cross-cell references. Modifier errors (`#NAME` for unknown modifiers) take precedence over displaying the formula result.
-9. Reference chain depth must be tracked as a counter passed through recursive evaluation calls. When the counter exceeds 50, return `#REF` immediately without further recursion.
-10. The modifier delimiter `-` must be disambiguated from arithmetic subtraction at the top level of the formula parser. The rule: a `-` at expression top level followed by a PascalCase identifier (first character uppercase A-Z) is treated as a modifier delimiter, not as a subtraction operator.
+1. `openExportDialog`, `printDocument` (refactored), and the format selection step creation (Option B) must all live in `src/lib/export.ts`. No new source files are required for Option B. Option A may require one new Tauri command file in `src-tauri/src/commands/`.
+2. If Option B: the format sheet must be created fresh on every invocation and removed from the DOM on close. A guard must prevent double-instantiation.
+3. `printDocument()` must place all DOM cleanup (style removal, overlay removal) in a `try/finally` block so cleanup is guaranteed even if `window.print()` throws.
+4. The `MINIMAL_CSS` constant shared between HTML export and PDF print overlay must not be duplicated. Both code paths import it from the same location in `export.ts`.
+5. All existing pure-function unit tests in `tests/` for `export.ts` must pass without modification. New tests must cover: `openExportDialog` orchestration logic (HTML routing, PDF routing, cancellation), and the refactored `printDocument` path reachable from `file-print`.
+6. If Option B: the format sheet must not add any persistent global CSS to the document. Its styles must be scoped to elements created by the sheet itself (inline styles or a `<style>` block injected and removed with the sheet).

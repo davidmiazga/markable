@@ -232,6 +232,48 @@ $$
 
 ---
 
+## Diagrams
+
+Use a `mermaid` code fence to draw diagrams with [Mermaid.js](https://mermaid.js.org):
+
+~~~
+```mermaid
+flowchart LR
+    A[Start] --> B{Decision}
+    B -- Yes --> C[Do it]
+    B -- No --> D[Skip it]
+```
+~~~
+
+```mermaid
+flowchart LR
+    A[Start] --> B{Decision}
+    B -- Yes --> C[Do it]
+    B -- No --> D[Skip it]
+```
+
+**Sequence diagram:**
+
+~~~
+```mermaid
+sequenceDiagram
+    Alice->>Bob: Hello Bob!
+    Bob-->>Alice: Hi Alice!
+```
+~~~
+
+```mermaid
+sequenceDiagram
+    Alice->>Bob: Hello Bob!
+    Bob-->>Alice: Hi Alice!
+```
+
+Place your cursor inside the fence to edit the source; move away to render the diagram.
+
+> Enable the **Diagrams** plugin to render Mermaid diagrams. Supports flowchart, sequenceDiagram, classDiagram, gantt, pie, erDiagram, and more.
+
+---
+
 ## YAML Front Matter
 
 ```

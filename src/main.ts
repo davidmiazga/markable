@@ -86,7 +86,7 @@ import {
 // editor and sidebar are both ready. The singleton is used directly; it is
 // not re-exported from main.ts.
 import { tabManager } from "./tabs";
-import { exportAsHtml, markdownToHtml, MINIMAL_CSS } from "./lib/export";
+import { openExportDialog, printDocument } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -437,43 +437,9 @@ async function setupWindowStateListeners(): Promise<void> {
   });
 }
 
-/**
- * Print the current document.
- * Injects a rendered HTML overlay + print-only stylesheet, calls window.print(),
- * then removes the overlay. The @media print rules hide the editor and show
- * only the rendered content.
- */
-function printDocument(): void {
-  if (!editor) return;
-  const html = markdownToHtml(editor.state.doc.toString());
-
-  // Inject print-only stylesheet
-  const style = document.createElement("style");
-  style.id = "markable-print-style";
-  style.textContent = `
-    @media print {
-      body > *:not(#markable-print-overlay) { display: none !important; }
-      #markable-print-overlay {
-        display: block !important;
-        position: static !important;
-      }
-    }
-  `;
-  document.head.appendChild(style);
-
-  // Inject rendered content overlay (hidden on screen, visible in print)
-  const overlay = document.createElement("div");
-  overlay.id = "markable-print-overlay";
-  overlay.style.cssText = "display:none";
-  overlay.innerHTML = `<style>${MINIMAL_CSS}</style><div class="content">${html}</div>`;
-  document.body.appendChild(overlay);
-
-  window.print();
-
-  // Clean up after print dialog closes
-  style.remove();
-  overlay.remove();
-}
+// printDocument was moved to src/lib/export.ts (step_04).
+// It now accepts `editor` as a parameter (D-01 in export/00_index.md) and wraps
+// window.print() in a try/finally block for unconditional cleanup (EC-15).
 
 /** Currently open Go to Line overlay (null if none). */
 let gotoLineOverlay: HTMLElement | null = null;
@@ -640,10 +606,10 @@ function handleAction(action: string): void {
       })();
       break;
     case "file-import":     void openFile();          break;
-    // file-export uses getActiveFilePath() — no longer references the removed
-    // currentFilePath variable (step_07 spec).
-    case "file-export":     void exportAsHtml(editor, tabManager.getActiveFilePath()); break;
-    case "file-print":      printDocument(); break;
+    // file-export opens the unified format-selection sheet (openExportDialog → export.ts).
+    case "file-export":     void openExportDialog(editor, tabManager.getActiveFilePath()); break;
+    // file-print bypasses the sheet and goes directly to the system print dialog.
+    case "file-print":      printDocument(editor); break;
     case "view-toggle-preview":    togglePreview();      break;
     case "view-toggle-statusbar":
       if (editor) void pluginManager.toggle("status-bar", !pluginManager.getStates()["status-bar"]);

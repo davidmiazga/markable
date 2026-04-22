@@ -401,3 +401,347 @@ export async function exportAsHtml(
   // FR-8.4 / AC-20: currentFilePath is intentionally NOT updated here.
   //                  This export does not change the currently open document.
 }
+
+// ---------------------------------------------------------------------------
+// Unified Export orchestration — printDocument, createExportSheet, openExportDialog
+// ---------------------------------------------------------------------------
+
+// Guard: prevents double-instantiation of the export sheet (EC-14).
+// Set to true when the sheet opens; reset to false when the Promise resolves.
+let exportSheetOpen = false;
+
+/**
+ * Builds the format-selection sheet DOM, appends it to document.body, and
+ * returns a Promise that resolves with the user's choice. The sheet removes
+ * itself from the DOM before resolving so callers never need to clean up.
+ *
+ * This function is intentionally NOT exported. It is an internal implementation
+ * detail of openExportDialog. Tests drive it indirectly by interacting with the
+ * DOM elements it creates (click Cancel/Export buttons, dispatch key events).
+ *
+ * D-02: Sheet lifecycle is Promise-based — one call, one resolve, no reject.
+ * D-04: CSS is injected as a <style> block and removed with the sheet to avoid
+ *       persistent global style bleed.
+ * D-06: Keyboard focus trap cycles through HTML radio → PDF radio → Export → Cancel.
+ * D-07: HTML radio is checked by default on every construction.
+ *
+ * @returns Promise that resolves to "html", "pdf", or "cancel"
+ */
+function createExportSheet(): Promise<"html" | "pdf" | "cancel"> {
+  // -----------------------------------------------------------------------
+  // Build the sheet CSS (injected into <head>, removed on cleanup — D-04)
+  // -----------------------------------------------------------------------
+  const sheetStyle = document.createElement("style");
+  sheetStyle.id = "markable-export-sheet-style";
+  sheetStyle.textContent = `
+#markable-export-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-bg, #fff);
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 16px 20px;
+  min-width: 260px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.12);
+  font-family: var(--ui-font, -apple-system, sans-serif);
+  font-size: 13px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mes-label {
+  margin: 0;
+  font-weight: 500;
+  color: var(--text-color, #1a1a1a);
+}
+.mes-options {
+  display: flex;
+  gap: 16px;
+}
+.mes-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-color, #1a1a1a);
+}
+.mes-option input[type="radio"] {
+  accent-color: var(--accent-color, #0066cc);
+  cursor: pointer;
+}
+.mes-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.mes-actions button {
+  font-family: var(--ui-font, -apple-system, sans-serif);
+  font-size: 13px;
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #d0d0d0);
+  background: var(--button-bg, #f5f5f5);
+  color: var(--text-color, #1a1a1a);
+  cursor: pointer;
+}
+.mes-primary {
+  background: var(--accent-color, #0066cc) !important;
+  color: #fff !important;
+  border-color: var(--accent-color, #0066cc) !important;
+}
+  `.trim();
+
+  // -----------------------------------------------------------------------
+  // Build the sheet DOM structure (FR-08.1 — sheet layout)
+  // -----------------------------------------------------------------------
+  const sheet = document.createElement("div");
+  sheet.id = "markable-export-sheet";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", "Export format");
+
+  // Format label
+  const label = document.createElement("p");
+  label.className = "mes-label";
+  label.textContent = "Export as:";
+
+  // Radio group container
+  const optionsDiv = document.createElement("div");
+  optionsDiv.className = "mes-options";
+  optionsDiv.setAttribute("role", "radiogroup");
+  optionsDiv.setAttribute("aria-label", "Format");
+
+  // HTML radio option (D-07: checked by default)
+  const htmlLabel = document.createElement("label");
+  htmlLabel.className = "mes-option";
+  const htmlRadio = document.createElement("input");
+  htmlRadio.type = "radio";
+  htmlRadio.name = "export-format";
+  htmlRadio.value = "html";
+  htmlRadio.checked = true;
+  htmlLabel.appendChild(htmlRadio);
+  htmlLabel.appendChild(document.createTextNode(" HTML"));
+
+  // PDF radio option
+  const pdfLabel = document.createElement("label");
+  pdfLabel.className = "mes-option";
+  const pdfRadio = document.createElement("input");
+  pdfRadio.type = "radio";
+  pdfRadio.name = "export-format";
+  pdfRadio.value = "pdf";
+  pdfLabel.appendChild(pdfRadio);
+  pdfLabel.appendChild(document.createTextNode(" PDF"));
+
+  optionsDiv.appendChild(htmlLabel);
+  optionsDiv.appendChild(pdfLabel);
+
+  // Action buttons
+  const actionsDiv = document.createElement("div");
+  actionsDiv.className = "mes-actions";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.id = "mes-cancel-btn";
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+
+  const exportBtn = document.createElement("button");
+  exportBtn.id = "mes-export-btn";
+  exportBtn.type = "button";
+  exportBtn.className = "mes-primary";
+  exportBtn.textContent = "Export";
+
+  actionsDiv.appendChild(cancelBtn);
+  actionsDiv.appendChild(exportBtn);
+
+  sheet.appendChild(label);
+  sheet.appendChild(optionsDiv);
+  sheet.appendChild(actionsDiv);
+
+  // -----------------------------------------------------------------------
+  // Wire the Promise — the sheet removes itself before every resolve path
+  // -----------------------------------------------------------------------
+  return new Promise<"html" | "pdf" | "cancel">((resolve) => {
+    /**
+     * Removes the sheet and its injected style from the DOM, then removes
+     * the capture-phase keyboard listener. Called before every resolve path
+     * to guarantee the sheet is never left in the DOM after resolution.
+     */
+    function cleanup(): void {
+      sheet.remove();
+      sheetStyle.remove();
+      document.removeEventListener("keydown", onKeyDown, true);
+    }
+
+    /**
+     * Document-level capture-phase keyboard handler for the sheet.
+     *
+     * D-06 / FR-08.2 / EC-12: Focus trap — Tab/Shift-Tab cycles through the
+     * four interactive elements. Escape cancels without triggering an export.
+     * Capture phase is used so the handler fires before CodeMirror's own
+     * keydown handlers consume the event.
+     *
+     * @param e - KeyboardEvent from the document keydown event
+     */
+    function onKeyDown(e: KeyboardEvent): void {
+      if (e.key === "Escape") {
+        // Escape cancels; prevent any other handler from seeing this event.
+        e.preventDefault();
+        cleanup();
+        resolve("cancel");
+        return;
+      }
+      if (e.key === "Tab") {
+        // Cycle focus among focusable elements in the sheet (D-06 / EC-12).
+        e.preventDefault();
+        const focusable: HTMLElement[] = [htmlRadio, pdfRadio, exportBtn, cancelBtn];
+        const idx = focusable.indexOf(document.activeElement as HTMLElement);
+        // When idx is -1 (no sheet element is focused), Shift-Tab must land on
+        // the last element (cancelBtn), not wrap incorrectly to index 2.
+        // idx <= 0 handles both the uninitialized-focus case (idx === -1) and
+        // the first-element case (idx === 0) — both should wrap to the last element.
+        const next = e.shiftKey
+          ? (idx <= 0 ? focusable.length - 1 : idx - 1)
+          : (idx + 1) % focusable.length;
+        focusable[next].focus();
+      }
+      // Enter and Space are handled natively by the focused radio/button elements.
+    }
+
+    // Wire button click handlers
+    cancelBtn.addEventListener("click", () => {
+      cleanup();
+      resolve("cancel");
+    });
+
+    exportBtn.addEventListener("click", () => {
+      // Read the checked radio to determine the chosen format.
+      // pdfRadio.checked is tested first; htmlRadio.checked is the default path.
+      const fmt: "html" | "pdf" = pdfRadio.checked ? "pdf" : "html";
+      cleanup();
+      resolve(fmt);
+    });
+
+    // Attach capture-phase keyboard handler before appending to DOM
+    document.addEventListener("keydown", onKeyDown, true);
+
+    // Append sheet and its style to the document
+    document.body.appendChild(sheet);
+    document.head.appendChild(sheetStyle);
+
+    // D-06 / FR-08.2: Move focus to Export button so Enter immediately exports
+    // as HTML (the default selection), matching the "low friction" NFR-01 goal.
+    exportBtn.focus();
+  });
+}
+
+/**
+ * Triggers the macOS system print dialog for the current document.
+ *
+ * Injects a rendered HTML overlay + print-only @media stylesheet into the DOM,
+ * calls window.print() (which surfaces the system print dialog), then removes
+ * both elements unconditionally in a finally block.
+ *
+ * D-05 / EC-15: finally block guarantees cleanup even if window.print() throws.
+ * FR-05.5: Returns immediately if editor is null.
+ * FR-05.6: @media print stylesheet hides all editor chrome, shows only the overlay.
+ *
+ * @param editor - The active CodeMirror EditorView, or null if not yet initialized
+ */
+export function printDocument(editor: EditorView | null): void {
+  // EC-15 / FR-05.5: guard against null editor (app still initializing, or no doc)
+  if (!editor) return;
+
+  // Render the document to HTML using the same pipeline as the HTML export path.
+  const html = markdownToHtml(editor.state.doc.toString());
+
+  // Inject a print-only stylesheet that hides all editor chrome and shows only
+  // the rendered content overlay. The style is removed in the finally block.
+  const style = document.createElement("style");
+  style.id = "markable-print-style";
+  style.textContent = `
+    @media print {
+      body > *:not(#markable-print-overlay) { display: none !important; }
+      #markable-print-overlay {
+        display: block !important;
+        position: static !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Inject the rendered content overlay. display:none keeps it invisible on
+  // screen; the @media print rule above makes it the only visible element
+  // during printing. The overlay is removed in the finally block.
+  const overlay = document.createElement("div");
+  overlay.id = "markable-print-overlay";
+  overlay.style.cssText = "display:none";
+  // MINIMAL_CSS is embedded so the printed output is self-contained.
+  overlay.innerHTML = `<style>${MINIMAL_CSS}</style><div class="content">${html}</div>`;
+  document.body.appendChild(overlay);
+
+  try {
+    // window.print() is synchronous on macOS — it blocks until the user
+    // dismisses the system print dialog (D-05 comment in spec: "synchronous on macOS").
+    window.print();
+  } finally {
+    // EC-15: unconditionally remove the injected elements even if window.print()
+    // throws (which can happen in test environments or under browser restrictions).
+    style.remove();
+    overlay.remove();
+  }
+}
+
+/**
+ * Unified export orchestrator. Entry point called from main.ts for the
+ * "file-export" menu event (Cmd-Alt-E).
+ *
+ * Presents the createExportSheet format-selection dialog, then routes to
+ * exportAsHtml or printDocument based on the user's choice. Cancellation
+ * is silent — no error is surfaced.
+ *
+ * EC-01: Returns immediately if editor is null.
+ * EC-14: Returns immediately if the export sheet is already open, preventing
+ *         a second sheet from being stacked behind the first.
+ * FR-06.3: Orchestrates the full export flow: sheet → format choice → dispatch.
+ *
+ * @param editor          - The active CodeMirror EditorView, or null
+ * @param currentFilePath - Path of the currently open file, or null for untitled
+ * @returns Promise<void>. All error cases handled internally (alert from exportAsHtml).
+ */
+export async function openExportDialog(
+  editor: EditorView | null,
+  currentFilePath: string | null
+): Promise<void> {
+  if (!editor) return;          // EC-01: no editor, nothing to export
+  if (exportSheetOpen) return;  // EC-14: sheet already in DOM, ignore rapid re-trigger
+
+  exportSheetOpen = true;
+  try {
+    const choice = await createExportSheet();
+
+    if (choice === "cancel") return; // EC-04: silent cancellation, no side effects
+
+    if (choice === "html") {
+      // FR-06.3 (HTML path): delegate to the existing exportAsHtml orchestrator
+      await exportAsHtml(editor, currentFilePath);
+    } else {
+      // FR-06.3 (PDF path): invoke the system print dialog via printDocument.
+      // A try/catch here surfaces any synchronous failure from printDocument
+      // (e.g. window.print() throwing in a restricted environment) so the user
+      // is not left with a silently swallowed error.
+      try {
+        printDocument(editor);
+      } catch (err) {
+        alert("Print failed: " + (err instanceof Error ? err.message : String(err)));
+      }
+    }
+  } finally {
+    // Reset the guard flag regardless of success, cancellation, or any thrown error
+    // so subsequent Cmd-Alt-E invocations are never permanently blocked (EC-14).
+    exportSheetOpen = false;
+  }
+}

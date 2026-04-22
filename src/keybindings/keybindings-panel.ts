@@ -42,7 +42,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "file-open",       label: "Open",                   defaultKey: "Cmd-O",           section: "File" },
   { id: "file-save",       label: "Save",                   defaultKey: "Cmd-S",           section: "File" },
   { id: "file-save-as",    label: "Save As",                defaultKey: "Cmd-Shift-S",     section: "File" },
-  { id: "file-export",     label: "Export as HTML",         defaultKey: "Cmd-Alt-E",       section: "File" },
+  { id: "file-export",     label: "Export...",              defaultKey: "Cmd-Alt-E",       section: "File" },
   { id: "file-import",     label: "Import",                 defaultKey: "Cmd-Alt-Shift-I", section: "File" },
   { id: "file-close-all",  label: "Close All",              defaultKey: "Cmd-Shift-W",     section: "File" },
   { id: "file-print",      label: "Print",                  defaultKey: "Cmd-P",           section: "File" },
