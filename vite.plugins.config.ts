@@ -1,7 +1,12 @@
 /**
- * Vite build configuration for core plugin IIFE bundles.
+ * Reference config for Markable core plugin IIFE bundles.
  *
- * Builds the six built-in Markable plugins as self-contained IIFE `.js` files.
+ * NOTE: This file is a reference document. The actual build runs via
+ * `scripts/build-plugins.mjs` (the programmatic Vite build API). Keep this file
+ * in sync with that script — any plugin added to PLUGINS in build-plugins.mjs
+ * must also appear in the export array below.
+ *
+ * Builds the fourteen built-in Markable plugins as self-contained IIFE `.js` files.
  * Each output is evaluated at runtime inside a sandboxed Function scope via:
  *
  *   const fn = new Function(source + "\nreturn __markablePlugin__;");
@@ -12,14 +17,14 @@
  * Or automatically: npm run tauri build (via beforeBuildCommand in tauri.conf.json)
  *
  * Vite 6 constraint: IIFE format does not support multiple entry points in a
- * single lib build. This config exports an array of six per-plugin configs —
+ * single lib build. This config exports an array of per-plugin configs —
  * Vite runs them sequentially. `emptyOutDir: true` is set only on the first
- * entry so the directory is cleared once before the six builds run.
+ * entry so the directory is cleared once before the builds run.
  *
  * Design constraints:
- *   EC-31: `external: []` — NO packages may be externalized. Every @codemirror/*
- *          dependency is bundled into the IIFE. If an import were externalized,
- *          the output would contain a require() call that throws at eval time.
+ *   EC-31: `external: [/^@codemirror\//]` — CM6 packages are marked external and
+ *          accessed via window globals (cm-globals.ts). This prevents duplicate
+ *          CM6 slot-ID namespaces that would make plugin extensions invisible.
  *   EC-30: Vite exits with a non-zero code if TypeScript or import errors exist,
  *          so CI catches broken builds before the app is packaged.
  *   EC-32: No import() calls in output; CSS injected via <style> tags in .plugin.ts.
@@ -29,8 +34,13 @@
  *     var __markablePlugin__ = (function() { ...bundle... })();
  *   The loader extracts the plugin object by appending:
  *     "\nreturn __markablePlugin__;"
- *   to the source string before evaluating. All four plugins share the same name
+ *   to the source string before evaluating. All plugins share the same name
  *   because each file is evaluated in an isolated Function scope — no collisions.
+ *
+ * `inlineDynamicImports`:
+ *   Set to true only for plugins that bundle large libraries with internal dynamic
+ *   imports (e.g. Mermaid v11). IIFE format does not support code-splitting, so
+ *   all dynamic import() calls must be inlined into the single output file.
  */
 
 import { defineConfig } from "vite";
@@ -39,16 +49,18 @@ import { resolve } from "path";
 /**
  * Build a single per-plugin Vite config.
  *
- * @param pluginName  - Kebab-case plugin id, used as output filename stem.
- * @param entryFile   - Absolute path to the .plugin.ts entry point.
- * @param clearOutput - When true, the output directory is emptied before this
- *                      build runs. Set to true only for the first plugin so the
- *                      directory is cleared exactly once per `npm run build:plugins`.
+ * @param pluginName          - Kebab-case plugin id, used as output filename stem.
+ * @param entryFile           - Absolute path to the .plugin.ts entry point.
+ * @param clearOutput         - When true, the output directory is emptied before this
+ *                              build runs. Set to true only for the first plugin.
+ * @param inlineDynamicImports - When true, Rollup inlines all dynamic import() calls
+ *                              into the IIFE. Required for Mermaid (diagrams plugin).
  */
 function pluginConfig(
   pluginName: string,
   entryFile: string,
   clearOutput: boolean,
+  inlineDynamicImports = false,
 ) {
   return defineConfig({
     build: {
@@ -102,12 +114,11 @@ function pluginConfig(
         external: [/^@codemirror\//],
 
         output: {
-          // Disable code splitting — each plugin is a single self-contained file.
-          // Dynamic imports are not supported inside the Function sandbox.
-          inlineDynamicImports: false,
-          // No global variable mappings needed: plugins consume @codemirror exports
-          // via the window.__CM_STATE__ / window.__CM_VIEW__ property accesses in
-          // their source, not via bare @codemirror/* import specifiers in the bundle.
+          // inlineDynamicImports: true is required when bundling libraries that
+          // use internal dynamic import() (e.g. Mermaid v11). IIFE format does not
+          // support code-splitting — all imports must be inlined into one file.
+          // For all other plugins false keeps the output lean and split-free.
+          inlineDynamicImports,
         },
       },
     },
@@ -115,6 +126,7 @@ function pluginConfig(
 }
 
 // Export an array of plugin configs. Vite processes each sequentially.
+// Keep this list in sync with scripts/build-plugins.mjs PLUGINS array.
 // The first config (focus-mode) clears the output directory before building;
 // the rest append their output to the same directory.
 export default [
@@ -134,8 +146,8 @@ export default [
     false,
   ),
   pluginConfig(
-    "status-bar",
-    resolve(__dirname, "src/plugins/status-bar/status-bar.plugin.ts"),
+    "auto-toc",
+    resolve(__dirname, "src/plugins/auto-toc/auto-toc.plugin.ts"),
     false,
   ),
   pluginConfig(
@@ -144,18 +156,53 @@ export default [
     false,
   ),
   pluginConfig(
-    "table-toolbar",
-    resolve(__dirname, "src/plugins/table-toolbar/table-toolbar.plugin.ts"),
-    false,
-  ),
-  pluginConfig(
-    "image-toolbar",
-    resolve(__dirname, "src/plugins/image-toolbar/image-toolbar.plugin.ts"),
+    "backlinks",
+    resolve(__dirname, "src/plugins/backlinks/backlinks.plugin.ts"),
     false,
   ),
   pluginConfig(
     "templates",
     resolve(__dirname, "src/plugins/templates/templates.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "yaml-pane",
+    resolve(__dirname, "src/plugins/yaml-pane/yaml-pane.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "math",
+    resolve(__dirname, "src/plugins/math/math.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "media-preview",
+    resolve(__dirname, "src/plugins/media-preview/media-preview.plugin.ts"),
+    false,
+  ),
+  pluginConfig(
+    "command-bar",
+    resolve(__dirname, "src/plugins/command-bar/command-bar.plugin.ts"),
+    false,
+  ),
+  // FC2 #9: Mermaid bundles ~2.5 MB and has internal dynamic imports.
+  // inlineDynamicImports: true is required for IIFE format compatibility.
+  pluginConfig(
+    "diagrams",
+    resolve(__dirname, "src/plugins/diagrams/diagrams.plugin.ts"),
+    false,
+    true, // inlineDynamicImports
+  ),
+  // FC2 #15: Insert Count — no dynamic imports.
+  pluginConfig(
+    "insert-count",
+    resolve(__dirname, "src/plugins/insert-count/insert-count.plugin.ts"),
+    false,
+  ),
+  // FC2 Auto-Save — no dynamic imports; debounce + blur listener, no CM6 StateField.
+  pluginConfig(
+    "auto-save",
+    resolve(__dirname, "src/plugins/auto-save/auto-save.plugin.ts"),
     false,
   ),
 ];

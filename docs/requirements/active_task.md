@@ -1,192 +1,185 @@
 ---
-title: "Unified Export Command (HTML + PDF)"
+title: "Auto-Save Plugin"
 last-updated: "2026-04-21"
 review-cadence-days: 7
-status: reference
+status: active
 ---
 
-# Unified Export Command (HTML + PDF) — Requirements Spec
+# Auto-Save Plugin — Requirements Spec
 
 ## Validation Status
 
-**VALIDATED — requirements approved by user. Ready for architecture phase.**
+**DRAFT — pending user review and approval.**
 
 ---
 
 ## Summary
 
-As a user, I want the existing "Export as HTML..." command to also offer PDF as a second format option, so that I can export to HTML or PDF from a single command without losing the Print menu item or its shortcut.
+As a user, I want the editor to save my open documents automatically on a configurable trigger (debounce timer, focus loss, or both), so that I never lose work due to forgetting to press Cmd-S, while retaining the ability to disable auto-save entirely.
 
 ---
 
 ## Background and Motivation
 
-The app currently has two export-adjacent menu items in the File menu:
+Markable 2.0 already has a fully working manual save system: `Cmd-S` calls `tabManager.saveActiveTab()` and `Cmd-Shift-S` calls `tabManager.saveActiveTabAs()`. The tab manager owns dirty state (`tab.isDirty`) and all atomic file writes go through the `writeFile()` function in `src/lib/bridge.ts` (which invokes the Rust `write_file` command with a temp-file-swap).
 
-- **"Export as HTML..."** (`Cmd-Alt-E`, menu ID `file-export`) — implemented in `src/lib/export.ts`. Reads raw Markdown from the editor, converts it with `marked`, assembles a self-contained HTML5 document (embedded `MINIMAL_CSS`), and writes it to a user-chosen path via the `save_html_dialog` Tauri command + `write_file` atomic swap. The keybinding is registered in `src/keybindings/keybindings-panel.ts` and the action is dispatched in `src/main.ts`.
-- **"Print..."** (`Cmd-P`, menu ID `file-print`) — implemented as `printDocument()` in `src/main.ts`. Injects a rendered HTML overlay + print-only stylesheet into the DOM, calls `window.print()` (which surfaces the macOS system print dialog, where the user can choose "Save as PDF"), then removes the overlay on close.
-
-The goal is to extend "Export as HTML..." into a unified **"Export..."** command that presents a format choice (HTML or PDF) before proceeding. The Print menu item, its shortcut `Cmd-P`, and its command bar entry remain completely untouched.
+Auto-save is an opt-in quality-of-life feature. It must never silently alter untitled documents, must survive rapid-typing scenarios without hammering the filesystem, and must clean up all timers and event listeners when disabled at runtime.
 
 ---
 
 ## Goals
 
-1. Rename the existing "Export as HTML..." menu item to **"Export..."**, keeping the same ID (`file-export`) and the same shortcut (`Cmd-Alt-E`). No shortcut change.
-2. When the export command fires, present a format selection step (HTML or PDF) before opening any save or print dialog.
-3. Preserve all existing HTML export behaviour exactly (`src/lib/export.ts` is not replaced — it is called by the new orchestrator).
-4. Preserve the existing PDF/print behaviour (`printDocument()` logic migrates into the new orchestrator and is also reachable via the format picker).
-5. No new Rust Tauri commands are required for the initial scope (the existing `save_html_dialog` and `write_file` commands are reused).
-6. **"Print..."** (`file-print`, `Cmd-P`) is left exactly as-is: menu item, shortcut, command bar entry, and handler are not touched.
+1. Deliver auto-save as an IIFE core plugin (same build pipeline as focus-mode, diagrams, etc.).
+2. Support three trigger modes: **debounce-only**, **focus-loss-only**, and **both** (debounce + focus loss).
+3. Default state: **disabled**. The user must explicitly enable the plugin via the Plugins Panel.
+4. Skip auto-save silently for untitled tabs (those with `filePath === null`).
+5. Skip auto-save silently for clean tabs (`isDirty === false`).
+6. Allow the debounce delay to be configured per-user, with a sensible default (2000 ms).
+7. Expose all settings in the plugin's detail extra panel (rendered via `renderDetailExtra`).
+8. Clean up all timers and DOM event listeners when `onDisable` is called.
 
 ---
 
 ## Functional Requirements
 
-### FR-01: Menu Changes
+### FR-01: Plugin Identity
 
-**FR-01.1** The Rust `menu.rs` file must rename the existing `"Export as HTML..."` menu item label to `"Export..."`. The item ID (`file-export`) and accelerator (`CmdOrCtrl+Alt+E`) are unchanged.
+**FR-01.1** Plugin `id` is `"auto-save"`. Name displayed in the Plugins Panel: `"Auto-Save"`.
 
-**FR-01.2** The `"Print..."` menu item (ID `file-print`, accelerator `CmdOrCtrl+P`) must remain in the File menu exactly as it is. No change to its label, ID, shortcut, position, or enabled state.
+**FR-01.2** The plugin is disabled by default. Its entry in `settings.json` under `plugins["auto-save"].enabled` starts as `false` (or absent, treated as disabled).
 
-**FR-01.3** The File menu order around the export area remains structurally identical to today. Only the label of `file-export` changes:
-```
-Save As...
-Save as Template...
---- (separator)
-Export...          Cmd-Alt-E      ← renamed from "Export as HTML..."
-Import...          Cmd-Alt-Shift-I
---- (separator)
-Print...           Cmd-P          ← untouched
-Close
-Close All
-```
+**FR-01.3** The plugin is a core plugin. Its compiled IIFE file is `auto-save.js`, placed at `src-tauri/plugins/core/auto-save.js` via `npm run build:plugins`.
 
-### FR-02: Keybinding Updates
+### FR-02: Trigger Modes
 
-**FR-02.1** In `src/keybindings/keybindings-panel.ts`, the entry for `file-export` must update its label from `"Export as HTML"` to `"Export..."`. The `defaultKey` (`"Cmd-Alt-E"`) is unchanged.
+The plugin supports three trigger modes, selectable by the user in the settings UI:
 
-**FR-02.2** The entry for `file-print` must remain in `KEYBINDING_DEFS` exactly as-is.
+| Mode ID | Behaviour |
+|---|---|
+| `"debounce"` | Auto-saves the active tab N ms after the last document change. |
+| `"focus-loss"` | Auto-saves the active tab when the app window loses focus (`window blur`). |
+| `"both"` | Applies both triggers simultaneously. |
 
-**FR-02.3** The existing `resolveAction()` keybinding lookup continues to work for `file-export` with the unchanged default key.
+**FR-02.1** Default trigger mode on first run: `"both"`.
 
-### FR-03: Format Selection UX
+**FR-02.2** In `"debounce"` mode, the plugin installs a CM6 `updateListener` extension that resets a `setTimeout` timer on every `docChanged` transaction. When the timer fires, `saveActiveTab()` is invoked on the active tab.
 
-The user picks the export format before a file-picker or print dialog appears. Two implementation options are acceptable; the Architect must evaluate and commit to one.
+**FR-02.3** In `"focus-loss"` mode, the plugin attaches a `window` `"blur"` listener. When the listener fires, `saveActiveTab()` is invoked on the active tab.
 
-**Option A — Native accessory view (NSSavePanel NSPopUpButton)**
-A Rust/AppKit interop layer adds a "Format:" `NSPopUpButton` accessory view to the `NSSavePanel`. The user picks format and save location in a single native macOS sheet (identical to the TextEdit / Pages "Format:" dropdown pattern). This requires a new Tauri command that wraps `NSSavePanel` directly and accepts a format parameter.
+**FR-02.4** In `"both"` mode, both the CM6 `updateListener` and the `window` `"blur"` listener are active simultaneously.
 
-**Option B — Minimal in-app sheet (acceptable fallback)**
-A small HTML overlay anchored to the bottom of the editor window shows only a "Format: [HTML / PDF]" dropdown and an "Export" button. Confirming the sheet closes it and immediately opens either the Tauri native `save()` dialog (HTML path, with `.html` filter) or the macOS print dialog (PDF path). The overlay is not a full-viewport scrim modal; it is a compact sheet attached to the window chrome.
+**FR-02.5** Switching trigger mode at runtime (via the settings UI) calls `api.restartSelf()` after persisting the new value so that the active listener/timer set is rebuilt cleanly.
 
-The Architect must call out which option is more feasible given Tauri v2's Rust/AppKit interop story and select one approach for the implementation spec. If Option A is chosen, it supersedes the FR-08 modal details below (which apply only to Option B).
+### FR-03: Debounce Delay
 
-**FR-03.1** Regardless of which option is chosen, the user must be able to select HTML or PDF and Cancel in a single interaction step.
+**FR-03.1** Default debounce delay: `2000` ms.
 
-**FR-03.2** Cancelling (Escape, Cancel button, or closing the sheet) must dismiss with no further action — no save dialog, no print dialog, no error.
+**FR-03.2** The user can set the delay to any integer in the range **500 – 30 000 ms** (inclusive) via a numeric input in the settings UI.
 
-**FR-03.3** Each invocation starts with HTML as the default / pre-selected format.
+**FR-03.3** Values outside the valid range are clamped silently on read (values below 500 become 500; values above 30 000 become 30 000). Invalid non-numeric values fall back to the default (2000 ms).
 
-**FR-03.4** The format selection step is stateless — the last-chosen format is not persisted between sessions.
+**FR-03.4** The debounce timer is per-plugin-instance, not per-tab. Only one timer runs at a time. Starting a new timer cancels any pending timer.
 
-### FR-04: HTML Export Path (Post Format Selection)
+### FR-04: Save Target
 
-**FR-04.1** When the user selects HTML, the flow must call the existing `exportAsHtml(editor, currentFilePath)` function from `src/lib/export.ts` without modification. All existing HTML export behaviour is preserved:
-- Native save dialog with `.html` filter and a suggested filename derived from the current file.
-- Self-contained HTML5 document assembled via `buildStandaloneHtml()` with `MINIMAL_CSS` embedded.
-- Atomic write via `writeFile()` (temp-file-swap).
-- Silent success; `alert()` on write failure.
-- No modification to `currentFilePath` / tab state.
+**FR-04.1** Auto-save always targets the **active tab** at the moment the timer fires or the blur event fires — not the tab that was active when the timer was started.
 
-**FR-04.2** The suggested filename is derived using the existing `deriveExportFilename()` function: replaces the file extension with `.html`; untitled documents use `"untitled.html"` (existing behaviour — no warning needed).
+**FR-04.2** The plugin invokes save by calling `__MARKABLE_TAB_MANAGER__.saveActiveTab()`. This reuses the full existing save path including atomic write, dirty-flag clear, title bar update, recent-files list update, and session save.
 
-### FR-05: PDF Export Path (Post Format Selection)
+**FR-04.3** If the active tab is untitled (`filePath === null`), `saveActiveTab()` internally redirects to `saveActiveTabAs()`, which opens the native Save dialog. Auto-save **must not** allow this redirect. Before calling `saveActiveTab()`, the plugin must check that the active tab has a non-null `filePath`. If `filePath` is null, the auto-save attempt is silently skipped.
 
-**FR-05.1** When the user selects PDF, the app must trigger the macOS system print dialog (which includes the native "Save as PDF" option). No bundled headless browser or third-party PDF library is used.
+**FR-04.4** If the active tab is not dirty (`isDirty === false`), the save call is skipped to avoid a redundant write. The plugin checks `__MARKABLE_TAB_MANAGER__.getActiveTab()?.isDirty` before invoking save.
 
-**FR-05.2** The PDF path must use the existing `printDocument()` mechanism: inject a rendered HTML overlay + print-only `@media print` stylesheet, call `window.print()`, then clean up.
+**FR-04.5** If the tab manager is not yet available (window global absent or returns null), the save attempt is silently skipped with a `console.warn`.
 
-**FR-05.3** `printDocument()` must be refactored out of `src/main.ts` and into `src/lib/export.ts` (alongside `exportAsHtml`). Function signature: `printDocument(editor: EditorView | null): void`. It receives the editor as a parameter (same pattern as `exportAsHtml`) to avoid circular imports.
+### FR-05: Settings Schema
 
-**FR-05.4** The print overlay is injected into `document.body` just before `window.print()` is called and removed immediately after `window.print()` returns.
+Settings are persisted via `api.saveSettings()` / `api.loadSettings()` to:
+`~/Library/Application Support/com.markable.app/plugins/auto-save/settings.json`
 
-**FR-05.5** If `editor` is null when `printDocument()` is called, the function returns immediately.
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `triggerMode` | `"debounce" \| "focus-loss" \| "both"` | `"both"` | Which event(s) trigger a save. |
+| `debounceDelayMs` | integer (500 – 30 000) | `2000` | Milliseconds of inactivity before auto-save fires in debounce mode. |
 
-**FR-05.6** The `@media print` stylesheet must hide the entire editor UI (`.cm-editor`, the sidebar, the toolbar, the status bar, the tab bar) and show only `#markable-print-overlay`.
+**FR-05.1** Settings are loaded in `onEnable`. If `loadSettings()` returns `null` (first run or read error), the plugin uses the defaults above.
 
-### FR-06: Main.ts Dispatch Changes
+**FR-05.2** Settings are persisted immediately when the user changes any value in the settings UI (not deferred to `onDisable`).
 
-**FR-06.1** The `case "file-export"` branch in the `handleMenuEvent` switch must be replaced with a call to the new unified export orchestrator: `void openExportDialog(editor, tabManager.getActiveFilePath())`.
+### FR-06: Settings UI
 
-**FR-06.2** The `case "file-print"` branch must remain untouched in the switch. Its existing handler (`printDocument()` or equivalent) continues to work independently of the `file-export` path.
+**FR-06.1** The plugin implements `renderDetailExtra(container: HTMLElement)` to render its settings controls into the Plugins Panel detail view. No separate settings panel is required.
 
-**FR-06.3** The `openExportDialog` function is the entry point orchestrator. It is responsible for: (a) showing the format selection step, (b) routing to `exportAsHtml` or `printDocument` based on the user's selection, and (c) handling cancellation.
+**FR-06.2** The settings UI must include:
+- A **"Trigger"** dropdown or segmented control with the three mode options: "Debounce Timer", "Focus Loss", "Both".
+- A **"Debounce Delay"** numeric input (visible and enabled only when trigger mode is `"debounce"` or `"both"`; hidden or disabled when mode is `"focus-loss"`).
+- A unit label ("ms") adjacent to the delay input.
 
-**FR-06.4** `openExportDialog` must be defined in `src/lib/export.ts` and imported into `src/main.ts`. Function signature: `openExportDialog(editor: EditorView | null, currentFilePath: string | null): Promise<void>`.
+**FR-06.3** When the trigger mode is changed, the plugin saves the new value, then calls `api.restartSelf()` so the new listener set takes effect immediately.
 
-### FR-07: Command Bar
+**FR-06.4** When the debounce delay is changed, the plugin saves the new value. The new delay takes effect on the next timer reset (no restart required — the plugin reads the delay from its in-memory settings object, which is updated immediately).
 
-**FR-07.1** The command bar entry for `"file-print"` must remain exactly as-is — label, context-invalid dimming, and ranking are unchanged.
+**FR-06.5** The settings UI must use `--ui-font` and existing CSS variables so it matches the active theme. No hardcoded font stacks.
 
-**FR-07.2** The label displayed in the command bar for `"file-export"` must update from `"Export as HTML"` to `"Export..."` to match the renamed menu item. If the command bar reads labels from `KEYBINDING_DEFS`, updating that array (FR-02.1) is sufficient. If it maintains its own label map, that map must also be updated.
+### FR-07: Status Bar Indicator (Optional v1)
 
-**FR-07.3** The context-invalid dimming for `"file-export"` continues to work (the action remains in `REQUIRES_FILE_IDS`).
+**FR-07.1** The plugin does **not** add a status bar indicator in v1. This is explicitly out of scope. The Architect may propose one in v2 if user feedback indicates demand.
 
-### FR-08: In-App Sheet Details (Option B only)
+### FR-08: Plugin Enable / Disable Lifecycle
 
-These requirements apply only if the Architect selects Option B from FR-03.
+**FR-08.1** `onEnable`:
+1. Load settings from disk (defaults on null).
+2. Attach the appropriate listener(s) based on `triggerMode`.
+3. If mode includes `"debounce"`: call `api.addExtensions([updateListenerExtension])`.
+4. If mode includes `"focus-loss"`: attach `window.addEventListener("blur", blurHandler)`.
 
-**FR-08.1** The format sheet is a pure TypeScript/HTML/CSS component. No third-party component library.
+**FR-08.2** `onDisable`:
+1. Cancel any pending debounce timer (`clearTimeout`).
+2. Call `api.removeExtensions()` (no-op if no extensions were added).
+3. Remove the `window` `"blur"` listener if it was attached.
 
-**FR-08.2** The sheet must be keyboard-navigable: Tab/Shift-Tab cycles focus between format options and Cancel; Enter/Space activates the focused choice; Escape cancels.
-
-**FR-08.3** The sheet must be created and destroyed on each invocation (destroy-on-close, not hide-on-close). A guard must prevent double-instantiation if invoked while already open.
-
-**FR-08.4** The sheet must close itself before handing off to the next step (save dialog or print dialog). It must not remain visible while the native OS dialog is showing.
-
-**FR-08.5** The sheet must be styled using `--ui-font`, `--accent-color`, and existing theme CSS variables so it adapts to light/dark theme automatically.
-
-**FR-08.6** No animation is required in v1.
+**FR-08.3** The plugin must be safe to enable and disable multiple times in the same session without leaking timers or event listeners (EC guard: always remove before re-adding).
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-01: No Unneeded New Rust Commands** — If Option A is chosen, one new Tauri command wrapping `NSSavePanel` with an accessory view is acceptable. If Option B is chosen, no changes to `src-tauri/src/commands/` are required.
+**NFR-01: No New Rust Commands** — Auto-save reuses the existing `write_file` Tauri command via `__MARKABLE_TAB_MANAGER__.saveActiveTab()`. No new Tauri commands are needed.
 
-**NFR-02: Backward Compatibility** — Existing unit tests for `src/lib/export.ts` (pure functions: `escapeHtml`, `extractTitle`, `deriveExportFilename`, `enforceHtmlExtension`, `markdownToHtml`, `buildStandaloneHtml`) must continue to pass unchanged. The new code must not alter those function signatures.
+**NFR-02: No Save Dialog on Auto-Save** — Auto-save must never open a native save dialog. The untitled-tab guard in FR-04.3 is the enforcement mechanism.
 
-**NFR-03: No Settings Persistence** — The last-chosen export format is not persisted to `settings.json`. The format selection step always defaults to HTML.
+**NFR-03: No Interruption of Manual Save** — If the user presses `Cmd-S` while an auto-save debounce is pending, the manual save proceeds normally. The auto-save timer should be cancelled after the manual save completes to avoid a redundant second write. Implementation note: the CM6 `updateListener` only fires on `docChanged`, and a manual save does not change the document, so the timer will naturally not re-fire unless the document changes again after the manual save.
 
-**NFR-04: Accessibility** — The format selection step must meet minimum ARIA requirements. Full WCAG AA compliance is a stretch goal, not a hard requirement for v1.
+**NFR-04: Self-Contained IIFE** — The plugin must follow all IIFE sandbox rules (see `focus-mode.plugin.ts` header): no app-internal imports, CM6 globals via `window.__CM_VIEW__` / `window.__CM_STATE__`, app globals via typed `window` cast.
 
-**NFR-05: No Source-Mode Restriction** — The export command must be available regardless of whether the editor is in live-preview mode or source mode. Both HTML and PDF paths call `markdownToHtml()` independently of the CM6 view state.
+**NFR-05: Test Coverage** — A Vitest test file (`tests/plugins/auto-save/auto-save.test.ts`) must cover: settings loading, settings defaults on null, triggerMode routing logic, debounce timer reset, untitled-tab skip, clean-tab skip, deactivation timer cleanup, and deactivation listener cleanup.
 
 ---
 
 ## Integration Points
 
-| Module | Change | Notes |
+| Module / Global | Role | Notes |
 |---|---|---|
-| `src-tauri/src/menu.rs` | Rename "Export as HTML..." label to "Export..." | ID (`file-export`) and accelerator (`CmdOrCtrl+Alt+E`) unchanged. `file-print` untouched. |
-| `src/lib/export.ts` | Add `openExportDialog()`, `printDocument()`, format selection step creation | `exportAsHtml` and all pure functions are unchanged |
-| `src/main.ts` | Update `case "file-export"` dispatch; keep `case "file-print"` unchanged; remove inline `printDocument()` definition; update import | `printDocument` moves to `export.ts` |
-| `src/keybindings/keybindings-panel.ts` | Update `file-export` label to "Export..."; keep `file-print` entry unchanged | `defaultKey` for `file-export` unchanged |
-| `src/plugins/command-bar/command-bar.plugin.ts` | Update `file-export` label if command bar has its own label map | `file-print` entry untouched |
+| `__MARKABLE_TAB_MANAGER__` | Invoke `saveActiveTab()`, read `getActiveTab()?.isDirty` and `getActiveTab()?.filePath` | Must null-check the global and the returned tab before use |
+| `api.addExtensions()` / `api.removeExtensions()` | Register / deregister the CM6 `updateListener` for debounce mode | Standard plugin API — no new API surface needed |
+| `window` `"blur"` event | Trigger save on focus loss | Attached in `onEnable`; removed in `onDisable`; named function reference required for removal |
+| `api.loadSettings()` / `api.saveSettings()` | Persist `triggerMode` and `debounceDelayMs` | Per-plugin settings path auto-managed by plugin API |
+| `api.restartSelf()` | Re-initialise listener set after trigger mode change | Called after `saveSettings()` in the UI change handler |
+| `renderDetailExtra(container)` | Render the trigger mode + delay UI in the Plugins Panel detail view | Standard plugin hook; container is freshly created on each open |
 
 ---
 
 ## Out of Scope (v1)
 
-1. **Additional export formats** — DOCX, Markdown (copy), plain text, EPUB. The format picker lists exactly HTML and PDF.
-2. **Export settings panel** — No new settings UI for controlling export CSS, page size, margins, or paper orientation.
-3. **Custom print CSS per-document** — No per-document `@page` overrides beyond what exists in `printDocument()` today.
-4. **"Save as PDF" path without print dialog** — Directly producing a `.pdf` file without the system print dialog is explicitly out of scope.
-5. **Remember last format** — The format selection step always resets to HTML. Persistence is a v2 consideration.
-6. **Export from command bar as two separate commands** — No separate "Export as HTML" and "Export as PDF" commands are added to the command list. One `file-export` entry triggers the unified orchestrator.
-7. **Exporting images as embedded base64** — The existing HTML export does not embed local images. Fixing this is a separate feature request.
-8. **Any changes to Print** — `file-print`, `Cmd-P`, `printDocument()` as called from the print menu item, and the command bar Print entry are all outside the scope of this feature.
+1. **Per-tab auto-save toggle** — Auto-save applies uniformly to all named tabs. Per-tab opt-out is a v2 consideration.
+2. **Auto-save of untitled documents** — Untitled tabs (no file path) are silently skipped. This deliberately avoids surprise Save-As dialogs.
+3. **"Auto-saved N seconds ago" status bar indicator** — Not in v1 (FR-07.1).
+4. **Conflict detection** — If the file on disk changed since last read (external edit), auto-save overwrites silently. Conflict detection is a separate feature.
+5. **Auto-save interval mode** — A wall-clock timer that fires every N minutes regardless of document activity is not part of v1.
+6. **Backup / versioning** — Auto-save writes to the same file. No backup copy or version history is created.
+7. **"Pause auto-save"** — No in-session pause without fully disabling the plugin.
+8. **Notification on auto-save** — No toast, alert, or transient UI message when an auto-save fires.
+9. **Auto-save on tab switch** — Switching the active tab does not trigger a save. Only the debounce timer expiry and the window blur event are triggers.
 
 ---
 
@@ -194,67 +187,61 @@ These requirements apply only if the Architect selects Option B from FR-03.
 
 The following edge cases are the mandatory test checklist for the Code Reviewer.
 
-**EC-01: No editor / null editor** — User triggers Export while the editor is null (app still initialising). Expected: `openExportDialog` returns immediately; no format selection step is shown; no error is thrown.
+**EC-01: Untitled tab is active when timer fires** — The debounce timer fires but the active tab has `filePath === null`. Expected: auto-save is silently skipped; no Save-As dialog opens; no error is thrown; the dirty indicator remains visible on the tab.
 
-**EC-02: Empty document** — The editor contains zero characters. Expected: format selection step opens normally; HTML path produces a valid HTML document with an empty `<div class="content"></div>`; PDF path opens print dialog showing a blank page. No crash.
+**EC-02: Clean tab when trigger fires** — The blur event fires (or timer fires) but the active tab is not dirty (`isDirty === false`). Expected: `saveActiveTab()` is not called; no write is issued; no error.
 
-**EC-03: Unsaved (untitled) document** — `currentFilePath` is null. Expected: format selection step opens; HTML save dialog pre-populates filename as `"untitled.html"`; PDF path opens print dialog. The tab/document dirty state is not modified by either path. No warning is shown (existing Untitled fallback is acceptable).
+**EC-03: Rapid typing resets debounce** — The user types continuously. Expected: each `docChanged` transaction resets the timer; only one save fires, N ms after the final keystroke. No intermediate saves occur during the typing burst.
 
-**EC-04: User cancels at the format selection step** — User opens Export, then presses Escape or clicks Cancel. Expected: format selection step dismisses silently; no save dialog opens; no print dialog opens; no error; editor state unchanged.
+**EC-04: Manual Cmd-S while debounce timer is pending** — The user presses `Cmd-S` before the timer fires. Expected: the manual save proceeds immediately; the pending auto-save timer continues running but when it fires the tab is clean (`isDirty === false`) and is therefore skipped. No duplicate write occurs.
 
-**EC-05: User cancels at the HTML save dialog** — User selects HTML, then cancels the native save dialog. Expected: both the format step and save dialog close silently; no file is written; editor state unchanged. (Existing `dialogResult.cancelled` guard in `exportAsHtml`.)
+**EC-05: Plugin disabled while timer is pending** — The user disables the plugin (via the Plugins Panel toggle) while a debounce timer is in flight. Expected: `onDisable` cancels the timer with `clearTimeout`; no save fires after disable; the dirty indicator remains.
 
-**EC-06: User cancels the macOS print dialog** — User selects PDF, the system print dialog appears, and the user presses Cancel. Expected: print dialog closes; print overlay is cleaned up from the DOM; no error is shown; editor state unchanged.
+**EC-06: App window loses focus during active typing (blur fires mid-debounce)** — In `"both"` mode, focus-loss fires while a debounce timer is pending. Expected: the blur handler saves immediately; the pending timer is cancelled (or fires redundantly but finds the tab clean and skips). No double write.
 
-**EC-07: Write failure on HTML export** — `writeFile()` returns `{ ok: false, error }`. Expected: an `alert()` with the error message is shown (existing behaviour preserved). The format selection step is already closed at this point.
+**EC-07: Focus-loss fires when no tab is open** — The window blurs but there are no open tabs. Expected: `getActiveTab()` returns null; the save is silently skipped; no error.
 
-**EC-08: Export while in source mode (live preview off)** — The editor is in raw source mode. Expected: both HTML and PDF paths still produce correctly rendered output because they call `markdownToHtml()` independently of the CM6 view state. No `__MARKABLE_PREVIEW_ENABLED__` check is needed in the export path.
+**EC-08: Save write failure** — `saveActiveTab()` calls `writeFile()` which returns `{ ok: false }`. Expected: the existing `alert()` in `tabManager.saveActiveTab()` fires (unchanged behaviour). The tab remains dirty. The auto-save plugin does not add its own error UI.
 
-**EC-09: Export with unsaved edits (dirty state)** — The document has unsaved changes. Expected: export uses the current in-memory content (`editor.state.doc.toString()`), which includes the unsaved edits. The dirty state indicator and tab state are not modified by export.
+**EC-09: Settings file absent on first enable** — `loadSettings()` returns `null` (first-run, no settings file yet). Expected: the plugin uses defaults (`triggerMode: "both"`, `debounceDelayMs: 2000`). The settings file is created the first time the user changes a setting.
 
-**EC-10: Export with document that has only a YAML front matter block** — The Markdown body is empty but YAML front matter exists. Expected: `markdownToHtml()` renders the front matter as a code block or passes it through as raw text (existing `marked` behaviour); no crash; export completes.
+**EC-10: Plugin enabled then immediately disabled before settings load resolves** — `onEnable` is async (awaits `loadSettings()`); `onDisable` is called before the load resolves. Expected: no timer is started; no listener is attached; `onDisable` completes safely. (Guard: check an `_active` flag set to `false` in `onDisable` before proceeding with setup in the `onEnable` continuation.)
 
-**EC-11: No shortcut conflict** — The existing `Cmd-Alt-E` shortcut is retained. The Architect must confirm it does not conflict with any system shortcut or other binding in the current `KEYBINDING_DEFS` (it is already registered and working today, so this is a verification step rather than a new risk).
+**EC-11: Trigger mode changed to "focus-loss" while debounce timer is pending** — User changes mode in the settings UI. Expected: `api.restartSelf()` is called; `onDisable` cancels the pending timer and removes the CM6 extension; `onEnable` with new mode attaches only the blur listener.
 
-**EC-12: Format selection step focus trap (Option B only)** — While the in-app sheet is open, pressing Tab repeatedly must cycle only between format options and the Cancel/Export button. No focus must escape to the editor or sidebar.
+**EC-12: Debounce delay changed to value below 500 ms** — User enters `100` in the delay input. Expected: the value is clamped to 500 ms on read; the UI may show `100` until the input loses focus, at which point it is corrected to `500`.
 
-**EC-13: Format selection step while another overlay is open (Option B only)** — If the command bar or find widget is open when Export fires. Expected: no undefined behaviour. Simplest acceptable behaviour: if the format sheet is already in the DOM, suppress duplicate instantiation.
+**EC-13: Multiple rapid toggle cycles (enable / disable / enable)** — User rapidly toggles the plugin on and off. Expected: each `onDisable` cancels any pending timer and removes listeners; each `onEnable` attaches fresh listeners; no stale listeners accumulate. (Verifiable: after N cycles, only one `"blur"` listener is attached.)
 
-**EC-14: Rapid double-trigger (Option B only)** — User presses `Cmd-Alt-E` twice quickly. Expected: at most one format selection sheet appears. Second invocation is suppressed if sheet is already in the DOM.
+**EC-14: App quit with unsaved changes and auto-save pending** — The Tauri `"CloseRequested"` event fires (or the system sends a kill signal) while a debounce timer is in flight. Expected: the pending timer has not fired yet at quit time; the existing quit-time dirty-check dialog (in `TabManager.closeTab()` / `closeAll` flow) still presents the user with "Save / Don't Save / Cancel" as normal. Auto-save does not bypass the quit-time confirmation.
 
-**EC-15: PDF export print overlay cleanup after print dialog error** — `window.print()` throws an unexpected exception. Expected: the print overlay and print stylesheet are still removed from the DOM (cleanup must occur in a `finally` block or equivalent).
+**EC-15: `__MARKABLE_TAB_MANAGER__` global not yet set** — The plugin is somehow enabled before the tab manager global is assigned in `main.ts`. Expected: the plugin reads the global inside the timer/blur callback (not at `onEnable` time), so by the time any trigger fires the global is available. If it is still absent at callback time, the plugin logs a `console.warn` and skips.
 
-**EC-16: HTML export — file with special characters in path/name** — The current file path contains characters like `&`, `<`, spaces, or Unicode. Expected: `extractTitle()` and `deriveExportFilename()` handle these correctly (existing behaviour preserved, covered by existing tests).
-
-**EC-17: Modal/sheet appears on correct screen in multi-display setups (Option B only)** — The sheet is appended to `document.body` and positioned with `position: fixed`, which inherits the webview's display. No special multi-display handling needed.
-
-**EC-18: Export command in command bar when no file is open** — `"file-export"` is in `REQUIRES_FILE_IDS`. Expected: the command bar dims the Export entry and does not invoke `openExportDialog` (existing context-invalid behaviour preserved).
-
-**EC-19: Print menu item continues to work after this feature ships** — `file-print` / `Cmd-P` must invoke `printDocument()` (via its existing `case "file-print"` handler) exactly as before. The refactor of `printDocument` into `export.ts` must not break this path.
+**EC-16: Focus loss triggered by opening a native OS dialog (e.g., Cmd-S Save-As dialog)** — Opening a native dialog causes the webview to lose focus, which fires `"blur"`. If the user opened a Save-As dialog manually, the auto-save blur handler fires. Expected: `getActiveTab()?.filePath` is null for an untitled tab (skipped, EC-01) or the tab is already in the process of being saved manually. Worst case: a redundant `saveActiveTab()` call is made for a named tab; `TabManager.saveActiveTab()` is idempotent (it calls `writeFile` again, which is atomic). Acceptable behaviour for v1.
 
 ---
 
 ## Resolved Decisions
 
-**AD-01 — Reuse existing `exportAsHtml` unchanged**: The HTML export function in `src/lib/export.ts` has a full suite of unit tests and a clean parameter-based API. It is called as-is from the new orchestrator.
+**AD-01 — Reuse `__MARKABLE_TAB_MANAGER__.saveActiveTab()` directly**: This reuses the full existing save path (atomic write, dirty-flag clear, title bar, recent files, session save) without duplicating logic in the plugin.
 
-**AD-02 — Move `printDocument` to `export.ts`**: Collocating both export functions in one module keeps the main.ts dispatch logic thin and makes both functions unit-testable. The same "pass editor as parameter to avoid circular imports" pattern already used by `exportAsHtml` applies.
+**AD-02 — No new Tauri commands**: The save infrastructure already exists. The plugin is pure TypeScript with no Rust surface.
 
-**AD-03 — Format selection step is preferred as a native NSSavePanel accessory view (Option A), with an in-app sheet (Option B) as an acceptable fallback**: The user prefers a native single-step UX identical to TextEdit/Pages. The Architect must assess Tauri v2 AppKit interop feasibility and select the appropriate option.
+**AD-03 — Per-plugin settings file, not a new key in `settings.json`**: Consistent with all other plugins. The Rust raw-JSON pass-through in `settings.json` would accommodate a new key, but the plugin settings API (`api.loadSettings()` / `api.saveSettings()`) is the correct pattern.
 
-**AD-04 — No persistent format preference in v1**: Keeping the format selection step stateless avoids a `settings.ts` schema change. Revisit if user feedback indicates the preference is tedious to re-select.
+**AD-04 — `api.restartSelf()` for mode changes**: Cleanest way to rebuild the listener set after a trigger mode change without manually threading teardown logic through the UI callback.
 
-**AD-05 — Print is untouched**: The existing `file-print` menu item, `Cmd-P` shortcut, command bar entry, and `printDocument()` invocation from the print handler are completely out of scope. PDF output is available via Export > PDF as an additional path, not as a replacement for Print.
+**AD-05 — Skip auto-save for untitled tabs rather than blocking**: The untitled-tab case is a silent skip. This avoids surprise Save-As dialogs during auto-save, which would be disruptive mid-flow. The user can always save untitled documents manually.
 
-**AD-06 — Shortcut unchanged (`Cmd-Alt-E`)**: This is the same Export as HTML command with a format option added. No new shortcut is introduced. No old shortcut is changed.
+**AD-06 — Disabled by default**: Auto-save is a behaviour-altering feature. Opt-in is the safer default; users who want it will enable it.
 
 ---
 
 ## Proposed Constraints
 
-1. `openExportDialog`, `printDocument` (refactored), and the format selection step creation (Option B) must all live in `src/lib/export.ts`. No new source files are required for Option B. Option A may require one new Tauri command file in `src-tauri/src/commands/`.
-2. If Option B: the format sheet must be created fresh on every invocation and removed from the DOM on close. A guard must prevent double-instantiation.
-3. `printDocument()` must place all DOM cleanup (style removal, overlay removal) in a `try/finally` block so cleanup is guaranteed even if `window.print()` throws.
-4. The `MINIMAL_CSS` constant shared between HTML export and PDF print overlay must not be duplicated. Both code paths import it from the same location in `export.ts`.
-5. All existing pure-function unit tests in `tests/` for `export.ts` must pass without modification. New tests must cover: `openExportDialog` orchestration logic (HTML routing, PDF routing, cancellation), and the refactored `printDocument` path reachable from `file-print`.
-6. If Option B: the format sheet must not add any persistent global CSS to the document. Its styles must be scoped to elements created by the sheet itself (inline styles or a `<style>` block injected and removed with the sheet).
+1. The plugin must not import any app-internal modules. All app interaction goes through `window` globals (`__MARKABLE_TAB_MANAGER__`, `__CM_VIEW__`, `__CM_STATE__`) and the `api` parameter.
+2. All timers and event listeners created in `onEnable` must be cleaned up in `onDisable`. An `_active` flag must guard the `onEnable` async continuation against a race with `onDisable`.
+3. The blur handler must be stored as a named function reference (not an inline arrow) so `removeEventListener` can remove the exact listener added by `onEnable`.
+4. Settings changes are saved eagerly (not deferred to `onDisable`) because the window may close before `onDisable` completes.
+5. The plugin must not add a global `"blur"` listener at module evaluation time — only inside `onEnable`.
+6. Test file location: `tests/plugins/auto-save/auto-save.test.ts`. Minimum coverage targets: debounce reset logic, untitled skip, clean-tab skip, disable teardown.
