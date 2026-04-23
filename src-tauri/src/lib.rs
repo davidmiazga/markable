@@ -23,6 +23,7 @@ fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: 
 fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
 
 pub use commands::{
+    create_daily_note, check_paths_exist,
     open_file_dialog, open_folder_dialog, read_file, save_file_dialog, save_html_dialog, write_file,
     get_settings, save_settings,
     list_themes, read_theme_css,
@@ -387,6 +388,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            create_daily_note,
+            check_paths_exist,
             open_file_dialog,
             open_folder_dialog,
             read_file,

@@ -44,6 +44,7 @@ import {
   type PresetEntry,
   type PresetApiDeps,
 } from "./preset-manager";
+import { buildToggleRow } from "../../settings/settings-fields";
 
 // ── Re-export public functions used by test imports ───────────────────────────
 export { renderHighlightedLabel };
@@ -3104,7 +3105,8 @@ function activateSelected(): void {
   const result = _visibleResults.find((r) => r.id === _selectedId);
   if (!result || result.dimmed) return;
 
-  closeBar();
+  // In keybindings mode the action enters key-capture — do not close the bar.
+  if (_mode !== "keybindings") closeBar();
   result.action();
 }
 
@@ -3292,7 +3294,8 @@ function onResultClick(e: MouseEvent): void {
   const result = _visibleResults.find((r) => r.id === resultId);
   if (!result || result.dimmed) return;
   _selectedId = resultId;
-  closeBar();
+  // In keybindings mode the action enters key-capture — do not close the bar.
+  if (_mode !== "keybindings") closeBar();
   result.action();
 }
 
@@ -3420,40 +3423,18 @@ export function renderDetailExtra(container: HTMLElement): void {
   section.appendChild(title);
 
   for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const labelWrap = document.createElement("div");
-    labelWrap.className = "settings-row-label";
-
-    const labelEl = document.createElement("label");
-    const checkboxId = `cb-setting-${item.key}`;
-    labelEl.htmlFor = checkboxId;
-    labelEl.className = "settings-label";
-    labelEl.textContent = item.label;
-
-    const descEl = document.createElement("p");
-    descEl.className = "settings-description";
-    descEl.textContent = item.description;
-
-    labelWrap.appendChild(labelEl);
-    labelWrap.appendChild(descEl);
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.id = checkboxId;
-    checkbox.className = "settings-checkbox";
-    checkbox.checked = _settings[item.key] as boolean;
-
-    const settingKey = item.key; // captured in closure
-    checkbox.addEventListener("change", () => {
-      (_settings as any)[settingKey] = checkbox.checked;
-      // FR-07.2: persist immediately so settings survive plugin reload.
-      if (_api) void _api.saveSettings(_settings as unknown as Record<string, unknown>);
+    const settingKey = item.key;
+    const row = buildToggleRow({
+      label: item.label,
+      description: item.description,
+      checked: _settings[item.key] as boolean,
+      id: `cb-setting-${item.key}`,
+      onChange: (checked) => {
+        (_settings as any)[settingKey] = checked;
+        // FR-07.2: persist immediately so settings survive plugin reload.
+        if (_api) void _api.saveSettings(_settings as unknown as Record<string, unknown>);
+      },
     });
-
-    row.appendChild(labelWrap);
-    row.appendChild(checkbox);
     section.appendChild(row);
   }
 

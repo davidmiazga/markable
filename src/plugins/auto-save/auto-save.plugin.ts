@@ -27,6 +27,7 @@ const {
 // Type-only imports — erased by tsc, safe for IDE support.
 import type { ViewUpdate } from "@codemirror/view";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+import { buildSelectRow, buildNumberRow } from "../../settings/settings-fields";
 
 // ── Settings types and defaults ───────────────────────────────────────────────
 
@@ -215,35 +216,7 @@ function injectCSS(): void {
   if (document.getElementById(id)) return;
   const style = document.createElement("style");
   style.id = id;
-  style.textContent = `
-    .auto-save-settings-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 0;
-      font-family: var(--ui-font);
-      font-size: 13px;
-    }
-    .auto-save-settings-row label {
-      flex: 0 0 140px;
-      color: var(--text-color, inherit);
-    }
-    .auto-save-settings-row select,
-    .auto-save-settings-row input[type="number"] {
-      font-family: var(--ui-font);
-      font-size: 13px;
-      padding: 2px 6px;
-      border-radius: 4px;
-      border: 1px solid var(--border-color, #ccc);
-      background: var(--input-bg, #fff);
-      color: var(--text-color, inherit);
-    }
-    .auto-save-delay-unit {
-      color: var(--text-muted, #888);
-      font-family: var(--ui-font);
-      font-size: 12px;
-    }
-  `;
+  style.textContent = ``;
   document.head.appendChild(style);
 }
 
@@ -269,41 +242,21 @@ function removeCSS(): void {
  * show the updated setting because renderDetailExtra reads _settings directly.
  */
 function buildTriggerRow(api: MarkablePluginAPI): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "auto-save-settings-row";
-
-  const label = document.createElement("label");
-  label.textContent = "Trigger";
-
-  const select = document.createElement("select");
-  // Declare options as a plain array to avoid TS inference issues with the tuple type.
-  const options: Array<[TriggerMode, string]> = [
-    ["debounce",   "Debounce Timer"],
-    ["focus-loss", "Focus Loss"],
-    ["both",       "Both"],
-  ];
-  for (const [value, text] of options) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = text;
-    // Pre-select the currently active mode so the UI reflects in-memory state.
-    opt.selected = _settings.triggerMode === value;
-    select.appendChild(opt);
-  }
-
-  select.addEventListener("change", async () => {
-    _settings.triggerMode = select.value as TriggerMode;
-    await api.saveSettings(_settings as unknown as Record<string, unknown>);
-    // Restart is required here so onEnable re-runs and attaches the correct
-    // set of listeners for the new mode (EC-11, FR-06.3).
-    await api.restartSelf();
-    // After restartSelf() the plugin is re-enabled; the container reference is
-    // stale — no further DOM manipulation is needed here.
-  });
-
-  row.appendChild(label);
-  row.appendChild(select);
-  return row;
+  return buildSelectRow(
+    "Trigger",
+    _settings.triggerMode,
+    [
+      ["debounce",   "Debounce Timer"],
+      ["focus-loss", "Focus Loss"],
+      ["both",       "Both"],
+    ],
+    async (value) => {
+      _settings.triggerMode = value as TriggerMode;
+      await api.saveSettings(_settings as unknown as Record<string, unknown>);
+      // Restart so onEnable re-runs and attaches the correct listener set (EC-11, FR-06.3).
+      await api.restartSelf();
+    },
+  );
 }
 
 /**
@@ -320,43 +273,22 @@ function buildTriggerRow(api: MarkablePluginAPI): HTMLElement {
  *   No restart required — the timer reads _settings.debounceDelayMs at each reset (AD-5).
  */
 function buildDelayRow(api: MarkablePluginAPI): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "auto-save-settings-row";
+  const row = buildNumberRow(
+    "Debounce Delay",
+    _settings.debounceDelayMs,
+    { min: 500, max: 30000, step: 100, width: "80px", unit: "ms" },
+    async (value) => {
+      const clamped = clampDelay(String(value));
+      _settings.debounceDelayMs = clamped;
+      await api.saveSettings(_settings as unknown as Record<string, unknown>);
+    },
+  );
 
-  // Hide the delay row when focus-loss-only mode is active (FR-06.2).
+  // Hide when focus-loss-only mode is active (FR-06.2).
   if (_settings.triggerMode === "focus-loss") {
     row.style.display = "none";
   }
 
-  const label = document.createElement("label");
-  label.textContent = "Debounce Delay";
-
-  const input = document.createElement("input");
-  input.type = "number";
-  input.min = "500";
-  input.max = "30000";
-  input.step = "100";
-  input.value = String(_settings.debounceDelayMs);
-  input.style.width = "80px";
-
-  const unit = document.createElement("span");
-  unit.className = "auto-save-delay-unit";
-  unit.textContent = "ms";
-
-  // "change" fires on blur or Enter — not on every keystroke — which is
-  // intentional: we only clamp and persist when the user commits the value.
-  input.addEventListener("change", async () => {
-    const clamped = clampDelay(input.value);
-    // EC-12: update the UI to display the clamped (corrected) value.
-    input.value = String(clamped);
-    _settings.debounceDelayMs = clamped;
-    await api.saveSettings(_settings as unknown as Record<string, unknown>);
-    // No restartSelf() — the listener reads _settings.debounceDelayMs live (AD-5).
-  });
-
-  row.appendChild(label);
-  row.appendChild(input);
-  row.appendChild(unit);
   return row;
 }
 

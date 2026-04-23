@@ -27,6 +27,7 @@
 import type { DecorationSet, WidgetType as WidgetTypeClass } from "@codemirror/view";
 import type { Transaction, EditorState } from "@codemirror/state";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+import { buildNumberRow } from "../../settings/settings-fields";
 
 // ── CM6 globals access ────────────────────────────────────────────────────────
 //
@@ -994,6 +995,8 @@ function createImageField(
  * Cleared to null in onDisable.
  */
 let _imageField: ReturnType<typeof StateField.define> | null = null;
+let _api: MarkablePluginAPI | null = null;
+let _maxDisplayWidth = 600;
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -1021,11 +1024,13 @@ interface MediaPreviewSettings {
 async function onEnable(api: MarkablePluginAPI): Promise<void> {
   // Step 1: Load persisted settings.
   // Validates that maxDisplayWidth is a non-negative number; falls back to 600.
+  _api = api;
   const saved = await api.loadSettings() as Partial<MediaPreviewSettings> | null;
   const maxDisplayWidth: number =
     typeof saved?.maxDisplayWidth === "number" && saved.maxDisplayWidth >= 0
       ? saved.maxDisplayWidth
       : 600;
+  _maxDisplayWidth = maxDisplayWidth;
 
   // Step 2: Inject CSS (idempotent — calling twice produces only one <style> tag).
   injectPluginCSS();
@@ -1068,8 +1073,9 @@ function onDisable(api: MarkablePluginAPI): void {
   // Step 3: Remove injected CSS.
   removePluginCSS();
 
-  // Step 4: Clear field reference.
+  // Step 4: Clear field and API references.
   _imageField = null;
+  _api = null;
 }
 
 // ── Settings UI ───────────────────────────────────────────────────────────────
@@ -1085,27 +1091,16 @@ function onDisable(api: MarkablePluginAPI): void {
  * @param container - The DOM element to append the settings UI into.
  */
 function renderDetailExtra(container: HTMLElement): void {
-  const row = document.createElement("div");
-  row.className = "plugin-detail-extra-row";
-  row.style.cssText = "display:flex; align-items:center; gap:8px; margin-top:12px;";
-
-  const label = document.createElement("label");
-  label.textContent = "Max display width (px):";
-  label.style.fontSize = "0.9em";
-
-  const input = document.createElement("input");
-  input.type = "number";
-  input.min = "0";
-  input.max = "4096";
-  input.step = "50";
-  input.style.cssText = "width: 80px; font-size: 0.9em;";
-  input.placeholder = "600";
-
-  const note = document.createElement("span");
-  note.textContent = "0 = no limit. Restart plugin to apply.";
-  note.style.cssText = "font-size: 0.8em; opacity: 0.65;";
-
-  row.append(label, input, note);
+  const row = buildNumberRow(
+    "Max display width (px)",
+    _maxDisplayWidth,
+    { min: 0, max: 4096, step: 50, width: "80px", unit: "0 = no limit" },
+    async (value) => {
+      const v = Math.max(0, Math.round(value));
+      _maxDisplayWidth = v;
+      if (_api) await _api.saveSettings({ maxDisplayWidth: v });
+    },
+  );
   container.appendChild(row);
 }
 

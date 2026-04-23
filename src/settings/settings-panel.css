@@ -237,6 +237,53 @@
   margin-bottom: 8px;
 }
 
+/* Inline field label — muted text on the left side of a settings-row */
+.settings-field-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Toggle switch (pill) — shared by all plugin settings panels */
+.settings-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.settings-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.settings-toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--border-color);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.settings-toggle input:checked + .settings-toggle-track {
+  background: var(--link-color);
+}
+.settings-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-primary, #fff);
+  transition: transform 0.2s ease;
+  pointer-events: none;
+}
+.settings-toggle input:checked ~ .settings-toggle-thumb {
+  transform: translateX(16px);
+}
+
 /* Segmented control — a horizontal group of mutually exclusive mode buttons.
  *
  * Used for the "Tab bar style" setting (Minimal / Regular / Vertical). The

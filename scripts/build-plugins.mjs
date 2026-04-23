@@ -60,6 +60,8 @@ const PLUGINS = [
   ["insert-count",      "src/plugins/insert-count/insert-count.plugin.ts"],
   // FC2 Auto-Save — no dynamic imports; debounce + blur listener, no CM6 StateField.
   ["auto-save",         "src/plugins/auto-save/auto-save.plugin.ts"],
+  // Daily Note — no dynamic imports; no CM6 StateField in Step 03 (Steps 04–05 will add).
+  ["daily-note",        "src/plugins/daily-note/daily-note.plugin.ts"],
 ];
 
 /**

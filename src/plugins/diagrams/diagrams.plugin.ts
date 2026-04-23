@@ -25,6 +25,7 @@ import mermaid from "mermaid";
 import type { DecorationSet, WidgetType as WidgetTypeClass } from "@codemirror/view";
 import type { Transaction, EditorState } from "@codemirror/state";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+import { buildSelectRow, buildNumberRow, buildToggleRow } from "../../settings/settings-fields";
 
 // ── CM6 globals access ────────────────────────────────────────────────────────
 //
@@ -945,40 +946,23 @@ function onDisable(api: MarkablePluginAPI): void {
  * if the theme changed, dispatches a themeChangedEffect, and saves settings.
  */
 function buildThemeRow(): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plugin-detail-setting-row";
-
-  const label = document.createElement("label");
-  label.textContent = "Diagram theme";
-
-  // Build select directly — no innerHTML + querySelector re-query (LOW-02).
-  const select = document.createElement("select");
-  const themeOptions: Array<[string, string]> = [
-    ["auto",    "Auto (follows app theme)"],
-    ["default", "Default (light)"],
-    ["dark",    "Dark"],
-    ["neutral", "Neutral"],
-    ["forest",  "Forest"],
-  ];
-  for (const [value, text] of themeOptions) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = text;
-    select.appendChild(opt);
-  }
-  select.value = _settings.mermaidTheme;
-
-  select.addEventListener("change", () => {
-    _settings.mermaidTheme = select.value as DiagramsSettings["mermaidTheme"];
-    // Re-initialize Mermaid with the new theme and dispatch a StateField recompute.
-    const changed = reinitIfNeeded();
-    if (changed) dispatchThemeEffect();
-    if (_currentApi) saveSettings(_currentApi);
-  });
-
-  row.appendChild(label);
-  row.appendChild(select);
-  return row;
+  return buildSelectRow(
+    "Diagram theme",
+    _settings.mermaidTheme,
+    [
+      ["auto",    "Auto (follows app theme)"],
+      ["default", "Default (light)"],
+      ["dark",    "Dark"],
+      ["neutral", "Neutral"],
+      ["forest",  "Forest"],
+    ],
+    (value) => {
+      _settings.mermaidTheme = value as DiagramsSettings["mermaidTheme"];
+      const changed = reinitIfNeeded();
+      if (changed) dispatchThemeEffect();
+      if (_currentApi) saveSettings(_currentApi);
+    },
+  );
 }
 
 /**
@@ -993,36 +977,21 @@ function buildThemeRow(): HTMLElement {
  * recompute needed).
  */
 function buildWidthRow(): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plugin-detail-setting-row";
-
-  const label = document.createElement("label");
-  label.textContent = "Max render width (px)";
-
-  // Direct element reference — no re-query by ID needed (LOW-02).
-  const input = document.createElement("input");
-  input.type = "number";
-  input.min = "200";
-  input.max = "4000";
-  input.step = "50";
-  input.value = String(_settings.maxRenderWidth);
-
-  input.addEventListener("change", () => {
-    const v = parseInt(input.value, 10);
-    // Guard matches HTML min/max: [200, 4000] (MEDIUM-02 — previously `v > 0`).
-    if (v >= 200 && v <= 4000) {
-      _settings.maxRenderWidth = v;
-      if (_currentApi) saveSettings(_currentApi);
-      // Apply immediately to existing block elements without a full StateField recompute.
-      document.querySelectorAll<HTMLElement>(".cm-mermaid-block").forEach((el) => {
-        el.style.setProperty("--mermaid-max-width", `${v}px`);
-      });
-    }
-  });
-
-  row.appendChild(label);
-  row.appendChild(input);
-  return row;
+  return buildNumberRow(
+    "Max render width (px)",
+    _settings.maxRenderWidth,
+    { min: 200, max: 4000, step: 50, width: "80px" },
+    (value) => {
+      const v = Math.round(value);
+      if (v >= 200 && v <= 4000) {
+        _settings.maxRenderWidth = v;
+        if (_currentApi) saveSettings(_currentApi);
+        document.querySelectorAll<HTMLElement>(".cm-mermaid-block").forEach((el) => {
+          el.style.setProperty("--mermaid-max-width", `${v}px`);
+        });
+      }
+    },
+  );
 }
 
 /**
@@ -1032,25 +1001,14 @@ function buildWidthRow(): HTMLElement {
  * block so the user can inspect and fix their diagram syntax (FR-05.2, FR-08.1).
  */
 function buildErrorSourceRow(): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plugin-detail-setting-row";
-
-  // Direct element reference — no re-query by ID needed (LOW-02).
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = _settings.showErrorSource;
-
-  const label = document.createElement("label");
-  label.appendChild(checkbox);
-  label.appendChild(document.createTextNode(" Show diagram source in error messages"));
-
-  checkbox.addEventListener("change", () => {
-    _settings.showErrorSource = checkbox.checked;
-    if (_currentApi) saveSettings(_currentApi);
+  return buildToggleRow({
+    label: "Show diagram source in error messages",
+    checked: _settings.showErrorSource,
+    onChange: (checked) => {
+      _settings.showErrorSource = checked;
+      if (_currentApi) saveSettings(_currentApi);
+    },
   });
-
-  row.appendChild(label);
-  return row;
 }
 
 // ── Plugin export ─────────────────────────────────────────────────────────────

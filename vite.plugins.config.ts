@@ -205,4 +205,10 @@ export default [
     resolve(__dirname, "src/plugins/auto-save/auto-save.plugin.ts"),
     false,
   ),
+  // Daily Note — no dynamic imports; no CM6 StateField in Step 03 (Steps 04–05 will add).
+  pluginConfig(
+    "daily-note",
+    resolve(__dirname, "src/plugins/daily-note/daily-note.plugin.ts"),
+    false,
+  ),
 ];
