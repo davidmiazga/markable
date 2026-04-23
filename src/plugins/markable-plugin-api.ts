@@ -30,6 +30,8 @@ import { pluginManager } from "./index";
 import {
   registerSidebarPanel as _registerSidebarPanel,
   unregisterSidebarPanel as _unregisterSidebarPanel,
+  focusSidebarPanel as _focusSidebarPanel,
+  toggleSidebarPanel as _toggleSidebarPanel,
 } from "../sidebar";
 import type { SidebarPanelDescriptor } from "../sidebar";
 
@@ -181,6 +183,24 @@ export interface MarkablePluginAPI {
    * @param panelId  The id from the original SidebarPanelDescriptor.
    */
   unregisterSidebarPanel(panelId: string): void;
+
+  /**
+   * Bring a registered panel into view: opens its sidebar side if closed and
+   * makes it the active tab. No-op if panelId is not registered.
+   *
+   * @param panelId  The id from the original SidebarPanelDescriptor.
+   */
+  focusSidebarPanel(panelId: string): void;
+
+  /**
+   * Toggle a sidebar panel open/closed.
+   *
+   * Opens and focuses the panel when it is not the current active visible panel.
+   * Closes the sidebar side when the panel is already the active visible panel.
+   *
+   * @param panelId  The id from the original SidebarPanelDescriptor.
+   */
+  toggleSidebarPanel(panelId: string): void;
 
   /**
    * Disable then re-enable this plugin in a single async call.
@@ -359,6 +379,14 @@ export function buildMarkablePluginAPI(
      */
     unregisterSidebarPanel(panelId: string): void {
       _unregisterSidebarPanel(pluginId, panelId);
+    },
+
+    focusSidebarPanel(panelId: string): void {
+      _focusSidebarPanel(panelId);
+    },
+
+    toggleSidebarPanel(panelId: string): void {
+      _toggleSidebarPanel(panelId);
     },
 
     /**

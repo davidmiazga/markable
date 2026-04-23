@@ -89,7 +89,7 @@ import { tabManager } from "./tabs";
 import { openExportDialog, printDocument } from "./lib/export";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/400-italic.css";
 import "@fontsource/inter/500.css";
@@ -748,6 +748,13 @@ function handleAction(action: string): void {
         if (idx >= 0 && idx < files.length) void openRecentFileByPath(files[idx]);
       } else if (action.startsWith("custom:")) {
         void setTheme(action);
+      } else {
+        // Plugin command fallback: find the command by id in __MARKABLE_COMMANDS__
+        // and call its action() directly. This handles all plugin-registered commands
+        // (e.g. daily-note-toggle-calendar) that are not wired into the switch above.
+        const cmds = (window as unknown as Record<string, unknown>)["__MARKABLE_COMMANDS__"] as
+          Array<{ id: string; action: () => void }> | undefined;
+        cmds?.find((c) => c.id === action)?.action();
       }
       break;
     }
@@ -836,6 +843,14 @@ async function initApp() {
     openFolder: async (defaultPath?: string) => {
       const result = await openFolderDialog(defaultPath);
       return result.cancelled ? null : (result as { cancelled: false; path: string }).path;
+    },
+    // Native macOS confirm dialog via tauri-plugin-dialog (registered in lib.rs).
+    confirm: async (message: string, opts?: { title?: string }) => {
+      return await invoke<boolean>("plugin:dialog|confirm", {
+        message,
+        title: opts?.title ?? "Confirm",
+        kind: "info",
+      });
     },
   };
 

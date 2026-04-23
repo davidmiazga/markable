@@ -813,6 +813,8 @@ function buildMockApi(
     hideStatusBarIfUnused: vi.fn(),
     registerStatusBarDependent: vi.fn(),
     unregisterStatusBarDependent: vi.fn(),
+    focusSidebarPanel: vi.fn(),
+    toggleSidebarPanel: vi.fn(),
   };
 }
 
@@ -2119,6 +2121,8 @@ function makeMockApi() {
     unregisterStatusBarDependent: vi.fn(),
     registerSidebarPanel: vi.fn(),
     unregisterSidebarPanel: vi.fn(),
+    focusSidebarPanel: vi.fn(),
+    toggleSidebarPanel: vi.fn(),
     restartSelf: vi.fn().mockResolvedValue(undefined),
   } as unknown as import("../../../src/plugins/markable-plugin-api").MarkablePluginAPI;
 }
@@ -3653,6 +3657,8 @@ describe("Integration: context switching", () => {
       hideStatusBarIfUnused: vi.fn(),
       registerStatusBarDependent: vi.fn(),
       unregisterStatusBarDependent: vi.fn(),
+      focusSidebarPanel: vi.fn(),
+      toggleSidebarPanel: vi.fn(),
     };
   }
 

@@ -779,6 +779,8 @@ function makeMockApi(settingsOverride: Record<string, unknown> | null = null) {
     removeExtension:  vi.fn(),
     registerSidebarPanel:   vi.fn(),
     unregisterSidebarPanel: vi.fn(),
+    focusSidebarPanel:      vi.fn(),
+    toggleSidebarPanel:     vi.fn(),
   };
 }
 
@@ -1746,6 +1748,9 @@ describe("calendar keyboard navigation", () => {
 
   // Test 130: Enter on a day cell calls openDailyNote with that cell's date.
   it("Enter on a focused day cell opens that day's note", async () => {
+    // The click handler shows a confirm dialog when autoCreateOnCalendarClick is false.
+    // Stub window.confirm to auto-approve so the note open proceeds.
+    vi.stubGlobal("confirm", vi.fn(() => true));
     (window as any).__MARKABLE_TAB_MANAGER__ = makeMockTabManager();
     (window as any).__TAURI_INTERNALS__ = makeMockTauriInternals({
       create_daily_note: () => undefined,

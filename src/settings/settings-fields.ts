@@ -154,6 +154,35 @@ export function buildTextRow(
   return row;
 }
 
+// ── Button ────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a themed button element.
+ *
+ * Variants:
+ *   "primary"   — filled with --link-color background, white text.
+ *   "secondary" — transparent background, --link-color border + text (outline).
+ *
+ * Both variants have hover, active, focus-visible, and disabled states defined
+ * in settings-panel.css via .btn, .btn-primary, .btn-secondary.
+ *
+ * @param label    Button label text.
+ * @param variant  "primary" | "secondary"
+ * @param onClick  Click handler.
+ */
+export function buildButton(
+  label: string,
+  variant: "primary" | "secondary",
+  onClick: () => void,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `btn btn-${variant}`;
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
 // ── Number input row ──────────────────────────────────────────────────────────
 
 export interface NumberRowOptions {

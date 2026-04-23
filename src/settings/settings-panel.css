@@ -107,7 +107,74 @@
   margin: 8px 0 0 0;
 }
 
-/* Buttons */
+/* ── Button system ───────────────────────────────────────────────────────────
+ * Two variants: primary (filled) and secondary (outline).
+ * Both use --link-color as the brand/action color so they adapt to any theme.
+ * Use via buildButton() in settings-fields.ts or directly as CSS classes.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-family: var(--ui-font, system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+  user-select: none;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Primary — filled with link/action color */
+.btn-primary {
+  background: var(--link-color);
+  border-color: var(--link-color);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--link-color) 85%, black);
+  border-color: color-mix(in srgb, var(--link-color) 85%, black);
+}
+
+.btn-primary:active {
+  background: color-mix(in srgb, var(--link-color) 72%, black);
+  border-color: color-mix(in srgb, var(--link-color) 72%, black);
+}
+
+/* Secondary — outline using link/action color */
+.btn-secondary {
+  background: transparent;
+  border-color: var(--link-color);
+  color: var(--link-color);
+}
+
+.btn-secondary:hover {
+  background: color-mix(in srgb, var(--link-color) 10%, transparent);
+}
+
+.btn-secondary:active {
+  background: color-mix(in srgb, var(--link-color) 18%, transparent);
+}
+
+/* Legacy aliases — keep existing callers working */
 .settings-btn {
   padding: 8px 16px;
   border: 1px solid var(--border-color);

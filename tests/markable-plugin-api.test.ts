@@ -132,7 +132,7 @@ describe("buildMarkablePluginAPI() — returned object shape", () => {
     expect(typeof api.unregisterStatusBarDependent).toBe("function");
   });
 
-  it("has all nine documented properties (no extras leaking through)", () => {
+  it("has all documented properties (no extras leaking through)", () => {
     const keys = Object.keys(api);
     const expected = [
       "statusBar",
@@ -144,6 +144,8 @@ describe("buildMarkablePluginAPI() — returned object shape", () => {
       "saveSettings",
       "addExtensions",
       "removeExtensions",
+      "focusSidebarPanel",
+      "toggleSidebarPanel",
     ];
     // All expected keys must be present.
     for (const key of expected) {

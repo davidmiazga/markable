@@ -17,4 +17,6 @@ export {
   restoreFromSettings as restoreSidebarFromSettings,
   movePanel,
   movePanelToSide,
+  focusSidebarPanel,
+  toggleSidebarPanel as toggleSidebarPanel,
 } from "./sidebar-manager";

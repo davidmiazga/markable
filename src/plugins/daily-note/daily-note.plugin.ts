@@ -45,7 +45,7 @@ import { substituteTokens } from "./template-tokens";
 import { injectFrontMatter } from "./frontmatter";
 import { buildCalendarGrid } from "./calendar-grid";
 import type { SidebarPanelDescriptor } from "../markable-plugin-api";
-import { buildToggleRow, buildSelectRow, buildTextRow } from "../../settings/settings-fields";
+import { buildToggleRow, buildSelectRow, buildTextRow, buildButton } from "../../settings/settings-fields";
 
 // ── Settings types and defaults ───────────────────────────────────────────────
 
@@ -73,6 +73,11 @@ export interface DailyNoteSettings {
   firstDayOfWeek: "monday" | "sunday";
   /** When true, an ISO week number column is shown in the calendar sidebar panel. */
   showWeekNumbers: boolean;
+  /**
+   * When true, clicking a calendar day opens or creates the note immediately.
+   * When false (default), a confirmation dialog is shown first.
+   */
+  autoCreateOnCalendarClick: boolean;
 }
 
 /**
@@ -91,6 +96,7 @@ const DEFAULT_SETTINGS: DailyNoteSettings = {
   confirmCreate: false,
   firstDayOfWeek: "monday",
   showWeekNumbers: false,
+  autoCreateOnCalendarClick: false,
 };
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -292,6 +298,12 @@ export function loadAndMergeSettings(
       ? raw.showWeekNumbers
       : DEFAULT_SETTINGS.showWeekNumbers;
 
+  // ── autoCreateOnCalendarClick ─────────────────────────────────────────────
+  const autoCreateOnCalendarClick =
+    typeof raw.autoCreateOnCalendarClick === "boolean"
+      ? raw.autoCreateOnCalendarClick
+      : DEFAULT_SETTINGS.autoCreateOnCalendarClick;
+
   // Return a new object containing only the known DailyNoteSettings keys.
   // Unknown keys from `raw` are intentionally excluded (forward compatibility).
   return {
@@ -303,6 +315,7 @@ export function loadAndMergeSettings(
     confirmCreate,
     firstDayOfWeek,
     showWeekNumbers,
+    autoCreateOnCalendarClick,
   };
 }
 
@@ -389,15 +402,77 @@ function showNotice(message: string): void {
  * @returns true if the user confirmed, false if they cancelled (EC-27).
  */
 async function confirmCreateDialog(formattedDate: string): Promise<boolean> {
-  const message = `Create daily note for ${formattedDate}?`;
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const dialog = (window as any).__TAURI_DIALOG__;
   /* eslint-enable @typescript-eslint/no-explicit-any */
   if (dialog?.confirm) {
-    return await dialog.confirm(message, { title: "Create Daily Note", kind: "info" });
+    try {
+      return await dialog.confirm(
+        `Open or create daily note for ${formattedDate}?`,
+        { title: "Daily Note", kind: "info" },
+      );
+    } catch {
+      // Native dialog failed (e.g. capability not granted) — fall through to in-app modal.
+    }
   }
-  // Fallback: browser confirm (used in tests and web previews).
-  return window.confirm(message);
+
+  // In-app modal fallback — window.confirm is a no-op in Tauri WebView.
+  return new Promise<boolean>((resolve) => {
+    const dialogId = "__dn_confirm_dialog__";
+    document.getElementById(dialogId)?.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = dialogId;
+    overlay.style.cssText = [
+      "position: fixed", "inset: 0", "z-index: 10001",
+      "display: flex", "align-items: center", "justify-content: center",
+      "background: rgba(0,0,0,0.3)",
+    ].join(";");
+
+    const box = document.createElement("div");
+    box.style.cssText = [
+      "background: var(--bg-primary, #fff)",
+      "border: 1px solid var(--border-color, #ccc)",
+      "border-radius: 6px",
+      "padding: 20px 24px",
+      "font-family: var(--ui-font, system-ui, sans-serif)",
+      "font-size: 13px",
+      "color: var(--text-color, inherit)",
+      "min-width: 280px",
+      "max-width: 360px",
+      "box-shadow: 0 4px 16px rgba(0,0,0,0.2)",
+    ].join(";");
+
+    const msg = document.createElement("p");
+    msg.textContent = `Open or create daily note for ${formattedDate}?`;
+    msg.style.cssText = "margin: 0 0 16px; line-height: 1.4;";
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display: flex; gap: 8px; justify-content: flex-end;";
+
+    function close(result: boolean): void {
+      overlay.remove();
+      resolve(result);
+    }
+
+    const cancelBtn = buildButton("Cancel", "secondary", () => { close(false); });
+    const openBtn   = buildButton("Open",   "primary",   () => { close(true); });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
+
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === "Escape") { e.preventDefault(); document.removeEventListener("keydown", onKey); close(false); }
+      if (e.key === "Enter")  { e.preventDefault(); document.removeEventListener("keydown", onKey); close(true); }
+    }
+    document.addEventListener("keydown", onKey);
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(openBtn);
+    box.appendChild(msg);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    openBtn.focus();
+  });
 }
 
 /**
@@ -437,11 +512,7 @@ function invalidateMonthCache(date: Date): void {
  * show/hide state. The plugin only requests the toggle.
  */
 function toggleCalendarPanel(): void {
-  if (_api && typeof (_api as unknown as Record<string, unknown>).toggleSidebarPanel === "function") {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    (_api as any).toggleSidebarPanel("daily-note-calendar");
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  }
+  if (_api) _api.toggleSidebarPanel("daily-note-calendar");
 }
 
 /**
@@ -1060,11 +1131,20 @@ function renderCalendarPanel(container: HTMLElement): void {
       dotSpan.className = "dn-cal-dot hidden";
       btn.appendChild(dotSpan);
 
-      // Click handler: open the daily note for this date.
+      // Click handler: open (or create) the daily note for this date.
       // Padding cells are still clickable — the user may intentionally click
       // a previous/next month cell to navigate to that note.
+      // When autoCreateOnCalendarClick is false (default), a native confirmation
+      // dialog is shown first so the user doesn't accidentally create notes.
       btn.addEventListener("click", () => {
-        void openDailyNote(cell.date);
+        if (_settings.autoCreateOnCalendarClick) {
+          void openDailyNote(cell.date);
+        } else {
+          const formattedDate = formatDate(cell.date, _settings.dateFormat);
+          void confirmCreateDialog(formattedDate).then((confirmed) => {
+            if (confirmed) void openDailyNote(cell.date);
+          });
+        }
       });
 
       // Focus handler: update _focusedCellIndex when a cell receives focus via
@@ -1562,11 +1642,13 @@ function injectCSS(): void {
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 4px 0 6px;
+      min-height: 28px;
+      padding: 4px 0;
     }
     .dn-cal-month-title {
       font-size: 13px;
       font-weight: 600;
+      line-height: 1;
       color: var(--text-color, inherit);
     }
 
@@ -1596,8 +1678,8 @@ function injectCSS(): void {
 
     /* ── Individual day cell button ── */
     .dn-cal-day {
+      position: relative;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       padding: 3px 2px;
@@ -1651,13 +1733,16 @@ function injectCSS(): void {
       font-size: 12px;
     }
 
-    /* ── Dot indicator ── */
+    /* ── Dot indicator — absolutely positioned so it doesn't affect day number centering ── */
     .dn-cal-dot {
+      position: absolute;
+      bottom: 3px;
+      left: 50%;
+      transform: translateX(-50%);
       width: 4px;
       height: 4px;
       border-radius: 50%;
       background: var(--accent-color, #27ae60);
-      margin-top: 2px;
     }
     .dn-cal-dot.hidden {
       visibility: hidden;
@@ -1962,7 +2047,7 @@ function buildCheckboxRow(
   labelText: string,
   key: keyof Pick<
     DailyNoteSettings,
-    "openOnStartup" | "injectFrontMatter" | "confirmCreate" | "showWeekNumbers"
+    "openOnStartup" | "injectFrontMatter" | "confirmCreate" | "showWeekNumbers" | "autoCreateOnCalendarClick"
   >,
   api: MarkablePluginAPI
 ): HTMLElement {
@@ -2158,6 +2243,9 @@ function renderDetailExtra(container: HTMLElement): void {
     buildCheckboxRow("Confirm Before Create (non-today)", "confirmCreate", api)
   );
   container.appendChild(buildCheckboxRow("Show Week Numbers", "showWeekNumbers", api));
+  container.appendChild(
+    buildCheckboxRow("Auto-create Note on Calendar Click", "autoCreateOnCalendarClick", api)
+  );
 }
 
 // ── _testing export (AD-H) ────────────────────────────────────────────────────

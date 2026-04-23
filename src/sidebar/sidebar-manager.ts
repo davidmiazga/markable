@@ -548,6 +548,54 @@ function _openSideIfClosed(side: "left" | "right"): void {
  * state regardless of what settings say — a sidebar without panels must not
  * show as an empty box.
  */
+/**
+ * Bring a registered panel into view:
+ *   - If the panel's side is closed, open it.
+ *   - Set the panel as the active tab on its side.
+ *
+ * No-op when panelId is not registered.
+ * Used by plugins whose commands need to reveal their sidebar panel.
+ */
+export function focusSidebarPanel(panelId: string): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const side = panel.effectiveSide;
+  const el = slotRuntime[side].el;
+  if (!el) return;
+
+  // Open the side if it is currently hidden.
+  if (el.style.display === "none") {
+    el.style.display = "";
+    updateSettings((s) => ({
+      ...s,
+      sidebar: _buildSidebarSettings(s.sidebar, side, {
+        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        open: true,
+      }),
+    }));
+  }
+
+  // Make this panel the active tab.
+  _setActivePanel(side, panelId, /* persist= */ true);
+}
+
+/**
+ * Toggle the sidebar side that contains the given panel — the same action as
+ * pressing Cmd-Shift-[ / Cmd-Shift-].
+ *
+ * Looks up the panel's effectiveSide and delegates to toggleSide(), so the
+ * behaviour is identical to the keyboard shortcut regardless of whether the
+ * panel has been moved to the opposite side by the user.
+ *
+ * No-op when panelId is not registered.
+ */
+export function toggleSidebarPanel(panelId: string): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+  toggleSide(panel.effectiveSide);
+}
+
 export function restoreFromSettings(): void {
   const sides: Array<"left" | "right"> = ["left", "right"];
 
