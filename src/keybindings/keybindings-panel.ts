@@ -1,4 +1,5 @@
 import "./keybindings-panel.css";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentSettings, updateSettings } from "../lib/settings";
 
 // ---------------------------------------------------------------------------
@@ -503,6 +504,115 @@ async function resetBinding(cmd: CommandDef): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Presets
+// ---------------------------------------------------------------------------
+
+const DEFAULT_PRESET = "Default";
+let presetSelectEl: HTMLSelectElement | null = null;
+let presetDeleteBtn: HTMLButtonElement | null = null;
+
+/** Namespace prefix used for keybinding preset files in plugin settings storage. */
+function presetNamespace(name: string): string {
+  return `keybinding-presets/${name.toLowerCase().replace(/\s+/g, "-")}`;
+}
+
+async function loadPresetOptions(): Promise<void> {
+  if (!presetSelectEl) return;
+  const current = presetSelectEl.value || DEFAULT_PRESET;
+
+  // Always start with Default
+  presetSelectEl.innerHTML = `<option value="${DEFAULT_PRESET}">${DEFAULT_PRESET}</option>`;
+
+  try {
+    const files = await invoke<string[]>("list_preset_files");
+    for (const file of files) {
+      const name = file.replace(/\.json$/i, "");
+      if (name.toLowerCase() === "default") continue;
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      presetSelectEl.appendChild(opt);
+    }
+  } catch {
+    // list_preset_files unavailable — only Default shown
+  }
+
+  // Restore previous selection if it still exists
+  const exists = Array.from(presetSelectEl.options).some((o) => o.value === current);
+  presetSelectEl.value = exists ? current : DEFAULT_PRESET;
+  updatePresetDeleteBtn();
+}
+
+function updatePresetDeleteBtn(): void {
+  if (!presetDeleteBtn || !presetSelectEl) return;
+  presetDeleteBtn.disabled = presetSelectEl.value === DEFAULT_PRESET;
+}
+
+async function applyPreset(name: string): Promise<void> {
+  if (name === DEFAULT_PRESET) {
+    // Reset all custom bindings
+    await updateSettings((s) => ({ ...s, keybindings: {} }));
+  } else {
+    try {
+      const raw = await invoke<string | null>("read_plugin_settings", {
+        namespace: presetNamespace(name),
+      });
+      const bindings: Record<string, string> = raw ? JSON.parse(raw) : {};
+      await updateSettings((s) => ({ ...s, keybindings: bindings }));
+    } catch (e) {
+      console.error("[KeybindingsPanel] Failed to apply preset:", e);
+      return;
+    }
+  }
+  if (bodyElement) renderBody(bodyElement);
+}
+
+async function saveCurrentAsPreset(name: string): Promise<void> {
+  const bindings = getCurrentSettings().keybindings ?? {};
+  await invoke("write_plugin_settings", {
+    namespace: presetNamespace(name),
+    data: JSON.stringify(bindings),
+  });
+  await loadPresetOptions();
+  if (presetSelectEl) presetSelectEl.value = name;
+  updatePresetDeleteBtn();
+}
+
+async function deletePreset(name: string): Promise<void> {
+  if (name === DEFAULT_PRESET) return;
+  // Tombstone: write empty object so the file is overwritten (no delete command)
+  await invoke("write_plugin_settings", {
+    namespace: presetNamespace(name),
+    data: "{}",
+  });
+  await loadPresetOptions();
+}
+
+function setupPresetBar(barEl: HTMLElement): void {
+  presetSelectEl = barEl.querySelector<HTMLSelectElement>(".kb-preset-select");
+  presetDeleteBtn = barEl.querySelector<HTMLButtonElement>(".kb-preset-delete-btn");
+
+  presetSelectEl?.addEventListener("change", () => {
+    updatePresetDeleteBtn();
+    if (presetSelectEl) void applyPreset(presetSelectEl.value);
+  });
+
+  barEl.querySelector(".kb-preset-save-btn")?.addEventListener("click", () => {
+    const name = prompt("Save current shortcuts as preset:\nEnter a name:")?.trim();
+    if (!name || name.toLowerCase() === "default") return;
+    void saveCurrentAsPreset(name);
+  });
+
+  presetDeleteBtn?.addEventListener("click", () => {
+    if (!presetSelectEl) return;
+    const name = presetSelectEl.value;
+    if (name === DEFAULT_PRESET) return;
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    void deletePreset(name);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Panel lifecycle
 // ---------------------------------------------------------------------------
 
@@ -528,6 +638,14 @@ export function createKeybindingsPanel(): void {
         </div>
         <button class="kb-search-clear hidden" title="Clear filter">×</button>
       </div>
+      <div class="kb-preset-bar">
+        <span class="kb-preset-label">Preset</span>
+        <select class="kb-preset-select">
+          <option value="Default">Default</option>
+        </select>
+        <button class="settings-btn settings-btn-secondary kb-preset-save-btn">Save As…</button>
+        <button class="settings-btn settings-btn-danger kb-preset-delete-btn" disabled>Delete</button>
+      </div>
       <div class="settings-body kb-body"></div>
     </div>
   `;
@@ -538,6 +656,9 @@ export function createKeybindingsPanel(): void {
 
   const searchBar = overlay.querySelector<HTMLElement>(".kb-search-bar")!;
   setupSearchBar(searchBar);
+
+  const presetBar = overlay.querySelector<HTMLElement>(".kb-preset-bar")!;
+  setupPresetBar(presetBar);
 
   overlay.querySelector(".settings-backdrop")!.addEventListener("click", closeKeybindingsPanel);
   overlay.querySelector(".settings-close-btn")?.addEventListener("click", closeKeybindingsPanel);
@@ -551,6 +672,7 @@ export function openKeybindingsPanel(): void {
   // Reset filter to clean state on each open
   setFilter("name", "");
   if (bodyElement) renderBody(bodyElement);
+  void loadPresetOptions();
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;

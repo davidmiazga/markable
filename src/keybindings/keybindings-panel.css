@@ -233,3 +233,62 @@
   font-size: 11px;
   padding: 3px 10px;
 }
+
+/* --- Preset bar (sits between search bar and scrollable body) --- */
+
+.kb-preset-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px 10px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kb-preset-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.kb-preset-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 5px 28px 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--code-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.kb-preset-select:hover {
+  border-color: var(--accent-color);
+}
+
+.kb-preset-select:focus {
+  border-color: var(--accent-color);
+}
+
+.settings-btn-danger {
+  color: #e05555;
+  border-color: currentColor;
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
+.settings-btn-danger:hover:not(:disabled) {
+  background: rgba(224, 85, 85, 0.12);
+}
+
+.settings-btn-danger:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

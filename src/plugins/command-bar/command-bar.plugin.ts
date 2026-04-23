@@ -2347,11 +2347,6 @@ let _captureExistingKey: string = "";
  */
 let _presets: PresetEntry[] = [];
 
-/**
- * True once the async preset load has resolved for the current open.
- * While false, the dropdown shows only the Default entry.
- */
-let _presetsLoaded = false;
 
 /**
  * True while the "Save as preset" inline input is visible in the preset row.
@@ -2969,7 +2964,6 @@ function openBar(mode?: BarMode): void {
         // Keybindings mode: start async preset loading (Step 05).
         // The generation guard ensures stale loads do not land after mode switches.
         if (targetMode === "keybindings") {
-          _presetsLoaded = false;
           _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
           renderPresetRow(); // show Default immediately; user sees dropdown right away
           const genAtOpen = _openGeneration;
@@ -2977,7 +2971,6 @@ function openBar(mode?: BarMode): void {
             // Discard result if bar was closed or mode changed while loading.
             if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtOpen) return;
             _presets = presets;
-            _presetsLoaded = true;
             // EC-36: if saved activePreset no longer exists on disk, fall back to Default.
             const found = presets.find((p) => p.name === _settings.activePreset);
             if (!found) {
@@ -3043,7 +3036,6 @@ function openBar(mode?: BarMode): void {
     // The synchronous build above is interactive immediately (NFR-01 <80ms).
     // Preset loading happens in parallel — Default is shown until it resolves.
     if (targetMode === "keybindings") {
-      _presetsLoaded = false;
       _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
       renderPresetRow(); // show Default immediately
       const genAtOpen = _openGeneration;
@@ -3051,7 +3043,6 @@ function openBar(mode?: BarMode): void {
         // Discard result if bar was closed or mode changed while loading.
         if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtOpen) return;
         _presets = presets;
-        _presetsLoaded = true;
         // EC-36: if saved activePreset no longer exists on disk, fall back to Default.
         const found = presets.find((p) => p.name === _settings.activePreset);
         if (!found) {
@@ -3166,14 +3157,12 @@ function onInput(this: HTMLInputElement): void {
     }
     filterAndRender("");
     // Start preset loading for keybindings mode (same pattern as openBar / switchMode).
-    _presetsLoaded = false;
     _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
     renderPresetRow();
     const genAtSwitch = _openGeneration;
     void loadPresets(makePresetApiDeps()).then((presets) => {
       if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtSwitch) return;
       _presets = presets;
-      _presetsLoaded = true;
       renderPresetRow();
     });
     return;
@@ -3609,7 +3598,6 @@ export default {
     _captureActionLabel  = "";
     // Reset preset state (Step 05).
     _presets              = [];
-    _presetsLoaded        = false;
     _presetSaveInputVisible = false;
   },
 };
