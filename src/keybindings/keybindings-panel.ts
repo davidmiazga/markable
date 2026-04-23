@@ -202,6 +202,7 @@ function findDuplicates(custom: Record<string, string>): Map<string, string[]> {
   const keyToIds = new Map<string, string[]>();
   for (const cmd of COMMANDS) {
     const activeKey = custom[cmd.id] ?? cmd.defaultKey;
+    if (!activeKey) continue; // unbound commands can't conflict
     const ids = keyToIds.get(activeKey) ?? [];
     ids.push(cmd.id);
     keyToIds.set(activeKey, ids);
@@ -382,10 +383,13 @@ function renderRow(
     right.appendChild(warn);
   }
 
-  // Key badge
+  // Key badge — clicking it starts recording (same as Edit button)
   const badge = document.createElement("kbd");
   badge.className = "kb-badge";
   badge.textContent = formatKeyForDisplay(activeKey);
+  badge.title = activeKey ? "Click to reassign" : "Click to assign a shortcut";
+  badge.style.cursor = "pointer";
+  badge.addEventListener("click", () => startRecording(row, right, cmd, activeKey));
   right.appendChild(badge);
 
   // ↺ Reset button — only when a custom binding is active

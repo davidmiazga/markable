@@ -1,12 +1,14 @@
 //! File discovery commands.
 //!
-//! Provides directory scanning utilities for the backlinks feature.
-//! Separate from io.rs because these commands return file metadata
-//! (names, not contents) and have different error semantics (empty
-//! Vec on failure, not Result::Err).
+//! Provides directory scanning utilities for the backlinks feature and
+//! keybinding preset discovery. Separate from io.rs because these commands
+//! return file metadata (names, not contents) and have different error
+//! semantics (empty Vec on failure, not Result::Err).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+// Manager trait provides app.path() on AppHandle — must be in scope for list_preset_files.
+use tauri::Manager;
 
 /// List `.md` filenames in a directory (shallow, non-recursive).
 ///
@@ -80,6 +82,48 @@ pub fn list_md_files(path: String) -> Vec<String> {
     filenames.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
 
     filenames
+}
+
+/// List all `.json` filenames in the `keybinding-presets/` subdirectory of the app data dir.
+///
+/// Uses `AppHandle` to resolve the app data directory internally — the same pattern used
+/// by `plugins.rs` and `themes.rs`. The caller (preset-manager.ts) never needs to know the
+/// app data directory path.
+///
+/// # Returns
+/// Filenames (not full paths) of `.json` files, sorted alphabetically.
+/// Returns an empty Vec if the directory does not exist or cannot be read — never errors.
+/// This "empty on failure" semantic is consistent with `list_md_files` above.
+#[tauri::command]
+pub fn list_preset_files(app: tauri::AppHandle) -> Vec<String> {
+    // Resolve app data directory via AppHandle — mirrors the pattern in themes.rs.
+    // If the path cannot be resolved (e.g. sandbox restrictions), return empty.
+    let data_dir: PathBuf = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(_) => return vec![],
+    };
+    let presets_dir = data_dir.join("keybinding-presets");
+
+    // If the directory doesn't exist yet (no presets saved), return empty without error.
+    if !presets_dir.is_dir() {
+        return vec![];
+    }
+
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&presets_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Case-insensitive check so files saved as .JSON on case-preserving
+            // filesystems (e.g. macOS default HFS+) are still discovered.
+            if name.to_lowercase().ends_with(".json") && !name.starts_with('.') {
+                names.push(name);
+            }
+        }
+    }
+
+    // Sort for deterministic order — same filename on every call for the same directory state.
+    names.sort();
+    names
 }
 
 /// Ensure a directory exists, creating it and all parent directories if absent.

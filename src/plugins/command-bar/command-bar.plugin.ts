@@ -25,6 +25,25 @@ import {
   FILES_SECTION_LABELS,
 } from "./files-mode";
 import type { FilesResult, TabEntry } from "./files-mode";
+import {
+  buildKeybindingResults,
+  captureKeyFromEvent,
+  checkConflict,
+  isModifierOnly,
+  formatKeyDisplay,
+  type KeybindingResult,
+  type ConflictInfo,
+} from "./keybindings-mode";
+import {
+  loadPresets,
+  saveNewPreset,
+  deletePreset,
+  renamePreset,
+  validatePresetName,
+  DEFAULT_PRESET_NAME,
+  type PresetEntry,
+  type PresetApiDeps,
+} from "./preset-manager";
 
 // ── Re-export public functions used by test imports ───────────────────────────
 export { renderHighlightedLabel };
@@ -492,6 +511,7 @@ mark.cb-match {
 /* ── Preset row (Step 01 scaffold; shown only in keybindings mode) ─── */
 
 .cb-preset-row {
+  position: relative;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border-color, #ccc);
   display: flex;
@@ -524,6 +544,185 @@ mark.cb-match {
   color: var(--text-secondary, #666);
   user-select: none;
   border-top: 1px solid var(--border-color, #e0e0e0);
+}
+
+/* ── Key-capture view (Step 04) ──────────────────────────── */
+
+.cb-capture-view {
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cb-capture-view--hidden {
+  display: none;
+}
+
+/* Hidden class for results list while key-capture sub-state is active. */
+.cb-results--hidden {
+  display: none;
+}
+
+.cb-capture-action {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cb-capture-existing {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cb-capture-prompt {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.cb-conflict-warning {
+  font-size: 13px;
+  color: var(--accent-color);
+}
+
+.cb-capture-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.cb-capture-btn {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: var(--code-bg);
+  color: var(--text-primary);
+  font-family: var(--ui-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cb-capture-btn--primary {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+/* "(default)" / "(custom)" / "(unbound)" label shown on keybinding result rows. */
+.cb-result-binding-status {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Key badge shown on keybinding mode result rows (distinct from command mode's .cb-result-key). */
+.cb-result-key-badge {
+  font-family: var(--key-font);
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Preset row UI (Step 05) ──────────────────────────────────── */
+
+.cb-preset-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.cb-preset-dropdown-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.cb-preset-dropdown-btn:hover {
+  background: var(--code-bg);
+}
+
+.cb-preset-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  z-index: 10000;
+  overflow: hidden;
+}
+
+.cb-preset-dropdown-item {
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cb-preset-dropdown-item:hover {
+  background: var(--code-bg);
+}
+
+.cb-preset-dropdown-item--active {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.cb-preset-dropdown-item--action {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.cb-preset-action-btn {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.cb-preset-action-btn:hover {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.cb-preset-save-input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.cb-preset-save-input:focus {
+  border-color: var(--accent-color);
+}
+
+.cb-preset-save-error {
+  font-size: 11px;
+  color: var(--accent-color);
+  display: none;
+  width: 100%;
+  padding: 2px 0;
 }
 `;
 
@@ -889,27 +1088,47 @@ export function buildResultsForMode(mode: BarMode, settings: CommandBarSettings)
   if (mode === "commands") {
     return buildCommandModeResults(settings);
   }
+  if (mode === "keybindings") {
+    // Cast required: KeybindingResult and CommandBarResult share structural contract
+    // (id, label, dimmed, action) but differ in extra fields (activeKey, isUnbound, etc.).
+    // The keybindings renderer (renderKeybindingResults) receives the typed array directly.
+    return buildKeybindingModeResults() as unknown as CommandBarResult[];
+  }
   // "files" builds results asynchronously via fetchWorkspaceFiles — not here.
-  // "keybindings" builder is implemented in Step 4; stub returns [] until then.
   return [];
 }
 
 /**
- * @deprecated Use buildResultsForMode("commands", settings) instead.
+ * Build the full Keybindings mode result list by reading __MARKABLE_COMMANDS__
+ * and the current custom bindings from __MARKABLE_GET_SETTINGS__().
  *
- * Legacy wrapper retained for call-site compatibility within this file.
- * The old buildAllResults() included the Recent Files category (showRecentFiles).
- * That category is now removed from Commands mode (FR-09.2). Any internal callers
- * that previously used buildAllResults() have been updated to call
- * buildResultsForMode() directly. This wrapper is kept as a named alias so that
- * a reader searching for "buildAllResults" can trace the evolution.
+ * Tolerates missing globals gracefully: if __MARKABLE_COMMANDS__ is absent or
+ * empty the function returns [] and logs a warning (EC-16 variant).
  *
- * @param settings - Current plugin settings.
- * @returns Same as buildResultsForMode("commands", settings).
+ * @returns Array of KeybindingResult, one per registered command.
  */
-function buildAllResults(settings: CommandBarSettings): CommandBarResult[] {
-  return buildResultsForMode("commands", settings);
+function buildKeybindingModeResults(): KeybindingResult[] {
+  const cmds = (window as any).__MARKABLE_COMMANDS__ as CommandDef[] ?? [];
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const appSettings = typeof getSettings === "function" ? getSettings() : { keybindings: {} };
+  const customBindings: Record<string, string> = appSettings.keybindings ?? {};
+
+  if (cmds.length === 0) {
+    console.warn("[CommandBar] __MARKABLE_COMMANDS__ is empty. Keybindings mode has no results.");
+    return [];
+  }
+
+  return buildKeybindingResults({
+    commands: cmds,
+    customBindings,
+    enterCapture: enterKeyCapture,
+  });
 }
+
+// Note: buildAllResults() was removed in Step 04. All callers now use
+// buildResultsForMode(mode, settings) directly. This replaced both the "commands"
+// path (buildResultsForMode("commands", ...)) and adds the "keybindings" path
+// (buildResultsForMode("keybindings", ...)).
 
 // ---------------------------------------------------------------------------
 // DOM builder
@@ -1024,10 +1243,18 @@ export function buildOverlayDOM(): HTMLElement {
   footer.className = "cb-footer";
   footer.textContent = MODE_FOOTER_HINTS["files"];
 
+  // ── Key-capture view (Step 04): hidden until enterKeyCapture() activates it ──
+  // Sits between results and footer; shown by toggling cb-capture-view--hidden.
+  // aria-live="assertive" ensures screen readers announce state changes immediately.
+  const captureView = document.createElement("div");
+  captureView.className = "cb-capture-view cb-capture-view--hidden";
+  captureView.setAttribute("aria-live", "assertive");
+
   panel.appendChild(tabStrip);
   panel.appendChild(inputRow);
   panel.appendChild(presetRow);
   panel.appendChild(resultsList);
+  panel.appendChild(captureView);
   panel.appendChild(footer);
   overlay.appendChild(panel);
 
@@ -1293,6 +1520,776 @@ export function renderFilesResults(
 }
 
 // ---------------------------------------------------------------------------
+// Keybindings mode renderer (Step 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Clear and rebuild the results list container for Keybindings mode.
+ *
+ * Renders a single "Actions" section header followed by one row per result.
+ * Each row shows the action label, a "(default)"/"(custom)"/"(unbound)" badge,
+ * and (when bound) a formatted key badge.
+ *
+ * Why separate from renderResults():
+ *   KeybindingResult differs from CommandBarResult in actionId, activeKey, isDefault,
+ *   isUnbound — fields used by the binding status and key badge. Merging these types
+ *   would add union branches throughout renderResults(). A dedicated renderer keeps
+ *   both paths clean and independently testable.
+ *
+ * @param container  - The .cb-results element to populate.
+ * @param results    - Keybinding mode results to render.
+ * @param query      - Current query (triggers highlight when non-empty).
+ * @param selectedId - The id of the currently selected result, or null.
+ */
+export function renderKeybindingResults(
+  container: HTMLElement,
+  results: KeybindingResult[],
+  query: string,
+  selectedId: string | null,
+): void {
+  container.innerHTML = "";
+
+  if (results.length === 0) {
+    // EC-16: no commands available — show a friendly empty state.
+    const empty = document.createElement("div");
+    empty.className = "cb-empty";
+    empty.textContent = "No actions available";
+    container.appendChild(empty);
+    return;
+  }
+
+  // Single "Actions" section header (keybindings mode has no sub-categories).
+  const header = document.createElement("div");
+  header.className = "cb-section-header";
+  header.textContent = "Actions";
+  container.appendChild(header);
+
+  let resultIndex = 0;
+  for (const result of results) {
+    const row = document.createElement("div");
+    row.className = "cb-result";
+    if (result.id === selectedId) {
+      row.classList.add("cb-result--selected");
+      row.setAttribute("aria-selected", "true");
+    } else {
+      row.setAttribute("aria-selected", "false");
+    }
+    row.setAttribute("role", "option");
+    row.setAttribute("data-id", result.id);
+    // DOM id for aria-activedescendant lookup (same pattern as renderResults()).
+    row.id = `cb-result-${resultIndex}`;
+
+    // Action label — highlight matched characters when a query is active.
+    const labelEl = document.createElement("div");
+    labelEl.className = "cb-result-label";
+    if (query && result._matchPositions?.length) {
+      labelEl.appendChild(renderHighlightedLabel(result.label, result._matchPositions));
+    } else {
+      labelEl.textContent = result.label;
+    }
+    row.appendChild(labelEl);
+
+    // Binding status badge: "(unbound)" | "(default)" | "(custom)".
+    const statusEl = document.createElement("span");
+    statusEl.className = "cb-result-binding-status";
+    statusEl.textContent = result.isUnbound
+      ? "(unbound)"
+      : (result.isDefault ? "(default)" : "(custom)");
+    row.appendChild(statusEl);
+
+    // Key badge: only shown when the action has a binding (unbound rows omit it).
+    if (!result.isUnbound) {
+      const keyBadge = document.createElement("kbd");
+      keyBadge.className = "cb-result-key cb-result-key-badge";
+      keyBadge.textContent = formatKeyDisplay(result.activeKey);
+      row.appendChild(keyBadge);
+    }
+
+    container.appendChild(row);
+    resultIndex++;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Key-capture view types (Step 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Union type representing the four states the capture view can be in:
+ *   "waiting"                — prompting the user to press a key combo
+ *   { type: "conflict" }    — showing an Override/Cancel choice
+ *   { type: "system-reserved-confirm" } — showing an "Assign Anyway?" choice
+ *   { type: "error" }       — showing an inline save failure message (EC-22)
+ */
+type CaptureViewState =
+  | "waiting"
+  | { type: "conflict"; info: ConflictInfo; _pendingCombo: string }
+  | { type: "system-reserved-confirm"; combo: string }
+  | { type: "error"; message: string };
+
+// ---------------------------------------------------------------------------
+// Key-capture view renderer (Step 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the key-capture view with the given state.
+ *
+ * The view always starts with the action name and current binding for reference,
+ * then renders state-specific UI:
+ *   "waiting"                — "Waiting for key combo…" prompt + optional Reset button
+ *   "conflict"               — warning text + Override / Cancel buttons
+ *   "system-reserved-confirm"— macOS-reserved warning + Assign Anyway / Cancel buttons
+ *   "error"                  — inline error message (EC-22, write failure)
+ *
+ * Reads _captureActionLabel and _captureExistingKey from module-level state
+ * (set by enterKeyCapture() before this is called).
+ *
+ * @param state - The current capture view state discriminant.
+ */
+export function renderCaptureView(state: CaptureViewState): void {
+  if (!_captureViewEl) return;
+  _captureViewEl.innerHTML = "";
+
+  // Always show the action name being assigned.
+  const actionEl = document.createElement("div");
+  actionEl.className = "cb-capture-action";
+  actionEl.textContent = _captureActionLabel;
+  _captureViewEl.appendChild(actionEl);
+
+  // Always show the current binding (or "unbound" status) for reference.
+  const existingEl = document.createElement("div");
+  existingEl.className = "cb-capture-existing";
+  existingEl.textContent = _captureExistingKey
+    ? `Current binding: ${formatKeyDisplay(_captureExistingKey)}`
+    : "Currently unbound";
+  _captureViewEl.appendChild(existingEl);
+
+  if (state === "waiting") {
+    // Prompt: ask the user to press the new combo.
+    const prompt = document.createElement("div");
+    prompt.className = "cb-capture-prompt";
+    prompt.textContent = "Waiting for key combo…";
+    _captureViewEl.appendChild(prompt);
+
+    // Reset to default button: only shown when the action has a current binding.
+    // Clicking it removes the custom binding and reverts to defaultKey (FR-07.9).
+    if (_captureExistingKey) {
+      const resetBtn = document.createElement("button");
+      resetBtn.type = "button";
+      resetBtn.className = "cb-capture-btn";
+      resetBtn.textContent = "Reset to default";
+      resetBtn.addEventListener("click", () => void handleResetToDefault());
+      _captureViewEl.appendChild(resetBtn);
+    }
+
+  } else if (typeof state === "object" && state.type === "conflict") {
+    // Conflict: another action already has this combo. Offer Override or Cancel.
+    const warn = document.createElement("div");
+    warn.className = "cb-conflict-warning";
+    warn.textContent = `⚠ Already bound to: ${state.info.conflictingActionLabel ?? "another action"}`;
+    _captureViewEl.appendChild(warn);
+
+    const btns = document.createElement("div");
+    btns.className = "cb-capture-buttons";
+
+    const overrideBtn = document.createElement("button");
+    overrideBtn.type = "button";
+    overrideBtn.className = "cb-capture-btn cb-capture-btn--primary";
+    overrideBtn.textContent = "Override";
+    // Capture the pending combo in a local const to avoid closing over the
+    // module-level _pendingCombo which may change if events race.
+    const pendingComboForOverride = state._pendingCombo;
+    overrideBtn.addEventListener("click", () => void handleOverride(pendingComboForOverride));
+    btns.appendChild(overrideBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "cb-capture-btn";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => exitKeyCapture());
+    btns.appendChild(cancelBtn);
+
+    _captureViewEl.appendChild(btns);
+
+  } else if (typeof state === "object" && state.type === "system-reserved-confirm") {
+    // System-reserved: give the user a second chance to confirm or cancel (EC-19, EC-20).
+    const warn = document.createElement("div");
+    warn.className = "cb-conflict-warning";
+    warn.textContent = "This shortcut is reserved by macOS. Are you sure?";
+    _captureViewEl.appendChild(warn);
+
+    const btns = document.createElement("div");
+    btns.className = "cb-capture-buttons";
+
+    const assignBtn = document.createElement("button");
+    assignBtn.type = "button";
+    assignBtn.className = "cb-capture-btn cb-capture-btn--primary";
+    assignBtn.textContent = "Assign Anyway";
+    const comboForAssign = state.combo;
+    assignBtn.addEventListener("click", () => void handleOverride(comboForAssign));
+    btns.appendChild(assignBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "cb-capture-btn";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => exitKeyCapture());
+    btns.appendChild(cancelBtn);
+
+    _captureViewEl.appendChild(btns);
+
+  } else if (typeof state === "object" && state.type === "error") {
+    // EC-22: write failure — show inline error, keep bar open so user can retry.
+    const errEl = document.createElement("div");
+    errEl.className = "cb-conflict-warning";
+    errEl.textContent = `Could not save binding: ${state.message}`;
+    _captureViewEl.appendChild(errEl);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Key-capture entry / exit (Step 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enter key-capture sub-state for the given action.
+ *
+ * Hides the results list, shows the capture view, and clears the input field
+ * (saving the current query for restoration on Escape — EC-17).
+ *
+ * Guard: no-op if capture DOM refs are not yet available (safety for test environments
+ * where onEnable has not been called).
+ *
+ * @param actionId - The id of the action the user wants to assign a key to.
+ */
+function enterKeyCapture(actionId: string): void {
+  if (!_captureViewEl || !_resultsEl || !_inputEl) return;
+
+  const cmds = (window as any).__MARKABLE_COMMANDS__ as CommandDef[] ?? [];
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const appSettings = typeof getSettings === "function" ? getSettings() : { keybindings: {} };
+  const customBindings: Record<string, string> = appSettings.keybindings ?? {};
+
+  const cmd = cmds.find((c) => c.id === actionId);
+  if (!cmd) return; // Unknown actionId — guard against stale results.
+
+  // Save state for EC-17 (Escape restore) and for the capture view display.
+  _capturingFor = actionId;
+  _captureQuery = _inputEl.value;
+  _captureActionLabel = cmd.label;
+  _captureExistingKey = customBindings[actionId] ?? cmd.defaultKey;
+
+  // Swap visibility: hide results, show capture view.
+  _resultsEl.classList.add("cb-results--hidden");
+  _captureViewEl.classList.remove("cb-capture-view--hidden");
+  renderCaptureView("waiting");
+
+  // Reset input to signal "press keys now".
+  _inputEl.value = "";
+  _inputEl.placeholder = "Press keys…";
+}
+
+/**
+ * Exit key-capture sub-state, restoring the Keybindings search view (EC-17).
+ *
+ * Called when the user presses Escape, clicks Cancel in a conflict/system dialog,
+ * or when closeBar() is called while capture is active (EC-30).
+ *
+ * Restores the saved query and re-runs filterAndRender so the results list
+ * reflects the current query exactly as before entering capture.
+ */
+function exitKeyCapture(): void {
+  if (!_captureViewEl || !_resultsEl || !_inputEl) return;
+
+  _capturingFor = null;
+
+  // Restore the search view.
+  _captureViewEl.classList.add("cb-capture-view--hidden");
+  _resultsEl.classList.remove("cb-results--hidden");
+
+  // Restore query and placeholder before re-rendering so filterAndRender sees
+  // the correct input value.
+  _inputEl.value = _captureQuery;
+  _inputEl.placeholder = MODE_PLACEHOLDERS["keybindings"];
+  filterAndRender(_captureQuery.trim());
+}
+
+// ---------------------------------------------------------------------------
+// Keybinding save helpers (Step 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist a keybinding assignment to the full app settings object.
+ *
+ * The Tauri save_settings command expects the complete MarkableSettings object,
+ * not a partial update. This function reads the full settings via __MARKABLE_GET_SETTINGS__,
+ * merges the keybindings update, then writes the merged object back. This ensures
+ * no other settings fields are lost on write.
+ *
+ * Side effects:
+ *   - Removes `combo` from any other action that previously held it (FR-05.6 override).
+ *   - Dispatches "markable-keybindings-changed" CustomEvent so main.ts can invalidate
+ *     the resolveAction() settings cache (AD-CB-06, FR-07.10).
+ *
+ * @param actionId - The action to assign the combo to.
+ * @param combo    - The combo string to save (e.g. "Cmd-Shift-S").
+ * @throws Re-throws Tauri invoke errors so callers can show EC-22 error state.
+ */
+async function saveBinding(actionId: string, combo: string): Promise<void> {
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const fullSettings = typeof getSettings === "function" ? getSettings() : {};
+  const currentBindings: Record<string, string> = { ...(fullSettings.keybindings ?? {}) };
+
+  // FR-05.6: Remove this combo from any other action that previously held it.
+  // This implements the "override" semantic — the previous owner is unbound.
+  for (const [id, key] of Object.entries(currentBindings)) {
+    if (key === combo && id !== actionId) {
+      delete currentBindings[id];
+    }
+  }
+
+  currentBindings[actionId] = combo;
+
+  // Merge keybindings into the full settings object before writing.
+  const mergedSettings = { ...fullSettings, keybindings: currentBindings };
+
+  // Use the same Tauri command that bridge.ts saveSettings() calls (AD-CB-06).
+  await (window as any).__TAURI_INTERNALS__.invoke("save_settings", {
+    settings: JSON.stringify(mergedSettings),
+  });
+
+  // Dispatch cache-invalidation event so main.ts updateSettings() picks up the change.
+  document.dispatchEvent(
+    new CustomEvent("markable-keybindings-changed", {
+      detail: { keybindings: currentBindings },
+    })
+  );
+}
+
+/**
+ * Override flow: save the binding and close the bar.
+ *
+ * Called when:
+ *   - A free combo is pressed (no conflict)
+ *   - The user clicks "Override" after a conflict warning
+ *   - The user clicks "Assign Anyway" after a system-reserved warning
+ *
+ * On write failure, shows an inline error (EC-22) and keeps the bar open
+ * so the user can retry or cancel.
+ *
+ * @param combo - The combo string to save.
+ */
+async function handleOverride(combo: string): Promise<void> {
+  if (!_capturingFor) return;
+  try {
+    await saveBinding(_capturingFor, combo);
+    closeBar();
+  } catch (err) {
+    // EC-22: write failed — show inline error, do not close bar.
+    renderCaptureView({ type: "error", message: String(err) });
+  }
+}
+
+/**
+ * Reset the active binding to default: remove the custom binding for _capturingFor.
+ *
+ * Reads the full settings, deletes _capturingFor from keybindings, writes back,
+ * dispatches the cache-invalidation event, then closes the bar (FR-07.9).
+ * On write failure, shows an inline error (EC-22).
+ */
+async function handleResetToDefault(): Promise<void> {
+  if (!_capturingFor) return;
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const fullSettings = typeof getSettings === "function" ? getSettings() : {};
+  const currentBindings: Record<string, string> = { ...(fullSettings.keybindings ?? {}) };
+
+  // Removing the custom binding restores the default (the resolver falls back to defaultKey).
+  delete currentBindings[_capturingFor];
+
+  const mergedSettings = { ...fullSettings, keybindings: currentBindings };
+
+  try {
+    await (window as any).__TAURI_INTERNALS__.invoke("save_settings", {
+      settings: JSON.stringify(mergedSettings),
+    });
+    document.dispatchEvent(
+      new CustomEvent("markable-keybindings-changed", {
+        detail: { keybindings: currentBindings },
+      })
+    );
+    closeBar();
+  } catch (err) {
+    renderCaptureView({ type: "error", message: String(err) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Preset API wiring (Step 05)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a PresetApiDeps object wired to Tauri globals.
+ *
+ * Called at runtime to wire preset operations to the real Tauri backend. During
+ * tests, tests pass their own mock PresetApiDeps directly to preset-manager.ts
+ * functions — this function is only called in the live plugin.
+ *
+ * Notes on Tauri bridge:
+ *   - `read_plugin_settings` returns the raw JSON string (or null). We parse it
+ *     here rather than relying on the bridge.ts wrapper.
+ *   - `write_plugin_settings` with data=null writes an empty object (tombstone).
+ *   - `list_preset_files` uses AppHandle internally — no dirPath argument needed.
+ */
+function makePresetApiDeps(): PresetApiDeps {
+  return {
+    /**
+     * Load plugin settings for a given namespace and parse the JSON string.
+     * Returns null if the namespace has no stored data or if parsing fails.
+     */
+    loadSettings: async (namespace: string) => {
+      try {
+        const raw = await (window as any).__TAURI_INTERNALS__.invoke(
+          "read_plugin_settings",
+          { pluginId: namespace },
+        );
+        if (raw === null || raw === undefined) return null;
+        return JSON.parse(raw as string) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * Save plugin settings for a given namespace.
+     * Passing null writes an empty object (tombstone) to the plugin settings file.
+     */
+    saveSettings: async (namespace: string, data: Record<string, unknown> | null) => {
+      await (window as any).__TAURI_INTERNALS__.invoke("write_plugin_settings", {
+        pluginId: namespace,
+        data: JSON.stringify(data ?? {}),
+      });
+    },
+
+    /**
+     * List .json filenames in the keybinding-presets directory via Rust command.
+     * Falls back to [] on invoke error so preset loading degrades gracefully.
+     */
+    listPresetFiles: async () => {
+      try {
+        return await (window as any).__TAURI_INTERNALS__.invoke(
+          "list_preset_files",
+        ) as string[];
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
+/**
+ * Write a complete keybindings map to app settings and dispatch the cache-invalidation event.
+ *
+ * Used when applying a preset (which replaces ALL bindings at once). Individual
+ * binding writes use saveBinding() from Step 04.
+ *
+ * Dispatches `markable-keybindings-changed` so main.ts updates its in-memory
+ * settings singleton without a page reload (AD-CB-06).
+ *
+ * @param bindings - The complete keybinding map to persist.
+ */
+async function saveKeybindings(bindings: Record<string, string>): Promise<void> {
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const appSettings = typeof getSettings === "function" ? getSettings() : {};
+  const merged = { ...appSettings, keybindings: bindings };
+
+  await (window as any).__TAURI_INTERNALS__.invoke("save_settings", {
+    settings: JSON.stringify(merged),
+  });
+
+  document.dispatchEvent(
+    new CustomEvent("markable-keybindings-changed", { detail: { keybindings: bindings } }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Preset UI functions (Step 05)
+// ---------------------------------------------------------------------------
+
+/**
+ * Rebuild the preset row DOM from current `_presets` and `_settings.activePreset`.
+ *
+ * Called after every preset state change (load completes, save, delete, rename).
+ * Clears existing content and rebuilds from scratch for simplicity.
+ * Any open dropdown is closed when the row re-renders.
+ */
+function renderPresetRow(): void {
+  if (!_presetRowEl) return;
+  _presetRowEl.innerHTML = "";
+
+  // A preset label showing the currently active preset name.
+  const label = document.createElement("span");
+  label.className = "cb-preset-name";
+  label.textContent = `Preset: ${_settings.activePreset}`;
+  _presetRowEl.appendChild(label);
+
+  // Dropdown trigger button (▾ glyph).
+  const dropdownBtn = document.createElement("button");
+  dropdownBtn.type = "button";
+  dropdownBtn.className = "cb-preset-dropdown-btn";
+  dropdownBtn.setAttribute("aria-label", "Open preset menu");
+  dropdownBtn.textContent = "▾";
+  dropdownBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePresetDropdown();
+  });
+  _presetRowEl.appendChild(dropdownBtn);
+
+  // Show the "Save as preset" inline input if it was open before this re-render.
+  if (_presetSaveInputVisible) {
+    renderSaveAsPresetInput();
+  }
+}
+
+/**
+ * Toggle the preset dropdown open/closed.
+ * If already open, closes it. Otherwise builds and appends it.
+ */
+function togglePresetDropdown(): void {
+  const existing = _presetRowEl?.querySelector(".cb-preset-dropdown");
+  if (existing) {
+    existing.remove();
+    return;
+  }
+  renderPresetDropdown();
+}
+
+/**
+ * Build and append the preset dropdown to the preset row.
+ *
+ * Each user preset row has Rename and Delete action buttons. Clicking a row
+ * (not a button) applies that preset. A "Save as preset…" entry at the bottom
+ * opens the inline name input.
+ */
+function renderPresetDropdown(): void {
+  if (!_presetRowEl) return;
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "cb-preset-dropdown";
+  dropdown.setAttribute("role", "listbox");
+  dropdown.setAttribute("aria-label", "Keybinding presets");
+
+  for (const preset of _presets) {
+    const item = document.createElement("div");
+    item.className = "cb-preset-dropdown-item";
+    item.setAttribute("role", "option");
+
+    // Highlight the currently active preset for quick visual identification.
+    if (preset.name === _settings.activePreset) {
+      item.classList.add("cb-preset-dropdown-item--active");
+    }
+
+    const nameSpan = document.createElement("span");
+    // The "(read-only)" annotation signals that Default cannot be modified.
+    nameSpan.textContent = preset.isDefault ? `${preset.name} (read-only)` : preset.name;
+    nameSpan.style.flex = "1";
+    item.appendChild(nameSpan);
+
+    // Rename / Delete buttons appear only on user-created presets.
+    if (!preset.isDefault) {
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "cb-preset-action-btn";
+      renameBtn.textContent = "Rename";
+      renameBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdown.remove();
+        void handleRenamePreset(preset);
+      });
+      item.appendChild(renameBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "cb-preset-action-btn";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdown.remove();
+        void handleDeletePreset(preset);
+      });
+      item.appendChild(deleteBtn);
+    }
+
+    // Clicking the row itself (not the buttons) applies the preset.
+    item.addEventListener("click", () => {
+      dropdown.remove();
+      void handleApplyPreset(preset);
+    });
+
+    dropdown.appendChild(item);
+  }
+
+  // "Save as preset…" entry at the bottom of the dropdown list.
+  const saveItem = document.createElement("div");
+  saveItem.className = "cb-preset-dropdown-item cb-preset-dropdown-item--action";
+  saveItem.setAttribute("role", "option");
+  saveItem.textContent = "Save as preset…";
+  saveItem.addEventListener("click", () => {
+    dropdown.remove();
+    _presetSaveInputVisible = true;
+    renderPresetRow();
+  });
+  dropdown.appendChild(saveItem);
+
+  _presetRowEl.appendChild(dropdown);
+}
+
+/**
+ * Build and append the "Save as preset" inline input to the preset row.
+ *
+ * Shows a text field for the preset name with live validation.
+ * Enter saves; Escape cancels (EC-17-style cancel pattern).
+ */
+function renderSaveAsPresetInput(): void {
+  if (!_presetRowEl) return;
+
+  const inputEl = document.createElement("input");
+  inputEl.type = "text";
+  inputEl.placeholder = "Preset name…";
+  inputEl.className = "cb-preset-save-input";
+
+  const errorEl = document.createElement("div");
+  errorEl.className = "cb-preset-save-error";
+
+  // Live validation: show error message as the user types so they get immediate
+  // feedback before attempting to save (pairs with EC-25, EC-26).
+  const showValidation = () => {
+    const existingNames = _presets.filter((p) => !p.isDefault).map((p) => p.name);
+    const err = validatePresetName(inputEl.value, existingNames);
+    errorEl.textContent = err ?? "";
+    errorEl.style.display = err ? "block" : "none";
+  };
+
+  inputEl.addEventListener("input", showValidation);
+  inputEl.addEventListener("keydown", (e) => {
+    // Stop propagation so the command bar's global keydown handler doesn't interfere.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleSaveAsPreset(inputEl.value);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      _presetSaveInputVisible = false;
+      renderPresetRow();
+    }
+  });
+
+  _presetRowEl.appendChild(inputEl);
+  _presetRowEl.appendChild(errorEl);
+
+  // Delay focus by one tick so the element is fully in the DOM before focus() fires.
+  setTimeout(() => inputEl.focus(), 0);
+}
+
+/**
+ * Apply a preset: replace all current keybindings with the preset's bindings.
+ *
+ * Prompts for confirmation before overwriting (non-destructive UX pattern).
+ * On success, updates `_settings.activePreset` and closes the bar.
+ *
+ * @param preset - The preset to apply.
+ */
+async function handleApplyPreset(preset: PresetEntry): Promise<void> {
+  const confirmed = window.confirm(
+    `Replace all current shortcuts with the "${preset.name}" preset?`,
+  );
+  if (!confirmed) return;
+
+  try {
+    await saveKeybindings(preset.bindings);
+    _settings.activePreset = preset.name;
+    if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
+    closeBar();
+  } catch (err) {
+    console.error(`[CommandBar] Failed to apply preset "${preset.name}":`, err);
+  }
+}
+
+/**
+ * Save the current keybindings as a new named preset.
+ *
+ * On validation failure, the save-input stays open and the live-validation
+ * handler shows the error. On success, updates `_settings.activePreset`.
+ *
+ * @param name - The proposed preset name from the inline input.
+ */
+async function handleSaveAsPreset(name: string): Promise<void> {
+  const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+  const appSettings = typeof getSettings === "function" ? getSettings() : { keybindings: {} };
+  const currentBindings: Record<string, string> = appSettings.keybindings ?? {};
+
+  try {
+    _presets = await saveNewPreset(name, currentBindings, _presets, makePresetApiDeps());
+    _presetSaveInputVisible = false;
+    _settings.activePreset = name.trim();
+    if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
+    renderPresetRow();
+  } catch (err) {
+    // Validation error — the input stays open. The live-validation handler in
+    // renderSaveAsPresetInput() will show the error message on the next input event.
+    // We log but do not re-render here so the user can correct the name.
+    console.warn("[CommandBar] saveNewPreset failed:", err);
+  }
+}
+
+/**
+ * Prompt the user for a new name and rename the preset.
+ *
+ * Uses `window.prompt` for simplicity (consistent with the rename UX in other
+ * parts of the app). On success, updates the active preset name if it was the
+ * renamed preset.
+ *
+ * @param preset - The preset entry to rename.
+ */
+async function handleRenamePreset(preset: PresetEntry): Promise<void> {
+  const newName = window.prompt(`Rename "${preset.name}" to:`);
+  if (!newName) return;
+  try {
+    _presets = await renamePreset(preset.name, newName, _presets, makePresetApiDeps());
+    // Keep active preset name in sync if the renamed preset was the active one.
+    if (_settings.activePreset === preset.name) {
+      _settings.activePreset = newName.trim();
+      if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
+    }
+    renderPresetRow();
+  } catch (err) {
+    console.error("[CommandBar] renamePreset failed:", err);
+  }
+}
+
+/**
+ * Confirm and delete a preset.
+ *
+ * If the deleted preset was the active one, falls back to Default.
+ *
+ * @param preset - The preset entry to delete.
+ */
+async function handleDeletePreset(preset: PresetEntry): Promise<void> {
+  const confirmed = window.confirm(`Delete preset "${preset.name}"?`);
+  if (!confirmed) return;
+  try {
+    _presets = await deletePreset(preset.name, _presets, makePresetApiDeps());
+    // If the deleted preset was active, fall back to the Default preset.
+    if (_settings.activePreset === preset.name) {
+      _settings.activePreset = DEFAULT_PRESET_NAME;
+      if (_api) await _api.saveSettings(_settings as unknown as Record<string, unknown>);
+    }
+    renderPresetRow();
+  } catch (err) {
+    console.error("[CommandBar] deletePreset failed:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Module-level plugin state
 // ---------------------------------------------------------------------------
 
@@ -1315,6 +2312,52 @@ let _isOpen = false;
 
 // Plugin settings (loaded from API in onEnable).
 let _settings: CommandBarSettings = { ...DEFAULT_SETTINGS };
+
+// ── Key-capture state (Step 04) ────────────────────────────────────────────
+// These variables drive the key-capture sub-state (FR-05). They are set when
+// the user selects an action in Keybindings mode and cleared when they save
+// or cancel (Escape). All are null/empty when not in capture.
+
+/** DOM reference to the .cb-capture-view container; set in onEnable, nulled in onDisable. */
+let _captureViewEl: HTMLElement | null = null;
+
+/** The action id currently being assigned; null means not in capture sub-state. */
+let _capturingFor: string | null = null;
+
+/** The input value saved when entering capture, restored on Escape (EC-17). */
+let _captureQuery: string = "";
+
+/** Display label for the action being assigned (shown in the capture view header). */
+let _captureActionLabel: string = "";
+
+/** The current resolved binding before capture begins (shown for reference). */
+let _captureExistingKey: string = "";
+
+// Note: _pendingCombo was considered for module-level storage but the combo is
+// instead embedded directly into the CaptureViewState object passed to renderCaptureView(),
+// which closes over it in the button click listeners. This avoids a stale-closure race.
+
+// ── Preset state (Step 05) ────────────────────────────────────────────────────
+// Loaded asynchronously when keybindings mode opens. Cleared on disable/close.
+
+/**
+ * All loaded presets (Default + any user presets on disk).
+ * Populated by loadPresets() when keybindings mode opens.
+ * Starts with just the Default preset until the async load completes.
+ */
+let _presets: PresetEntry[] = [];
+
+/**
+ * True once the async preset load has resolved for the current open.
+ * While false, the dropdown shows only the Default entry.
+ */
+let _presetsLoaded = false;
+
+/**
+ * True while the "Save as preset" inline input is visible in the preset row.
+ * Cleared on save, Escape, or bar close.
+ */
+let _presetSaveInputVisible = false;
 
 // ---------------------------------------------------------------------------
 // Files mode async state (Step 02)
@@ -1390,21 +2433,6 @@ export function setMode(mode: BarMode): void {
 }
 
 /**
- * Badge click handler: cycle through modes in order Files → Commands → Keybindings → Files.
- * Clears the input and re-renders results for the new mode.
- *
- * FR-08.3: clicking the badge advances to the next mode in MODE_CYCLE.
- * EC-11: key-capture exit (Step 4) will be wired here in the future; for now,
- *        it is a no-op because key-capture is not yet implemented.
- *
- * Why _allResults is rebuilt here for non-files modes:
- *   When transitioning FROM files mode (where _allResults = []) TO commands or
- *   keybindings mode, _allResults must be repopulated before filterAndRender() is
- *   called. Without this, the commands/keybindings mode would render an empty list.
- *   Transitioning FROM commands mode: _allResults is already populated, no rebuild needed.
- *   Transitioning TO files mode: filterAndRenderFiles() handles its own data pipeline.
- */
-/**
  * Shared mode-switch logic used by both the tab strip click handler and any
  * future keyboard shortcut that cycles modes directly.
  *
@@ -1433,9 +2461,9 @@ function switchMode(targetMode: BarMode): void {
     // Switching INTO commands or keybindings mode: rebuild _allResults.
     // Files mode sets _allResults = [] (unused); commands/keybindings require a fresh build.
     try {
-      _allResults = buildAllResults(_settings);
+      _allResults = buildResultsForMode(targetMode, _settings);
     } catch (err) {
-      console.error("[CommandBar] buildAllResults failed on mode switch:", err);
+      console.error("[CommandBar] buildResultsForMode failed on mode switch:", err);
       _allResults = [];
     }
     filterAndRender("");
@@ -1461,6 +2489,9 @@ function onTabStripClick(e: MouseEvent): void {
   const targetMode = tab.dataset.mode as BarMode | undefined;
   if (!targetMode || targetMode === _mode) return;   // already active — no-op
 
+  // EC-11: cancel key-capture before switching modes so the capture overlay
+  // is hidden and result list restored before the new mode renders.
+  if (_capturingFor !== null) exitKeyCapture();
   switchMode(targetMode);
 }
 
@@ -1768,7 +2799,12 @@ function moveSelection(delta: 1 | -1): void {
   }
 
   _selectedId = ids[nextIdx];
-  renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
+  // Dispatch to the appropriate renderer based on the current mode.
+  if (_mode === "keybindings") {
+    renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], _inputEl.value, _selectedId);
+  } else {
+    renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
+  }
   updateAriaActiveDescendant(_inputEl, _selectedId);
   scrollSelectedIntoView(_resultsEl);
 }
@@ -1827,12 +2863,18 @@ function filterAndRender(query: string): void {
     return;
   }
 
-  // ── Commands / Keybindings mode (existing pipeline, unchanged) ────────────
+  // ── Commands / Keybindings mode pipeline ────────────────────────────────
+  // Keybindings mode uses renderKeybindingResults (typed for KeybindingResult);
+  // commands mode uses renderResults (typed for CommandBarResult).
   if (query === "") {
     // FR-02.5: empty query shows all results without ranking.
     _visibleResults = _allResults;
     _selectedId = firstSelectableId(_visibleResults);
-    renderResults(_resultsEl, _visibleResults, "", _selectedId);
+    if (_mode === "keybindings") {
+      renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], "", _selectedId);
+    } else {
+      renderResults(_resultsEl, _visibleResults, "", _selectedId);
+    }
   } else {
     const matched: MatchedResult[] = [];
     for (const result of _allResults) {
@@ -1853,7 +2895,11 @@ function filterAndRender(query: string): void {
 
     _visibleResults = matched.map((mr) => mr.result);
     _selectedId = firstSelectableId(_visibleResults);
-    renderResults(_resultsEl, _visibleResults, query, _selectedId);
+    if (_mode === "keybindings") {
+      renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], query, _selectedId);
+    } else {
+      renderResults(_resultsEl, _visibleResults, query, _selectedId);
+    }
   }
 
   updateAriaActiveDescendant(_inputEl, _selectedId);
@@ -1891,6 +2937,8 @@ function openBar(mode?: BarMode): void {
       return;
     } else {
       // Different mode: switch without closing (FR-01.8, EC-12).
+      // If key-capture is active, cancel it before switching modes (EC-11/EC-12).
+      if (_capturingFor !== null) exitKeyCapture();
       setMode(targetMode);
       _inputEl.value = "";
       _openGeneration++;
@@ -1911,12 +2959,37 @@ function openBar(mode?: BarMode): void {
         // use _allResults which must be fresh. If we're switching from files mode,
         // _allResults was set to [] and must be repopulated.
         try {
-          _allResults = buildAllResults(_settings);
+          _allResults = buildResultsForMode(targetMode, _settings);
         } catch (err) {
-          console.error("[CommandBar] buildAllResults failed on mode switch:", err);
+          console.error("[CommandBar] buildResultsForMode failed on mode switch:", err);
           _allResults = [];
         }
         filterAndRender("");
+
+        // Keybindings mode: start async preset loading (Step 05).
+        // The generation guard ensures stale loads do not land after mode switches.
+        if (targetMode === "keybindings") {
+          _presetsLoaded = false;
+          _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
+          renderPresetRow(); // show Default immediately; user sees dropdown right away
+          const genAtOpen = _openGeneration;
+          void loadPresets(makePresetApiDeps()).then((presets) => {
+            // Discard result if bar was closed or mode changed while loading.
+            if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtOpen) return;
+            _presets = presets;
+            _presetsLoaded = true;
+            // EC-36: if saved activePreset no longer exists on disk, fall back to Default.
+            const found = presets.find((p) => p.name === _settings.activePreset);
+            if (!found) {
+              console.warn(
+                `[CommandBar] Active preset "${_settings.activePreset}" not found; falling back to Default`,
+              );
+              _settings.activePreset = DEFAULT_PRESET_NAME;
+              if (_api) void _api.saveSettings(_settings as unknown as Record<string, unknown>);
+            }
+            renderPresetRow();
+          });
+        }
       }
       return;
     }
@@ -1949,21 +3022,48 @@ function openBar(mode?: BarMode): void {
     void fetchWorkspaceFiles(capturedGeneration);
   } else {
     // ── Commands / Keybindings mode: synchronous build ────────────────────────
-    // Rebuild results fresh on every open (EC-30: reflects current plugin states).
-    // Wrapped in try-catch: if buildAllResults throws (e.g. a missing global or
-    // unexpected API shape), the overlay still shows and renders an empty list
-    // rather than leaving the results container blank with no feedback.
+    // Rebuild results fresh on every open (reflects current plugin/keybinding state).
     try {
-      _allResults = buildAllResults(_settings);
+      _allResults = buildResultsForMode(targetMode, _settings);
     } catch (err) {
-      console.error("[CommandBar] buildAllResults failed:", err);
+      console.error("[CommandBar] buildResultsForMode failed:", err);
       _allResults = [];
     }
     _visibleResults = _allResults;
     _selectedId = firstSelectableId(_visibleResults);
-    renderResults(_resultsEl, _visibleResults, "", _selectedId);
+    if (targetMode === "keybindings") {
+      renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], "", _selectedId);
+    } else {
+      renderResults(_resultsEl, _visibleResults, "", _selectedId);
+    }
     updateAriaActiveDescendant(_inputEl, _selectedId);
     scrollSelectedIntoView(_resultsEl);
+
+    // Keybindings mode: load presets asynchronously (Step 05).
+    // The synchronous build above is interactive immediately (NFR-01 <80ms).
+    // Preset loading happens in parallel — Default is shown until it resolves.
+    if (targetMode === "keybindings") {
+      _presetsLoaded = false;
+      _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
+      renderPresetRow(); // show Default immediately
+      const genAtOpen = _openGeneration;
+      void loadPresets(makePresetApiDeps()).then((presets) => {
+        // Discard result if bar was closed or mode changed while loading.
+        if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtOpen) return;
+        _presets = presets;
+        _presetsLoaded = true;
+        // EC-36: if saved activePreset no longer exists on disk, fall back to Default.
+        const found = presets.find((p) => p.name === _settings.activePreset);
+        if (!found) {
+          console.warn(
+            `[CommandBar] Active preset "${_settings.activePreset}" not found; falling back to Default`,
+          );
+          _settings.activePreset = DEFAULT_PRESET_NAME;
+          if (_api) void _api.saveSettings(_settings as unknown as Record<string, unknown>);
+        }
+        renderPresetRow();
+      });
+    }
   }
 
   // FR-01.3: use setTimeout(0) rather than requestAnimationFrame so focus lands
@@ -1983,12 +3083,24 @@ function openBar(mode?: BarMode): void {
  */
 function closeBar(): void {
   if (!_overlayEl || !_inputEl || !_isOpen) return;
+
+  // EC-30: exit key-capture cleanly if active when bar is closed from outside
+  // (e.g. the user triggers another shortcut or the plugin is disabled mid-capture).
+  if (_capturingFor !== null) {
+    _capturingFor = null;
+    _captureViewEl?.classList.add("cb-capture-view--hidden");
+    _resultsEl?.classList.remove("cb-results--hidden");
+  }
+
+  _openGeneration++;   // EC-28: guard stale async fetches (preset loading, workspace scan)
   _isOpen = false;
   // FR-01.9: always reset to files mode on close so the next open is predictable.
   _mode = "files";
   closeCommandBar(_overlayEl, _inputEl);
   _selectedId = null;
   _visibleResults = [];
+  // Reset preset save input visibility so it does not persist into the next open.
+  _presetSaveInputVisible = false;
 }
 
 /**
@@ -2030,13 +3142,40 @@ function onInput(this: HTMLInputElement): void {
   if (_mode === "files" && raw === ">") {
     setMode("commands");
     this.value = "";
+    // Rebuild _allResults for commands mode: files mode leaves _allResults = []
+    // so we must repopulate before filterAndRender() can show any results.
+    try {
+      _allResults = buildResultsForMode("commands", _settings);
+    } catch (err) {
+      console.error("[CommandBar] buildResultsForMode failed on prefix switch:", err);
+      _allResults = [];
+    }
     filterAndRender("");
     return;
   }
   if (_mode === "files" && raw === "#") {
     setMode("keybindings");
     this.value = "";
+    _openGeneration++;
+    // Rebuild _allResults for keybindings mode: files mode leaves _allResults = [].
+    try {
+      _allResults = buildResultsForMode("keybindings", _settings);
+    } catch (err) {
+      console.error("[CommandBar] buildResultsForMode failed on prefix switch:", err);
+      _allResults = [];
+    }
     filterAndRender("");
+    // Start preset loading for keybindings mode (same pattern as openBar / switchMode).
+    _presetsLoaded = false;
+    _presets = [{ name: DEFAULT_PRESET_NAME, bindings: {}, isDefault: true }];
+    renderPresetRow();
+    const genAtSwitch = _openGeneration;
+    void loadPresets(makePresetApiDeps()).then((presets) => {
+      if (!_isOpen || _mode !== "keybindings" || _openGeneration !== genAtSwitch) return;
+      _presets = presets;
+      _presetsLoaded = true;
+      renderPresetRow();
+    });
     return;
   }
 
@@ -2056,6 +3195,54 @@ function onInput(this: HTMLInputElement): void {
  *   When already in files mode → normal no-op (do not intercept).
  */
 function onOverlayKeydown(e: KeyboardEvent): void {
+  // ── Key-capture sub-state: intercept ALL keys (FR-05.3, EC-19, EC-20) ────────
+  // When the user is in capture mode (awaiting a key combo for an action), every
+  // keydown must be intercepted so it is not forwarded to the editor or system.
+  // Escape exits capture and restores search view (EC-17).
+  // Modifier-only presses are ignored — we wait for a real key (EC-18).
+  if (_capturingFor !== null) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === "Escape") {
+      exitKeyCapture(); // EC-17: restore search view
+      return;
+    }
+
+    if (isModifierOnly(e)) return; // EC-18: wait for non-modifier key
+
+    const combo = captureKeyFromEvent(e)!;
+    const cmds = (window as any).__MARKABLE_COMMANDS__ as CommandDef[] ?? [];
+    const getSettings = (window as any).__MARKABLE_GET_SETTINGS__;
+    const appSettings = typeof getSettings === "function" ? getSettings() : { keybindings: {} };
+    const customBindings: Record<string, string> = appSettings.keybindings ?? {};
+
+    const conflict = checkConflict(combo, _capturingFor, cmds, customBindings);
+
+    if (conflict === null) {
+      // Free combo — save immediately and close.
+      void handleOverride(combo);
+      return;
+    }
+
+    if (conflict.type === "self") {
+      // EC-21: user pressed the same key the action already has — treat as no-op.
+      // The binding is unchanged; close the bar without showing a conflict warning.
+      closeBar();
+      return;
+    }
+
+    if (conflict.type === "system-reserved") {
+      // EC-19, EC-20: macOS-reserved combo — show second-confirmation prompt.
+      renderCaptureView({ type: "system-reserved-confirm", combo });
+      return;
+    }
+
+    // Regular conflict: another action owns this combo. Show Override/Cancel.
+    renderCaptureView({ type: "conflict", info: conflict, _pendingCombo: combo });
+    return;
+  }
+
   // Backspace-to-files: only when the input is empty and we are not already in files mode.
   // If the input has text, Backspace deletes a character normally (FR-06.4).
   if (e.key === "Backspace" && _inputEl!.value === "" && _mode !== "files") {
@@ -2135,7 +3322,16 @@ function onResultHover(e: MouseEvent): void {
 
   _selectedId = resultId;
   if (!_inputEl || !_resultsEl) return;
-  renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
+  if (_mode === "keybindings") {
+    // Keybindings mode uses its own renderer to show key badges and capture buttons.
+    renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], _inputEl.value, _selectedId);
+  } else if (_mode === "files") {
+    // Files mode uses its own data pipeline — re-run the filter/render so the
+    // selection highlight updates correctly without corrupting files-mode DOM.
+    filterAndRenderFiles(_inputEl.value.trim());
+  } else {
+    renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
+  }
   updateAriaActiveDescendant(_inputEl, _selectedId);
 }
 
@@ -2356,9 +3552,11 @@ export default {
     _inputEl     = _overlayEl.querySelector<HTMLInputElement>(".cb-input")!;
     _resultsEl   = _overlayEl.querySelector<HTMLElement>(".cb-results")!;
     // Wire mode tab strip and supporting UI element refs.
-    _tabStripEl  = _overlayEl.querySelector<HTMLElement>(".cb-tab-strip")!;
-    _presetRowEl = _overlayEl.querySelector<HTMLElement>(".cb-preset-row")!;
-    _footerEl    = _overlayEl.querySelector<HTMLElement>(".cb-footer")!;
+    _tabStripEl     = _overlayEl.querySelector<HTMLElement>(".cb-tab-strip")!;
+    _presetRowEl    = _overlayEl.querySelector<HTMLElement>(".cb-preset-row")!;
+    _footerEl       = _overlayEl.querySelector<HTMLElement>(".cb-footer")!;
+    // Step 04: wire key-capture view ref.
+    _captureViewEl  = _overlayEl.querySelector<HTMLElement>(".cb-capture-view")!;
 
     attachListeners();
     document.body.appendChild(_overlayEl);
@@ -2403,5 +3601,15 @@ export default {
     _fileListLoaded      = false;
     _fileListError       = false;
     _totalWorkspaceCount = 0;
+    // Reset key-capture state (Step 04).
+    _captureViewEl       = null;
+    _capturingFor        = null;
+    _captureQuery        = "";
+    _captureExistingKey  = "";
+    _captureActionLabel  = "";
+    // Reset preset state (Step 05).
+    _presets              = [];
+    _presetsLoaded        = false;
+    _presetSaveInputVisible = false;
   },
 };

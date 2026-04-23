@@ -140,7 +140,9 @@
 /* --- Key badge --- */
 
 .kb-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--key-font);
   font-size: 12px;
   padding: 2px 8px;
@@ -148,9 +150,15 @@
   background: var(--code-bg);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
-  min-width: 40px;
+  min-width: 24px;
+  min-height: 16px;
   text-align: center;
   white-space: nowrap;
+}
+
+.kb-badge:hover {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
 }
 
 .kb-badge.kb-recording-placeholder {
