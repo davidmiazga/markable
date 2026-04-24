@@ -62,6 +62,10 @@ const PLUGINS = [
   ["auto-save",         "src/plugins/auto-save/auto-save.plugin.ts"],
   // Daily Note — no dynamic imports; no CM6 StateField in Step 03 (Steps 04–05 will add).
   ["daily-note",        "src/plugins/daily-note/daily-note.plugin.ts"],
+  // PKM Step 02a: File Browser — read-only vault file tree, no CM6 StateField.
+  ["file-browser",      "src/plugins/file-browser/file-browser.plugin.ts"],
+  // PKM Step 03: Knowledge Graph — D3 force-directed graph, no dynamic imports.
+  ["knowledge-graph",   "src/plugins/knowledge-graph/knowledge-graph.plugin.ts"],
 ];
 
 /**

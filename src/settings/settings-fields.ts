@@ -172,7 +172,7 @@ export function buildTextRow(
  */
 export function buildButton(
   label: string,
-  variant: "primary" | "secondary",
+  variant: "primary" | "secondary" | "danger",
   onClick: () => void,
 ): HTMLButtonElement {
   const btn = document.createElement("button");

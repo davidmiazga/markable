@@ -1,0 +1,308 @@
+/**
+ * manage-vaults.css
+ *
+ * Styles for the Manage Vaults settings panel.
+ *
+ * All colours use CSS variables so that built-in and custom themes can
+ * override them without touching this file (NFR-08: no hardcoded hex values).
+ *
+ * Layout summary:
+ *  .manage-vaults-container  — full-width panel wrapper
+ *  .vault-list-row           — single vault in the list view
+ *  .vault-form               — create / edit form grid
+ *  .vault-path-entry         — one root path row inside the form
+ *  .vault-overlap-warning    — yellow banner shown when paths overlap (EC-04)
+ *  .vault-performance-warning — persistent badge when maxIndexSize > 500
+ *  .vault-inline-error       — red validation message below a field
+ */
+
+/* ── Panel container ──────────────────────────────────────────────────────── */
+
+.manage-vaults-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 12px 16px;
+  font-family: var(--ui-font);
+  color: var(--text-color, #222);
+  box-sizing: border-box;
+}
+
+.manage-vaults-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.manage-vaults-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-color, #222);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+
+.manage-vaults-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  gap: 12px;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ── Vault list row ───────────────────────────────────────────────────────── */
+
+.vault-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background-color 0.1s ease;
+}
+
+.vault-list-row:hover {
+  background-color: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+/* Active vault is distinguished by the accent-colour left border. */
+.vault-list-row.active {
+  border-left-color: var(--accent-color, #5c6bc0);
+  background-color: var(--active-item-bg, rgba(92, 107, 192, 0.08));
+}
+
+.vault-list-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.vault-list-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-color, #222);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vault-list-row-paths {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.vault-list-row-meta {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Form layout ──────────────────────────────────────────────────────────── */
+
+.vault-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.vault-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vault-form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-color, #222);
+}
+
+.vault-form-input {
+  background: var(--input-bg, #fff);
+  border: 1px solid var(--input-border, #ccc);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  color: var(--text-color, #222);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.vault-form-input:focus {
+  border-color: var(--accent-color, #5c6bc0);
+  /* Use a CSS variable so custom themes can control the focus ring colour.
+   * The fallback matches the default accent colour at 15% opacity (NEW-2 fix). */
+  box-shadow: 0 0 0 2px var(--accent-focus-ring, rgba(92, 107, 192, 0.15));
+}
+
+.vault-form-textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* ── Root path entries ────────────────────────────────────────────────────── */
+
+.vault-paths-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vault-path-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--input-bg, #fff);
+  border: 1px solid var(--input-border, #ccc);
+  border-radius: 4px;
+}
+
+.vault-path-entry-text {
+  flex: 1;
+  font-size: 12px;
+  font-family: var(--mono-font);
+  color: var(--text-color, #222);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vault-path-entry-remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #888);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: color 0.1s ease;
+}
+
+.vault-path-entry-remove:hover {
+  color: var(--error-color, #c0392b);
+}
+
+/* ── Warning and error states ─────────────────────────────────────────────── */
+
+/**
+ * Yellow banner shown when the new vault's root paths overlap with an existing
+ * vault (EC-04). Creates both vaults — this is just a warning, not a blocker.
+ */
+.vault-overlap-warning {
+  background: var(--warning-bg, #fffbe6);
+  border: 1px solid var(--warning-border, #ffe58f);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--warning-text, #7a5700);
+}
+
+/**
+ * Persistent yellow badge shown next to the maxIndexSize field when the value
+ * exceeds 500. Reminds users that large indexes may affect performance (NFR-02).
+ */
+.vault-performance-warning {
+  background: var(--warning-bg, #fffbe6);
+  border: 1px solid var(--warning-border, #ffe58f);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--warning-text, #7a5700);
+  margin-top: 4px;
+}
+
+/**
+ * Red inline validation message rendered below a field when the value is
+ * invalid (EC-01: non-existent path, EC-02: path is a file, etc.).
+ */
+.vault-inline-error {
+  font-size: 11px;
+  color: var(--error-color, #c0392b);
+  margin-top: 2px;
+}
+
+/* ── Form action buttons ──────────────────────────────────────────────────── */
+
+.vault-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.vault-form-btn {
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--input-border, #ccc);
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.vault-form-btn-primary {
+  background: var(--accent-color, #5c6bc0);
+  color: var(--btn-primary-text, #fff);
+  border-color: var(--accent-color, #5c6bc0);
+}
+
+.vault-form-btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.vault-form-btn-secondary {
+  background: var(--input-bg, #fff);
+  color: var(--text-color, #222);
+}
+
+.vault-form-btn-secondary:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+.vault-form-btn-danger {
+  background: none;
+  color: var(--error-color, #c0392b);
+  border-color: var(--error-color, #c0392b);
+  margin-left: auto;
+}
+
+.vault-form-btn-danger:hover {
+  background: var(--btn-danger-hover-bg, rgba(192, 57, 43, 0.06));
+}
+
+/* ── Add path button ──────────────────────────────────────────────────────── */
+
+.vault-add-path-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px dashed var(--input-border, #ccc);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  transition: border-color 0.1s ease, color 0.1s ease;
+}
+
+.vault-add-path-btn:hover {
+  border-color: var(--accent-color, #5c6bc0);
+  color: var(--accent-color, #5c6bc0);
+}

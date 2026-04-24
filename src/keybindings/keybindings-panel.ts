@@ -83,6 +83,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "view-toggle-diagrams",   label: "Diagrams",        defaultKey: "",       section: "View" },
   { id: "sidebar.toggleLeft",  label: "Toggle Left Sidebar",  defaultKey: "Cmd-Shift-[", section: "View" },
   { id: "sidebar.toggleRight", label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
+  // PKM Step 02a: File Browser panel toggle — no default key yet; remap via Keyboard Shortcuts.
+  { id: "file-browser-toggle", label: "File Browser: Toggle Panel", defaultKey: "", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },

@@ -1157,6 +1157,21 @@ let _rebuildInProgress = false;
  * @returns Array of `.md` filenames, or empty array on error.
  */
 async function invokeListMdFiles(directoryPath: string): Promise<string[]> {
+  /*
+   * Phase 2b migration: when a vault is active, use the vault index as the
+   * autocomplete candidate source. The vault index is bounded, pre-scanned,
+   * and richer than a shallow directory scan. This is guarded so pre-vault
+   * sessions (no active vault) fall back to the existing list_md_files path
+   * with zero regression (R-04 mitigation from 00_index.md).
+   */
+  const vaultIndex = (window as any).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.();
+  if (vaultIndex) {
+    // Return stem + ".md" for each indexed entry so the format matches what
+    // the existing autocomplete logic expects from list_md_files.
+    return (vaultIndex.entries as Array<{ name: string }>).map((e) => e.name + ".md");
+  }
+
+  // Fallback: shallow scan of the current directory when no vault is active.
   try {
     return await (window as any).__TAURI_INTERNALS__.invoke(
       "list_md_files",

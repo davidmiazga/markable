@@ -211,4 +211,16 @@ export default [
     resolve(__dirname, "src/plugins/daily-note/daily-note.plugin.ts"),
     false,
   ),
+  // PKM Step 02a: File Browser — read-only vault file tree, no CM6 StateField.
+  pluginConfig(
+    "file-browser",
+    resolve(__dirname, "src/plugins/file-browser/file-browser.plugin.ts"),
+    false,
+  ),
+  // PKM Step 03: Knowledge Graph — D3 force-directed graph, no dynamic imports.
+  pluginConfig(
+    "knowledge-graph",
+    resolve(__dirname, "src/plugins/knowledge-graph/knowledge-graph.plugin.ts"),
+    false,
+  ),
 ];

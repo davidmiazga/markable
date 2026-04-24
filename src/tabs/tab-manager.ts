@@ -143,14 +143,23 @@ export class TabManager {
 
     // Step 5 fallback: if no tabs were successfully restored, open an untitled
     // tab so the editor is never left empty (FR-6.5).
-    if (this.tabs.length === 0) {
+    // Exception: when a vault is active, the file browser leads the experience —
+    // stay at 0 tabs so the sidebar and file browser are the entry point.
+    // Read from settings directly (not vault manager global) because vault init
+    // may not have completed yet at this point in the startup sequence.
+    const hasActiveVault = this._settingsHaveActiveVault();
+    if (this.tabs.length === 0 && !hasActiveVault) {
       this.tabs.push(this._createUntitledTab());
     }
 
     // Step 6: clamp the saved activeTabIndex to a valid range.
     // Out-of-range values (e.g. after removing files between sessions) default
     // to the last tab rather than crashing (FR-6.6).
-    this.activeIndex = Math.max(0, Math.min(rawActiveIndex, this.tabs.length - 1));
+    // When 0 tabs (vault-active startup), use -1 to signal "no active tab".
+    this.activeIndex =
+      this.tabs.length === 0
+        ? -1
+        : Math.max(0, Math.min(rawActiveIndex, this.tabs.length - 1));
 
     // Step 7: renderer instantiation.
     // _instantiateRenderer() creates the appropriate renderer for this.mode and
@@ -188,6 +197,20 @@ export class TabManager {
     const dotIdx = name.lastIndexOf(".");
     // dotIdx === 0 means a dotfile like ".bashrc" — keep the full name.
     return dotIdx > 0 ? name.slice(0, dotIdx) : name;
+  }
+
+  /**
+   * Returns true when the user has a vault configured and active in settings.
+   *
+   * Reads from settings directly rather than the vault-manager global because
+   * this method is called during init(), before vault-manager.init() has
+   * necessarily completed (vault init is non-blocking in main.ts).
+   */
+  private _settingsHaveActiveVault(): boolean {
+    const settings = getCurrentSettings();
+    const activeId = settings.activeVaultId;
+    if (!activeId) return false;
+    return (settings.vaults ?? []).some((v) => v.id === activeId);
   }
 
   /**
@@ -437,6 +460,22 @@ export class TabManager {
     void addRecentFile(filePath);
     void this.saveSession();
 
+    // Auto-close a clean Untitled tab that was the only other tab before this
+    // file opened (file-browser-first experience). Only close it when:
+    //   1. Exactly two tabs now exist (the new file + the Untitled).
+    //   2. The non-active tab has no filePath (is Untitled) and is not dirty.
+    if (this.tabs.length === 2) {
+      const otherIdx = this.tabs.findIndex((t) => t.id !== newTab.id);
+      const other = otherIdx !== -1 ? this.tabs[otherIdx] : null;
+      if (other && other.filePath === null && !other.isDirty) {
+        this.tabs.splice(otherIdx, 1);
+        // Recalculate active index after the splice.
+        this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
+        this._notifyRenderer();
+        void this.saveSession();
+      }
+    }
+
     return true;
   }
 
@@ -510,12 +549,22 @@ export class TabManager {
     const tab = this.tabs[idx];
 
     if (this.tabs.length === 1) {
-      // This is the last tab. Closing it ends the editing session.
+      // This is the last tab.
       if (tab.isDirty) {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
         if (!confirmed) return;
+      }
+      // When a vault is active, stay open at 0 tabs — the file browser leads.
+      // When no vault is configured, closing the last tab closes the window.
+      const hasActiveVault = this._settingsHaveActiveVault();
+      if (hasActiveVault) {
+        this.tabs = [];
+        this.activeIndex = -1;
+        this._notifyRenderer();
+        void this.saveSession();
+        return;
       }
       // Remove the tab from in-memory state before closing the window so that
       // if the window-close event triggers saveSession() it writes empty state.

@@ -33,6 +33,11 @@ pub use commands::{
     list_preset_files,
     ensure_directory,
     list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
+    build_vault_index, create_vault, delete_vault, get_vault_index, list_vault_files,
+    save_vault_index, switch_vault, unwatch_vault, update_vault, validate_vault_paths, watch_vault,
+    create_file, rename_file, delete_file, delete_directory, move_file, create_directory,
+    update_wiki_links, reveal_in_finder,
+    WatcherRegistry,
 };
 
 /// Read a bundled help resource file by filename.
@@ -307,6 +312,26 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                // Size the window to 50% width × 80% height of the primary monitor.
+                // Falls back to the tauri.conf.json default (800×600) if the monitor
+                // cannot be queried (e.g. headless CI).
+                if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let scale = monitor.scale_factor();
+                    let phys = monitor.size();
+                    // Convert physical → logical, then apply percentages.
+                    let logical_w = phys.width  as f64 / scale * 0.5;
+                    let logical_h = phys.height as f64 / scale * 0.8;
+                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                        width:  logical_w,
+                        height: logical_h,
+                    }));
+                    let _ = window.center();
+                }
+            }
+            Ok(())
+        })
         .menu(|handle| menu::build_menu(handle))
         .on_menu_event(|app_handle, event| {
             let id = event.id().as_ref();
@@ -386,6 +411,7 @@ pub fn run() {
                 }
             }
         })
+        .manage(WatcherRegistry::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             create_daily_note,
@@ -412,7 +438,26 @@ pub fn run() {
             write_plugin_settings,
             update_recent_files_menu,
             update_theme_menu,
-            set_template_menu_enabled
+            set_template_menu_enabled,
+            build_vault_index,
+            create_vault,
+            delete_vault,
+            get_vault_index,
+            list_vault_files,
+            save_vault_index,
+            switch_vault,
+            unwatch_vault,
+            update_vault,
+            validate_vault_paths,
+            watch_vault,
+            create_file,
+            rename_file,
+            delete_file,
+            delete_directory,
+            move_file,
+            create_directory,
+            update_wiki_links,
+            reveal_in_finder
         ])
         .on_window_event(|window, event| {
             // Hide-on-close: intercept the close request and hide the window

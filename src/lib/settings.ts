@@ -9,6 +9,7 @@
 import { getSettings, saveSettings } from "./bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import type { VaultEntry } from "./vault-types";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
@@ -184,6 +185,27 @@ export interface MarkableSettings {
    * Clamped to the valid range by TabManager.init() after restore (FR-6.6).
    */
   activeTabIndex?: number;
+
+  /**
+   * PKM vault list. Each entry describes a named, bounded collection of file
+   * paths that forms the indexing scope for the File Browser and Knowledge
+   * Graph features.
+   *
+   * Optional — absent in settings files created before PKM support was added.
+   * vault-manager.ts treats an absent or empty array as "no vaults configured".
+   * The Rust raw-JSON pass-through means this field is safe to add without
+   * touching any Rust struct.
+   */
+  vaults?: VaultEntry[];
+
+  /**
+   * The id of the currently active vault, or null when no vault is active.
+   *
+   * Optional — absent in settings files created before PKM support.
+   * vault-manager.init() resets this to null when the referenced vault id
+   * no longer exists in the `vaults` array (EC-11).
+   */
+  activeVaultId?: string | null;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */

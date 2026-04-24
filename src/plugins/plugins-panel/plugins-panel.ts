@@ -17,6 +17,7 @@
 
 import "./plugins-panel.css";
 import type { UnifiedPluginDef } from "../index";
+import { DEFAULT_ENABLED_PLUGINS, WORKFLOW_PLUGINS } from "../index";
 import { getCurrentSettings } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
 
@@ -51,9 +52,10 @@ let keydownListenerRegistered = false;
 
 /**
  * Per-section collapsed state (session-only, not persisted to settings).
- * Both sections start open (collapsed = false) on first load.
+ * All sections start open (collapsed = false) on first load.
  */
-const sectionCollapsed: Record<"core" | "user", boolean> = {
+const sectionCollapsed: Record<"workflow" | "core" | "user", boolean> = {
+  workflow: false,
   core: false,
   user: false,
 };
@@ -202,8 +204,12 @@ export function updateUserPluginDefs(
 // ── List View ─────────────────────────────────────────────────────────────────
 
 /**
- * Render the two-section list view: "Core Plugins" then "User Plugins".
+ * Render the three-section list view: "Workflow" → "Core Plugins" → "User Plugins".
  * Each section is collapsible (session state in sectionCollapsed).
+ *
+ * Workflow plugins (WORKFLOW_PLUGINS) are pulled out of the core bucket and
+ * rendered in their own section in declared order.
+ * Remaining core plugins sort featured-first then alphabetically.
  */
 function showListView(): void {
   if (!bodyElement || !titleElement) return;
@@ -211,11 +217,30 @@ function showListView(): void {
   titleElement.textContent = "Plugins";
   bodyElement.innerHTML = "";
 
-  // Split the flat definitions array into core and user buckets.
-  const coreDefs = definitions.filter((d) => d.kind === "core");
+  const workflowSet = new Set(WORKFLOW_PLUGINS);
+  const featuredOrder = Array.from(DEFAULT_ENABLED_PLUGINS);
+
+  // Workflow section: WORKFLOW_PLUGINS order, skipping any not yet loaded.
+  const workflowDefs = WORKFLOW_PLUGINS
+    .map((id) => definitions.find((d) => d.id === id))
+    .filter((d): d is UnifiedPluginDef => d !== undefined);
+
+  // Core section: everything with kind==="core" that isn't in WORKFLOW_PLUGINS.
+  const coreDefs = definitions
+    .filter((d) => d.kind === "core" && !workflowSet.has(d.id))
+    .sort((a, b) => {
+      const ai = featuredOrder.indexOf(a.id);
+      const bi = featuredOrder.indexOf(b.id);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
   const userDefs = definitions.filter((d) => d.kind === "user");
 
   bodyElement.appendChild(buildSection("core", "Core Plugins", coreDefs));
+  bodyElement.appendChild(buildSection("workflow", "Workflow Plugins", workflowDefs));
   bodyElement.appendChild(buildSection("user", "User Plugins", userDefs));
 }
 
@@ -237,7 +262,7 @@ function showListView(): void {
  * @param defs     Plugin definitions for this section.
  */
 function buildSection(
-  kind: "core" | "user",
+  kind: "workflow" | "core" | "user",
   label: string,
   defs: UnifiedPluginDef[],
 ): HTMLElement {
@@ -311,7 +336,9 @@ function buildSection(
     const placeholder = document.createElement("p");
     placeholder.className = "plugin-empty-placeholder";
     placeholder.textContent =
-      kind === "core" ? "No core plugins loaded." : "No user plugins installed.";
+      kind === "workflow" ? "No workflow plugins loaded." :
+      kind === "core" ? "No core plugins loaded." :
+      "No user plugins installed.";
     body.appendChild(placeholder);
   } else {
     for (const def of defs) {
@@ -331,7 +358,7 @@ function buildSection(
  * @param def   Plugin definition to render.
  * @param kind  Section kind — passed to buildPluginRow for version badge logic.
  */
-function buildRow(def: UnifiedPluginDef, kind: "core" | "user"): HTMLElement {
+function buildRow(def: UnifiedPluginDef, kind: "workflow" | "core" | "user"): HTMLElement {
   if (def.status === "failed") {
     return buildFailedRow(def);
   }
@@ -361,7 +388,7 @@ function buildRow(def: UnifiedPluginDef, kind: "core" | "user"): HTMLElement {
 function buildPluginRow(
   def: UnifiedPluginDef,
   enabled: boolean,
-  kind: "core" | "user",
+  kind: "workflow" | "core" | "user",
 ): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-row";
@@ -373,8 +400,8 @@ function buildPluginRow(
   nameText.textContent = def.name;
   nameEl.appendChild(nameText);
 
-  // Version badge: shown for core plugins that have a non-empty version string.
-  if (kind === "core" && def.version) {
+  // Version badge: shown for core and workflow plugins that have a non-empty version string.
+  if ((kind === "core" || kind === "workflow") && def.version) {
     const versionBadge = document.createElement("span");
     versionBadge.className = "plugin-version-badge";
     versionBadge.textContent = `v${def.version}`;

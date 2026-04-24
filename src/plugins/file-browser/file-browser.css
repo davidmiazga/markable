@@ -1,0 +1,390 @@
+/*
+ * file-browser.css
+ *
+ * Visual styles for the File Browser sidebar panel.
+ *
+ * All colour values are CSS variables — no hardcoded hex. This ensures the
+ * panel automatically inherits the active theme's colour scheme. Font families
+ * are also via variables so all UI text stays consistent with the rest of the
+ * application.
+ *
+ * Scope:
+ *   .file-browser-panel    — outer wrapper rendered by the sidebar system
+ *   .file-browser-header   — sticky search + controls row at the top of the panel
+ *   .file-browser-search   — debounced search/filter input
+ *   .file-tree             — the <ul> holding all tree nodes
+ *   .tree-node             — each <li> in the tree
+ *   .tree-node-vault       — vault root nodes (bold, distinct from folder nodes)
+ *   .tree-node-directory   — synthesised directory nodes
+ *   .tree-node-file        — leaf file nodes
+ *   .tree-node-active      — the currently open file's row
+ *   .file-browser-empty    — centered empty-state messages
+ *
+ * Icon glyphs are Unicode characters rendered via ::before pseudo-elements.
+ * When a richer SVG icon system is added in a later phase, only the ::before
+ * rules need updating — no JavaScript changes are required.
+ */
+
+/* ── Panel wrapper ───────────────────────────────────────────────────────────── */
+
+.file-browser-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--ui-font);
+  font-size: 13px;
+}
+
+/* ── Header / search bar ─────────────────────────────────────────────────────── */
+
+.file-browser-header {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+}
+
+.file-browser-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  background: var(--input-bg, var(--code-bg, rgba(0, 0, 0, 0.08)));
+  border: 1px solid var(--input-border, var(--border-color, rgba(128, 128, 128, 0.25)));
+  border-radius: 4px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.file-browser-search:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px var(--accent-focus-ring, rgba(92, 107, 192, 0.15));
+}
+
+/* ── Tree container ──────────────────────────────────────────────────────────── */
+
+.file-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+}
+
+/* ── Tree nodes (shared) ─────────────────────────────────────────────────────── */
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  cursor: pointer;
+  padding-right: 8px;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  outline: none;
+  border-left: 2px solid transparent;
+}
+
+.tree-node:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.08));
+}
+
+.tree-node:focus {
+  outline: 1px solid var(--accent-color);
+  outline-offset: -1px;
+}
+
+/* Active file highlight — used for the currently open file */
+.tree-node-active {
+  background: var(--selection-bg, rgba(92, 107, 192, 0.15));
+  border-left-color: var(--accent-color);
+}
+
+/* ── Indentation spacer ──────────────────────────────────────────────────────── */
+
+.tree-node-indent {
+  /*
+   * The indentation is controlled by the --depth CSS variable set inline on
+   * each node via style.setProperty("--depth", node.depth). This pattern
+   * avoids generating separate CSS rules per depth level.
+   */
+  flex-shrink: 0;
+  width: calc(var(--depth, 0) * 16px);
+}
+
+/* ── Icon glyphs ─────────────────────────────────────────────────────────────── */
+
+.tree-node-icon {
+  flex-shrink: 0;
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+/* Vault root icon — visually distinct from folder icons */
+.vault-icon-default::before {
+  content: "🗂";
+  font-size: 13px;
+}
+
+/* Named vault icon variants (data-driven extension point, FR-02.13) */
+.vault-icon-work::before    { content: "💼"; font-size: 13px; }
+.vault-icon-personal::before { content: "🏠"; font-size: 13px; }
+.vault-icon-research::before { content: "🔬"; font-size: 13px; }
+
+/* Folder icon for directory nodes */
+.folder-icon::before {
+  content: "📁";
+  font-size: 12px;
+}
+
+/* Document icon for file nodes */
+.file-icon::before {
+  content: "📄";
+  font-size: 12px;
+}
+
+/* ── Node label ──────────────────────────────────────────────────────────────── */
+
+.tree-node-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 3px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 28px;
+}
+
+/* ── Vault nodes ─────────────────────────────────────────────────────────────── */
+
+.tree-node-vault {
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+  height: 32px;
+}
+
+.tree-node-vault .tree-node-label {
+  line-height: 32px;
+}
+
+/* ── Directory nodes ─────────────────────────────────────────────────────────── */
+
+.tree-node-directory .tree-node-label {
+  font-weight: 500;
+}
+
+/* ── Chevron (expand/collapse toggle) ───────────────────────────────────────── */
+
+.tree-node-chevron {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-secondary, rgba(128, 128, 128, 0.7));
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+/*
+ * When aria-expanded="true" the chevron rotates 90 degrees to point downward,
+ * indicating that the node is open. The CSS selector is on the element that
+ * sets the aria attribute (the <li>), and the sibling combinator targets the
+ * chevron span inside it.
+ */
+.tree-node[aria-expanded="true"] .tree-node-chevron {
+  transform: rotate(90deg);
+}
+
+/* ── Empty states ────────────────────────────────────────────────────────────── */
+
+.file-browser-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--muted-text, var(--text-secondary, rgba(128, 128, 128, 0.7)));
+  text-align: center;
+  gap: 10px;
+}
+
+.file-browser-empty p {
+  margin: 0;
+}
+
+.file-browser-empty button {
+  margin-top: 4px;
+  padding: 5px 12px;
+  background: var(--accent-color);
+  color: var(--btn-primary-text, #fff);
+  border: none;
+  border-radius: 4px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.file-browser-empty button:hover {
+  opacity: 0.85;
+}
+
+/* ── Index-capped notice ─────────────────────────────────────────────────────── */
+
+/*
+ * Shown at the top of the tree when the vault index was capped (EC-08).
+ * Uses a muted warning style to inform without alarming.
+ */
+.file-browser-cap-notice {
+  padding: 4px 10px;
+  font-family: var(--ui-font);
+  font-size: 11px;
+  color: var(--muted-text, var(--text-secondary));
+  background: var(--hover-bg, rgba(128, 128, 128, 0.06));
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
+}
+
+/* ── Context menu ────────────────────────────────────────────────────────────── */
+
+/*
+ * Fixed-position context menu shown on right-click. Uses --shadow-color so
+ * the shadow automatically inverts in dark themes (LOW-2: was rgba(0,0,0,.2)).
+ */
+.context-menu {
+  position: fixed;
+  z-index: 9999;
+  list-style: none;
+  padding: 4px 0;
+  margin: 0;
+  min-width: 160px;
+  background: var(--menu-bg, var(--bg-primary, #fff));
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow-color, rgba(0, 0, 0, 0.2));
+  font-family: var(--ui-font);
+  font-size: 13px;
+}
+
+.context-menu-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.context-menu-item:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.08));
+}
+
+.context-menu-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border-color, rgba(128, 128, 128, 0.15));
+  margin: 4px 0;
+}
+
+/* ── Inline rename / create input ────────────────────────────────────────────── */
+
+/*
+ * Replaces the label span of a tree node while the user types a new name.
+ * Bordered with the accent colour to match the focused search input.
+ */
+.tree-node-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--input-bg, var(--code-bg, rgba(0, 0, 0, 0.08)));
+  border: 1px solid var(--accent-color);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+/*
+ * Error text displayed below the rename input when validation fails (EC-16,
+ * EC-17). Hidden when empty; no JS toggling required — textContent drives it.
+ */
+.tree-node-inline-error {
+  display: block;
+  padding: 2px 8px;
+  font-family: var(--ui-font);
+  font-size: 11px;
+  color: var(--error-color, #c0392b);
+}
+
+/* ── Drag-and-drop ───────────────────────────────────────────────────────────── */
+
+/*
+ * Applied to the drop-target directory/vault node while a dragged item is
+ * held over it. Outline uses a dashed accent border for clear affordance.
+ */
+.drag-over {
+  background: var(--drag-target-bg, rgba(92, 107, 192, 0.1));
+  outline: 1px dashed var(--accent-color);
+}
+
+/* ── Link-update banner ──────────────────────────────────────────────────────── */
+
+/*
+ * Shown at the top of the panel after a rename when other files contain
+ * wiki-links pointing to the old filename stem (EC-18).
+ */
+.file-browser-link-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--warning-bg, rgba(255, 193, 7, 0.15));
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.file-browser-link-banner-btn {
+  padding: 2px 8px;
+  background: var(--accent-color);
+  color: var(--btn-primary-text, #fff);
+  border: none;
+  border-radius: 3px;
+  font-family: var(--ui-font);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.file-browser-link-banner-dismiss {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+  color: var(--text-secondary);
+}
+
+/* ── Inline error strip ──────────────────────────────────────────────────────── */
+
+/*
+ * Transient error notification shown when a file operation fails (e.g. a move
+ * collision or network write failure). Auto-removes after 3 seconds via JS.
+ */
+.file-browser-inline-error {
+  padding: 4px 12px;
+  background: var(--error-bg, rgba(192, 57, 43, 0.1));
+  border-bottom: 1px solid var(--error-color, #c0392b);
+  font-family: var(--ui-font);
+  font-size: 11px;
+  color: var(--error-color, #c0392b);
+}

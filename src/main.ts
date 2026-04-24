@@ -45,7 +45,7 @@ import {
   deleteLine,
 } from "./editor/format";
 import { switchListStyle, listStyleIndicator, createListStyleIndicator } from "./editor/list-style-switch";
-import { registerStatusBarDependent, ensureStatusBar } from "./plugins/status-bar/status-bar";
+import { ensureStatusBar, getStatusBarVisible, setStatusBarVisible } from "./plugins/status-bar/status-bar";
 import {
   readResourceFile,
   openFileDialog,
@@ -87,6 +87,7 @@ import {
 // not re-exported from main.ts.
 import { tabManager } from "./tabs";
 import { openExportDialog, printDocument } from "./lib/export";
+import * as vaultManager from "./lib/vault-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -627,7 +628,12 @@ function handleAction(action: string): void {
     case "file-print":      printDocument(editor); break;
     case "view-toggle-preview":    togglePreview();      break;
     case "view-toggle-statusbar":
-      if (editor) void pluginManager.toggle("status-bar", !pluginManager.getStates()["status-bar"]);
+      if (getStatusBarVisible()) {
+        setStatusBarVisible(false);
+        document.getElementById("statusbar")?.classList.add("hidden");
+      } else {
+        ensureStatusBar();
+      }
       break;
     case "view-toggle-focus":
       if (editor) void pluginManager.toggle("focus-mode", !pluginManager.getStates()["focus-mode"]);
@@ -899,6 +905,15 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_IS_OPEN__"] = false;
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_OPEN__"] = null;
 
+  // ── Vault manager initialisation ────────────────────────────────────────────
+  // Non-blocking: vault init runs in the background so the window becomes
+  // visible before potentially slow index building begins. The File Browser
+  // plugin responds to vault state via onVaultChanged once init() completes.
+  // The window global is set by vault-manager.ts at module load time.
+  vaultManager.init().catch((err) =>
+    console.warn("[init] vaultManager.init failed (non-fatal):", err)
+  );
+
   // Load all plugins (core + user) from disk. Must run after setEditorView()
   // so any plugin calling api.addExtensions() in onEnable has a live view.
   // Errors are isolated per-plugin — a failing plugin does not block the rest.
@@ -908,6 +923,25 @@ async function initApp() {
   // plugins have been loaded. EC-23: this runs after loadPlugins so we only
   // restore "open" state if at least one panel was actually registered.
   restoreSidebarFromSettings();
+
+  // File-browser-first experience: when a vault is active and the left sidebar
+  // is at factory default (never been manually opened/closed by the user),
+  // open it automatically so the file browser leads the experience.
+  // "Factory default" = open:false AND activeTabId:null (the user has not
+  // interacted with the sidebar since the vault was configured).
+  {
+    const _s = getCurrentSettings();
+    const _activeId = _s.activeVaultId;
+    const _hasVault = !!_activeId && (_s.vaults ?? []).some((v) => v.id === _activeId);
+    if (_hasVault) {
+      const _leftSlot = _s.sidebar?.left;
+      const _isFactoryDefault =
+        !_leftSlot || (_leftSlot.open === false && _leftSlot.activeTabId === null);
+      if (_isFactoryDefault) {
+        toggleSidebarSide("left");
+      }
+    }
+  }
 
   // Initialize the tab manager. Must run after initSidebar() (which creates
   // #app-row) and after editor creation. TabManager reads settings to restore
@@ -935,10 +969,8 @@ async function initApp() {
   });
 
   // List style status bar indicator (FR-3).
-  // Registers as a status bar dependent so the bar auto-shows when this
-  // feature is active. Creates a clickable indicator in the left zone.
-  registerStatusBarDependent("list-style-indicator");
-  ensureStatusBar();
+  // Element is created and attached unconditionally; the status bar itself
+  // is only shown when a trigger plugin (word-count, etc.) calls ensureStatusBar().
   const listStyleZone = statusBarZones.left;
   if (listStyleZone) {
     const listIndicatorEl = createListStyleIndicator(() => editor);
