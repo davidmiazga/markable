@@ -74,7 +74,7 @@ export interface SidebarPanelDescriptor {
    * and before the move/toggle buttons. Each button shows its icon as text and
    * its title as a tooltip.
    */
-  headerActions?: Array<{ icon: string; title: string; onClick: () => void }>;
+  headerActions?: Array<{ id?: string; icon: string; iconHTML?: string; title: string; onClick: () => void }>;
 }
 
 // ── Private types ─────────────────────────────────────────────────────────────
@@ -776,7 +776,12 @@ function _buildPanelWrapper(
     for (const action of descriptor.headerActions) {
       const actionBtn = document.createElement("button");
       actionBtn.className = "sidebar-header-action-btn";
-      actionBtn.textContent = action.icon;
+      if (action.id) actionBtn.id = action.id;
+      if (action.iconHTML) {
+        actionBtn.innerHTML = action.iconHTML;
+      } else {
+        actionBtn.textContent = action.icon;
+      }
       actionBtn.title = action.title;
       actionBtn.setAttribute("aria-label", action.title);
       actionBtn.addEventListener("click", (e) => {

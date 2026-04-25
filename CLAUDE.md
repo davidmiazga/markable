@@ -52,6 +52,23 @@ markable-2.0/
 - **Asset protocol**: Images use Tauri's `asset://` protocol, never base64 embedding.
 - **Code signing is mandatory** for macOS builds — unsigned apps will be flagged as damaged on Sequoia+.
 
+## ⚠️ Window Launch Size — DO NOT CHANGE
+
+**The window must always launch at 50% width × 80% height, centered. This must never regress.**
+
+File: `src-tauri/src/lib.rs` — the `.setup()` hook must always read:
+```rust
+let phys  = monitor.size();
+let scale = monitor.scale_factor();
+let logical_w = phys.width  as f64 / scale * 0.5;
+let logical_h = phys.height as f64 / scale * 0.8;
+window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: logical_w, height: logical_h }));
+window.center();
+```
+- Uses `LogicalSize` (NOT `PhysicalSize`) — Retina displays return physical pixels from `monitor.size()`, dividing by `scale_factor()` is mandatory.
+- Do NOT hardcode pixel values. Do NOT switch to `PhysicalSize`.
+- **Verify this code is still intact any time `lib.rs` is touched for any reason.**
+
 ## Build Notes
 
 The macOS Sequoia/Tahoe DMG compiler has known incompatibilities with Tauri v2. See `docs/build-notes/macos-dmg-workaround.md` for current workarounds. Key points:

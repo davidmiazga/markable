@@ -29,6 +29,20 @@ import type { MarkablePluginAPI } from "../markable-plugin-api";
 import type { VaultEntry, VaultIndex, VaultFileChangedEvent } from "../../lib/vault-types";
 import type { SidebarPanelDescriptor } from "../markable-plugin-api";
 
+// Material Symbols icons — bundled inline by Rollup at build time.
+import {
+  ICON_VAULT,
+  ICON_FOLDER,
+  ICON_FOLDER_OPEN,
+  ICON_FILE,
+  ICON_FILE_MD,
+  ICON_FILE_IMAGE,
+  ICON_FILE_JSON,
+  ICON_FILE_CODE,
+  ICON_CHEVRON,
+  ICON_EXPAND,
+} from "./icons/material/index";
+
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
 import {
   buildTreeFromIndex,
@@ -92,9 +106,14 @@ const FILE_BROWSER_CSS = `
 }
 .file-browser-header {
   flex-shrink: 0;
-  padding: 6px 8px;
+}
+.file-browser-header.has-search {
   border-bottom: 1px solid var(--border-color, rgba(128,128,128,.2));
 }
+.file-browser-search-row {
+  padding: 6px 8px 6px;
+}
+.file-browser-search-row.hidden { display: none; }
 .file-browser-search {
   width: 100%;
   box-sizing: border-box;
@@ -129,30 +148,25 @@ const FILE_BROWSER_CSS = `
   white-space: nowrap;
   overflow: hidden;
   outline: none;
-  border-left: 2px solid transparent;
 }
 .tree-node:hover { background: var(--hover-bg, rgba(128,128,128,.08)); }
-.tree-node:focus { outline: 1px solid var(--accent-color); outline-offset: -1px; }
+.tree-node:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-color); }
 .tree-node-active {
   background: var(--selection-bg, rgba(92,107,192,.15));
-  border-left-color: var(--accent-color);
+  box-shadow: inset 2px 0 0 var(--accent-color);
 }
-.tree-node-indent { flex-shrink: 0; width: calc(var(--depth, 0) * 16px); }
+/* .tree-node-indent kept for DOM structure compatibility with inline-create inputs */
+.tree-node-indent { display: none; }
 .tree-node-icon {
   flex-shrink: 0;
-  width: 18px;
+  width: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  opacity: .75;
+  opacity: .9;
 }
-.vault-icon-default::before { content: "🗂"; font-size: 13px; }
-.vault-icon-work::before    { content: "💼"; font-size: 13px; }
-.vault-icon-personal::before { content: "🏠"; font-size: 13px; }
-.vault-icon-research::before { content: "🔬"; font-size: 13px; }
-.folder-icon::before { content: "📁"; font-size: 12px; }
-.file-icon::before   { content: "📄"; font-size: 12px; }
+.vault-icon svg, .folder-icon svg, .file-icon svg { display: block; fill: currentColor; }
+.tree-node-source-file { opacity: 0.5; }
 .tree-node-label {
   flex: 1;
   overflow: hidden;
@@ -165,20 +179,47 @@ const FILE_BROWSER_CSS = `
 }
 .tree-node-vault {
   font-weight: 600;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.2));
-  height: 32px;
+  height: 28px;
 }
-.tree-node-vault .tree-node-label { line-height: 32px; }
+.tree-node-vault .tree-node-label { line-height: 28px; }
+.file-tree-card {
+  margin: 6px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--card-bg, rgba(128,128,128,.07));
+}
+.file-tree-card .file-tree {
+  overflow-y: visible;
+  overflow-x: visible;
+  flex: none;
+}
+.file-browser-add-row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  cursor: pointer;
+  color: var(--text-secondary, rgba(128,128,128,.6));
+  font-size: 12px;
+  gap: 5px;
+  user-select: none;
+  border-radius: 0 0 6px 6px;
+}
+.file-browser-add-row:hover {
+  background: var(--hover-bg, rgba(128,128,128,.08));
+  color: var(--text-primary);
+}
 .tree-node-directory .tree-node-label { font-weight: 500; }
 .tree-node-chevron {
   flex-shrink: 0;
   width: 16px;
-  text-align: center;
-  font-size: 10px;
-  color: var(--text-secondary, rgba(128,128,128,.7));
-  transition: transform .15s ease;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  transition: transform .12s ease;
 }
+.tree-node-chevron svg { fill: currentColor; display: block; }
 .tree-node[aria-expanded="true"] .tree-node-chevron { transform: rotate(90deg); }
 .file-browser-empty {
   display: flex;
@@ -483,6 +524,12 @@ let _searchEl: HTMLInputElement | null = null;
 /** The current search query string (empty string = no filter active). */
 let _searchQuery = "";
 
+/** Whether the search row is currently expanded. */
+let _searchVisible = false;
+
+/** Reference to the header-action search toggle button (in the sidebar title bar). */
+let _searchToggleBtn: HTMLButtonElement | null = null;
+
 /**
  * The currently rendered tree nodes.
  *
@@ -694,38 +741,124 @@ function openManageVaultsModal(selectedVaultId?: string): void {
   if (document.getElementById("__fb_manage_vaults_overlay__")) return;
 
   const overlay = buildModalOverlay();
-  /* buildModalContent appends the .settings-panel to the overlay and returns
-     the .settings-body div where the panel content should be mounted. */
   const body = buildModalContent(overlay);
-  mountManageVaultsPanel(body, selectedVaultId);
+  mountManageVaultsPanel(body, selectedVaultId, () => overlay.remove());
 
   document.body.appendChild(overlay);
 }
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 
+// ── Icon system ───────────────────────────────────────────────────────────────
+
 /**
- * Build and append the indent spacer, icon, and label spans to a node <li>.
+ * IconSet interface — the single extension point for icon themes.
  *
- * Extracted from buildNodeEl to keep each helper ≤30 lines. The icon+label
- * structure is the same for all node types; only the iconClass and name differ.
+ * All three methods receive contextual arguments so future implementations
+ * can return different SVG strings based on file extension, folder name,
+ * or expanded state without any changes to the call sites.
  *
- * @param li   - The <li> element to append into.
- * @param node - Source node providing depth, iconClass, name, and path.
+ * To add a new icon theme:
+ *   1. Create an object that satisfies this interface.
+ *   2. Call setIconSet(myIconSet) before or after plugin enable.
+ *   3. Call renderPanel() to repaint.
+ */
+interface IconSet {
+  /** SVG string for the vault root node. */
+  vault(): string;
+  /**
+   * SVG string for a directory node.
+   * @param _name     - Directory basename (for named-folder overrides later).
+   * @param _expanded - Whether the directory is currently open.
+   */
+  folder(_name: string, _expanded: boolean): string;
+  /**
+   * SVG string for a file node.
+   * @param _name - Full filename including extension (for ext overrides later).
+   */
+  file(_name: string): string;
+}
+
+/**
+ * Inject width/height into a Material Symbols SVG string.
+ * The fetched SVGs have no width/height attributes (stripped by fetch script)
+ * so we add them here for consistent 16×16 rendering.
+ */
+function wrapSvg(svg: string, size: number): string {
+  return svg.replace("<svg ", `<svg width="${size}" height="${size}" `);
+}
+
+/** Map a filename extension to the appropriate Material Symbol icon string. */
+function fileIconFor(name: string): string {
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  if (ext === "md" || ext === "markdown") return ICON_FILE_MD;
+  if (ext === "png" || ext === "jpg" || ext === "jpeg" ||
+      ext === "gif" || ext === "webp" || ext === "svg" ||
+      ext === "ico" || ext === "bmp" || ext === "tiff") return ICON_FILE_IMAGE;
+  if (ext === "json" || ext === "jsonc") return ICON_FILE_JSON;
+  if (ext === "yaml" || ext === "yml" || ext === "toml" ||
+      ext === "env"  || ext === "ini"  || ext === "cfg") return ICON_FILE_CODE;
+  return ICON_FILE;
+}
+
+/**
+ * Built-in icon set using Google Material Symbols Outlined (Apache 2.0).
+ * Icons are inlined at build time — no runtime network calls.
+ */
+const OUTLINE_ICONS: IconSet = {
+  vault:  ()           => wrapSvg(ICON_VAULT, 16),
+  folder: (_n, exp)    => wrapSvg(exp ? ICON_FOLDER_OPEN : ICON_FOLDER, 16),
+  file:   (name)       => wrapSvg(fileIconFor(name), 16),
+};
+
+/** Active icon set. Replace via setIconSet() to switch themes. */
+let _iconSet: IconSet = OUTLINE_ICONS;
+
+/**
+ * Swap the active icon set and repaint the panel.
+ *
+ * @param set - Any object satisfying the IconSet interface.
+ */
+export function setIconSet(set: IconSet): void {
+  _iconSet = set;
+  if (_enabled) renderPanel();
+}
+
+// ── Node rendering ─────────────────────────────────────────────────────────────
+
+/**
+ * Build and append the chevron, icon, and label spans to a node <li>.
+ *
+ * Uses _iconSet so the icon source is swappable without touching this function.
  */
 function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
-  /* Indent spacer — depth drives the CSS custom property */
-  const indent = document.createElement("span");
-  indent.className = "tree-node-indent";
-  indent.style.setProperty("--depth", String(node.depth));
-  li.appendChild(indent);
+  /* VSCode-style: depth * 16px padding-left, then [chevron][icon][label] */
+  li.style.paddingLeft = `${node.depth * 16}px`;
 
-  /* Icon glyph — class drives the ::before pseudo-element */
+  /* Chevron — present for vault/directory, empty spacer for files */
+  const chevron = document.createElement("span");
+  chevron.className = "tree-node-chevron";
+  if (node.type === "vault" || node.type === "directory") {
+    chevron.innerHTML = wrapSvg(ICON_CHEVRON, 14);
+  }
+  li.appendChild(chevron);
+
+  /* Icon — resolved through the active icon set */
   const icon = document.createElement("span");
-  icon.className = `tree-node-icon ${node.iconClass}`;
+  icon.className = `tree-node-icon ${
+    node.type === "vault" ? "vault-icon" :
+    node.type === "directory" ? "folder-icon" : "file-icon"
+  }`;
+  if (node.type === "vault") {
+    icon.innerHTML = _iconSet.vault();
+  } else if (node.type === "directory") {
+    icon.innerHTML = _iconSet.folder(node.name, node.expanded);
+  } else {
+    icon.innerHTML = _iconSet.file(node.name);
+  }
   li.appendChild(icon);
 
-  /* Label — tooltip shows the full path on hover */
+  /* Label */
   const label = document.createElement("span");
   label.className = "tree-node-label";
   label.textContent = node.name;
@@ -757,18 +890,20 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
 
   appendIconAndLabel(li, node);
 
-  /* Chevron — only for containers (vault and directory) */
+  /* aria-expanded for CSS chevron rotation */
   if (node.type === "vault" || node.type === "directory") {
-    const chevron = document.createElement("span");
-    chevron.className = "tree-node-chevron";
-    chevron.textContent = "▶";
-    li.appendChild(chevron);
     li.setAttribute("aria-expanded", node.expanded ? "true" : "false");
   }
 
   /* Active file highlight */
   if (node.type === "file" && activeFile && node.path === activeFile) {
     li.classList.add("tree-node-active");
+  }
+
+  /* Source-file dimming: non-folder, non-.md files (images, PDFs, etc.)
+     are editable only in source mode — dim them to 50% to show this. */
+  if (node.type === "file" && !node.path.toLowerCase().endsWith(".md")) {
+    li.classList.add("tree-node-source-file");
   }
 
   if (node.vaultId) {
@@ -815,6 +950,49 @@ function renderNodes(
   }
 }
 
+// ── Search toggle helpers ─────────────────────────────────────────────────────
+
+/**
+ * Update the active state of the header-action search toggle button.
+ * Called after query changes so the button reflects whether search is in use.
+ */
+function _updateSearchToggleState(): void {
+  if (_searchToggleBtn) {
+    _searchToggleBtn.classList.toggle("active", _searchVisible || !!_searchQuery);
+  }
+}
+
+/**
+ * Toggle the search row open/closed. Called by the headerAction onClick.
+ * Keeps _searchVisible in sync, shows/hides the DOM row, and clears the
+ * query when closing.
+ */
+function toggleSearch(): void {
+  _searchVisible = !_searchVisible;
+  _updateSearchToggleState();
+
+  /* Find the search row inside the current panel render */
+  const row = _panelContainer?.querySelector<HTMLElement>(".file-browser-search-row");
+  const header = _panelContainer?.querySelector<HTMLElement>(".file-browser-header");
+  if (!row || !header) return;
+
+  if (_searchVisible) {
+    row.classList.remove("hidden");
+    header.classList.add("has-search");
+    _searchEl?.focus();
+  } else {
+    row.classList.add("hidden");
+    header.classList.remove("has-search");
+    if (_searchQuery) {
+      _searchQuery = "";
+      if (_searchEl) _searchEl.value = "";
+      _updateSearchToggleState();
+      const wrapper = _panelContainer?.querySelector<HTMLElement>(".file-browser-panel");
+      if (wrapper) renderTreeContent(wrapper);
+    }
+  }
+}
+
 // ── Panel rendering ───────────────────────────────────────────────────────────
 
 /**
@@ -834,9 +1012,13 @@ export function renderPanel(): void {
   const wrapper = document.createElement("div");
   wrapper.className = "file-browser-panel";
 
-  /* ── Header with search input ── */
+  /* ── Header: collapsible search row (shown when _searchVisible is true) ── */
   const header = document.createElement("div");
-  header.className = "file-browser-header";
+  header.className = "file-browser-header" + (_searchVisible ? " has-search" : "");
+
+  /* Search input row */
+  const searchRow = document.createElement("div");
+  searchRow.className = "file-browser-search-row" + (_searchVisible ? "" : " hidden");
 
   const searchInput = document.createElement("input");
   searchInput.type = "search";
@@ -849,13 +1031,17 @@ export function renderPanel(): void {
     if (_searchTimer !== null) clearTimeout(_searchTimer);
     _searchTimer = setTimeout(() => {
       _searchQuery = searchInput.value;
+      _updateSearchToggleState();
       renderTreeContent(wrapper);
     }, SEARCH_DEBOUNCE_MS);
   });
 
-  header.appendChild(searchInput);
+  searchRow.appendChild(searchInput);
+  header.appendChild(searchRow);
   wrapper.appendChild(header);
   _searchEl = searchInput;
+
+  if (_searchVisible) setTimeout(() => searchInput.focus(), 0);
 
   renderTreeContent(wrapper);
 
@@ -898,6 +1084,9 @@ function buildTreeUl(
   activeFile: string | null,
   vaultId: string,
 ): void {
+  const card = document.createElement("div");
+  card.className = "file-tree-card";
+
   const ul = document.createElement("ul");
   ul.className = "file-tree";
   ul.setAttribute("role", "tree");
@@ -910,7 +1099,59 @@ function buildTreeUl(
     attachNodeListeners(el, vaultId);
   }
 
-  wrapper.appendChild(ul);
+  card.appendChild(ul);
+  card.appendChild(buildAddRow(vaultId));
+  wrapper.appendChild(card);
+}
+
+/**
+ * Build the "+ Add…" row appended at the bottom of the file-tree card.
+ *
+ * Clicking shows a context menu with New File / New Folder / New Vault.
+ *
+ * @param vaultId - Active vault ID used for inline-create context.
+ */
+function buildAddRow(vaultId: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "file-browser-add-row";
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", "Add…");
+  row.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>Add…</span>`;
+
+  row.addEventListener("click", (e) => {
+    const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const activeVault = vaultManager?.getActiveVault?.();
+    const rootPath: string = activeVault?.rootPaths?.[0] ?? "";
+    const container = _panelContainer;
+
+    showContextMenu(
+      [
+        {
+          label: "New File",
+          handler: () => {
+            if (!container || !rootPath) return;
+            showInlineCreateInput(rootPath, container, vaultId);
+          },
+        },
+        {
+          label: "New Folder",
+          handler: () => {
+            if (!container || !rootPath) return;
+            showInlineFolderCreateInput(rootPath, container, vaultId);
+          },
+        },
+        { separator: true, label: "", handler: null },
+        {
+          label: "New Vault…",
+          handler: () => openManageVaultsModal(),
+        },
+      ],
+      e.clientX,
+      e.clientY,
+    );
+  });
+
+  return row;
 }
 
 /**
@@ -932,8 +1173,8 @@ function buildTreeUl(
  * @param wrapper - The .file-browser-panel div to update.
  */
 function renderTreeContent(wrapper: HTMLElement): void {
-  /* Remove any existing tree / empty-state / loading / cap-notice content */
-  wrapper.querySelector(".file-tree, .file-browser-empty, .file-browser-loading")?.remove();
+  /* Remove any existing tree card / empty-state / loading / cap-notice content */
+  wrapper.querySelector(".file-tree-card, .file-browser-empty, .file-browser-loading")?.remove();
   wrapper.querySelector(".file-browser-cap-notice")?.remove();
 
   const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
@@ -2125,6 +2366,13 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
 
     headerActions: [
       {
+        id: "file-browser-search-btn",
+        icon: "",
+        iconHTML: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.4"/><line x1="8.7" y1="8.7" x2="12.5" y2="12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+        title: "Search files",
+        onClick: toggleSearch,
+      },
+      {
         /* ⋯ (horizontal ellipsis) matches the spec icon for panel menus */
         icon: "⋯",
         title: "Panel menu",
@@ -2152,6 +2400,11 @@ const plugin = {
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
     api.registerSidebarPanel(makePanelDescriptor());
+
+    /* Capture the search toggle button reference after the sidebar renders it */
+    setTimeout(() => {
+      _searchToggleBtn = document.getElementById("file-browser-search-btn") as HTMLButtonElement | null;
+    }, 0);
 
     /* Tab-change via custom event (clean path) */
     _tabChangedListener = () => onTabChanged();
@@ -2194,6 +2447,8 @@ const plugin = {
 
     /* Unregister sidebar panel */
     api.unregisterSidebarPanel(PANEL_ID);
+    _searchToggleBtn = null;
+    _searchVisible = false;
 
     /* Remove event listeners */
     if (_tabChangedListener) {

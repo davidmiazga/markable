@@ -61,6 +61,8 @@ let currentView: PanelView = "list";
 let editingVaultId: string | null = null;
 /** The container element this panel was mounted into. */
 let panelRoot: HTMLElement | null = null;
+/** Optional callback invoked after a successful vault create or update. */
+let _onClose: (() => void) | null = null;
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
@@ -78,8 +80,9 @@ let panelRoot: HTMLElement | null = null;
  * @param container       - The DOM element to render into.
  * @param selectedVaultId - Optional vault ID to pre-select for editing.
  */
-export function mountManageVaultsPanel(container: HTMLElement, selectedVaultId?: string): void {
+export function mountManageVaultsPanel(container: HTMLElement, selectedVaultId?: string, onClose?: () => void): void {
   panelRoot = container;
+  _onClose = onClose ?? null;
   if (selectedVaultId) {
     /* Open the edit form directly for the specified vault. */
     currentView = "edit";
@@ -515,7 +518,8 @@ async function handleSave(
       // Pass maxIndexSize so the form value is persisted on creation (NEW-1 fix).
       await createVault(name, currentPaths, excludePatterns, maxIndexSize);
     }
-    currentView = "list"; editingVaultId = null; render();
+    currentView = "list"; editingVaultId = null;
+    if (_onClose) { _onClose(); } else { render(); }
   } catch (err) {
     saveBtn.disabled = false; saveBtn.textContent = isEdit ? "Save" : "Create";
     nameError.textContent = err instanceof Error ? err.message : String(err);

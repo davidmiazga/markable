@@ -109,10 +109,8 @@ export function getVaultIconClass(vault: VaultEntry): string {
  * @param type    - The node type used to decide whether to strip the extension.
  * @returns The display name to render in the tree.
  */
-function displayName(rawName: string, type: TreeNodeType): string {
-  if (type === "file" && rawName.endsWith(".md")) {
-    return rawName.slice(0, -3);
-  }
+function displayName(rawName: string, _type: TreeNodeType): string {
+  // Always show the full filename including extension.
   return rawName;
 }
 

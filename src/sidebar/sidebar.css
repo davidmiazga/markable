@@ -23,11 +23,11 @@
 }
 
 #sidebar-left {
-  border-right: 1px solid var(--border-color);
+  border-right: none;
 }
 
 #sidebar-right {
-  border-left: 1px solid var(--border-color);
+  border-left: none;
 }
 
 /* ── Tab bar ─────────────────────────────────────────────────────────────────── */
@@ -92,7 +92,7 @@
   flex-shrink: 0;
   height: 32px;
   padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: none;
   cursor: default;
 }
 
@@ -203,6 +203,10 @@
 .sidebar-header-action-btn:hover {
   background: var(--code-bg);
   color: var(--text-primary);
+}
+
+.sidebar-header-action-btn.active {
+  color: var(--accent-color);
 }
 
 /* ── Panel content area ───────────────────────────────────────────────────────── */
