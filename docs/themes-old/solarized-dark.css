@@ -1,0 +1,18 @@
+/* Solarized Dark theme for Markable */
+:root {
+  --bg-primary: #002b36;
+  --bg-titlebar: #002b36;
+  --text-primary: #839496;
+  --text-secondary: #586e75;
+  --text-titlebar: rgba(88, 110, 117, 0.22);
+  --border-color: #073642;
+  --cursor-color: #839496;
+  --selection-bg: rgba(38, 139, 210, 0.25);
+  --code-bg: rgba(7, 54, 66, 0.8);
+  --code-text: #93a1a1;
+  --link-color: #268bd2;
+  --heading-color: #b58900;
+  --blockquote-color: #657b83;
+  --blockquote-border: #073642;
+  --hr-color: #073642;
+}

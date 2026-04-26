@@ -1,0 +1,24 @@
+/* Dracula — Markable theme
+   Based on the Dracula theme by Zeno Rocha (https://draculatheme.com/) */
+:root {
+  --bg-primary:         #282a36;
+  --bg-titlebar:        #21222c;
+  --text-primary:       #f8f8f2;
+  --text-secondary:     #6272a4;
+  --text-titlebar:      rgba(248, 248, 242, 0.22);
+  --border-color:       #44475a;
+  --cursor-color:       #f8f8f2;
+  --selection-bg:       rgba(68, 71, 90, 0.8);
+  --code-bg:            rgba(40, 42, 54, 0.7);
+  --code-text:          #f8f8f2;
+  --link-color:         #8be9fd;
+  --heading-color:      #bd93f9;
+  --blockquote-color:   #6272a4;
+  --blockquote-border:  #44475a;
+  --hr-color:           #44475a;
+  --accent-color:       #bd93f9;
+  --search-panel-bg:    #21222c;
+  --search-panel-border:#44475a;
+  --search-match-bg:    rgba(255, 184, 108, 0.25);
+  --search-match-selected-bg: rgba(255, 184, 108, 0.55);
+}

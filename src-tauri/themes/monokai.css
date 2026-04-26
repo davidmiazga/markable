@@ -1,0 +1,24 @@
+/* Monokai — Markable theme
+   Based on the classic Monokai colour scheme by Wimer Hazenberg */
+:root {
+  --bg-primary:         #272822;
+  --bg-titlebar:        #1e1f1c;
+  --text-primary:       #f8f8f2;
+  --text-secondary:     #75715e;
+  --text-titlebar:      rgba(248, 248, 242, 0.22);
+  --border-color:       #3e3d32;
+  --cursor-color:       #f8f8f2;
+  --selection-bg:       rgba(73, 72, 62, 0.8);
+  --code-bg:            rgba(62, 61, 50, 0.7);
+  --code-text:          #f8f8f2;
+  --link-color:         #66d9e8;
+  --heading-color:      #a6e22e;
+  --blockquote-color:   #75715e;
+  --blockquote-border:  #3e3d32;
+  --hr-color:           #3e3d32;
+  --accent-color:       #66d9e8;
+  --search-panel-bg:    #1e1f1c;
+  --search-panel-border:#3e3d32;
+  --search-match-bg:    rgba(253, 151, 31, 0.25);
+  --search-match-selected-bg: rgba(253, 151, 31, 0.55);
+}

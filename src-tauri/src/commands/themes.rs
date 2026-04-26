@@ -101,6 +101,58 @@ pub fn read_theme_css(app: tauri::AppHandle, filename: String) -> Result<String,
         .map_err(|e| format!("Failed to read theme file: {}", e))
 }
 
+/// Copy default theme CSS files from the app bundle into Application Support.
+///
+/// Only copies files that do not already exist in the destination — user
+/// customisations to default themes are preserved. New default themes added
+/// in a future version will be copied on the first launch of that version.
+///
+/// Safe to call on every launch (idempotent for existing files). Returns the
+/// number of files newly written.
+#[tauri::command]
+pub fn copy_default_themes(app: tauri::AppHandle) -> Result<usize, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Failed to resolve resource dir: {}", e))?;
+
+    let src_dir = resource_dir.join("themes");
+    if !src_dir.exists() {
+        // Normal in `tauri dev` — the resource dir is the Tauri target dir,
+        // not the project root. Themes are synced manually in dev via
+        // `npm run sync:themes`. Return silently.
+        return Ok(0);
+    }
+
+    let dst_dir = themes_dir(&app)?;
+    std::fs::create_dir_all(&dst_dir)
+        .map_err(|e| format!("Failed to create themes dir: {}", e))?;
+
+    let mut copied = 0usize;
+    for entry in std::fs::read_dir(&src_dir)
+        .map_err(|e| format!("Failed to read bundled themes: {}", e))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "css") {
+            if let Some(filename) = path.file_name() {
+                let dst = dst_dir.join(filename);
+                if !dst.exists() {
+                    std::fs::copy(&path, &dst)
+                        .map_err(|e| format!("Failed to copy {:?}: {}", path, e))?;
+                    copied += 1;
+                }
+            }
+        }
+    }
+
+    if copied > 0 {
+        println!("[themes] Installed {} default theme(s) to Application Support.", copied);
+    }
+
+    Ok(copied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

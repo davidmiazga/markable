@@ -1,0 +1,24 @@
+/* Solarized Light — Markable theme
+   Palette by Ethan Schoonover (https://ethanschoonover.com/solarized/) */
+:root {
+  --bg-primary:         #fdf6e3;
+  --bg-titlebar:        #eee8d5;
+  --text-primary:       #657b83;
+  --text-secondary:     #839496;
+  --text-titlebar:      rgba(88, 110, 117, 0.22);
+  --border-color:       #e8e1cc;
+  --cursor-color:       #586e75;
+  --selection-bg:       rgba(38, 139, 210, 0.18);
+  --code-bg:            rgba(238, 232, 213, 0.8);
+  --code-text:          #586e75;
+  --link-color:         #268bd2;
+  --heading-color:      #586e75;
+  --blockquote-color:   #839496;
+  --blockquote-border:  #e8e1cc;
+  --hr-color:           #e8e1cc;
+  --accent-color:       #268bd2;
+  --search-panel-bg:    #eee8d5;
+  --search-panel-border:#ddd6c2;
+  --search-match-bg:    rgba(181, 137, 0, 0.22);
+  --search-match-selected-bg: rgba(181, 137, 0, 0.50);
+}

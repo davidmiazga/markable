@@ -55,6 +55,7 @@ import {
   readThemeCss,
   updateThemeMenu,
   copyCorePlugins,
+  copyDefaultThemes,
 } from "./lib/bridge";
 import type { ThemeEntry } from "./lib/bridge";
 import {
@@ -68,7 +69,7 @@ import {
   removeRecentFile,
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
-import { createSettingsPanel, toggleSettingsPanel } from "./settings/settings-panel";
+import { createSettingsPanel, toggleSettingsPanel, initAppearanceCallbacks } from "./settings/settings-panel";
 import { createKeybindingsPanel, toggleKeybindingsPanel, resolveAction, COMMANDS } from "./keybindings/keybindings-panel";
 import {
   createPluginsPanel,
@@ -91,11 +92,6 @@ import * as vaultManager from "./lib/vault-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/400-italic.css";
-import "@fontsource/inter/500.css";
-import "@fontsource/inter/600.css";
-import "@fontsource/inter/700.css";
 import "./styles.css";
 
 // Global editor instance. currentFilePath, isDirty, isReadOnly, setDirty(),
@@ -801,6 +797,14 @@ async function initApp() {
     console.warn("[init] copyCorePlugins failed (non-fatal):", err);
   }
 
+  // Copy bundled default themes to Application Support on first launch.
+  // Skipped silently in tauri dev (no bundled resource dir). Non-fatal.
+  try {
+    await copyDefaultThemes();
+  } catch (err) {
+    console.warn("[init] copyDefaultThemes failed (non-fatal):", err);
+  }
+
   // Apply window position/size before anything is visible
   await applyWindowSettings(migratedSettings.window);
 
@@ -1014,6 +1018,11 @@ async function initApp() {
 
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel();
+  initAppearanceCallbacks({
+    getThemeOrder,
+    getCurrentTheme: () => getCurrentSettings().theme.active,
+    setTheme: (t) => void setTheme(t),
+  });
 
   // Create keybindings panel (DOM injection, hidden by default)
   createKeybindingsPanel();

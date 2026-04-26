@@ -45,6 +45,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["help/*", "plugins/core/*"]
+    "resources": ["help/*", "plugins/core/*", "themes/*"]
   }
 }

@@ -123,7 +123,10 @@
       "Bash(git merge:*)",
       "Bash(npm list:*)",
       "Read(//Users/davidmiazga/Documents/_code-workArea/markable-2.0/BEGIN{max=0;fn=\"\"} /^\\(export \\)?\\(async \\)?function |^export class |^  \\(async \\)?[a-zA-Z].*\\\\\\(.*\\\\\\).*{/{start=NR;name=$0} /^}$/**)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(rm /Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/node_modules/.bin/tauri)",
+      "Bash(ln -s ../@tauri-apps/cli/tauri.js /Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/node_modules/.bin/tauri)",
+      "Bash(npm uninstall *)"
     ]
   }
 }

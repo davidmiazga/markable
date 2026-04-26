@@ -18,6 +18,28 @@ import "./settings-panel.css";
 let panelElement: HTMLElement | null = null;
 let isOpen = false;
 
+interface ThemeCallbacks {
+  getThemeOrder: () => string[];
+  getCurrentTheme: () => string;
+  setTheme: (theme: string) => void;
+}
+let themeCallbacks: ThemeCallbacks | null = null;
+
+export function initAppearanceCallbacks(callbacks: ThemeCallbacks): void {
+  themeCallbacks = callbacks;
+}
+
+function themeDisplayName(id: string): string {
+  if (id === "system") return "System (follows OS)";
+  if (id === "default-light") return "Default Light";
+  if (id === "default-dark") return "Default Dark";
+  if (id.startsWith("custom:")) {
+    const stem = id.slice("custom:".length).replace(/\.css$/, "");
+    return stem.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+  return id;
+}
+
 export function createSettingsPanel(): void {
   const overlay = document.createElement("div");
   overlay.id = "settings-overlay";
@@ -77,6 +99,14 @@ export function createSettingsPanel(): void {
           </div>
 
           <p class="settings-description">Preset sizes apply immediately and center the window. Manual remembers your last size &amp; position. Maximize overrides all.</p>
+        </div>
+
+        <div class="settings-section">
+          <label class="settings-label">Appearance</label>
+          <div class="settings-row">
+            <span class="settings-description">Theme</span>
+            <select class="settings-select" id="settings-theme-select"></select>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -187,6 +217,12 @@ function wireEvents(): void {
       e.preventDefault();
       closeSettingsPanel();
     }
+  });
+
+  // Theme picker
+  const themeSelect = panelElement.querySelector("#settings-theme-select") as HTMLSelectElement;
+  themeSelect?.addEventListener("change", () => {
+    if (themeCallbacks) themeCallbacks.setTheme(themeSelect.value);
   });
 
   // Maximize checkbox
@@ -311,8 +347,26 @@ function updateSizeControlsDisabled(maximized: boolean): void {
   }
 }
 
+function populateThemeSelect(): void {
+  const themeSelect = document.querySelector("#settings-theme-select") as HTMLSelectElement;
+  if (!themeSelect || !themeCallbacks) return;
+  const current = themeCallbacks.getCurrentTheme();
+  const order = themeCallbacks.getThemeOrder();
+  themeSelect.innerHTML = "";
+  for (const id of order) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = themeDisplayName(id);
+    if (id === current) opt.selected = true;
+    themeSelect.appendChild(opt);
+  }
+}
+
 function syncPanelToSettings(): void {
   const settings = getCurrentSettings();
+
+  // Appearance — theme picker
+  populateThemeSelect();
 
   // Maximize
   const maxCheck = document.querySelector("#settings-launch-maximized") as HTMLInputElement;

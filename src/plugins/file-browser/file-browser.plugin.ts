@@ -40,7 +40,6 @@ import {
   ICON_FILE_JSON,
   ICON_FILE_CODE,
   ICON_CHEVRON,
-  ICON_EXPAND,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).

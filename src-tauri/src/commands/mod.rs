@@ -36,7 +36,7 @@ pub use plugins::{
     write_plugin_settings,
 };
 pub use settings::{get_settings, save_settings};
-pub use themes::{list_themes, read_theme_css};
+pub use themes::{copy_default_themes, list_themes, read_theme_css};
 pub use vault::{
     build_vault_index,
     create_vault,

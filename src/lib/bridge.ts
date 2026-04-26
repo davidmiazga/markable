@@ -263,6 +263,16 @@ export async function copyCorePlugins(): Promise<void> {
   await invoke<void>("copy_core_plugins");
 }
 
+/**
+ * Copy bundled default theme CSS files to Application Support/themes/.
+ * Only writes files that don't already exist — user customisations are safe.
+ * Returns the number of newly installed themes (0 = all already present).
+ * Non-fatal: silently succeeds in tauri dev where the resource dir is absent.
+ */
+export async function copyDefaultThemes(): Promise<number> {
+  return invoke<number>("copy_default_themes");
+}
+
 // ── User Plugin commands ──────────────────────────────────────────────────────
 
 /**

@@ -1,0 +1,24 @@
+/* Nord — Markable theme
+   Arctic, north-bluish colour palette by Arctic Ice Studio */
+:root {
+  --bg-primary:         #2e3440;
+  --bg-titlebar:        #2e3440;
+  --text-primary:       #d8dee9;
+  --text-secondary:     #7b88a1;
+  --text-titlebar:      rgba(123, 136, 161, 0.22);
+  --border-color:       #3b4252;
+  --cursor-color:       #d8dee9;
+  --selection-bg:       rgba(136, 192, 208, 0.2);
+  --code-bg:            rgba(59, 66, 82, 0.8);
+  --code-text:          #e5e9f0;
+  --link-color:         #88c0d0;
+  --heading-color:      #81a1c1;
+  --blockquote-color:   #7b88a1;
+  --blockquote-border:  #434c5e;
+  --hr-color:           #434c5e;
+  --accent-color:       #88c0d0;
+  --search-panel-bg:    #3b4252;
+  --search-panel-border:#434c5e;
+  --search-match-bg:    rgba(136, 192, 208, 0.25);
+  --search-match-selected-bg: rgba(136, 192, 208, 0.55);
+}
