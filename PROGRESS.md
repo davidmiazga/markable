@@ -1,7 +1,7 @@
 # Markable 2.0 — Progress Tracker
 
 **Last Updated:** 2026-04-27
-**Current Status:** Phase 1 complete ✅ — Phase 2 active 🟡
+**Current Status:** Phase 1 complete ✅ — Phase 2 largely complete 🟡
 
 ---
 
@@ -23,6 +23,24 @@
 - **Heading scale** — CSS custom properties (`--heading-h1-size` … `--heading-h6-weight`) control all heading sizes/weights from top of `styles.css`
 - **Vault UX refactor** — New Vault decoupled from Manage Vaults modal; hover-reveal unmount button (12% → 50% on row hover, red on button hover); inline rename on double-click; context menu (Unmount / Rename / Edit Type); Manage Vaults entry points in Plugin Panel footer + `vault-manage` keybinding slot; 31 Vitest tests; code-reviewer approved 2026-04-25
 - **Find & Replace** — Custom floating widget (Cmd-F / Cmd-Shift-F); CM6 panel suppressed; drag + position persistence; match count with 999+ cap; all 29 edge cases covered; 72 Vitest tests; code-reviewer approved 2026-04-09
+- **Tiny Three** — Paste Link (Cmd-K), Move Line Up/Down (Opt-↑/↓), Close All (Cmd-Shift-W); 21 Vitest tests; code-reviewer approved 2026-04-09
+- **Export HTML** — Cmd-Opt-E; `marked` v18 conversion; standalone HTML with embedded CSS; 48 Vitest tests; code-reviewer approved 2026-04-09
+- **Word Count** — Plugin
+- **Auto TOC** — Plugin
+- **Focus Mode** — Plugin
+- **Typewriter Mode** — Plugin
+- **Templates** — Plugin
+- **Backlinks** — Plugin
+- **YAML Pane** — Plugin
+- **Math (LaTeX)** — Plugin
+- **Media Preview** — Plugin
+- **Diagrams (Mermaid)** — Plugin
+- **Insert Count** — Plugin
+- **Knowledge Graph** — Plugin
+- **File Browser link update (FR-02.11)** — Post-rename/move `[[wiki-link]]` update banner; same-stem guard suppresses no-op moves; `reloadVaultIndex` after update; 12 new Vitest tests (EC-01–EC-09, EC-11, EC-18); code-reviewer approved 2026-04-27
+
+### Known Regressions 🔴
+- **`file-tree.test.ts` — 4 failing tests** (pre-existing, commit `281795e`): `displayName` in `file-tree.ts` no longer strips `.md` extension from file node names. Needs a follow-up fix.
 
 ### In Progress / Next 🟡
 - TBD

@@ -31,6 +31,8 @@ import {
   showLinkUpdateBanner,
   deleteDirectory,
   renameNode,
+  checkAndShowLinkBanner,
+  moveNode,
 } from "../../../src/plugins/file-browser/file-browser-ops";
 
 // ── Test fixtures ──────────────────────────────────────────────────────────────
@@ -72,6 +74,46 @@ function makeContainer(): HTMLDivElement {
   const div = document.createElement("div");
   document.body.appendChild(div);
   return div;
+}
+
+/**
+ * Builds a vault index where "/notes/old-note.md" exists and
+ * "/notes/linking-note.md" has an outbound link to the stem "old-note".
+ *
+ * Hoisted to module scope so it can be shared by the EC-18 describe block,
+ * the FR-02.11 edge-case suite, and any future tests that need a backlink
+ * fixture — avoiding the code duplication that caused Low-1.
+ */
+function makeIndexWithBacklink(): VaultIndex {
+  return {
+    vaultId: "test-vault",
+    builtAt: Date.now(),
+    entries: [
+      {
+        path: "/notes/old-note.md",
+        name: "old-note",
+        modified: 1000,
+        size: 100,
+        title: "Old Note",
+        tags: [],
+        outboundLinks: [],
+      },
+      {
+        path: "/notes/linking-note.md",
+        name: "linking-note",
+        modified: 1000,
+        size: 100,
+        title: "Linker",
+        tags: [],
+        // This entry references the file being renamed, so it will appear in
+        // the link-update banner when "old-note" is renamed.
+        outboundLinks: ["old-note"],
+      },
+    ],
+    totalFilesFound: 2,
+    skippedCount: 0,
+    capped: false,
+  };
 }
 
 // ── Mock API factory ───────────────────────────────────────────────────────────
@@ -1620,39 +1662,7 @@ describe("deleteDirectory", () => {
 // ── HIGH-2: renameNode link-update banner (EC-18) ─────────────────────────────
 
 describe("renameNode link-update banner (EC-18)", () => {
-  /**
-   * Builds a vault index where one file has an outbound link pointing to
-   * the stem "old-note", used to verify the link-update banner appears.
-   */
-  function makeIndexWithBacklink(): VaultIndex {
-    return {
-      vaultId: "test-vault",
-      builtAt: Date.now(),
-      entries: [
-        {
-          path: "/notes/old-note.md",
-          name: "old-note",
-          modified: 1000,
-          size: 100,
-          title: "Old Note",
-          tags: [],
-          outboundLinks: [],
-        },
-        {
-          path: "/notes/linking-note.md",
-          name: "linking-note",
-          modified: 1000,
-          size: 100,
-          title: "Linker",
-          tags: [],
-          outboundLinks: ["old-note"], // references the file being renamed
-        },
-      ],
-      totalFilesFound: 2,
-      skippedCount: 0,
-      capped: false,
-    };
-  }
+  // makeIndexWithBacklink is defined at module scope — see fixture section above.
 
   it("link-update banner appears after confirming rename (EC-18)", async () => {
     /*
@@ -1819,6 +1829,388 @@ describe("startInlineRename — no-op when same name entered (LOW-5)", () => {
     /* The rename input must have been removed and the label restored. */
     expect(fileNode!.querySelector(".tree-node-rename-input")).toBeNull();
     expect(fileNode!.querySelector(".tree-node-label")).not.toBeNull();
+  });
+});
+
+// ── FR-02.11 edge-case suite ──────────────────────────────────────────────────
+
+describe("link-update banner — edge cases (FR-02.11)", () => {
+  // makeIndexWithBacklink is defined at module scope — see fixture section above.
+
+  // ── EC-01 — No linking files: no banner ─────────────────────────────────────
+
+  it("EC-01: no banner when no file links to the renamed stem", async () => {
+    /*
+     * When the vault index has no entries whose outboundLinks include the old
+     * stem, the link-update banner must NOT appear after renaming.
+     */
+    const vault = makeVault();
+    // makeVaultIndex produces entries with empty outboundLinks — no backlinks.
+    const index = makeVaultIndex(["/notes/solo.md"]);
+    setupVaultManager(vault, index);
+
+    const invokeMock = vi.fn().mockResolvedValue(undefined);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    const container = makeContainer();
+
+    await renameNode("/notes/solo.md", "solo-renamed", container);
+
+    expect(container.querySelector(".file-browser-link-banner")).toBeNull();
+  });
+
+  // ── EC-02 — Singular "1 note links to …" ────────────────────────────────────
+
+  it("EC-02: banner message uses singular 'note' when exactly one file links", async () => {
+    /*
+     * When exactly one file has a backlink, the banner text must read
+     * "1 note links to …" — no trailing "s" on "note" (EC-02).
+     */
+    const vault = makeVault();
+    const index = makeIndexWithBacklink(); // exactly one linking note
+    setupVaultManager(vault, index);
+
+    const invokeMock = vi.fn().mockResolvedValue(undefined);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    const container = makeContainer();
+
+    await renameNode("/notes/old-note.md", "new-note", container);
+
+    const banner = container.querySelector(".file-browser-link-banner");
+    expect(banner).not.toBeNull();
+
+    // Singular form must be present.
+    expect(banner!.textContent).toContain("1 note links");
+    // Plural form "1 notes" must NOT appear.
+    expect(banner!.textContent).not.toContain("1 notes");
+  });
+
+  // ── EC-04 — Rename to same name: no banner ───────────────────────────────────
+
+  it("EC-04: no banner when file is renamed to the same stem", async () => {
+    /*
+     * When the user presses Enter without changing the filename, oldStem === stem.
+     * The banner must be suppressed per AD-01 — showing it would offer a no-op
+     * rewrite ([[same-stem]] → [[same-stem]]).
+     *
+     * We use a path not in the vault index ("/notes/same-stem.md") so the
+     * `filenameExistsInDir` check passes, while the index still contains a
+     * linking note so a banner *would* appear if the guard were absent.
+     */
+    const vault = makeVault();
+
+    // Index has a linking note but NOT "/notes/same-stem.md" as an entry,
+    // so the duplicate-name guard inside renameNode is not triggered.
+    const index: VaultIndex = {
+      vaultId: "test-vault",
+      builtAt: Date.now(),
+      entries: [
+        {
+          path: "/notes/linking-note.md",
+          name: "linking-note",
+          modified: 1000,
+          size: 100,
+          title: "Linker",
+          tags: [],
+          outboundLinks: ["same-stem"], // would trigger banner if guard absent
+        },
+      ],
+      totalFilesFound: 1,
+      skippedCount: 0,
+      capped: false,
+    };
+    setupVaultManager(vault, index);
+
+    const invokeMock = vi.fn().mockResolvedValue(undefined);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    const container = makeContainer();
+
+    // Rename "/notes/same-stem.md" to the same stem — banner must not appear.
+    await renameNode("/notes/same-stem.md", "same-stem", container);
+
+    expect(container.querySelector(".file-browser-link-banner")).toBeNull();
+  });
+
+  // ── EC-05 — Move with same stem: no banner ───────────────────────────────────
+
+  it("EC-05: no banner after moving a file when the stem is unchanged", async () => {
+    /*
+     * A pure directory move preserves the filename stem.
+     * getFileStem("/notes/old-note.md") === getFileStem("/notes/subdir/old-note.md")
+     * so the oldStem !== newStem guard is false and the banner must not appear.
+     */
+    const vault = makeVault();
+    const index = makeIndexWithBacklink();
+    setupVaultManager(vault, index);
+
+    // move_file resolves with the new absolute path of the moved file.
+    const invokeMock = vi.fn().mockResolvedValue("/notes/subdir/old-note.md");
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    const container = makeContainer();
+
+    await moveNode("/notes/old-note.md", "/notes/subdir", container);
+
+    // Stem "old-note" is the same before and after — banner must be suppressed.
+    expect(container.querySelector(".file-browser-link-banner")).toBeNull();
+  });
+
+  // ── EC-07 — Ghost file: path absent from vault index entirely ───────────────
+
+  it("EC-07: no banner when the renamed file has no entry in the vault index at all", async () => {
+    /*
+     * When the vault index contains entries for other files but has NO entry
+     * whose path matches the renamed file's stem (i.e. the file is a "ghost"
+     * that was never indexed), checkAndShowLinkBanner must return without
+     * showing a banner and without throwing an exception.
+     *
+     * Rationale: the index only has "/notes/other.md" with no outbound links.
+     * Calling checkAndShowLinkBanner with oldStem "ghost" finds zero matching
+     * outboundLinks entries, so the banner suppression path is taken (EC-01
+     * covers the same code path but this test explicitly documents the
+     * "path absent entirely" case, not just "outboundLinks is empty").
+     */
+    const vault = makeVault();
+    // Index only has "/notes/other.md" — no entry for "ghost" at all.
+    const index = makeVaultIndex(["/notes/other.md"]);
+    setupVaultManager(vault, index);
+
+    const container = makeContainer();
+
+    // Must not throw, must not insert a banner.
+    expect(() => checkAndShowLinkBanner(container, "ghost", "ghost-renamed")).not.toThrow();
+
+    expect(container.querySelector(".file-browser-link-banner")).toBeNull();
+  });
+
+  // ── EC-03 — Plural success message ──────────────────────────────────────────
+
+  it("EC-03: success message says 'Updated 2 notes.' when two files were updated", async () => {
+    /*
+     * When update_wiki_links returns { updated: ["/a.md", "/b.md"], failed: [] },
+     * the success message must read "Updated 2 notes." (plural "notes", not
+     * "note"). This validates the note${n === 1 ? "" : "s"} grammar branch for
+     * counts greater than 1 (EC-03, Low-2 coverage gap).
+     */
+    vi.useFakeTimers();
+
+    // Set up vault manager so reloadVaultIndex is available (awaited on success).
+    setupVaultManager(makeVault(), makeVaultIndex(["/a.md", "/b.md"]));
+
+    const container = makeContainer();
+
+    const invokeMock = vi.fn().mockResolvedValue({
+      updated: ["/a.md", "/b.md"],
+      failed: [],
+    });
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    showLinkUpdateBanner(container, "old-note", "new-note", ["/a.md", "/b.md"]);
+
+    const updateBtn = container.querySelector<HTMLElement>(
+      ".file-browser-link-banner-btn:not(.file-browser-link-banner-dismiss)",
+    );
+    expect(updateBtn).not.toBeNull();
+    updateBtn!.click();
+
+    // Flush all async boundaries (invoke + reloadVaultIndex + message set).
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const msg = container.querySelector(".file-browser-link-banner span");
+    // Plural: "Updated 2 notes." — NOT "Updated 2 note."
+    expect(msg!.textContent).toContain("Updated 2 notes.");
+    expect(msg!.textContent).not.toContain("Updated 2 note.");
+
+    vi.useRealTimers();
+  });
+
+  // ── EC-08 — Partial failure: banner persists with summary ───────────────────
+
+  it("EC-08: banner persists and shows updated/failed counts on partial failure", async () => {
+    /*
+     * When update_wiki_links returns a non-empty `failed` array the banner must
+     * NOT auto-dismiss, and the message must show both counts.
+     *
+     * Timer control: fake timers are used to verify the banner is NOT dismissed
+     * by `setTimeout` after a partial failure. `vi.runAllTimers()` advances all
+     * pending timers; the banner must still be present afterward.
+     *
+     * Extra Promise.resolve() flush: handleLinkUpdateClick now awaits
+     * reloadVaultIndex in the partial-failure path before setting the message
+     * text — one additional async boundary compared to the original code.
+     */
+    vi.useFakeTimers();
+
+    // Set up vault manager so reloadVaultIndex is available (called for partial
+    // failures too, per FR-02.11.4, to persist updates that did succeed).
+    setupVaultManager(makeVault(), makeVaultIndex(["/notes/a.md", "/notes/b.md"]));
+
+    const container = makeContainer();
+
+    const invokeMock = vi.fn().mockResolvedValue({
+      updated: ["/notes/a.md"],
+      failed: ["/notes/b.md"],
+    });
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    showLinkUpdateBanner(container, "old", "new", ["/notes/a.md", "/notes/b.md"]);
+
+    const updateBtn = container.querySelector<HTMLElement>(".file-browser-link-banner-btn:not(.file-browser-link-banner-dismiss)");
+    expect(updateBtn).not.toBeNull();
+    updateBtn!.click();
+
+    /*
+     * Flush the microtask queue: handleLinkUpdateClick chains through
+     * invoke → tauri.invoke (mock) → reloadVaultIndex → message set.
+     * Five flushes absorb all async boundaries in the partial-failure path.
+     */
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const msg = container.querySelector(".file-browser-link-banner span");
+    expect(msg!.textContent).toContain("Updated 1, failed 1.");
+
+    // Banner must not have auto-dismissed on partial failure.
+    vi.runAllTimers();
+    expect(container.querySelector(".file-browser-link-banner")).not.toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  // ── EC-09 — Total failure: banner persists with error message ───────────────
+
+  it("EC-09: banner persists and shows error message when update_wiki_links rejects", async () => {
+    /*
+     * When update_wiki_links rejects (e.g. disk full), the banner must stay in
+     * the DOM and the message must contain the error string.
+     *
+     * Timer control: same fake-timer strategy as EC-08 — run all timers and
+     * assert the banner is still present (error state never auto-dismisses).
+     */
+    vi.useFakeTimers();
+
+    const container = makeContainer();
+
+    const invokeMock = vi.fn().mockRejectedValue("disk full");
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    showLinkUpdateBanner(container, "old", "new", ["/notes/a.md"]);
+
+    const updateBtn = container.querySelector<HTMLElement>(".file-browser-link-banner-btn:not(.file-browser-link-banner-dismiss)");
+    expect(updateBtn).not.toBeNull();
+    updateBtn!.click();
+
+    // Flush the microtask queue (rejection path is also async).
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const msg = container.querySelector(".file-browser-link-banner span");
+    expect(msg!.textContent).toContain("Link update failed: disk full");
+
+    // Banner must not auto-dismiss on total failure.
+    vi.runAllTimers();
+    expect(container.querySelector(".file-browser-link-banner")).not.toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  // ── EC-11 — Success: auto-dismiss after 3 s ──────────────────────────────────
+
+  it("EC-11: banner auto-dismisses after 3 s on successful update", async () => {
+    /*
+     * When update_wiki_links succeeds, the banner must:
+     *   1. Call reloadVaultIndex so link metadata is refreshed (FR-02.11.4).
+     *   2. Show a success message.
+     *   3. Auto-dismiss after 3 seconds.
+     *
+     * Timer control: fake timers capture the `setTimeout(() => banner.remove(), 3000)`
+     * call. `vi.advanceTimersByTime(3000)` fires it precisely.
+     *
+     * Extra Promise.resolve() flushes: handleLinkUpdateClick now awaits
+     * reloadVaultIndex before the setTimeout, adding one extra async boundary
+     * that needs flushing (5 flushes total instead of 4).
+     */
+    vi.useFakeTimers();
+
+    const vault = makeVault();
+    const index = makeIndexWithBacklink();
+    // Set up vault manager so reloadVaultIndex is available for the assertion.
+    setupVaultManager(vault, index);
+    const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+
+    const container = makeContainer();
+
+    const invokeMock = vi.fn().mockResolvedValue({
+      updated: ["/notes/a.md"],
+      failed: [],
+    });
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    showLinkUpdateBanner(container, "old", "new", ["/notes/a.md"]);
+
+    const updateBtn = container.querySelector<HTMLElement>(".file-browser-link-banner-btn:not(.file-browser-link-banner-dismiss)");
+    expect(updateBtn).not.toBeNull();
+    updateBtn!.click();
+
+    // Flush the microtask queue before advancing timers.
+    // Five flushes: invoke → resolve → reloadVaultIndex → resolve → message set.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // reloadVaultIndex must have been called after a successful update (FR-02.11.4).
+    expect(vaultManager.reloadVaultIndex).toHaveBeenCalledTimes(1);
+
+    const msg = container.querySelector(".file-browser-link-banner span");
+    expect(msg!.textContent).toContain("Updated 1 note.");
+
+    // Banner must still be present before the timer fires.
+    expect(container.querySelector(".file-browser-link-banner")).not.toBeNull();
+
+    // Advance time past the 3-second auto-dismiss threshold.
+    vi.advanceTimersByTime(3000);
+
+    // Banner must now be gone.
+    expect(container.querySelector(".file-browser-link-banner")).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  // ── EC-18 variant — Null container: no DOM error ─────────────────────────────
+
+  it("EC-18 (null-container): checkAndShowLinkBanner with null container does not throw", () => {
+    /*
+     * When the panel is not mounted (_panelContainer is null), calling
+     * checkAndShowLinkBanner must silently return without throwing or touching
+     * document.body. This protects callers that pass _panelContainer directly
+     * without a null-check (AD-01, EC-18).
+     */
+    const bodyChildCountBefore = document.body.childElementCount;
+
+    // Must not throw even with a vault index that has backlinks.
+    const vault = makeVault();
+    const index = makeIndexWithBacklink();
+    setupVaultManager(vault, index);
+
+    expect(() => checkAndShowLinkBanner(null, "old", "new")).not.toThrow();
+
+    // No banner must have been appended to document.body.
+    const addedToBody = document.body.childElementCount > bodyChildCountBefore &&
+      document.body.querySelector(".file-browser-link-banner") !== null;
+    expect(addedToBody).toBe(false);
   });
 });
 

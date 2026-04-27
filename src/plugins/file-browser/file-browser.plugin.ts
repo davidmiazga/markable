@@ -2400,7 +2400,9 @@ function attachDragDropListeners(el: HTMLElement, _vaultId: string): void {
       /* Prevent dropping into a descendant of the dragged node */
       if (path.startsWith(sourcePath + "/")) return;
 
-      void moveNode(sourcePath, path).catch((err) => {
+      // Pass _panelContainer (nullable) so moveNode can show the link-update
+      // banner when needed. checkAndShowLinkBanner guards the null case internally.
+      void moveNode(sourcePath, path, _panelContainer).catch((err) => {
         console.error("[file-browser] move failed:", err);
         /*
          * MEDIUM-2: Surface the move failure as a visible error strip so the

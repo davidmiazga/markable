@@ -124,7 +124,7 @@ export function showLinkUpdateBanner(
   // Remove any existing banner before showing a new one.
   container.querySelector(".file-browser-link-banner")?.remove();
 
-  const banner = buildLinkBanner(container, oldStem, newStem, linkingPaths);
+  const banner = buildLinkBanner(oldStem, newStem, linkingPaths);
   // Insert at the top of the container, before the tree / search header.
   container.insertBefore(banner, container.firstChild);
 }
@@ -134,14 +134,12 @@ export function showLinkUpdateBanner(
  *
  * Extracted from showLinkUpdateBanner to keep each function ≤30 lines.
  *
- * @param container    - Parent container (for DOM manipulation callbacks).
  * @param oldStem      - Old filename stem.
  * @param newStem      - New filename stem.
  * @param linkingPaths - Files containing the old link.
  * @returns The configured banner element.
  */
 function buildLinkBanner(
-  _container: HTMLElement,
   oldStem: string,
   newStem: string,
   linkingPaths: string[],
@@ -150,10 +148,18 @@ function buildLinkBanner(
   banner.className = "file-browser-link-banner";
 
   const msg = document.createElement("span");
-  msg.textContent = `${linkingPaths.length} note${linkingPaths.length === 1 ? "" : "s"} link to "${oldStem}". Update links?`;
+  // Grammar: "1 note links to …" (singular verb) vs "2 notes link to …" (plural).
+  // The "s" moves from the noun suffix to the verb suffix for singular count.
+  const count = linkingPaths.length;
+  msg.textContent = count === 1
+    ? `1 note links to "${oldStem}". Update links?`
+    : `${count} notes link to "${oldStem}". Update links?`;
   banner.appendChild(msg);
 
   const updateBtn = document.createElement("button");
+  // type="button" prevents accidental form submission if the banner is ever
+  // placed inside a <form> element in the future (defensive coding).
+  updateBtn.type = "button";
   updateBtn.className = "file-browser-link-banner-btn";
   updateBtn.textContent = "Update";
   updateBtn.addEventListener("click", () => {
@@ -161,6 +167,8 @@ function buildLinkBanner(
   });
 
   const dismissBtn = document.createElement("button");
+  // type="button" — same defensive rationale as updateBtn above.
+  dismissBtn.type = "button";
   dismissBtn.className = "file-browser-link-banner-btn file-browser-link-banner-dismiss";
   dismissBtn.textContent = "Dismiss";
   dismissBtn.addEventListener("click", () => banner.remove());
@@ -201,12 +209,19 @@ async function handleLinkUpdateClick(
     const updatedCount = result.updated.length;
     const failedCount = result.failed.length;
 
-    msg.textContent = failedCount === 0
-      ? `Updated ${updatedCount} note${updatedCount === 1 ? "" : "s"}.`
-      : `Updated ${updatedCount}, failed ${failedCount}.`;
-
-    // Auto-dismiss the banner after 3 seconds.
-    setTimeout(() => banner.remove(), 3000);
+    if (failedCount === 0) {
+      // Full success: reload the vault index so link metadata is current
+      // (FR-02.11.4), then show summary and auto-dismiss after 3 s (EC-11).
+      await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+      msg.textContent = `Updated ${updatedCount} note${updatedCount === 1 ? "" : "s"}.`;
+      setTimeout(() => banner.remove(), 3000);
+    } else {
+      // Partial failure: reload the vault index for the files that did succeed
+      // (FR-02.11.4), then show both counts and leave banner open for user
+      // action (EC-08). No auto-dismiss — the user must manually dismiss.
+      await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+      msg.textContent = `Updated ${updatedCount}, failed ${failedCount}.`;
+    }
   } catch (err) {
     msg.textContent = `Link update failed: ${String(err)}`;
   }
@@ -303,8 +318,10 @@ export async function renameNode(
   // Notify the tab manager so the tab title updates.
   (window as any).__MARKABLE_TAB_MANAGER__?.renameFile?.(oldPath, newPath);
 
-  // Check for backlinks referencing the old stem (EC-18).
-  if (isFile) {
+  // Only check backlinks when the stem actually changed (AD-01).
+  // When oldStem === stem the user committed the input without changing the
+  // filename; showing the banner would offer a no-op rewrite (EC-04 guard).
+  if (isFile && oldStem !== stem) {
     checkAndShowLinkBanner(container, oldStem, stem);
   }
 }
@@ -313,17 +330,25 @@ export async function renameNode(
  * Check the vault index for files containing `[[oldStem]]` and show the
  * link-update banner when any are found.
  *
+ * Accepts a nullable container so callers can pass `_panelContainer` directly
+ * without a null-check at every call site (EC-18). When `container` is null the
+ * function returns immediately without touching the DOM.
+ *
  * Extracted from renameNode to keep that function ≤30 lines.
  *
- * @param container - The panel container to host the banner.
+ * @param container - The panel container to host the banner, or null when the
+ *                    panel is not mounted (banner is silently suppressed).
  * @param oldStem   - The old link target stem.
  * @param newStem   - The replacement stem.
  */
-function checkAndShowLinkBanner(
-  container: HTMLElement,
+export function checkAndShowLinkBanner(
+  container: HTMLElement | null,
   oldStem: string,
   newStem: string,
 ): void {
+  // Guard: panel may not be mounted yet (e.g. during startup or after teardown).
+  if (!container) return;
+
   const vaultIndex = (window as any).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.() as VaultIndex | null;
   if (!vaultIndex) return;
 
@@ -413,15 +438,27 @@ async function closeTabsUnder(dirPath: string): Promise<void> {
  * Move a file to a new parent directory.
  *
  * Errors if the destination already contains a file with the same name (EC-19).
- * On success: reloads the vault index, updates any open tab for the moved file.
+ * On success: reloads the vault index, updates any open tab for the moved file,
+ * and conditionally shows the link-update banner.
+ *
+ * The banner is suppressed when `oldStem === newStem` (AD-01). A pure directory
+ * move never changes the stem, so the guard is currently always false. It exists
+ * to document intent and protect against future code paths that might differ.
  *
  * @param sourcePath     - Absolute path of the file to move.
  * @param destinationDir - Absolute path of the target directory.
+ * @param container      - The file-browser panel container for the banner, or
+ *                         null when the panel is not mounted (banner suppressed).
  */
 export async function moveNode(
   sourcePath: string,
   destinationDir: string,
+  container: HTMLElement | null,
 ): Promise<void> {
+  // Capture the source stem before the move (stem is preserved during a move,
+  // but computing both allows the guard below to document intent clearly).
+  const oldStem = getFileStem(sourcePath);
+
   const newPath = await invoke<string>("move_file", {
     source: sourcePath,
     destinationDir,
@@ -432,6 +469,13 @@ export async function moveNode(
 
   // Notify the tab manager so the tab header updates.
   (window as any).__MARKABLE_TAB_MANAGER__?.renameFile?.(sourcePath, newPath);
+
+  // Only show the banner when the stem actually changed (AD-01).
+  // For a standard move this guard is always false; it guards future edge cases.
+  const newStem = getFileStem(newPath);
+  if (oldStem !== newStem) {
+    checkAndShowLinkBanner(container, oldStem, newStem);
+  }
 }
 
 // ── Private path helpers ──────────────────────────────────────────────────────
