@@ -110,6 +110,18 @@ export function createSettingsPanel(): void {
         </div>
 
         <div class="settings-section">
+          <label class="settings-label">Editor</label>
+
+          <div class="settings-maximize-row">
+            <label class="settings-checkbox-label">
+              <input type="checkbox" id="settings-spell-check" />
+              <span>Spell check</span>
+            </label>
+          </div>
+          <p class="settings-description">Underline misspelled words using the system dictionary.</p>
+        </div>
+
+        <div class="settings-section">
           <label class="settings-label">Recent Files</label>
           <p class="settings-description" id="settings-recent-count"></p>
           <button class="settings-btn settings-btn-secondary" id="settings-clear-recent">
@@ -316,6 +328,25 @@ function wireEvents(): void {
       syncTabModeControl(mode);
     });
 
+  // Spell check checkbox — toggle the CM6 spellCheckCompartment immediately
+  // and persist the new value. Follows the same pattern as other boolean
+  // settings toggles (e.g. launchMaximized above).
+  //
+  // The `applyEditorSettings(getCurrentSettings().editor)` call re-reads the
+  // freshly updated settings object so the compartment reflects the new value
+  // (FR-B.2, AD-07). The Reset-All handler below uses the same mechanism via
+  // applyEditorSettings(DEFAULT_SETTINGS.editor) (AD-08).
+  const spellCheckInput = panelElement.querySelector(
+    "#settings-spell-check"
+  ) as HTMLInputElement;
+  spellCheckInput?.addEventListener("change", async () => {
+    await updateSettings((s) => ({
+      ...s,
+      editor: { ...s.editor, spellCheck: spellCheckInput.checked },
+    }));
+    applyEditorSettings(getCurrentSettings().editor);
+  });
+
   // List style dropdown — persist the selected style immediately so the list
   // engine picks it up on the next Enter/Tab keypress. Follows the same
   // pattern as the window size dropdowns (wSelect/hSelect above).
@@ -395,6 +426,16 @@ function syncPanelToSettings(): void {
 
   // Tab mode segmented control — reflect the current saved mode
   syncTabModeControl(settings.tabMode ?? "minimal");
+
+  // Spell check checkbox — sync to current settings value.
+  // `?? false` guards against old settings files that pre-date this field
+  // (EC-B.01, AD-09): missing field → unchecked (off).
+  const spellCheckInput = document.querySelector(
+    "#settings-spell-check"
+  ) as HTMLInputElement;
+  if (spellCheckInput) {
+    spellCheckInput.checked = settings.editor.spellCheck ?? false;
+  }
 
   syncRecentFilesCount();
 }

@@ -1,166 +1,224 @@
 ---
-title: "File Browser — Post-Rename/Move Link Update (FR-02.11)"
+title: "Wikilink Autocomplete (Vault-Index Source) + Spell Check Toggle"
 last-updated: "2026-04-27"
 review-cadence-days: 7
 status: active
 ---
 
-# File Browser — Post-Rename/Move Link Update (FR-02.11)
+# Wikilink Autocomplete (Vault-Index Source) + Spell Check Toggle
 
 ## Validation Status
 
-**PENDING — awaiting user approval.**
+**VALIDATED — requirements approved for handoff.**
 
 ---
 
-## 1. Feature Summary
+## 1. Feature Summaries
 
-After a file is renamed or moved within the active vault, the system queries the vault index to find all notes that contain an outbound wiki-link pointing to the affected file's old name. If any such notes exist, a dismissible notification banner appears inside the File Browser panel offering the user a one-click bulk link-update operation. The update is performed by a dedicated Rust command that rewrites every matched `[[old-name]]` occurrence across all linking files using the temp-file-swap pattern, ensuring no partial writes. The operation is opt-in and best-effort: only the bare `[[filename-stem]]` wiki-link form is matched; links that embed the full path, an alias, or a display-text override with the old stem in a non-standard position may not be caught.
+**Feature A — Wikilink Autocomplete (Vault-Index Source)**
+As a user I want typing `[[` in the editor to show an inline autocomplete dropdown of every `.md` file in the active vault, filtered as I type, so I can insert a correctly formatted `[[stem]]` link without leaving the keyboard.
 
----
-
-## 2. Functional Requirements
-
-### FR-02.11.1 — Trigger: Post-Rename Detection
-
-After a successful file rename (committed via `renameNode` / the Rust `rename_file` command), the system must:
-
-- Determine the old filename stem (the portion of the filename before `.md`, e.g. `meeting` from `meeting.md`).
-- Query the active vault index for all entries whose `outboundLinks` array contains the old stem.
-- If one or more linking entries are found, show the link-update banner (FR-02.11.3).
-- If zero linking entries are found, take no action and show no banner.
-- This check applies to `.md` file renames only. Folder renames do not trigger a link-update banner.
-
-### FR-02.11.2 — Trigger: Post-Move Detection
-
-After a successful file move (committed via `moveNode` / the Rust `move_file` command), the system must apply the same detection logic as FR-02.11.1 using the moved file's stem. A move does not change the filename stem, so the stem before and after the move is identical. The link-update banner is therefore only relevant when the vault contains notes that use `[[stem]]` wiki-links AND the user intends to update them to reflect the new location in a future path-aware link format. For the current spec (bare-stem matching only), the banner informs the user that links to `[[stem]]` exist and offers to re-confirm them — but since the stem has not changed, the "Update" action in the move case is a no-op rewrite (find `[[stem]]` → replace with `[[stem]]`). The banner must still appear to ensure the user is aware of linking notes.
-
-> Note for Architect: the move-case banner is low-value unless the system evolves to support path-aware wiki-links. The Architect may recommend suppressing the banner on moves where the stem is unchanged, provided this decision is documented as an architectural note in the spec.
-
-### FR-02.11.3 — Notification Banner UI
-
-When triggered (FR-02.11.1 or FR-02.11.2), the system must display a notification banner within the File Browser panel with the following properties:
-
-- **Placement**: inserted at the top of the `.file-browser-panel` container, above the file tree and search header. Only one banner may be visible at a time; a new banner replaces any existing one.
-- **Message text**: `"[N] note[s] link to '[old-name]'. Update links?"` where N is the count of linking files and the singular/plural form of "note" is grammatically correct (i.e. "1 note links" not "1 notes links").
-- **"Update" button**: triggers the bulk link-update operation (FR-02.11.4).
-- **"Dismiss" button**: removes the banner without performing any file writes (FR-02.11.5).
-- The banner must be keyboard-accessible: "Update" and "Dismiss" buttons are focusable and respond to Enter/Space.
-- The banner must use CSS variables for all colors and typography (no hardcoded values).
-
-### FR-02.11.4 — Update Action
-
-When the user clicks "Update":
-
-- The UI updates the banner message to `"Updating links…"` immediately (optimistic feedback).
-- The system invokes the Rust command `update_wiki_links` with: the list of linking file paths (`filesToUpdate`), the old stem (`oldLink`), and the new stem (`newLink`).
-- `update_wiki_links` signature: `(files_to_update: Vec<String>, old_link: String, new_link: String) -> Result<{ updated: Vec<String>, failed: Vec<String> }, String>`.
-- Each file in `filesToUpdate` is processed independently using the temp-file-swap pattern; a failure on one file does not abort processing of the others.
-- On complete success (zero failures): banner message updates to `"Updated [N] note[s]."` and the banner auto-dismisses after 3 seconds.
-- On partial failure: banner message updates to `"Updated [N], failed [M]."` and the banner persists (does not auto-dismiss) so the user can read the outcome.
-- On total failure (the command returns an `Err`): banner message updates to `"Link update failed: [error message]."` and the banner persists.
-- After the update completes (success or partial), the vault index must be reloaded so that `outboundLinks` entries reflect the new stems.
-
-### FR-02.11.5 — Dismiss Action
-
-When the user clicks "Dismiss":
-
-- The banner is removed from the DOM immediately.
-- No file writes are performed.
-- No state is persisted: if the user immediately renames the same file again (or performs any other rename/move), the detection logic runs fresh from the current vault index state.
-
-### FR-02.11.6 — Scope of Wiki-Link Matching
-
-The `update_wiki_links` Rust command matches and replaces only the bare `[[filename-stem]]` form. The following link variants are explicitly out of scope for matching:
-
-- `[[path/to/filename-stem]]` — path-qualified wiki-links.
-- `[[filename-stem|Display Text]]` — links with a display-text alias where the stem appears before the pipe character (these will be matched if the regex is `\[\[old-stem\]\]` but not if a display text is present — the Architect must clarify the exact regex).
-- `[[Display Text|filename-stem]]` — links where the stem appears after the pipe (these would not be matched by a simple find-and-replace on `[[old-stem]]`).
-- Markdown inline links `[text](path/to/file.md)`.
-
-This is a known limitation. Users are informed of it via the "best-effort" framing in the notification banner tooltip (optional enhancement, not required in v1).
-
-### FR-02.11.7 — Vault Index as the Source of Truth
-
-The detection query (FR-02.11.1 / FR-02.11.2) reads from the in-memory vault index, specifically the `outboundLinks` field of each index entry. It does not perform a live disk scan. This means:
-
-- If the vault index is stale (e.g., a note was edited outside Markable and the watcher has not yet updated the index), the detection may produce false negatives or false positives.
-- A stale index is an accepted limitation for v1. The system does not force a full re-index before showing the banner.
-
-### FR-02.11.8 — Banner Lifecycle with Subsequent Operations
-
-- If the user performs a second rename or move before dismissing an existing banner, the new banner replaces the old one.
-- The banner is not persisted across sessions. On app restart, no banner is shown regardless of any prior unresolved link update.
-- If the user switches vaults while a banner is visible, the banner is removed as part of the vault-switch panel reset.
+**Feature B — Spell Check Toggle**
+As a user I want a "Spell check" toggle in the Editor settings section so I can enable or disable the browser's native spell-check underlines on editor content, with the setting persisted across sessions.
 
 ---
 
-## 3. Non-Functional Requirements
+## 2. Background and Codebase Context
 
-**NFR-02.11.1: Detection latency** — The vault index query that determines linking files (FR-02.11.1 / FR-02.11.2) must complete and the banner must appear within 100ms of the rename or move operation completing on disk. The query is an in-memory filter over the `outboundLinks` arrays; no disk I/O is required.
+### 2.1 Existing Autocomplete Infrastructure (Feature A)
 
-**NFR-02.11.2: Update throughput** — The `update_wiki_links` command must process each file using the temp-file-swap pattern. For a typical vault (up to 500 files), the full batch must complete in under 2 seconds on a solid-state drive.
+The backlinks plugin (`src/plugins/backlinks/backlinks.plugin.ts`) already contains a working autocomplete implementation. The following functions exist and are exported for testing:
 
-**NFR-02.11.3: No main-thread blocking** — The `update_wiki_links` Tauri command runs on the Rust side. The renderer must not block the UI thread while the update is in progress. The "Updating links…" message provides feedback during the async wait.
+- `getCompletionContext(lineText, cursorInLine)` — pure helper; detects open `[[` context and returns `{ from, prefix }` or `null`.
+- `filterCompletions(cachedFileList, prefix)` — pure helper; filters filenames by prefix and strips `.md` extension.
+- `setCachedFileList(files: string[])` — updates the module-level `_cachedFileList` array used as the completion source.
+- `buildAutocompleteExtension()` — builds the CM6 `autocompletion()` extension with `wikiLinkCompletionSource` as the override.
 
-**NFR-02.11.4: Atomicity per file** — Each individual file update is atomic (temp-file-swap). If the process is interrupted mid-batch (crash, power loss), each file on disk is in a consistent state — either fully updated or unmodified. There are no partial rewrites.
+The `buildIndex()` function (Step 7) currently calls `setCachedFileList()` with the result of `list_md_files` (a flat filename list). When a vault is active, `scheduleIndexRebuild` uses `getVaultIndex()` entries to populate the same cache via `e.name + ".md"`.
 
-**NFR-02.11.5: CSS variable compliance** — All banner styles use CSS variables. No hardcoded hex colors or font stacks.
+**The change required by Feature A** is:
+1. The autocomplete dropdown must source completions from the vault index (`VaultIndexEntry[]`) when a vault is active — specifically using `VaultIndexEntry.name` as the stem and either `VaultIndexEntry.title` or vault-relative path as the detail line shown in the dropdown.
+2. When no vault is active, the existing `_cachedFileList` fallback (populated from `list_md_files`) continues unchanged — no regression on pre-vault workflows.
 
-**NFR-02.11.6: Test coverage** — The link-update banner logic must be covered in `tests/plugins/file-browser/file-browser.test.ts`. Minimum required test cases are enumerated in the Edge Case Inventory (Section 4). The Rust `update_wiki_links` command must be covered by `cargo test` in `src-tauri/src/commands/`.
+No new plugin or new CM6 extension is needed. The Architect must determine whether `buildAutocompleteExtension` and the completion source need modification to carry `detail` text from vault index entries, or whether a separate vault-aware completion source is wired in alongside the existing one.
+
+### 2.2 Spell Check (Feature B)
+
+`applyEditorSettings()` in `src/lib/settings.ts` currently applies CSS variables for font size and content width. It does not touch `contentAttributes`. The `EditorSettings` interface does not have a `spellCheck` field. The `buildExtensions()` function in `src/editor/extensions.ts` does not include any `contentAttributes` extension. The settings panel (`src/settings/settings-panel.ts`) has an "Appearance" and a "Tabs" section but no "Editor" section. There is no existing spell-check control anywhere in the codebase.
 
 ---
 
-## 4. Edge Case Inventory
+## 3. Feature A — Functional Requirements: Wikilink Autocomplete
 
-The following items are the mandatory test checklist for the Code Reviewer. Every item must have a corresponding test or a documented rationale for exclusion.
+### FR-A.1 — Trigger
 
-**EC-01: No notes link to the renamed file** — After rename, `checkAndShowLinkBanner` finds zero entries in the vault index whose `outboundLinks` includes the old stem. Expected: no banner is shown. The rename completes silently.
+The autocomplete dropdown must activate whenever the CM6 cursor position immediately follows `[[` with zero or more characters that are not `]` or newline. Concretely: the `matchBefore(/\[\[([^\]\n]*)/)` pattern used by the existing `wikiLinkCompletionSource` is the canonical trigger definition. No other trigger mechanism is required.
 
-**EC-02: Exactly one note links to the renamed file** — Banner message reads "1 note links to '[old-name]'. Update links?" (singular form). Clicking "Update" processes one file. Success message reads "Updated 1 note."
+The dropdown must activate on explicit invocation (the user types `[[` and then characters) and must NOT re-trigger when the cursor moves into or after an already-closed `[[stem]]` link.
 
-**EC-03: Many notes link to the renamed file (N > 1)** — Banner message reads "[N] notes link to '[old-name]'. Update links?" (plural form). All N files are submitted to `update_wiki_links`. Success message reads "Updated [N] notes."
+### FR-A.2 — Completion Source: Vault-Active Mode
 
-**EC-04: Rename to a name that is identical to the old name** — The user opens the inline rename input and presses Enter without changing the text. Expected: the rename is effectively a no-op (same `oldPath` and `newPath`). The link-update detection runs with `oldStem === newStem`. The `update_wiki_links` command would replace `[[stem]]` with `[[stem]]` — a no-op rewrite. The banner should either be suppressed (preferred) or shown with a no-op update. The Architect must decide and document the behavior.
+When the active vault's index is available (i.e., `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` returns a `VaultIndex` with a non-empty `entries` array), the completion source must:
 
-**EC-05: Move file within the same vault — stem unchanged** — After a move, `oldStem === newStem`. The vault index is reloaded and the query runs. Notes that link to `[[stem]]` are found. The banner appears but the update action is a no-op rewrite (replaces `[[stem]]` with `[[stem]]`). Expected: no file content changes on disk after "Update" is clicked. The banner auto-dismisses after 3 seconds.
+- Use `VaultIndexEntry.name` as the completion label (the stem, without `.md`).
+- Use the vault-relative path of the file as the `detail` string shown in the dropdown (e.g., `"research/meeting"` for a file at `<vault-root>/research/meeting.md`). The vault root is available from `window.__MARKABLE_VAULT_MANAGER__` — the Architect must identify the correct accessor.
+- If `VaultIndexEntry.title` differs from `VaultIndexEntry.name` (i.e., the file has a front-matter title or an H1 different from the filename stem), display `title` as the CM6 `info` or `detail` field so the user can distinguish files with the same stem. The Architect will decide whether to use the CM6 `detail` or `info` property for the path vs. title distinction.
+- Filter completions using the typed prefix (text after `[[` up to the cursor), case-insensitively.
+- Sort completions alphabetically by stem (locale-insensitive, case-insensitive), matching the existing `filterCompletions` sort behavior.
+- The currently open file must NOT be excluded from completions (self-linking is a valid pattern in PKM workflows).
 
-**EC-06: Move file to a folder in a different vault** — Cross-vault moves are not supported in the current file tree (drag-and-drop is scoped to the active vault). Expected: this case cannot occur via the UI. If it does occur (e.g., programmatic call), `moveNode` operates on the active vault's index only and the banner reflects the active vault's link state.
+### FR-A.3 — Completion Source: No-Vault Fallback Mode
 
-**EC-07: File not present in the vault index at time of rename** — The renamed file has no index entry (e.g., it was just created and the index has not updated yet). Expected: the `outboundLinks` query returns zero results (no entry to check). No banner is shown. No error.
+When no vault is active, or when `getVaultIndex()` returns `null` or an index with zero entries, the completion source must fall back to the existing `_cachedFileList` behavior (populated by `list_md_files` via `setCachedFileList`). No `detail` text is shown in this mode (preserves existing behavior).
 
-**EC-08: `update_wiki_links` partially fails — some files updated, some not** — The Rust command returns `{ updated: ["a.md", "b.md"], failed: ["c.md"] }`. Expected: banner message shows "Updated 2, failed 1." The banner does not auto-dismiss. The two successfully updated files are written atomically. `c.md` is unchanged on disk.
+If `_cachedFileList` is also empty (e.g., fresh untitled document, no directory scanned), the completion source returns `null` (no dropdown shown). This is not an error state.
 
-**EC-09: `update_wiki_links` totally fails — command returns Err** — The Rust command returns an `Err` string. Expected: banner message shows "Link update failed: [error]." The banner persists. No files are modified.
+### FR-A.4 — Completion Insertion
 
-**EC-10: User dismisses the banner and then renames the same file again** — After dismiss, the banner state is cleared. The second rename triggers a fresh detection pass. If links still exist (e.g., the user renamed back to the original name), a new banner appears. The second banner is independent of the first.
+Selecting a completion item must:
 
-**EC-11: Second rename arrives while a banner is already visible** — A new banner replaces the existing one. The old banner's "Update" and "Dismiss" button event listeners are removed when the old banner element is removed from the DOM. No memory leak from orphaned listeners.
+- Replace the typed partial stem (the text between `[[` and the cursor) with the selected stem, and close the link with `]]`.
+- Result in `[[stem]]` with the cursor positioned immediately after `]]`.
+- Not insert `[[` a second time (the user has already typed `[[`; the completion source's `from` position starts after `[[`).
+- Not leave a dangling or unclosed `[[` in any code path.
 
-**EC-12: Concurrent renames in rapid succession** — The user renames two files within the 100ms detection window. Each rename call is independent; each invokes `checkAndShowLinkBanner` separately. The second banner replaces the first. The "Update" action on the second banner operates only on the links relevant to the second rename.
+The CM6 `apply` callback on the `Completion` object controls insertion behavior. The Architect must implement an `apply` function that replaces from `before.from + 2` (after the `[[`) to `context.pos` (current cursor) with `stem + "]]"`. This is the same approach used in the existing implementation; it must be verified to work correctly when the user has typed a partial prefix (e.g., `[[not` → select `notes` → result is `[[notes]]`).
 
-**EC-13: Very large vault (approaching maxIndexSize: 500)** — The vault index contains 500 entries, each with a non-empty `outboundLinks` array. The in-memory filter that finds linking paths must complete within the 100ms budget (NFR-02.11.1). Expected: performance test or benchmark assertion confirms this.
+### FR-A.5 — Pipe Syntax: No Retrigger on Display Text
 
-**EC-14: `update_wiki_links` is called for a file that no longer exists on disk** — One of the `filesToUpdate` paths points to a file deleted between the time the banner was shown and the "Update" click. Expected: the Rust command skips the missing file, adds it to the `failed` list, and continues processing the remaining files. The TypeScript layer shows the partial-failure message.
+If the user types `[[stem|` and continues typing, the autocomplete must NOT re-trigger for the display-text portion. The existing `matchBefore(/\[\[([^\]\n]*)/)` pattern already captures text containing `|` because `|` is not excluded from `[^\]\n]`. The `getCompletionContext` pure helper must be verified to return `null` when a `|` is present between `[[` and the cursor, OR the completion source must detect a `|` in the matched prefix and return `null` explicitly. The Architect must confirm or fix the pipe-suppression behavior before implementation.
 
-**EC-15: Vault index is reloaded by the file watcher between the rename and the banner click** — The index reload (triggered by the `vault-file-changed` watch event) runs between the `checkAndShowLinkBanner` call and the user clicking "Update." The `linkingPaths` captured at banner-show time are stale. Expected: the "Update" action uses the paths captured at banner-show time (snapshot semantics). The Architect must decide whether a pre-click re-query is needed or whether snapshot semantics are acceptable. This decision must be documented.
+### FR-A.6 — Already-Closed Link: No Retrigger
 
-**EC-16: Wiki-link in the linking file appears multiple times** — `note-a.md` contains `[[old-name]]` three times. Expected: `update_wiki_links` replaces all three occurrences (global replace, not just the first). The file is written once (single temp-file-swap for all replacements in that file).
+When the cursor is positioned inside or after a fully closed `[[stem]]` (i.e., a `]]` exists between the `[[` and the cursor position), the completion source must return `null`. The existing `getCompletionContext` already implements this check — it must be preserved.
 
-**EC-17: Wiki-link uses a display-text alias — `[[old-name|Display Text]]`** — The Rust regex for `update_wiki_links` targets `[[old-name]]` (no pipe). The display-text form `[[old-name|Display Text]]` is not matched. Expected: this link is not updated. The banner's result message counts this file as "failed" if it is in `filesToUpdate` but was not rewritten, OR the file is silently counted as "updated 0 occurrences" — the Architect must determine whether zero-occurrence files are in the `updated` or `failed` list and document the behavior.
+### FR-A.7 — Works in Both Preview Modes
 
-**EC-18: Vault panel is not mounted / container element is null** — `checkAndShowLinkBanner` is called but `_panelContainer` is null (the panel was closed). Expected: `showLinkUpdateBanner` is not called. No DOM manipulation error. The detection result is silently dropped.
+The autocomplete extension must function identically in live-preview mode (the `previewCompartment` active) and in plain-syntax mode. No mode-switching logic is required; since both modes use the same underlying CM6 `EditorState`, the completion source operates on raw document text in both cases.
 
-**EC-19: User switches vaults while a banner is visible** — The vault switch re-renders the panel (or tears it down and rebuilds it). Expected: the banner is removed as part of the panel teardown. No stale banner persists after the vault switch completes.
+### FR-A.8 — Performance
 
-**EC-20: Rename of a file whose stem matches multiple vault index entries (duplicate stems in different folders)** — E.g., `/vault/research/meeting.md` and `/vault/work/meeting.md` both exist. Renaming `/vault/research/meeting.md` to `standup.md` triggers detection on stem `meeting`. The `outboundLinks` filter finds notes linking to `[[meeting]]` — but those links are ambiguous (could point to either file). Expected: the banner shows the count of all notes with `[[meeting]]` in their `outboundLinks`. The "Update" action replaces `[[meeting]]` with `[[standup]]` in all of them, which may break links to the surviving `/vault/work/meeting.md`. This is a known limitation of bare-stem matching. No special disambiguation is required in v1 — the user is responsible for reviewing the result. The banner must not crash or behave incorrectly.
+The vault index is in-memory. No Tauri IPC call and no disk I/O is permitted inside the completion source callback. The completion source reads `VaultIndexEntry[]` directly from the in-memory object returned by `getVaultIndex()`. For a vault of up to 500 files (the documented `maxIndexSize`), the completion source must produce its result set within the synchronous execution time of a single CM6 update cycle (target: under 5ms on a modern Apple Silicon chip). No debouncing or async completion sources are required.
+
+---
+
+## 4. Feature A — Edge Case Inventory
+
+**EC-A.01: No vault active, no directory scanned** — `getVaultIndex()` returns null and `_cachedFileList` is empty. Completion source returns `null`. No dropdown is shown. No error is thrown.
+
+**EC-A.02: Vault active but index is empty (zero entries)** — `getVaultIndex()` returns a `VaultIndex` with `entries: []`. The vault-mode completion path produces an empty options array. No dropdown is shown (CM6 hides the dropdown when `options` is empty). The fallback to `_cachedFileList` does NOT apply — an active vault with zero entries is a legitimate vault-mode result, not a missing-vault scenario.
+
+**EC-A.03: Typed prefix matches no stems** — e.g., user types `[[zzz` and no file has a stem starting with `zzz`. The completion source returns `{ from, options: [] }`. CM6 hides the dropdown. No error.
+
+**EC-A.04: Two files share the same stem in different folders** — e.g., `notes/meeting.md` and `work/meeting.md`, both have `name: "meeting"`. Both appear in the dropdown as separate completions. The `detail` field (vault-relative path) disambiguates them visually. Both are selectable and both insert `[[meeting]]` on selection (bare-stem insertion — path qualification is out of scope for v1).
+
+**EC-A.05: Cursor is placed inside an already-closed `[[stem]]`** — e.g., document contains `[[notes]]` and the user clicks between `[` and `n`. The completion source must return `null` because `getCompletionContext` detects the `]]` closure. No dropdown appears.
+
+**EC-A.06: User types `[[stem|` (pipe present)** — The completion source detects the `|` in the matched prefix and returns `null`. No dropdown appears for the display-text portion. The Architect must confirm this is correctly handled by `getCompletionContext` or add a `|`-check in the completion source.
+
+**EC-A.07: Completion selected when prefix is empty — `[[` with cursor immediately after** — `getCompletionContext` returns `{ from: <pos after [[>, prefix: "" }`. All vault stems are shown unfiltered. Selecting one inserts `[[stem]]`. The cursor lands after `]]`.
+
+**EC-A.08: Completion selected when partial prefix present** — e.g., `[[not` → user selects `notes`. The `apply` callback replaces from `before.from + 2` to `context.pos` (current cursor, which is after `t`) with `"notes]]"`. The result is `[[notes]]`. No duplicate `[[` or stray characters.
+
+**EC-A.09: Vault index refreshes while dropdown is open** — The vault watcher triggers a `getVaultIndex()` update while the user has the autocomplete dropdown visible. The completion source re-runs on the next keypress and reflects the new index. There is no mechanism to update an already-rendered dropdown mid-display; this is acceptable (CM6 behavior). No crash or stale pointer.
+
+**EC-A.10: `window.__MARKABLE_VAULT_MANAGER__` is undefined** — The vault manager global has not been set (e.g., the plugin is loaded before the vault manager initializes). The optional-chain accessor `?.getVaultIndex?.()` returns `undefined`. The completion source falls through to the `_cachedFileList` path. No error.
+
+**EC-A.11: `VaultIndexEntry.name` contains special characters (spaces, hyphens, Unicode)** — e.g., `name: "meeting notes"`. The stem `"meeting notes"` is used as the label and inserted as `[[meeting notes]]`. No escaping is applied. CM6 displays the label verbatim. No crash.
+
+**EC-A.12: Fenced code block context** — The user types `[[` inside a fenced code block. The existing `wikiLinkCompletionSource` uses `context.matchBefore()` on the raw document text. Whether completions suppress inside fenced code blocks depends on whether CM6's autocomplete respects language context. For v1, completions inside fenced code blocks are acceptable (not a regression from current behavior). If the Architect determines suppression is feasible via `context.tokenBefore()`, it may be added — but it is not a hard requirement.
+
+**EC-A.13: Plugin disabled while dropdown is open** — The backlinks plugin is disabled (toggled off) via the plugins panel while the autocomplete dropdown is visible. CM6 reconfigures the `pluginCompartment`, removing the `autocompletion()` extension. CM6 closes any open autocomplete dropdown automatically on extension removal. No crash or orphaned UI.
+
+---
+
+## 5. Feature B — Functional Requirements: Spell Check Toggle
+
+### FR-B.1 — Settings Key
+
+A new boolean field `spellCheck` is added to the `EditorSettings` interface in `src/lib/settings.ts`. Default value: `false`. The `DEFAULT_SETTINGS.editor` object must include `spellCheck: false`.
+
+### FR-B.2 — Applying the Setting to the Editor
+
+When `spellCheck` is `true`, the editor's content element must have the HTML attribute `spellcheck="true"` applied. When `false` (or absent for backwards compatibility with old settings files that pre-date this field), the attribute must be absent or set to `"false"`.
+
+The implementation mechanism is `EditorView.contentAttributes({ spellcheck: booleanValue ? "true" : "false" })`. This extension must be hot-swappable without a full editor rebuild. The Architect must introduce a new `Compartment` — named `spellCheckCompartment` — in `src/editor/extensions.ts`, initialized to `spellCheckCompartment.of(EditorView.contentAttributes({ spellcheck: "false" }))`. When the setting changes, `applyEditorSettings()` must dispatch a `spellCheckCompartment.reconfigure(...)` effect to the active `EditorView`.
+
+The `applyEditorSettings()` function in `src/lib/settings.ts` requires access to the active `EditorView` to dispatch the reconfiguration. The Architect must determine the cleanest injection pattern (e.g., accept an optional `view?: EditorView` parameter, or use the existing `window.__MARKABLE_EDITOR__` global if one exists, or add a setter function). This architectural decision must be documented in the spec.
+
+### FR-B.3 — Settings Panel UI
+
+A new "Editor" section must be added to the settings panel in `src/settings/settings-panel.ts` (currently no Editor section exists). The section must be labeled `"Editor"` and must contain:
+
+- A checkbox-style toggle row labeled `"Spell check"`.
+- A brief description below the toggle: `"Underline misspelled words using the system dictionary."` (or equivalent short copy; the Architect may refine wording).
+
+The toggle element must use the existing settings panel's checkbox markup pattern (matching the "Maximize on Launch" checkbox as a structural reference). It must be wired to read the current `editor.spellCheck` value on panel open (`syncPanelToSettings`) and write the new value immediately via `updateSettings` on toggle change, followed by a call to `applyEditorSettings`.
+
+### FR-B.4 — Persistence
+
+The `spellCheck` value is persisted as part of the standard `MarkableSettings` object via the existing `updateSettings` / `saveSettings` flow. No new Tauri command or new settings file is required. Old settings files that pre-date this field load with `spellCheck` absent; the in-memory merge in `loadSettings` (`{ ...structuredClone(DEFAULT_SETTINGS), ...result.value }`) does not merge nested objects — it replaces `editor` wholesale. Therefore `DEFAULT_SETTINGS.editor.spellCheck` must be `false` to ensure the field is present after load when old files are opened.
+
+> Note: the current merge strategy in `loadSettings` uses a shallow spread. Nested objects like `editor` are replaced by the persisted value, which will not contain `spellCheck` if the file predates this feature. The Architect must verify that `applyEditorSettings` treats an absent `spellCheck` field as `false` (i.e., uses `settings.editor.spellCheck ?? false`), not as `undefined`, which could incorrectly set `spellcheck="undefined"` on the content element.
+
+### FR-B.5 — No Vault Dependency
+
+Spell check is a pure editor attribute. It must work with or without an active vault and must not depend on the plugin system. It is part of the core editor setup, not a plugin extension.
+
+### FR-B.6 — Reset to Defaults
+
+The "Reset All" button in the settings panel footer calls `DEFAULT_SETTINGS`. After reset, `editor.spellCheck` is `false`. The editor's `spellCheckCompartment` must be reconfigured to `{ spellcheck: "false" }` as part of the reset flow.
+
+---
+
+## 6. Feature B — Edge Case Inventory
+
+**EC-B.01: Old settings file without `spellCheck` field** — `result.value.editor` does not contain `spellCheck`. After the shallow merge in `loadSettings`, `currentSettings.editor` is the persisted `editor` object, which lacks `spellCheck`. `applyEditorSettings` must use `settings.editor.spellCheck ?? false` to prevent setting `spellcheck="undefined"` on the content element. Expected: spell check remains off; no attribute error.
+
+**EC-B.02: Toggle on, close app, reopen** — `spellCheck: true` is written to `settings.json`. On next launch, `loadSettings` reads it, `applyEditorSettings` is called during init, and the editor content element receives `spellcheck="true"`. The setting survives a full app restart.
+
+**EC-B.03: Toggle flipped rapidly multiple times** — Each toggle change dispatches a `spellCheckCompartment.reconfigure(...)` effect. CM6 handles compartment reconfiguration synchronously within a transaction; rapid successive dispatches do not cause errors or desync. The final toggle state is the one applied to the DOM.
+
+**EC-B.04: Editor view not yet initialized when `applyEditorSettings` is called** — During the settings load sequence, `applyEditorSettings` may be called before the CM6 `EditorView` is constructed (e.g., if settings are applied before the editor is mounted). The Architect must ensure the `spellCheckCompartment.reconfigure` dispatch is a no-op or deferred when no `EditorView` is available. Expected: no crash; the initial compartment value (`{ spellcheck: "false" }`) holds until the view is available and `applyEditorSettings` is called again post-mount.
+
+**EC-B.05: Settings panel "Reset All" with spell check enabled** — User has spell check on, clicks "Reset All." `DEFAULT_SETTINGS` has `spellCheck: false`. The settings panel checkbox updates to unchecked. `applyEditorSettings` is called with the reset settings, reconfiguring the compartment to `{ spellcheck: "false" }`. The red underlines disappear immediately.
+
+**EC-B.06: Multiple editor tabs open** — Markable supports multiple tabs, each with its own CM6 `EditorState`. However, `buildExtensions` is called once per editor instance. The `spellCheckCompartment` is a module-level singleton. If `spellCheckCompartment.reconfigure` is dispatched on only one view, other tab views' compartments retain their current value. The Architect must determine whether `spellCheckCompartment` should be per-tab or shared, and document the decision. Suggested resolution: the compartment is per-tab (instantiated inside `buildExtensions` rather than at module level), and `applyEditorSettings` reconfigures all active editor views. Alternatively, since `contentAttributes` is a low-cost extension, it can be re-applied on tab switch.
+
+---
+
+## 7. Non-Functional Requirements
+
+**NFR-1: Autocomplete latency** — The completion source (Feature A) must execute synchronously and complete within 5ms for a vault of up to 500 entries on Apple Silicon. No async operations are permitted inside the completion source callback.
+
+**NFR-2: Autocomplete UX responsiveness** — The dropdown must appear within one frame (16ms) of the user typing `[[` or any character after `[[`. CM6's built-in `autocompletion()` handles display timing; no additional debounce is required beyond what CM6 applies by default. The `activateOnTyping` option (CM6 default: true) must not be overridden to false.
+
+**NFR-3: No disk I/O in completion path** — The completion source reads only from the in-memory vault index. No Tauri `invoke()` calls are permitted in the hot path.
+
+**NFR-4: Spell check toggle latency** — Toggling spell check in the settings panel must cause the editor's `spellcheck` attribute to change within one animation frame. A CM6 compartment reconfiguration dispatched synchronously in the toggle handler achieves this without any additional debouncing.
+
+**NFR-5: Backward compatibility** — Both features must be additive only. No existing behavior is regressed. The backlinks plugin's existing autocomplete (in no-vault mode using `_cachedFileList`) must continue working without a vault. Settings files pre-dating these features must load without errors.
+
+**NFR-6: CSS variable compliance** — Any new UI elements (settings section, toggle row) must use CSS variables for colors and typography, matching the existing settings panel conventions. No hardcoded hex or font values.
+
+**NFR-7: Test coverage** — All edge cases in the Edge Case Inventories (Sections 4 and 6) must have a corresponding test in the appropriate test file, or a documented rationale for exclusion. Feature A tests belong in `tests/plugins/backlinks/backlinks.test.ts` (or a new `wikilink-autocomplete.test.ts` if the Architect judges the file size warrants a split). Feature B tests belong in a settings-focused test file; the Architect must determine the appropriate location given no dedicated settings test file currently exists.
+
+---
+
+## 8. Out of Scope (v1)
+
+- Path-qualified autocomplete insertions (`[[folder/stem]]`). Bare-stem insertion only.
+- Autocomplete for `[[stem|` display-text portion.
+- Grammar checking or third-party spell-check dictionaries.
+- Custom dictionary additions (OS-native spell check only).
+- Suppressing autocomplete inside fenced code blocks (acceptable if trivially implemented; not required).
 
 ---
 
 ## Handoff Summary
 
 - Artifact: docs/requirements/active_task.md
-- Status: Requirements Validated (pending user sign-off)
-- Edge cases to verify in tests: 20 items in Edge Case Inventory
+- Status: Requirements Validated
+- Edge cases to verify in tests: 13 items in Edge Case Inventory (EC-A.01 through EC-A.13 for Feature A; EC-B.01 through EC-B.06 for Feature B)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

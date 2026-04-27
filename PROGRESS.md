@@ -1,7 +1,7 @@
 # Markable 2.0 — Progress Tracker
 
 **Last Updated:** 2026-04-27
-**Current Status:** Phase 1 complete ✅ — Phase 2 largely complete 🟡
+**Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
 
@@ -38,6 +38,7 @@
 - **Insert Count** — Plugin
 - **Knowledge Graph** — Plugin
 - **File Browser link update (FR-02.11)** — Post-rename/move `[[wiki-link]]` update banner; same-stem guard suppresses no-op moves; `reloadVaultIndex` after update; 12 new Vitest tests (EC-01–EC-09, EC-11, EC-18); code-reviewer approved 2026-04-27
+- **Wikilink Autocomplete + Spell Check** — Vault-index autocomplete source for `[[` with vault-relative `detail`, lazy `info` title, pipe suppression, self-link allowed; module-level `spellCheckCompartment` toggle; `EditorSettings.spellCheck` field; "Editor" settings section; `makeApplyCallback` refactor; 18 new Vitest tests; code-reviewer approved 2026-04-27
 
 ### Known Regressions 🔴
 None — all pre-existing test failures resolved 2026-04-27.

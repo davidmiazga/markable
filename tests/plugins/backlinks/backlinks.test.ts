@@ -1030,6 +1030,360 @@ describe("buildAutocompleteExtension", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildAutocompleteExtension — vault mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Tests for the vault-mode completion path introduced in step_01 of the
+ * wiki-autocomplete spec. These tests exercise EC-A.01 through EC-A.10.
+ *
+ * The mock vault manager exposes the same shape as the real
+ * `__MARKABLE_VAULT_MANAGER__` window global at runtime.
+ */
+describe("buildAutocompleteExtension — vault mode", () => {
+  /**
+   * Three canonical vault entries used across most tests.
+   *  - "meeting"  lives in a sub-folder, has a title equal to its name.
+   *  - "notes"    lives at root, has a DIFFERENT title "My Notes".
+   *  - "readme"   lives at root, title equals name.
+   */
+  const mockEntries = [
+    {
+      name: "meeting",
+      path: "/vault/work/meeting.md",
+      title: "meeting",
+      tags: [],
+      outboundLinks: [],
+      modified: 0,
+      size: 0,
+    },
+    {
+      name: "notes",
+      path: "/vault/notes.md",
+      title: "My Notes",
+      tags: [],
+      outboundLinks: [],
+      modified: 0,
+      size: 0,
+    },
+    {
+      name: "readme",
+      path: "/vault/readme.md",
+      title: "readme",
+      tags: [],
+      outboundLinks: [],
+      modified: 0,
+      size: 0,
+    },
+  ];
+
+  /**
+   * A mock CM6 `CompletionContext` that simulates a cursor positioned
+   * after the text `[[<prefix>`. `matchBefore` returns a fake match whose
+   * `.text` property starts with `[[` followed by the prefix.
+   *
+   * @param prefix - Text typed after `[[`, e.g. "not", "", "stem|"
+   */
+  function makeContext(prefix: string) {
+    return {
+      matchBefore: (_regex: RegExp) => {
+        if (prefix === null) return null; // simulate no match
+        return {
+          from: 0,
+          to: 2 + prefix.length,
+          text: `[[${prefix}`,
+        };
+      },
+    };
+  }
+
+  /**
+   * Helper that calls the vault-mode path by:
+   *  1. Setting up __MARKABLE_VAULT_MANAGER__ with the given entries.
+   *  2. Setting up __CM_AUTOCOMPLETE__ with an `autocompletion` spy that
+   *     captures the override function.
+   *  3. Calling buildAutocompleteExtension() to get the registered source.
+   *  4. Invoking the captured CompletionSource with a fake context.
+   *
+   * Returns whatever the CompletionSource returns.
+   */
+  function invokeSource(
+    prefix: string,
+    entries = mockEntries,
+    vaultRoot = "/vault",
+  ) {
+    // Capture the CompletionSource function from autocompletion({override: [fn]})
+    let capturedSource: ((ctx: any) => any) | null = null;
+    (window as any).__CM_AUTOCOMPLETE__ = {
+      autocompletion: (opts: { override: Array<(ctx: any) => any> }) => {
+        capturedSource = opts.override[0];
+        return { _tag: "autocompletion" };
+      },
+    };
+
+    // Install vault manager mock
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: () => ({ entries }),
+      getActiveVault: () => ({ rootPaths: [vaultRoot] }),
+    };
+
+    buildAutocompleteExtension();
+    if (!capturedSource) throw new Error("CompletionSource was not captured");
+
+    // Cast to the known type so TypeScript does not infer `never` after the
+    // narrowing guard above (closure variables are not narrowed post-mutation).
+    const source = capturedSource as (ctx: any) => any;
+    return source(makeContext(prefix));
+  }
+
+  afterEach(() => {
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+    delete (window as any).__CM_AUTOCOMPLETE__;
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+  });
+
+  // EC-A.02 — vault active but entries array is empty → { from, options: [] }, NOT null
+  it("returns empty options (not null) when vault index has zero entries", () => {
+    const result = invokeSource("", []);
+    // The vault path is taken (entries.length === 0), so result is an object
+    // with an empty options array, NOT null.
+    expect(result).not.toBeNull();
+    expect(result.options).toEqual([]);
+  });
+
+  // EC-A.03 — vault active, prefix matches nothing
+  it("returns empty options when prefix matches nothing", () => {
+    const result = invokeSource("zzz");
+    expect(result).not.toBeNull();
+    expect(result.options).toHaveLength(0);
+  });
+
+  // EC-A.04 — detail is vault-relative path without .md extension
+  it("detail is vault-relative path without extension (AD-04)", () => {
+    const result = invokeSource("meeting");
+    expect(result).not.toBeNull();
+    // entry.path = "/vault/work/meeting.md", vaultRoot = "/vault"
+    // expected detail: "work/meeting"
+    const meetingOption = result.options.find((o: any) => o.label === "meeting");
+    expect(meetingOption).toBeDefined();
+    expect(meetingOption.detail).toBe("work/meeting");
+  });
+
+  // EC-A.04 — two files sharing same stem in different folders both appear with distinct details
+  it("two files with same stem in different folders both appear with distinct details (EC-A.04)", () => {
+    const twoMeetings = [
+      { name: "meeting", path: "/vault/notes/meeting.md", title: "meeting", tags: [], outboundLinks: [], modified: 0, size: 0 },
+      { name: "meeting", path: "/vault/work/meeting.md",  title: "meeting", tags: [], outboundLinks: [], modified: 0, size: 0 },
+    ];
+    const result = invokeSource("meeting", twoMeetings);
+    const meetingOptions = result.options.filter((o: any) => o.label === "meeting");
+    expect(meetingOptions).toHaveLength(2);
+    const details = meetingOptions.map((o: any) => o.detail);
+    expect(details).toContain("notes/meeting");
+    expect(details).toContain("work/meeting");
+  });
+
+  // AD-03 — info is set when VaultIndexEntry.title differs from name
+  it("info is a function returning the title when title differs from name", () => {
+    const result = invokeSource("notes");
+    const notesOption = result.options.find((o: any) => o.label === "notes");
+    expect(notesOption).toBeDefined();
+    // notes.title = "My Notes", notes.name = "notes" → info should be a function
+    expect(typeof notesOption.info).toBe("function");
+    expect(notesOption.info()).toBe("My Notes");
+  });
+
+  // AD-03 — info is undefined when title equals name
+  it("info is undefined when VaultIndexEntry.title equals name", () => {
+    const result = invokeSource("readme");
+    const readmeOption = result.options.find((o: any) => o.label === "readme");
+    expect(readmeOption).toBeDefined();
+    // readme.title === readme.name → info should be undefined
+    expect(readmeOption.info).toBeUndefined();
+  });
+
+  // FR-A.2 — currently open file is NOT excluded from vault-mode completions
+  it("current file is included in completions (no self-exclusion)", () => {
+    // Set the global so self-link detection code (if any) can see it
+    (window as any).__MARKABLE_CURRENT_FILE__ = "/vault/notes.md";
+    const result = invokeSource("");
+    const labels = result.options.map((o: any) => o.label);
+    // "notes" must still appear even though it is the current file
+    expect(labels).toContain("notes");
+  });
+
+  // FR-A.5 / EC-A.06 — pipe character in prefix triggers immediate null return
+  it("returns null when prefix contains pipe character", () => {
+    const result = invokeSource("stem|");
+    expect(result).toBeNull();
+  });
+
+  // EC-A.07 — empty prefix returns all entries
+  it("returns all entries when prefix is empty string", () => {
+    const result = invokeSource("");
+    expect(result).not.toBeNull();
+    expect(result.options).toHaveLength(mockEntries.length);
+  });
+
+  // EC-A.08 — prefix filter is case-insensitive
+  it("filters by prefix case-insensitively", () => {
+    const result = invokeSource("NOTE");
+    const labels = result.options.map((o: any) => o.label);
+    expect(labels).toContain("notes");
+    expect(labels).not.toContain("meeting");
+    expect(labels).not.toContain("readme");
+  });
+
+  // EC-A.10 — vault manager global absent → falls through to _cachedFileList
+  it("falls through to _cachedFileList when vault manager global is absent", () => {
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+
+    let capturedSource: ((ctx: any) => any) | null = null;
+    (window as any).__CM_AUTOCOMPLETE__ = {
+      autocompletion: (opts: { override: Array<(ctx: any) => any> }) => {
+        capturedSource = opts.override[0];
+        return { _tag: "autocompletion" };
+      },
+    };
+
+    setCachedFileList(["alpha.md", "beta.md"]);
+    buildAutocompleteExtension();
+
+    // Cast through unknown — TypeScript can't narrow closure-mutated variables
+    // after buildAutocompleteExtension() sets capturedSource via callback.
+    const sourceA = capturedSource as unknown as (ctx: any) => any;
+    const result = sourceA(makeContext("al"));
+    // Should fall through to the no-vault path and return "alpha"
+    expect(result).not.toBeNull();
+    const labels = result.options.map((o: any) => o.label);
+    expect(labels).toContain("alpha");
+  });
+
+  // EC-A.01 — getVaultIndex returns null → falls through to _cachedFileList
+  it("falls through to _cachedFileList when getVaultIndex returns null", () => {
+    let capturedSource: ((ctx: any) => any) | null = null;
+    (window as any).__CM_AUTOCOMPLETE__ = {
+      autocompletion: (opts: { override: Array<(ctx: any) => any> }) => {
+        capturedSource = opts.override[0];
+        return { _tag: "autocompletion" };
+      },
+    };
+
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: () => null,
+      getActiveVault: () => ({ rootPaths: ["/vault"] }),
+    };
+
+    setCachedFileList(["gamma.md"]);
+    buildAutocompleteExtension();
+
+    // Cast through unknown — TypeScript can't narrow closure-mutated variables
+    // after buildAutocompleteExtension() sets capturedSource via callback.
+    const sourceG = capturedSource as unknown as (ctx: any) => any;
+    const result = sourceG(makeContext("gamma"));
+    expect(result).not.toBeNull();
+    const labels = result.options.map((o: any) => o.label);
+    expect(labels).toContain("gamma");
+  });
+
+  // AD-04 fallback — entry.path not under vaultRoot → detail falls back to name
+  it("detail falls back to entry.name when path is not under vaultRoot", () => {
+    const externalEntry = [
+      {
+        name: "remote",
+        path: "/other-root/remote.md", // not under /vault
+        title: "remote",
+        tags: [],
+        outboundLinks: [],
+        modified: 0,
+        size: 0,
+      },
+    ];
+    const result = invokeSource("remote", externalEntry, "/vault");
+    const opt = result.options.find((o: any) => o.label === "remote");
+    expect(opt).toBeDefined();
+    // Path does not start with vaultRoot "/vault" → detail = entry.name = "remote"
+    expect(opt.detail).toBe("remote");
+  });
+
+  // H-01 — string-prefix collision: /vaultroot/file.md must NOT match vaultRoot /vault
+  it("detail falls back to name when path shares root prefix but not separator boundary", () => {
+    const entry = [
+      {
+        name: "file",
+        path: "/vaultroot/file.md", // starts with "/vault" but not "/vault/"
+        title: "file",
+        tags: [],
+        outboundLinks: [],
+        modified: 0,
+        size: 0,
+      },
+    ];
+    const result = invokeSource("file", entry, "/vault");
+    const opt = result.options.find((o: any) => o.label === "file");
+    expect(opt).toBeDefined();
+    // "/vaultroot/file.md".startsWith("/vault/") === false → fallback to entry.name
+    expect(opt.detail).toBe("file");
+  });
+
+  // EC-A.11 — apply inserts stem with spaces verbatim as [[meeting notes]]
+  it("apply inserts stem containing spaces verbatim without escaping (EC-A.11)", () => {
+    const spacedEntry = [
+      {
+        name: "meeting notes",
+        path: "/vault/meeting notes.md",
+        title: "meeting notes",
+        tags: [],
+        outboundLinks: [],
+        modified: 0,
+        size: 0,
+      },
+    ];
+    const result = invokeSource("meeting", spacedEntry);
+    const opt = result.options.find((o: any) => o.label === "meeting notes");
+    expect(opt).toBeDefined();
+
+    const dispatchSpy = vi.fn();
+    const mockView = {
+      state: {
+        doc: {
+          length: 20,
+          sliceString: (_from: number, _to: number) => "",
+        },
+      },
+      dispatch: dispatchSpy,
+    };
+    opt.apply(mockView, null, 2, 2);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: { from: 2, to: 2, insert: "meeting notes]]" },
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filterCompletions — null currentFile includes all files (AD-02)
+// ---------------------------------------------------------------------------
+
+describe("filterCompletions — null currentFile", () => {
+  it("includes all files when currentFile is null (no self-exclusion)", () => {
+    /*
+     * FR-A.2 / AD-02: passing null as currentFile must NOT exclude any file.
+     * Previously wikiLinkCompletionSource passed currentFilename which excluded
+     * the current file. The new implementation passes null in both paths.
+     */
+    const result = filterCompletions(
+      ["current.md", "other.md", "another.md"],
+      "",
+      null,
+    );
+    expect(result).toContain("current.md");
+    expect(result).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // setCachedFileList
 // ---------------------------------------------------------------------------
 

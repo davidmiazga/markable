@@ -1009,11 +1009,34 @@ export function buildAutocompleteExtension(): any[] {
   /**
    * CM6 CompletionSource for wiki-link `[[` syntax.
    *
-   * Uses `context.matchBefore()` to detect whether the cursor is
-   * preceded by `[[` followed by optional non-bracket characters.
-   * Delegates to pure helpers `getCompletionContext` and `filterCompletions`
-   * for the testable logic, then builds CM6 `Completion` objects.
+   * Two execution paths:
+   *  1. **Vault mode** (FR-A.2): when `__MARKABLE_VAULT_MANAGER__` is present
+   *     and `getVaultIndex()` returns a non-null index with entries, completions
+   *     are sourced directly from `VaultIndexEntry[]`. Each completion carries
+   *     a vault-relative path as `detail` (AD-03/AD-04) and a `title` as `info`
+   *     when it differs from `name` (AD-03). Self-link exclusion is NOT applied
+   *     (FR-A.2, AD-02). `filter: false` is used because we pre-filter.
+   *  2. **No-vault fallback** (FR-A.3): when no vault is active, falls through
+   *     to the existing `_cachedFileList` path. `null` is passed for the current
+   *     filename so no file is excluded (AD-02). `filter: true` is used here so
+   *     CM6 can narrow further as the user types.
+   *
+   * Shared guards (applied before either path):
+   *  - FR-A.6 / EC-A.05: `]]` in prefix → already closed, return null.
+   *  - FR-A.5 / EC-A.06: `|` in prefix → display-text portion, return null.
    */
+  function makeApplyCallback(label: string) {
+    return (view: any, _completion: any, from: number, to: number) => {
+      const docLength = view.state.doc.length;
+      const after = view.state.doc.sliceString(to, Math.min(to + 2, docLength));
+      const closingBrackets = after === "]]" ? "" : "]]";
+      view.dispatch({
+        changes: { from, to, insert: label + closingBrackets },
+        selection: { anchor: from + label.length + closingBrackets.length },
+      });
+    };
+  }
+
   const wikiLinkCompletionSource = (context: any): any => {
     /*
      * matchBefore scans backward from the cursor for the given pattern.
@@ -1024,43 +1047,125 @@ export function buildAutocompleteExtension(): any[] {
     if (!before) return null;
 
     /*
-     * Extract the prefix (text typed after `[[`).
-     * The matched text starts with `[[`, so skip 2 characters.
+     * Extract the prefix — the text the user has typed after `[[`.
+     * before.text always starts with `[[`, so slice 2 characters.
      */
     const prefix = before.text.slice(2);
 
     /*
-     * Safety check: if `]]` appears between `[[` and cursor, the
-     * wiki-link is already closed and we should not offer completions.
+     * FR-A.6 / EC-A.05: already-closed wiki-link guard.
+     * If `]]` appears between `[[` and the cursor, the link is already
+     * closed. Suppress completions so the popup does not appear.
      */
     if (prefix.includes("]]")) return null;
 
     /*
-     * Determine the current filename to exclude self-references (FR-4.5).
-     * If no file is open (untitled document, EC-1), currentFilename is null.
+     * FR-A.5 / EC-A.06: pipe-character guard (AD-05).
+     * The text after `[[` contains `|`, which means the cursor is in
+     * the display-text portion of `[[target|display]]`. Offering file
+     * completions here would be nonsensical. Return null explicitly to
+     * make the suppression intentional rather than accidental.
      */
-    const currentFilePath = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
-    const currentFilename = currentFilePath
-      ? filenameFromPath(currentFilePath)
-      : null;
+    if (prefix.includes("|")) return null;
 
-    /* Filter the cached file list using pure helper */
-    const matchingFiles = filterCompletions(
-      _cachedFileList,
-      prefix,
-      currentFilename
-    );
+    // ── Vault mode (FR-A.2) ──────────────────────────────────────────────────
+    /*
+     * Read the vault manager and index from the window global.
+     * Optional chaining (?.()) is used so that a missing or broken global
+     * degrades gracefully to undefined, which causes the vault branch to be
+     * skipped and control to fall through to the no-vault path (EC-A.01,
+     * EC-A.10, AD-07 analogy).
+     */
+    const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const vaultIndex = vaultManager?.getVaultIndex?.();
 
-    /* If no files match, return null so the popup does not appear (EC-22) */
+    if (vaultIndex && Array.isArray(vaultIndex.entries)) {
+      /*
+       * Vault is active. Source completions from the pre-built index.
+       * We do NOT call filterCompletions here because it cannot carry
+       * `detail` or `info` metadata (AD-01).
+       */
+      const vaultRoot: string =
+        vaultManager.getActiveVault()?.rootPaths?.[0] ?? "";
+      const lowerPrefix = prefix.toLowerCase();
+
+      const options = vaultIndex.entries
+        .filter((entry: { name: string }) =>
+          entry.name.toLowerCase().startsWith(lowerPrefix)
+        )
+        .sort(
+          (a: { name: string }, b: { name: string }) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+        )
+        .map((entry: { name: string; path: string; title: string }) => {
+          /*
+           * Compute vault-relative path without the .md extension (AD-04).
+           * Example: path = "/vault/research/meeting.md", root = "/vault"
+           *   → detail = "research/meeting"
+           *
+           * If the path does not start with the vault root (unusual — could
+           * happen with multi-root vaults), fall back to entry.name so the
+           * detail field is always a non-empty string.
+           */
+          let detail: string;
+          if (vaultRoot && entry.path.startsWith(vaultRoot + "/")) {
+            detail = entry.path
+              .slice(vaultRoot.length + 1)
+              .replace(/\.md$/, "");
+          } else {
+            detail = entry.name;
+          }
+
+          /*
+           * info is shown in a secondary tooltip on the right of the dropdown
+           * and is only populated when the stored title differs from the
+           * filename stem (AD-03). A lazy function form is used so the value
+           * is never computed until CM6 needs to render it.
+           */
+          const infoFn =
+            entry.title !== entry.name
+              ? () => entry.title
+              : undefined;
+
+          /*
+           * The label is the filename stem (entry.name, no extension).
+           * Capture label in a closure so the apply callback can reference it
+           * after the map iteration ends.
+           */
+          const label = entry.name;
+
+          return {
+            label,
+            detail,
+            info: infoFn,
+            apply: makeApplyCallback(label),
+            type: "file",
+          };
+        });
+
+      /*
+       * Return the vault-mode result.
+       * `filter: false` disables CM6's own substring re-filter because we
+       * already pre-filter with `startsWith(lowerPrefix)` above (AD-01 note).
+       * An empty `options` array is intentional (EC-A.02, EC-A.03) — CM6
+       * hides the dropdown automatically when the array is empty.
+       */
+      return { from: before.from + 2, options, filter: false };
+    }
+
+    // ── No-vault fallback (FR-A.3) ───────────────────────────────────────────
+    /*
+     * No vault is active. Fall back to the directory-level `_cachedFileList`
+     * that is populated by `buildIndex()` during the last index scan.
+     *
+     * Pass `null` as `currentFile` so no file is excluded from suggestions
+     * (AD-02: self-exclusion removed from both paths per FR-A.2).
+     */
+    const matchingFiles = filterCompletions(_cachedFileList, prefix, null);
+
+    /* EC-22: empty result — return null so the popup does not appear */
     if (matchingFiles.length === 0) return null;
 
-    /*
-     * Build CM6 Completion objects.
-     * - `label`: filename without .md (what the user sees in the popup)
-     * - `apply`: custom apply function that inserts filename + `]]`,
-     *   but skips `]]` if it already exists after the cursor (EC-23)
-     * - `type`: "file" icon hint for the completion popup
-     */
     const options = matchingFiles.map((filename: string) => {
       const label = filename.endsWith(".md")
         ? filename.slice(0, -3)
@@ -1068,34 +1173,12 @@ export function buildAutocompleteExtension(): any[] {
 
       return {
         label,
-        apply: (view: any, _completion: any, from: number, to: number) => {
-          /*
-           * Check if `]]` already follows the cursor position.
-           * If so, do not insert duplicate closing brackets (EC-23).
-           */
-          const docLength = view.state.doc.length;
-          const after = view.state.doc.sliceString(
-            to,
-            Math.min(to + 2, docLength)
-          );
-          const closingBrackets = after === "]]" ? "" : "]]";
-
-          view.dispatch({
-            changes: { from, to, insert: label + closingBrackets },
-            selection: {
-              anchor: from + label.length + closingBrackets.length,
-            },
-          });
-        },
+        apply: makeApplyCallback(label),
         type: "file",
       };
     });
 
-    return {
-      from: before.from + 2,
-      options,
-      filter: true,
-    };
+    return { from: before.from + 2, options, filter: true };
   };
 
   return [

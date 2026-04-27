@@ -10,6 +10,8 @@ import { getSettings, saveSettings } from "./bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import type { VaultEntry } from "./vault-types";
+import { spellCheckCompartment } from "../editor/extensions";
+import { EditorView } from "@codemirror/view";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
@@ -232,6 +234,17 @@ export interface EditorSettings {
   baseFontSize: number;
   /** Content width as CSS value, e.g. "900px" or "80%". Overrides contentMaxWidth if set. */
   contentWidth?: string;
+  /**
+   * Whether the browser's native spell-checker underlines are shown in the
+   * editor content element. Defaults to false (off). Set via the "Editor"
+   * section in the Settings panel (FR-B.1, FR-B.3).
+   *
+   * Optional (`?`) so that old settings files that pre-date this field
+   * are handled gracefully: applyEditorSettings uses `?? false` to coerce
+   * the absent value to false, preventing `spellcheck="undefined"` on the
+   * DOM element (EC-B.01, AD-09).
+   */
+  spellCheck?: boolean;
 }
 
 export interface ThemeSettings {
@@ -257,6 +270,7 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     contentMaxWidth: 900,
     contentPadding: "responsive",
     baseFontSize: 16,
+    spellCheck: false, // EC-B.05: default off; reset-all handler relies on this (AD-08)
   },
   theme: {
     active: "default-dark",
@@ -428,11 +442,61 @@ export const EDITOR_CONSTRAINTS = {
   baseFontSize: { min: 8, max: 48, step: 2 },
 } as const;
 
+/**
+ * Apply editor settings to the live editor and CSS variables.
+ *
+ * Two responsibilities:
+ *  1. CSS variables — sets `--settings-content-max-width` and
+ *     `--settings-base-font-size` on the document root (unchanged behaviour).
+ *  2. Spell-check compartment — dispatches a `spellCheckCompartment.reconfigure`
+ *     effect to the live `__MARKABLE_EDITOR_VIEW__` (FR-B.2, AD-07).
+ *
+ * The EditorView global may be absent when this function is called during
+ * startup (before createEditor() completes). In that case the compartment
+ * reconfiguration is silently skipped; the compartment's initial value
+ * ("false") holds until applyEditorSettings is called again post-mount
+ * with the loaded settings (EC-B.04).
+ *
+ * The `?? false` guard on `editor.spellCheck` handles old settings files
+ * that pre-date this field, preventing `spellcheck="undefined"` from being
+ * set as a DOM attribute (EC-B.01, AD-09).
+ *
+ * @param editor - The current editor settings object.
+ */
 export function applyEditorSettings(editor: EditorSettings): void {
   const root = document.documentElement;
   const cw = editor.contentWidth ?? `${editor.contentMaxWidth}px`;
   root.style.setProperty("--settings-content-max-width", cw);
   root.style.setProperty("--settings-base-font-size", `${editor.baseFontSize}px`);
+
+  /*
+   * Reconfigure the spell-check compartment on the live EditorView.
+   * Uses the established window-global pattern (AD-07) so that the
+   * function signature does not change and all call sites in main.ts
+   * and settings-panel.ts remain unchanged.
+   *
+   * `?? false` ensures that an undefined spellCheck field from an old
+   * settings file is treated as false, not as the string "undefined"
+   * on the DOM attribute (EC-B.01, AD-09).
+   */
+  const spellCheckEnabled = editor.spellCheck ?? false;
+  const view = (window as any).__MARKABLE_EDITOR_VIEW__;
+  if (view) {
+    /*
+     * EditorView.contentAttributes is a Facet — its value is provided via
+     * `.of()` not via a direct call. This mirrors the initial value set in
+     * buildExtensions() and the CM6 Facet API contract.
+     */
+    view.dispatch({
+      effects: spellCheckCompartment.reconfigure(
+        EditorView.contentAttributes.of({
+          spellcheck: spellCheckEnabled ? "true" : "false",
+        })
+      ),
+    });
+  }
+  // EC-B.04: if view is null/undefined (called before editor mounts), the
+  // dispatch is skipped; the compartment's initial value ("false") holds.
 }
 
 // --- Recent files ---

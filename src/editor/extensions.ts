@@ -94,6 +94,21 @@ export const editableCompartment = new Compartment();
 export const pluginCompartment = new Compartment();
 
 /**
+ * Compartment that controls the `spellcheck` content attribute on the
+ * CodeMirror content element (FR-B.2).
+ *
+ * Module-level (not per-buildExtensions call) because there is exactly one
+ * EditorView for the application lifetime — TabManager reuses the single view
+ * via setState() rather than creating a new view per tab (AD-06).
+ *
+ * Initialized to `spellcheck="false"` (spell check off by default per
+ * DEFAULT_SETTINGS.editor.spellCheck = false). Reconfigured by
+ * applyEditorSettings() in settings.ts when the user toggles the
+ * "Spell check" checkbox in the Settings panel (FR-B.3, AD-07).
+ */
+export const spellCheckCompartment = new Compartment();
+
+/**
  * FR-2.2 / TC-2: Suppress the CM6 built-in search panel DOM entirely.
  *
  * search() must be registered so that its searchState StateField is
@@ -185,6 +200,26 @@ export function buildExtensions(): Extension[] {
   extensions.push(pluginCompartment.of([]));
   extensions.push(previewCompartment.of(previewExtensions));
   extensions.push(editableCompartment.of(EditorView.editable.of(true)));
+
+  /*
+   * Spell-check compartment: starts with spellcheck="false" (off by default).
+   * applyEditorSettings() reconfigures this compartment after the view mounts
+   * to reflect the user's saved preference (AD-07).
+   *
+   * Placed after the other compartments for logical grouping — all hot-swap
+   * compartments are grouped at the end of the extension list.
+   */
+  extensions.push(
+    spellCheckCompartment.of(
+      /*
+       * Initial value: spell check off. EditorView.contentAttributes is a
+       * Facet, so its value is provided via `.of()` rather than a direct
+       * function call. The value "false" matches the default
+       * DEFAULT_SETTINGS.editor.spellCheck = false (EC-B.05).
+       */
+      EditorView.contentAttributes.of({ spellcheck: "false" })
+    )
+  );
 
   return extensions;
 }
