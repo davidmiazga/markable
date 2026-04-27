@@ -276,6 +276,13 @@
   background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
 }
 
+/* Default-action indicator: shown on the button that Enter (or ⌘⌥⇧↩) will trigger. */
+.find-widget-default-btn {
+  border-color: var(--link-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--link-color) 25%, transparent);
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
 /* ---- EC-21: Viewport clamping for very narrow screens (< 400px) ---- */
 @media (max-width: 400px) {
   .find-widget {

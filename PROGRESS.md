@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-04-25
+**Last Updated:** 2026-04-27
 **Current Status:** Phase 1 complete ✅ — Phase 2 active 🟡
 
 ---
@@ -21,9 +21,11 @@
 - **Themes** — 5 default themes (Nord, Solarized Dark/Light, Dracula, Monokai) bundled into app install; `copy_default_themes` Rust command auto-installs on first launch; `sync:themes` dev script; Nord and Solarized Dark color values restored to original palette
 - **Font** — Inter Variable (woff2, 100–900 weight axis) bundled in `public/fonts/`, loaded via `<link>` in index.html; works without system font installed
 - **Heading scale** — CSS custom properties (`--heading-h1-size` … `--heading-h6-weight`) control all heading sizes/weights from top of `styles.css`
+- **Vault UX refactor** — New Vault decoupled from Manage Vaults modal; hover-reveal unmount button (12% → 50% on row hover, red on button hover); inline rename on double-click; context menu (Unmount / Rename / Edit Type); Manage Vaults entry points in Plugin Panel footer + `vault-manage` keybinding slot; 31 Vitest tests; code-reviewer approved 2026-04-25
+- **Find & Replace** — Custom floating widget (Cmd-F / Cmd-Shift-F); CM6 panel suppressed; drag + position persistence; match count with 999+ cap; all 29 edge cases covered; 72 Vitest tests; code-reviewer approved 2026-04-09
 
 ### In Progress / Next 🟡
-- **Vaults** — To be discussed this session
+- TBD
 
 ---
 

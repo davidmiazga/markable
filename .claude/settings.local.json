@@ -130,7 +130,8 @@
       "WebFetch(domain:fonts.gstatic.com)",
       "Read(//Users/daveslaptop/.cargo/bin/**)",
       "Read(//Users/daveslaptop/.cargo/**)",
-      "Bash(command -v rustup)"
+      "Bash(command -v rustup)",
+      "Bash(git config *)"
     ]
   }
 }

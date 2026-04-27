@@ -375,7 +375,7 @@ export class FindWidget {
     const replaceAllBtn = document.createElement("button");
     replaceAllBtn.className = "find-widget-replace-all";
     replaceAllBtn.setAttribute("aria-label", "Replace All");
-    replaceAllBtn.setAttribute("title", "Replace All");
+    replaceAllBtn.setAttribute("title", "Replace All (⌘⌥⇧↩)");
     replaceAllBtn.textContent = "All";
     replaceRow.appendChild(replaceAllBtn);
 
@@ -445,6 +445,14 @@ export class FindWidget {
         e.stopPropagation();
         replaceNext(this.view);
         this._updateCount(this._buildSearchQuery());
+        return;
+      }
+      // Cmd-Opt-Shift-Return: replace all matches. Only active when replace row is visible.
+      if (e.key === "Enter" && e.metaKey && e.altKey && e.shiftKey && this._replaceVisible) {
+        e.preventDefault();
+        e.stopPropagation();
+        replaceAll(this.view);
+        this._updateCount(this._buildSearchQuery());
       }
     });
 
@@ -482,11 +490,44 @@ export class FindWidget {
       // Escape is handled by the root keydown listener above.
     });
 
+    // ---- Replace input: default-action indicator ----
+    // Highlight "Replace" when the replace input is focused (Enter will trigger it).
+    this.replaceInput.addEventListener("focus", () => {
+      this._setDefaultBtn(this.replaceOneBtn);
+    });
+    this.replaceInput.addEventListener("blur", () => {
+      this._setDefaultBtn(null);
+    });
+
+    // ---- Root modifier tracking: shift highlight to "All" when ⌘⌥⇧ are all held ----
+    root.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (document.activeElement !== this.replaceInput) return;
+      if (e.metaKey && e.altKey && e.shiftKey) {
+        this._setDefaultBtn(this.replaceAllBtn);
+      }
+    });
+    root.addEventListener("keyup", (e: KeyboardEvent) => {
+      if (document.activeElement !== this.replaceInput) return;
+      if (!(e.metaKey && e.altKey && e.shiftKey)) {
+        this._setDefaultBtn(this.replaceOneBtn);
+      }
+    });
+
     // ---- Replace input: keep replacement text in sync with SearchQuery ----
     this.replaceInput.addEventListener("input", () => {
       // The replace text must be part of the SearchQuery so that replaceNext
       // and replaceAll use the current value, not the value at query creation.
       this._dispatchQuery();
+    });
+
+    // ---- Replace input: Enter commits a single replacement ----
+    this.replaceInput.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        replaceNext(this.view);
+        this._updateCount(this._buildSearchQuery());
+      }
     });
 
     // ---- Toggle buttons: update search immediately on each click ----
@@ -544,6 +585,16 @@ export class FindWidget {
     this.closeBtn.addEventListener("click", () => {
       this.close();
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: Default-action button indicator
+  // ---------------------------------------------------------------------------
+
+  private _setDefaultBtn(btn: HTMLButtonElement | null): void {
+    this.replaceOneBtn.classList.remove("find-widget-default-btn");
+    this.replaceAllBtn.classList.remove("find-widget-default-btn");
+    if (btn) btn.classList.add("find-widget-default-btn");
   }
 
   // ---------------------------------------------------------------------------
