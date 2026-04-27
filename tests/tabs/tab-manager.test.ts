@@ -272,15 +272,15 @@ describe("TabManager — openFileInTab", () => {
     mockReadFile.mockResolvedValue({ ok: true, value: "hello" });
     const result = await manager.openFileInTab("/a/file.md");
     expect(result).toBe(true);
-    expect(manager.getTabCount()).toBe(2); // untitled + new
+    expect(manager.getTabCount()).toBe(1); // untitled auto-closed when first file opens
   });
 
   it("activates existing tab and returns false on duplicate open (EC-4)", async () => {
     mockReadFile.mockResolvedValue({ ok: true, value: "hello" });
-    await manager.openFileInTab("/a/file.md");
-    // Open a second tab so we can test that the first is re-activated
-    manager.openNewTab();
-    expect(manager.getTabCount()).toBe(3);
+    await manager.openFileInTab("/a/file.md"); // untitled auto-closed → [a/file.md]
+    // Open a second file tab so we can test that the first is re-activated
+    await manager.openFileInTab("/b/other.md");
+    expect(manager.getTabCount()).toBe(2);
 
     const result = await manager.openFileInTab("/a/file.md");
     expect(result).toBe(false);
@@ -387,18 +387,20 @@ describe("TabManager — closeTab", () => {
   it("removes the tab when closing a non-last clean tab", async () => {
     // Need two tabs to close one without triggering window close
     mockReadFile.mockResolvedValue({ ok: true, value: "content" });
-    await manager.openFileInTab("/a/file.md");
+    await manager.openFileInTab("/a/file.md"); // untitled auto-closed → [a/file.md]
+    await manager.openFileInTab("/b/file.md"); // → [a/file.md, b/file.md]
     expect(manager.getTabCount()).toBe(2);
 
-    const fileTabId = manager.getActiveTab()!.id;
+    const fileTabId = manager.getActiveTab()!.id; // b/file.md is active
     await manager.closeTab(fileTabId);
     expect(manager.getTabCount()).toBe(1);
   });
 
   it("shows confirm dialog for dirty non-last tab and cancels (EC-3 variant)", async () => {
     mockReadFile.mockResolvedValue({ ok: true, value: "content" });
-    await manager.openFileInTab("/a/file.md");
-    const fileTabId = manager.getActiveTab()!.id;
+    await manager.openFileInTab("/a/file.md"); // untitled auto-closed → [a/file.md]
+    await manager.openFileInTab("/b/file.md"); // → [a/file.md, b/file.md]
+    const fileTabId = manager.getActiveTab()!.id; // b/file.md is active
     manager.markActiveTabDirty();
 
     // Install window.confirm as happy-dom does not provide it.
@@ -432,15 +434,16 @@ describe("TabManager — closeTab", () => {
 
   it("activates the tab before the closed one when closing the active tab at end", async () => {
     mockReadFile.mockResolvedValue({ ok: true, value: "x" });
-    await manager.openFileInTab("/a.md");
+    await manager.openFileInTab("/a.md"); // untitled auto-closed → [a.md]
+    await manager.openFileInTab("/b.md"); // → [a.md, b.md], b.md active
 
-    // Active is /a.md at index 1. Close it.
+    // Active is /b.md at index 1. Close it.
     const id = manager.getActiveTab()!.id;
     await manager.closeTab(id);
 
-    // Should fall back to the untitled tab (index 0)
+    // Should fall back to the previous tab (/a.md at index 0)
     expect(manager.getTabCount()).toBe(1);
-    expect(manager.getActiveTab()?.filePath).toBeNull();
+    expect(manager.getActiveTab()?.filePath).toBe("/a.md");
   });
 
   it("ignores closeTab calls with an unknown id", async () => {
@@ -478,13 +481,12 @@ describe("TabManager — activateTabByIndex", () => {
   });
 
   it("activates last tab with exactly 1 tab via Cmd-9 (EC-9)", async () => {
-    // Close all but the untitled tab
+    // Close down to 1 tab — beforeEach tabs are [a.md(0), b.md(1)]
     const tabs = manager.getTabs();
-    await manager.closeTab(tabs[2].id);
-    await manager.closeTab(tabs[1].id);
-    // Only untitled remains
+    await manager.closeTab(tabs[1].id); // close b.md → [a.md]
+    // Only a.md remains
     manager.activateTabByIndex(9);
-    expect(manager.getActiveTab()?.filePath).toBeNull();
+    expect(manager.getActiveTab()?.filePath).toBe("/a.md");
   });
 
   it("is a no-op when index is out of range (EC-8)", () => {
@@ -495,12 +497,12 @@ describe("TabManager — activateTabByIndex", () => {
 
   it("activates tab at one-based index 1", () => {
     manager.activateTabByIndex(1);
-    expect(manager.getActiveTab()?.filePath).toBeNull(); // index 0 = untitled
+    expect(manager.getActiveTab()?.filePath).toBe("/a.md"); // index 0 = a.md (untitled auto-closed)
   });
 
   it("activates tab at one-based index 2", () => {
     manager.activateTabByIndex(2);
-    expect(manager.getActiveTab()?.filePath).toBe("/a.md");
+    expect(manager.getActiveTab()?.filePath).toBe("/b.md"); // index 1 = b.md
   });
 });
 

@@ -48,6 +48,17 @@ if (typeof window.confirm !== "function") {
 }
 
 // ---------------------------------------------------------------------------
+// Global Tauri internals mock — required by plugin.onEnable / onDisable
+// which call __TAURI_INTERNALS__.invoke("set_template_menu_enabled", ...).
+// ---------------------------------------------------------------------------
+beforeEach(() => {
+  (window as any).__TAURI_INTERNALS__ = { invoke: vi.fn().mockResolvedValue(undefined) };
+});
+afterEach(() => {
+  delete (window as any).__TAURI_INTERNALS__;
+});
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
@@ -368,7 +379,7 @@ describe("saveAsTemplate", () => {
   let mockInvoke: ReturnType<typeof vi.fn>;
   let api: ReturnType<typeof mockApi>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockInvoke = vi.fn();
     (window as any).__TAURI_INTERNALS__ = { invoke: mockInvoke };
     (window as any).__MARKABLE_EDITOR_VIEW__ = {
@@ -376,8 +387,16 @@ describe("saveAsTemplate", () => {
       dispatch: vi.fn(),
     };
     api = mockApi();
-    // Enable the plugin so _settings are initialized.
+    api.loadSettings.mockResolvedValue({
+      templatesFolderPath: "/Users/test/docs/Templates",
+      setupComplete: true,
+    });
     plugin.onEnable(api);
+    // Flush async settings load triggered by onEnable.
+    await Promise.resolve();
+    await Promise.resolve();
+    // Clear invoke calls made during onEnable (set_template_menu_enabled).
+    mockInvoke.mockClear();
   });
 
   afterEach(() => {
@@ -387,15 +406,14 @@ describe("saveAsTemplate", () => {
     delete (window as any).__MARKABLE_CURRENT_FILE__;
   });
 
-  it("shows alert when no file open (EC-1)", async () => {
+  it("does not crash and prompts for name when no file is open (EC-1)", async () => {
     (window as any).__MARKABLE_CURRENT_FILE__ = null;
+    vi.spyOn(window, "prompt").mockReturnValue(null); // user cancels prompt
     vi.spyOn(window, "alert").mockImplementation(() => {});
 
-    await saveAsTemplate();
+    await saveAsTemplate(); // should complete without throwing
 
-    expect(window.alert).toHaveBeenCalledWith(
-      expect.stringContaining("Save your document first")
-    );
+    expect(window.alert).not.toHaveBeenCalled(); // no error, just silent cancel
     vi.restoreAllMocks();
   });
 
@@ -522,17 +540,15 @@ describe("openPicker", () => {
     delete (window as any).__MARKABLE_CURRENT_FILE__;
   });
 
-  it("shows alert when no file open (EC-1)", async () => {
+  it("shows setup wizard when templates not configured (EC-1 updated)", async () => {
+    // With no templatesFolderPath configured, openPicker should show the setup wizard.
     (window as any).__MARKABLE_CURRENT_FILE__ = null;
-    plugin.onEnable(api);
-    vi.spyOn(window, "alert").mockImplementation(() => {});
+    plugin.onEnable(api); // loadSettings returns null → setupComplete: false (default)
 
     await openPicker();
 
-    expect(window.alert).toHaveBeenCalledWith(
-      expect.stringContaining("Save your document first")
-    );
-    vi.restoreAllMocks();
+    // The wizard overlay should be created (not an alert).
+    expect(document.querySelector(".templates-wizard-card")).not.toBeNull();
   });
 
   it("is no-op when plugin is disabled", async () => {

@@ -165,7 +165,7 @@ describe("step_07 main integration — openFileInTab()", () => {
     const opened = await manager.openFileInTab("/docs/new-file.md");
 
     expect(opened).toBe(true);
-    expect(manager.getTabCount()).toBe(initialCount + 1);
+    expect(manager.getTabCount()).toBe(initialCount); // untitled auto-closed, net count unchanged
     expect(manager.getActiveFilePath()).toBe("/docs/new-file.md");
   });
 
@@ -226,10 +226,10 @@ describe("step_07 main integration — openFileInTab()", () => {
       .mockResolvedValueOnce({ ok: true, value: "# A" })
       .mockResolvedValueOnce({ ok: true, value: "# B" });
 
-    await manager.openFileInTab("/docs/a.md");
-    await manager.openFileInTab("/docs/b.md");
+    await manager.openFileInTab("/docs/a.md"); // untitled auto-closed → net +0
+    await manager.openFileInTab("/docs/b.md"); // → net +1
 
-    expect(manager.getTabCount()).toBe(initialCount + 2);
+    expect(manager.getTabCount()).toBe(initialCount + 1);
   });
 });
 
@@ -440,16 +440,18 @@ describe("step_07 main integration — file-close-all", () => {
   it("closeTab() with multiple clean tabs removes one tab at a time without window close (FR-5.2)", async () => {
     const { manager } = await setupTabManager();
 
-    // Open a second clean tab.
+    // Open two clean file tabs (first open auto-closes the untitled tab).
     globalThis.alert = () => {};
     (readFile as Mock).mockResolvedValueOnce({ ok: true, value: "# Doc A" });
-    await manager.openFileInTab("/docs/a.md");
+    await manager.openFileInTab("/docs/a.md"); // untitled auto-closed → [a.md]
+    (readFile as Mock).mockResolvedValueOnce({ ok: true, value: "# Doc B" });
+    await manager.openFileInTab("/docs/b.md"); // → [a.md, b.md]
     expect(manager.getTabCount()).toBe(2);
 
     _mockAppWindow.close.mockClear();
 
     // Close the first tab — window should NOT close yet.
-    const firstId = manager.getTabs()[0].id;
+    const firstId = manager.getTabs()[0].id; // a.md
     await manager.closeTab(firstId);
 
     expect(manager.getTabCount()).toBe(1);

@@ -1382,7 +1382,7 @@ describe("scheduleIndexRebuild", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     /* After the async work completes, callback should be called */
-    expect(callback).toHaveBeenCalledWith(["fileA.md"]);
+    expect(callback).toHaveBeenCalledWith(["fileA.md"], expect.any(Array));
   });
 
   it("resets debounce timer on repeated calls (EC-12)", async () => {
@@ -1443,7 +1443,7 @@ describe("scheduleIndexRebuild", () => {
 
     await vi.advanceTimersByTimeAsync(300);
 
-    expect(callback).toHaveBeenCalledWith([]);
+    expect(callback).toHaveBeenCalledWith([], expect.any(Array));
   });
 });
 
@@ -1520,7 +1520,7 @@ describe("Backlinks sidebar panel", () => {
 
     const emptyEl = list.querySelector(".backlink-empty");
     expect(emptyEl).not.toBeNull();
-    expect(emptyEl!.textContent).toBe("No backlinks");
+    expect(emptyEl!.textContent).toBe("No links");
   });
 
   it("renders 'Scanning...' when isScanning is true", () => {
@@ -1643,7 +1643,7 @@ describe("Backlinks sidebar panel", () => {
 
     const emptyEl = list.querySelector(".backlink-empty");
     expect(emptyEl).not.toBeNull();
-    expect(emptyEl!.textContent).toBe("No backlinks");
+    expect(emptyEl!.textContent).toBe("No links");
   });
 
   it("EC-14: tab switch to untitled clears panel to 'No backlinks'", () => {
@@ -1668,7 +1668,7 @@ describe("Backlinks sidebar panel", () => {
 
     const emptyEl = list.querySelector(".backlink-empty");
     expect(emptyEl).not.toBeNull();
-    expect(emptyEl!.textContent).toBe("No backlinks");
+    expect(emptyEl!.textContent).toBe("No links");
     expect(list.querySelectorAll(".backlink-item")).toHaveLength(0);
   });
 
@@ -1684,7 +1684,7 @@ describe("Backlinks sidebar panel", () => {
 
     /* Initial: empty */
     rebuildBacklinksDOM();
-    expect(list.querySelector(".backlink-empty")!.textContent).toBe("No backlinks");
+    expect(list.querySelector(".backlink-empty")!.textContent).toBe("No links");
 
     /* Index rebuilt with results */
     _testing.setCurrentBacklinks(["result.md"]);
