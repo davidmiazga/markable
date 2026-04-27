@@ -40,6 +40,7 @@ import {
   ICON_FILE_JSON,
   ICON_FILE_CODE,
   ICON_CHEVRON,
+  ICON_UNMOUNT,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
@@ -51,7 +52,7 @@ import {
   type TreeNode,
 } from "./file-tree";
 
-import { mountManageVaultsPanel } from "./manage-vaults-ui";
+import { mountManageVaultsPanel, showCreateVaultForm } from "./manage-vaults-ui";
 
 // File operation helpers — bundled inline by Rollup.
 import {
@@ -164,7 +165,7 @@ const FILE_BROWSER_CSS = `
   justify-content: center;
   opacity: .9;
 }
-.vault-icon svg, .folder-icon svg, .file-icon svg { display: block; fill: currentColor; }
+.vault-icon svg, .folder-icon svg, .file-icon svg, .vault-row-unmount-btn svg { display: block; fill: currentColor; }
 .tree-node-source-file { opacity: 0.5; }
 .tree-node-label {
   flex: 1;
@@ -181,6 +182,43 @@ const FILE_BROWSER_CSS = `
   height: 28px;
 }
 .tree-node-vault .tree-node-label { line-height: 28px; }
+
+/* ── Hover-reveal unmount button on vault rows (step_02) ─────────────────── */
+/*
+ * OQ-VUX-02: The button must always be in layout at 12% opacity so the
+ * affordance is discoverable on hover without a jarring layout shift.
+ * Using opacity (not display:none) preserves the button's space in the row
+ * and keeps pointer-events active for the transition to work correctly.
+ */
+.vault-row-unmount-btn {
+  display: flex;           /* always in layout — never display:none */
+  opacity: 0.12;           /* 12% resting state per OQ-VUX-02 */
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  margin-right: 2px;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+/* Row hover: reveal button to partial opacity, color stays neutral */
+.tree-node-vault:hover .vault-row-unmount-btn,
+.tree-node-vault:focus-visible .vault-row-unmount-btn {
+  opacity: 0.5;
+}
+/* Button hover: full opacity + red danger color */
+.vault-row-unmount-btn:hover {
+  opacity: 1 !important;
+  color: var(--error-color, #c0392b) !important;
+}
 .file-tree-card {
   margin: 6px 8px;
   border-radius: 6px;
@@ -597,6 +635,16 @@ let _contextMenu: HTMLElement | null = null;
 /** Document-level click listener for dismissing the context menu on outside click. */
 let _contextMenuDismiss: ((e: MouseEvent) => void) | null = null;
 
+/**
+ * Document-level keydown listener that closes the context menu on Escape.
+ *
+ * Stored at module level (not as a local variable inside showContextMenu) so
+ * closeContextMenu() can always remove it regardless of which code path
+ * triggered the close. Without this, every showContextMenu() call that is
+ * closed via a path other than Escape leaks one keydown listener — Finding 4.
+ */
+let _contextMenuEscHandler: ((e: KeyboardEvent) => void) | null = null;
+
 /** Unsubscribe function returned by vault-file-changed Tauri event listener. */
 let _fsUnlisten: (() => void) | null = null;
 
@@ -746,6 +794,33 @@ function openManageVaultsModal(selectedVaultId?: string): void {
   document.body.appendChild(overlay);
 }
 
+/**
+ * Open the Manage Vaults UI pre-navigated to the Create Vault form.
+ *
+ * Replaces direct calls to openManageVaultsModal() from "New Vault" entry
+ * points so the user lands on the create form immediately — not the vault
+ * list — decoupling the two actions (step_01).
+ *
+ * The double-open guard from openManageVaultsModal() is replicated here so
+ * calling openNewVaultModal() twice does not produce two overlays (EC-VUX-07).
+ */
+function openNewVaultModal(): void {
+  if (document.getElementById("__fb_manage_vaults_overlay__")) return;
+
+  const overlay = buildModalOverlay();
+  const body = buildModalContent(overlay);
+  mountManageVaultsPanel(body, undefined, () => overlay.remove());
+  /*
+   * Attach the overlay to the DOM *before* calling showCreateVaultForm()
+   * so that any internal DOM queries inside showCreateVaultForm() (e.g.
+   * querying the modal body for an active input to focus) find the element
+   * already attached. Order matters: mount → append → navigate.
+   */
+  document.body.appendChild(overlay);
+  /* Skip the list view: navigate directly to the create form (step_01) */
+  showCreateVaultForm();
+}
+
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 
 // ── Icon system ───────────────────────────────────────────────────────────────
@@ -892,6 +967,23 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
   /* aria-expanded for CSS chevron rotation */
   if (node.type === "vault" || node.type === "directory") {
     li.setAttribute("aria-expanded", node.expanded ? "true" : "false");
+  }
+
+  /*
+   * Vault rows: append a hover-reveal unmount button (step_02).
+   * Using display:none as base means it consumes no space and intercepts no
+   * pointer events when invisible. The click handler is wired in
+   * attachVaultUnmountListener() (called from attachNodeListeners) so all event
+   * wiring stays in one place.
+   */
+  if (node.type === "vault") {
+    const unmountBtn = document.createElement("button");
+    unmountBtn.className = "vault-row-unmount-btn";
+    unmountBtn.setAttribute("aria-label", `Unmount vault ${node.name}`);
+    unmountBtn.setAttribute("title", "Unmount vault");
+    /* Render the chip_extraction icon at 16×16 */
+    unmountBtn.innerHTML = wrapSvg(ICON_UNMOUNT, 16);
+    li.appendChild(unmountBtn);
   }
 
   /* Active file highlight */
@@ -1142,7 +1234,8 @@ function buildAddRow(vaultId: string): HTMLElement {
         { separator: true, label: "", handler: null },
         {
           label: "New Vault…",
-          handler: () => openManageVaultsModal(),
+          /* step_01: open create form directly, bypassing the vault list */
+          handler: () => openNewVaultModal(),
         },
       ],
       e.clientX,
@@ -1238,7 +1331,8 @@ function renderEmptyState(
 
     const btn = document.createElement("button");
     btn.textContent = "New Vault";
-    btn.addEventListener("click", () => openManageVaultsModal());
+    /* step_01: open create form directly (EC-VUX-07) */
+    btn.addEventListener("click", () => openNewVaultModal());
     div.appendChild(btn);
   } else if (variant === "no-files") {
     const p = document.createElement("p");
@@ -1344,6 +1438,157 @@ function attachKeyboardHandler(
 }
 
 /**
+ * Wire the unmount button click handler for a vault row.
+ *
+ * Extracted from attachNodeListeners so all vault-specific event wiring lives
+ * in a single helper (≤30 lines rule).
+ *
+ * Behaviour (OQ-VUX-01 resolution):
+ *   - Active vault: shows a native window.confirm() before deleting.
+ *   - Inactive vault: silent unmount with no dialog (EC-VUX-02).
+ *   - stopPropagation() prevents the vault-switch activate handler from firing
+ *     (AC-5, EC-VUX-06 note: context-menu's outside-click dismissal handles
+ *     the menu itself naturally since the click still reaches document).
+ *
+ * @param el - The vault <li> element that contains the unmount button.
+ */
+function attachVaultUnmountListener(el: HTMLElement): void {
+  const btn = el.querySelector<HTMLButtonElement>(".vault-row-unmount-btn");
+  if (!btn) return;
+
+  btn.addEventListener("click", (e: MouseEvent) => {
+    /* Prevent vault-switch (or expand/collapse) from firing on the row */
+    e.stopPropagation();
+    e.preventDefault();
+    /*
+     * EC-VUX-06: If a context menu is open when the unmount button is clicked,
+     * stopPropagation() above prevents the mousedown dismiss listener from
+     * reaching the document. Close the menu explicitly here so the two
+     * affordances (context menu + unmount button) never conflict.
+     */
+    closeContextMenu();
+
+    const nodeVaultId = el.getAttribute("data-vault-id") ?? "";
+    if (!nodeVaultId) return;
+
+    const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const activeVault = vm?.getActiveVault?.();
+
+    if (activeVault?.id === nodeVaultId) {
+      /* EC-VUX-01: confirm before unmounting the active vault */
+      const vaultName = activeVault.name ?? "this vault";
+      const confirmed = window.confirm(
+        `Unmount "${vaultName}"? You can re-add it later. Your notes are not deleted.`,
+      );
+      if (!confirmed) return;
+    }
+    /* EC-VUX-02: silent unmount for inactive vaults */
+    void vm?.deleteVault?.(nodeVaultId);
+  });
+}
+
+/**
+ * Wire the double-click inline-rename handler for a vault row (step_03).
+ *
+ * The dblclick fires after two clicks. The activate handler (single click) may
+ * have already run, which is acceptable: if the vault is already active the
+ * click is a harmless toggle; if not, the vault switches first, then rename
+ * activates on the now-active vault.
+ *
+ * @param el      - The vault <li> element.
+ * @param vaultId - Unused here; kept for API symmetry with other listener helpers.
+ */
+function attachVaultDblClickListener(el: HTMLElement, _vaultId: string): void {
+  el.addEventListener("dblclick", (e: MouseEvent) => {
+    e.stopPropagation();
+    void startVaultInlineRename(el);
+  });
+}
+
+/**
+ * Activate inline rename for a vault row.
+ *
+ * Replaces the .tree-node-label span with a text input pre-filled with the
+ * current vault name. Enter commits; Escape or blur cancels (EC-VUX-04).
+ * Reuses the existing .tree-node-rename-input and .tree-node-inline-error CSS.
+ *
+ * The commit path calls vm.updateVault() with a partial patch {name} which is
+ * sufficient because vault-manager.ts accepts Partial<Pick<VaultEntry, ...>>.
+ * After a successful rename, vault-manager fires onVaultChanged → renderPanel
+ * re-paints the row with the new name automatically.
+ *
+ * Length justification: the cancel, commit, blur, and keydown closures all
+ * share the same mutable state — the input element, the errSpan, the
+ * originalName string, and the labelEl reference. Splitting any of these
+ * closures into separate helper functions would require passing five
+ * interdependent arguments, producing more indirection than clarity. This is
+ * the same irreducible-closure pattern accepted on renderTreeContent (see the
+ * length justification in that function's JSDoc above).
+ *
+ * @param el - The vault <li> element to inline-edit.
+ */
+export async function startVaultInlineRename(el: HTMLElement): Promise<void> {
+  const labelEl = el.querySelector<HTMLElement>(".tree-node-label");
+  if (!labelEl) return;
+
+  const nodeVaultId = el.getAttribute("data-vault-id") ?? "";
+  if (!nodeVaultId) return;
+
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const allVaults = vm?.getAllVaults?.() ?? [];
+  const vaultEntry = allVaults.find((v: any) => v.id === nodeVaultId);
+  if (!vaultEntry) return;
+
+  const originalName = vaultEntry.name as string;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tree-node-rename-input";
+  input.value = originalName;
+
+  const errSpan = document.createElement("span");
+  errSpan.className = "tree-node-inline-error";
+
+  labelEl.replaceWith(input);
+  input.insertAdjacentElement("afterend", errSpan);
+  input.focus();
+  input.select();
+
+  const cancel = (): void => {
+    if (document.contains(input)) {
+      input.replaceWith(labelEl);
+      errSpan.remove();
+      el.tabIndex = 0;
+    }
+  };
+
+  const commit = async (): Promise<void> => {
+    const newName = input.value.trim();
+    /* EC-VUX-03: duplicate names are allowed; EC-VUX-04: empty/unchanged cancels */
+    if (!newName || newName === originalName) { cancel(); return; }
+    try {
+      await vm.updateVault(nodeVaultId, { name: newName });
+      /* vault-manager fires onVaultChanged → renderPanel re-renders the label */
+    } catch (err) {
+      errSpan.textContent = String(err);
+    }
+  };
+
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); void commit(); }
+    if (e.key === "Escape") { cancel(); }
+  });
+
+  /* EC-VUX-04: blur cancels — defer 100ms so Enter commit runs first */
+  input.addEventListener("blur", () => {
+    setTimeout(() => { if (document.contains(input)) cancel(); }, 100);
+  });
+
+  /* Prevent propagation so a click inside the input does not activate the row */
+  input.addEventListener("click", (e: MouseEvent) => e.stopPropagation());
+}
+
+/**
  * Attach click, keyboard, context menu, and drag-and-drop event listeners to a
  * rendered tree node <li>.
  *
@@ -1378,6 +1623,12 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
       void deleteFile(path).then(() => reloadAndRender(vaultId));
     }
   });
+
+  /* Vault-specific interactions: unmount button (step_02) + dblclick rename (step_03) */
+  if (el.getAttribute("data-type") === "vault") {
+    attachVaultUnmountListener(el);
+    attachVaultDblClickListener(el, vaultId);
+  }
 
   /* Drag-and-drop (Step 02b) */
   attachDragDropListeners(el, vaultId);
@@ -1616,6 +1867,18 @@ function closeContextMenu(): void {
     document.removeEventListener("mousedown", _contextMenuDismiss);
     _contextMenuDismiss = null;
   }
+  /*
+   * Always remove the Escape keydown handler regardless of which code path
+   * closed the menu. The handler was previously a local variable inside
+   * showContextMenu() so it could only remove itself on Escape — all other
+   * close paths (outside click, menu item click, unmount button) leaked the
+   * listener. Moving it to _contextMenuEscHandler and clearing here fixes
+   * the leak (Finding 4).
+   */
+  if (_contextMenuEscHandler) {
+    document.removeEventListener("keydown", _contextMenuEscHandler);
+    _contextMenuEscHandler = null;
+  }
 }
 
 /**
@@ -1696,14 +1959,15 @@ function showContextMenu(
   };
   document.addEventListener("mousedown", _contextMenuDismiss);
 
-  /* Dismiss on Escape */
-  const escHandler = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      closeContextMenu();
-      document.removeEventListener("keydown", escHandler);
-    }
+  /*
+   * Dismiss on Escape — stored in _contextMenuEscHandler (module-level) so
+   * closeContextMenu() can remove it on any close path, not just Escape itself.
+   * This fixes the listener leak from Finding 4.
+   */
+  _contextMenuEscHandler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") closeContextMenu();
   };
-  document.addEventListener("keydown", escHandler);
+  document.addEventListener("keydown", _contextMenuEscHandler);
 }
 
 /**
@@ -1812,55 +2076,55 @@ function buildDirContextMenuItems(
 }
 
 /**
- * Build the context menu items for a vault root node.
+ * Build the context menu items for a vault root node (step_04).
  *
- * MEDIUM-4 fix: "Edit Vault…" now passes the right-clicked vault's ID to
- * `openManageVaultsModal` so the edit form opens for that specific vault,
- * not for whatever vault happens to be active. Using `vaultId` from the
- * node attribute (data-vault-id → passed in as the third parameter) rather
- * than `getActiveVault()` is correct when the user has multiple vaults and
- * right-clicks a non-active one.
+ * Items:
+ *   Unmount   — calls deleteVault (removes from Markable, does not touch disk).
+ *               Confirms first when the vault is active (EC-VUX-01).
+ *   Rename    — activates inline rename on the row (same as double-click, step_03).
+ *   Edit Type — opens Manage Vaults modal focused on this vault's edit form.
  *
- * @param _el     - The node <li> element (unused but kept for API consistency).
- * @param _path   - Vault path (unused).
+ * The old "New Vault…", "Edit Vault…", "Delete Vault…" items are removed.
+ * Creating vaults is now via the "+ Add…" row (step_01).
+ *
+ * @param el      - The vault <li> element (forwarded to startVaultInlineRename).
+ * @param _path   - Vault path (unused; kept for API consistency with other builders).
  * @param vaultId - The ID of the vault whose node was right-clicked.
  */
 function buildVaultContextMenuItems(
-  _el: HTMLElement,
+  el: HTMLElement,
   _path: string,
   vaultId: string,
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const activeVault = vm?.getActiveVault?.();
+
   return [
     {
-      label: "New Vault…",
-      /* Opens the blank new-vault form — no vault ID needed. */
-      handler: () => openManageVaultsModal(),
+      label: "Unmount",
+      handler: () => {
+        const isActive = activeVault?.id === vaultId;
+        if (isActive) {
+          const name = activeVault.name ?? "this vault";
+          const confirmed = window.confirm(
+            `Unmount "${name}"? You can re-add it later. Your notes are not deleted.`,
+          );
+          if (!confirmed) return;
+        }
+        /* EC-VUX-02: silent unmount for inactive vaults */
+        void vm?.deleteVault?.(vaultId);
+      },
     },
     {
-      label: "Edit Vault…",
-      /*
-       * MEDIUM-4: Pass the right-clicked vault's ID so the modal opens on
-       * the edit form for that vault, not the blank new-vault form.
-       */
-      handler: () => openManageVaultsModal(vaultId),
+      label: "Rename",
+      /* Delegates to startVaultInlineRename — same behaviour as double-click */
+      handler: () => void startVaultInlineRename(el),
     },
     { separator: true, label: "", handler: null },
     {
-      label: "Delete Vault…",
-      handler: () => {
-        const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
-        /*
-         * Use the right-clicked vault's ID (vaultId) rather than the active
-         * vault, so deleting a non-active vault from its node works correctly.
-         */
-        const allVaults = vm?.getAllVaults?.() ?? [];
-        const vaultEntry = allVaults.find((v: any) => v.id === vaultId) ?? vm?.getActiveVault?.();
-        if (!vaultEntry) return;
-        const confirmed = window.confirm(`Delete vault "${vaultEntry.name}"? The files are not deleted.`);
-        if (confirmed) {
-          void vm.deleteVault(vaultEntry.id);
-        }
-      },
+      label: "Edit Type",
+      /* Opens Manage Vaults modal focused on the edit form for this vault */
+      handler: () => openManageVaultsModal(vaultId),
     },
   ];
 }
@@ -2373,6 +2637,7 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
       },
       {
         /* ⋯ (horizontal ellipsis) matches the spec icon for panel menus */
+        id: "file-browser-manage-vaults-btn",
         icon: "⋯",
         title: "Panel menu",
         onClick: openManageVaultsModal,
@@ -2396,6 +2661,14 @@ const plugin = {
     _api = api;
 
     injectFileBrowserCSS();
+
+    /*
+     * step_05: Register the window global so external entry points (Plugin Panel
+     * button, vault-manage keybinding) can open the Manage Vaults modal without
+     * a direct import dependency on this module. Follows the __MARKABLE_COMMAND_BAR_OPEN__
+     * pattern used by other plugins.
+     */
+    (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__ = openManageVaultsModal;
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
     api.registerSidebarPanel(makePanelDescriptor());
@@ -2428,6 +2701,9 @@ const plugin = {
 
   onDisable(api: MarkablePluginAPI): void {
     _enabled = false;
+
+    /* step_05: Unregister the window global so the button is unreachable while disabled */
+    (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__ = null;
 
     /* Close any open context menu so it doesn't linger after disable */
     closeContextMenu();
@@ -2476,6 +2752,7 @@ const plugin = {
     _lastKnownFile = null;
     _contextMenu = null;
     _contextMenuDismiss = null;
+    _contextMenuEscHandler = null;
     _fsUnlisten = null;
     _fsDebounceTimer = null;
   },
@@ -2563,6 +2840,16 @@ export const _testing = {
   },
   /** Expose startInlineRename for testing. */
   startInlineRename,
+  /** Expose startVaultInlineRename for testing (step_03). */
+  startVaultInlineRename,
+  /** Expose openNewVaultModal for testing (step_01). */
+  openNewVaultModal,
+  /** Expose buildVaultContextMenuItems for testing (step_04). */
+  buildVaultContextMenuItems,
+  /** Expose buildNodeEl for testing (step_02). */
+  buildNodeEl,
+  /** Expose attachVaultUnmountListener for testing (step_02). */
+  attachVaultUnmountListener,
   /** Expose handleFsEvent for watcher debounce testing. */
   handleFsEvent,
   /** Get the current context menu element (null when none is open). */
@@ -2571,6 +2858,11 @@ export const _testing = {
   },
   /** Expose closeContextMenu for testing. */
   closeContextMenu,
+  /**
+   * Expose showContextMenu for testing (EC-VUX-06: verify context menu is closed
+   * when unmount button is clicked while the menu is open).
+   */
+  showContextMenu,
   /** Get the FS debounce timer handle (null when no pending event). */
   getFsDebounceTimer(): ReturnType<typeof setTimeout> | null {
     return _fsDebounceTimer;

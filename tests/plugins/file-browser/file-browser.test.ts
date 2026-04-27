@@ -714,13 +714,19 @@ describe("headerActions", () => {
   });
 
   it("headerActions first entry has icon '⋯' and title 'Panel menu'", () => {
+    /*
+     * The search button is now registered at index 0; the ⋯ manage-vaults
+     * button was moved to index 1 during the vault UX refactor. We therefore
+     * assert against headerActions[1] and also verify its stable action id.
+     */
     setupVaultManager(null, null);
     const api = makeMockApi();
     plugin.onEnable(api as any);
     const descriptor = (api.registerSidebarPanel as any).mock.calls[0][0];
-    const action = descriptor.headerActions[0];
+    const action = descriptor.headerActions[1];
     expect(action.icon).toBe("⋯");
     expect(action.title).toBe("Panel menu");
+    expect(action.id).toBe("file-browser-manage-vaults-btn");
     plugin.onDisable(api as any);
   });
 });

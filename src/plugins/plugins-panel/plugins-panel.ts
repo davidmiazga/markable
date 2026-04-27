@@ -204,6 +204,38 @@ export function updateUserPluginDefs(
 // ── List View ─────────────────────────────────────────────────────────────────
 
 /**
+ * Build a footer row containing the "Manage Vaults" button.
+ *
+ * The button delegates to the file-browser plugin via the window global
+ * __MARKABLE_OPEN_MANAGE_VAULTS__ so plugins-panel.ts has no direct import
+ * dependency on file-browser.plugin.ts. This follows the same decoupling
+ * pattern used by __MARKABLE_COMMAND_BAR_OPEN__ and __MARKABLE_TEMPLATES__.
+ *
+ * EC-VUX-09: closePluginsPanel() is called first so the two panels do not
+ * overlap. openManageVaultsModal() appends to document.body which is always
+ * accessible regardless of panel state.
+ *
+ * This function is only called from showListView() when the global is present,
+ * so the button is hidden automatically when the file-browser plugin is off.
+ */
+function buildManageVaultsFooter(): HTMLElement {
+  const footer = document.createElement("div");
+  footer.className = "plugin-panel-footer";
+
+  const btn = document.createElement("button");
+  btn.className = "plugin-panel-footer-btn";
+  btn.textContent = "Manage Vaults";
+  btn.addEventListener("click", () => {
+    closePluginsPanel();
+    const openVaultFn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
+    if (typeof openVaultFn === "function") openVaultFn();
+  });
+
+  footer.appendChild(btn);
+  return footer;
+}
+
+/**
  * Render the three-section list view: "Workflow" → "Core Plugins" → "User Plugins".
  * Each section is collapsible (session state in sectionCollapsed).
  *
@@ -242,6 +274,17 @@ function showListView(): void {
   bodyElement.appendChild(buildSection("core", "Core Plugins", coreDefs));
   bodyElement.appendChild(buildSection("workflow", "Workflow Plugins", workflowDefs));
   bodyElement.appendChild(buildSection("user", "User Plugins", userDefs));
+
+  /*
+   * step_05: Append the "Manage Vaults" footer button only when the file-browser
+   * plugin is enabled (i.e. the global is registered). The panel re-renders each
+   * time it opens via showListView(), so the footer tracks the plugin's live state
+   * without explicit enable/disable hooks here.
+   */
+  const openFn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
+  if (typeof openFn === "function") {
+    bodyElement.appendChild(buildManageVaultsFooter());
+  }
 }
 
 // ── Section builder ───────────────────────────────────────────────────────────

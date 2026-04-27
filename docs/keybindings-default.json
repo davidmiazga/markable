@@ -54,7 +54,8 @@
     "view-toggle-typewriter":       "",
     "view-toggle-diagrams":         "",
     "sidebar.toggleLeft":           "Cmd-Shift-[",
-    "sidebar.toggleRight":          "Cmd-Shift-]"
+    "sidebar.toggleRight":          "Cmd-Shift-]",
+    "vault-manage":                 ""
   },
   "Format": {
     "format-bold":                    "Cmd-B",

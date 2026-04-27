@@ -85,6 +85,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "sidebar.toggleRight", label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
   // PKM Step 02a: File Browser panel toggle — no default key yet; remap via Keyboard Shortcuts.
   { id: "file-browser-toggle", label: "File Browser: Toggle Panel", defaultKey: "", section: "View" },
+  // vault-ux step_05: Manage Vaults entry point — no default key; user binds via Keyboard Shortcuts.
+  { id: "vault-manage", label: "Manage Vaults", defaultKey: "", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },

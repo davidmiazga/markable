@@ -1,4 +1,33 @@
-# Markable 2.0 — Phase 1 Progress Tracker
+# Markable 2.0 — Progress Tracker
+
+**Last Updated:** 2026-04-25
+**Current Status:** Phase 1 complete ✅ — Phase 2 active 🟡
+
+---
+
+## Phase 2 Status
+
+### Completed ✅
+- **Tab system** — Multi-file tabs, regular/vertical/minimal modes
+- **File browser** — Vault system, sidebar panel, file tree
+- **Plugin system** — Core plugin scaffold, copy-on-install pattern, sync script
+- **Settings panel** — Appearance, editor, content, keybindings, plugins sections
+- **Command bar** — Fuzzy search overlay, keyboard navigation
+- **Keybindings** — Panel UI, default keybindings, workflow integration
+- **Daily note** — Rust commands, plugin scaffold
+- **Auto-save** — Plugin with core logic and settings UI
+- **Status bar** — Plugin
+- **Live preview** — Typora-style hide-syntax-unless-active-line
+- **Themes** — 5 default themes (Nord, Solarized Dark/Light, Dracula, Monokai) bundled into app install; `copy_default_themes` Rust command auto-installs on first launch; `sync:themes` dev script; Nord and Solarized Dark color values restored to original palette
+- **Font** — Inter Variable (woff2, 100–900 weight axis) bundled in `public/fonts/`, loaded via `<link>` in index.html; works without system font installed
+- **Heading scale** — CSS custom properties (`--heading-h1-size` … `--heading-h6-weight`) control all heading sizes/weights from top of `styles.css`
+
+### In Progress / Next 🟡
+- **Vaults** — To be discussed this session
+
+---
+
+## Phase 1 Progress Tracker (archived)
 
 **Last Updated:** 2026-04-06
 **Current Status:** ALL PHASE 1 STEPS COMPLETE ✅ (Steps 00-02, 04-06 complete; Step 03 deferred)

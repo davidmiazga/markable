@@ -646,6 +646,14 @@ function handleAction(action: string): void {
     case "sidebar.toggleRight":
       toggleSidebarSide("right");
       break;
+    // vault-ux step_05: open Manage Vaults modal via window global.
+    // EC-VUX-08: double-open guard lives inside openManageVaultsModal itself.
+    // EC-VUX-09: n/a for the keybinding path (Plugin Panel is not involved).
+    case "vault-manage": {
+      const openVaultFn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
+      if (typeof openVaultFn === "function") openVaultFn();
+      break;
+    }
     case "theme-next":      nextTheme();              break;
     case "theme-prev":      prevTheme();              break;
     case "theme-light":     void setTheme("default-light"); break;

@@ -126,7 +126,11 @@
       "Bash(echo \"EXIT:$?\")",
       "Bash(rm /Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/node_modules/.bin/tauri)",
       "Bash(ln -s ../@tauri-apps/cli/tauri.js /Users/dave/Documents/web-local-dev/MarkdownEditor-Rewrite/markable-2.0/node_modules/.bin/tauri)",
-      "Bash(npm uninstall *)"
+      "Bash(npm uninstall *)",
+      "WebFetch(domain:fonts.gstatic.com)",
+      "Read(//Users/daveslaptop/.cargo/bin/**)",
+      "Read(//Users/daveslaptop/.cargo/**)",
+      "Bash(command -v rustup)"
     ]
   }
 }
