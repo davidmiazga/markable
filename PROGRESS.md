@@ -40,7 +40,7 @@
 - **File Browser link update (FR-02.11)** — Post-rename/move `[[wiki-link]]` update banner; same-stem guard suppresses no-op moves; `reloadVaultIndex` after update; 12 new Vitest tests (EC-01–EC-09, EC-11, EC-18); code-reviewer approved 2026-04-27
 
 ### Known Regressions 🔴
-- **`file-tree.test.ts` — 4 failing tests** (pre-existing, commit `281795e`): `displayName` in `file-tree.ts` no longer strips `.md` extension from file node names. Needs a follow-up fix.
+None — all pre-existing test failures resolved 2026-04-27.
 
 ### In Progress / Next 🟡
 - TBD
