@@ -326,3 +326,14 @@ Wire `onEnable`/`onDisable` sequences. Add to `PLUGINS` array in `build-plugins.
 - **Requirements traceability**: All items in `docs/requirements/active_task.md` verified. FR-1 through FR-8, NFR-1 through NFR-6, AD-1 through AD-8 satisfied.
 - **Edge case coverage**: All 30 Edge Case Inventory items (EC-1 through EC-30) covered by tests.
 - **Status**: Approved for Merge
+
+## Review Sign-off (Pass 3 — Step 10: Wiki-Link Hover Preview Popover)
+
+- **Date**: 2026-04-28
+- **Findings summary**: 0 Critical, 0 High, 0 Medium, 1 Low (accepted — see below) — all resolved
+- **Requirements traceability**: All items in `docs/requirements/active_task.md` (hover-popover requirements FR-1 through FR-10, EC-01 through EC-19) verified against implementation.
+- **Edge case coverage**: All hover-popover Edge Case Inventory items covered by tests. EC-01, EC-03, EC-04, EC-07, EC-08, EC-11, EC-12, EC-18 have explicit tests. Remaining ECs (EC-02, EC-05, EC-06, EC-09, EC-10, EC-13, EC-14, EC-15, EC-16, EC-17, EC-19) are design-level or covered by the existing backlinks test suite.
+- **Low (accepted)**: The JSDoc on `findFrontMatterEnd` incorrectly describes the return value as "foundIndex + 4"; the function actually returns `foundIndex` and callers add 4. The code is correct; only the comment is misleading. Accepted as Low documentation debt.
+- **TypeScript**: `npx tsc --noEmit` exits clean.
+- **Tests**: 2923/2923 pass (39 skipped); hover-popover.test.ts 31/31.
+- **Status**: Approved for Merge

@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-04-27 (evening)
+**Last Updated:** 2026-04-28
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -42,12 +42,15 @@
 - **Non-MD file support in vault index** — `NonMdFile` struct in Rust `build_vault_index`; `nonMdFiles?: NonMdFile[]` on `VaultIndex` TypeScript type; file browser renders images/PDFs/other assets alongside `.md` files in the tree; `nonMdFiles` optional to handle cached indexes; `@codemirror` import leak from `settings.ts` fixed (moved `spellCheckCompartment` to `window.__MARKABLE_SPELL_CHECK_COMPARTMENT__` global); 2026-04-27
 - **Media file preview — VSCode-style content area** — Clicking a non-MD asset in the file browser opens it as a tab in the main content area (images via `<img>`, PDFs via `<embed>`, unsupported types show "Cannot preview" message); `TabEntry.kind: "editor" | "media"` discriminated union; `openMediaInTab()` on TabManager with dedup; `div#media-viewer` permanent DOM fixture in `#editor` toggled via `has-media-tab` CSS class; `saveActiveTab`/`saveActiveTabAs`/`markActiveTabDirty`/`saveSession` all guarded for media tabs; sidebar preview approach (200px panel) designed, built, then superseded by this content-area approach; 42 new Vitest tests; code-reviewer approved (2 rounds) 2026-04-27
 - **Window size default invariant enforcement** — `sizeH` regression (`"50%"` instead of `"80%"`) found and fixed in `DEFAULT_SETTINGS` and `applyWindowSettings` fallback; `tests/settings/window-defaults.test.ts` (6 tests) added as permanent regression guard; `docs/specs/invariants/window-size-defaults.md` canonical invariant spec; `CLAUDE.md` ⚠️ section expanded with recovery procedure including on-disk `settings.json` patch one-liner; 2026-04-27
+- **Backlinks bug fix** — Two bugs in `scheduleIndexRebuild`: (1) vault-mode path construction used `currentFileDir + bareFilename`, giving wrong paths for cross-directory vault files; (2) index always read from disk so unsaved in-memory `[[links]]` were invisible. Fix: vault fast path seeds link map directly from `VaultIndexEntry.outboundLinks` (Rust-parsed, all directories), then overrides each open editor tab's entry with its in-memory `tab.doc`; no-vault directory-scan path unchanged; 2026-04-28
+- **Wiki-link hover preview popover** — Hovering a `[[wikilink]]` span for 180 ms triggers async file read; popover shows title (front matter / H1 / filename stem), vault-relative path label, and 200-word plain-text excerpt. 60 ms grace period keeps popover alive when mouse moves from span into popover (EC-08). Monotonic version counter discards stale overlapping fetches (EC-04). `position: fixed` with right/bottom viewport clamping. Full cleanup in `onDisable`. 31 new Vitest tests; code-reviewer approved 2026-04-28
 
 ### Known Regressions 🔴
-None — all pre-existing test failures resolved 2026-04-27.
+None.
 
 ### In Progress / Next 🟡
-- TBD
+- Tab right-click context menu (close, close others, reveal in Finder)
+- Drag & drop `.md` files to open
 
 ---
 

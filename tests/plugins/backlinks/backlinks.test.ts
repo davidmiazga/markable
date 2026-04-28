@@ -38,6 +38,7 @@ import backlinkPlugin, {
   findWikiLinkAtPosition,
   handleWikiLinkClick,
   computeWikiLinkDecorationRanges,
+  buildWikiLinkDecorationExtension,
   getCompletionContext,
   filterCompletions,
   setCachedFileList,
@@ -477,7 +478,8 @@ describe("computeWikiLinkDecorationRanges", () => {
 
     const sorted = [...ranges].sort((a, b) => a.from - b.from);
     expect(sorted[0]).toEqual({ from: 4, to: 6, type: "replace" });
-    expect(sorted[1]).toEqual({ from: 6, to: 11, type: "mark" });
+    // Step 10: "mark" ranges now include a `target` field for data-wiki-target (FR-7.1)
+    expect(sorted[1]).toEqual({ from: 6, to: 11, type: "mark", target: "notes" });
     expect(sorted[2]).toEqual({ from: 11, to: 13, type: "replace" });
   });
 
@@ -492,7 +494,7 @@ describe("computeWikiLinkDecorationRanges", () => {
      * Expected decorations for [[readme|Read Me]] at positions 0..18:
      *   - replace  0..2    (hide "[[")
      *   - replace  2..9    (hide "readme|")
-     *   - mark     9..16   (style "Read Me")
+     *   - mark     9..16   (style "Read Me"; target is "readme" per FR-7.2)
      *   - replace  16..18  (hide "]]")
      */
     expect(ranges).toHaveLength(4);
@@ -500,7 +502,8 @@ describe("computeWikiLinkDecorationRanges", () => {
     const sorted = [...ranges].sort((a, b) => a.from - b.from);
     expect(sorted[0]).toEqual({ from: 0, to: 2, type: "replace" });
     expect(sorted[1]).toEqual({ from: 2, to: 9, type: "replace" });
-    expect(sorted[2]).toEqual({ from: 9, to: 16, type: "mark" });
+    // Step 10: target is the part BEFORE the pipe (FR-7.2)
+    expect(sorted[2]).toEqual({ from: 9, to: 16, type: "mark", target: "readme" });
     expect(sorted[3]).toEqual({ from: 16, to: 18, type: "replace" });
   });
 
@@ -533,7 +536,8 @@ describe("computeWikiLinkDecorationRanges", () => {
     expect(ranges).toHaveLength(3);
     const sorted = [...ranges].sort((a, b) => a.from - b.from);
     expect(sorted[0]).toEqual({ from: 0, to: 2, type: "replace" });
-    expect(sorted[1]).toEqual({ from: 2, to: 7, type: "mark" });
+    // Step 10: "mark" ranges now include `target` for data-wiki-target (FR-7.1)
+    expect(sorted[1]).toEqual({ from: 2, to: 7, type: "mark", target: "start" });
     expect(sorted[2]).toEqual({ from: 7, to: 9, type: "replace" });
   });
 
@@ -547,7 +551,8 @@ describe("computeWikiLinkDecorationRanges", () => {
     expect(ranges).toHaveLength(3);
     const sorted = [...ranges].sort((a, b) => a.from - b.from);
     expect(sorted[0]).toEqual({ from: 4, to: 6, type: "replace" });
-    expect(sorted[1]).toEqual({ from: 6, to: 12, type: "mark" });
+    // Step 10: "mark" ranges now include `target` for data-wiki-target (FR-7.1)
+    expect(sorted[1]).toEqual({ from: 6, to: 12, type: "mark", target: "finish" });
     expect(sorted[2]).toEqual({ from: 12, to: 14, type: "replace" });
   });
 
@@ -576,7 +581,8 @@ describe("computeWikiLinkDecorationRanges", () => {
     expect(ranges).toHaveLength(3);
     const sorted = [...ranges].sort((a, b) => a.from - b.from);
     expect(sorted[0]).toEqual({ from: 2, to: 4, type: "replace" });
-    expect(sorted[1]).toEqual({ from: 4, to: 8, type: "mark" });
+    // Step 10: "mark" ranges now include `target` for data-wiki-target (FR-7.1)
+    expect(sorted[1]).toEqual({ from: 4, to: 8, type: "mark", target: "link" });
     expect(sorted[2]).toEqual({ from: 8, to: 10, type: "replace" });
   });
 
@@ -647,6 +653,74 @@ describe("computeWikiLinkDecorationRanges", () => {
 
     /* Only [[real-link]] gets 3 decorations; [[code-link]] is skipped */
     expect(ranges).toHaveLength(3);
+  });
+
+  it("EC-02: cursor moves off link line — decoration applied on next call", () => {
+    /*
+     * Simulate the transition: first call has line 1 active (raw syntax),
+     * second call has no active lines (decoration appears). The ViewPlugin
+     * rebuilds on every CM6 update, so the second call models the tick
+     * immediately after the cursor leaves the line.
+     */
+    const text = "[[target]]";
+    const visibleRanges = [{ from: 0, to: text.length }];
+
+    /* Cursor on the link line — no decorations */
+    const withCursor = computeWikiLinkDecorationRanges(
+      text,
+      new Set<number>([1]),
+      visibleRanges
+    );
+    expect(withCursor).toHaveLength(0);
+
+    /* Cursor elsewhere — decoration applied */
+    const withoutCursor = computeWikiLinkDecorationRanges(
+      text,
+      new Set<number>(),
+      visibleRanges
+    );
+    expect(withoutCursor).toHaveLength(3);
+  });
+
+  it("EC-03: multi-line selection spanning a link line suppresses all covered links", () => {
+    /*
+     * Lines 1, 2, and 3 are all active (user has a multi-line selection).
+     * Wiki-links on every one of those lines must remain as raw syntax.
+     */
+    const text = "[[line1]]\n[[line2]]\n[[line3]]";
+    const activeLines = new Set<number>([1, 2, 3]);
+    const visibleRanges = [{ from: 0, to: text.length }];
+
+    const ranges = computeWikiLinkDecorationRanges(text, activeLines, visibleRanges);
+
+    expect(ranges).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildWikiLinkDecorationExtension
+// ---------------------------------------------------------------------------
+
+describe("buildWikiLinkDecorationExtension", () => {
+  let savedCmView: unknown;
+
+  beforeEach(() => {
+    savedCmView = (globalThis as any).__CM_VIEW__;
+  });
+
+  afterEach(() => {
+    (globalThis as any).__CM_VIEW__ = savedCmView;
+  });
+
+  it("EC-14: returns empty array when __CM_VIEW__ is absent", () => {
+    /*
+     * If the CM6 globals haven't been set (e.g. cold startup race or test
+     * environment), buildWikiLinkDecorationExtension must degrade gracefully
+     * by returning [] rather than throwing.
+     */
+    (globalThis as any).__CM_VIEW__ = undefined;
+    const result = buildWikiLinkDecorationExtension();
+    expect(result).toEqual([]);
   });
 });
 

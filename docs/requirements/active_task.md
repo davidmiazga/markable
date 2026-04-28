@@ -1,622 +1,397 @@
 ---
-title: "Media File Preview — VSCode-Style Content Area (Replaces Sidebar Panel)"
-last-updated: "2026-04-27"
+title: "Wiki-link hover preview popover"
+last-updated: "2026-04-28"
 review-cadence-days: 7
 status: active
 ---
 
-# Media File Preview — VSCode-Style Content Area
-
-## Validation Status
-
-**VALIDATED — requirements approved for handoff.**
-
----
+# Wiki-link Hover Preview Popover
 
 ## 1. Feature Summary
 
-As a user I want clicking an image, PDF, or other non-markdown asset in the file
-browser to open that file as a tab in the main content area — exactly as VSCode
-does — so I can view it at full size while keeping the file browser sidebar open.
+As a user I want to hover the mouse over any `[[wikilink]]` span in the editor and see a
+small floating popover showing the linked document's title and a plain-text excerpt of its
+content, so I can read the destination note without leaving the current document — the same
+hover-preview behaviour present in Obsidian and Notion.
 
 ---
 
-## 2. Background and Codebase Context
+## 2. Where the Code Lives
 
-### 2.1 What Was Built and Why It Is Being Replaced
+**The hover popover is implemented inside the existing backlinks plugin
+(`src/plugins/backlinks/backlinks.plugin.ts`), not as a separate plugin.**
 
-The previous implementation (now superseded) injected a fixed 200px
-`file-browser-media-preview` panel at the bottom of the file browser sidebar.
-This was rejected by the user as the wrong UX. The entire sidebar-preview
-approach — `showMediaPreview()`, `closeMediaPreview()`, `_previewedPath`,
-`file-browser-media-preview` CSS, and `fbmp-*` CSS classes — is removed by
-this change.
+Justification:
 
-### 2.2 Relevant DOM Layout
+- The backlinks plugin already owns every piece of infrastructure this feature needs:
+  the `cm-wiki-link` DOM class it applies to decorated spans, the `resolveWikiLinkPath`
+  and `normalizeTarget` path-resolution helpers, the `invokeReadFile` Tauri bridge
+  wrapper, and the `_enabled` guard used to make async callbacks no-ops after disable.
+- A separate IIFE plugin would have to duplicate `resolveWikiLinkPath`,
+  `normalizeTarget`, and `invokeReadFile` because IIFE plugins cannot import from one
+  another at runtime.
+- Splitting ownership of `cm-wiki-link` spans between two plugins would create a
+  temporal coupling: the popover plugin would silently do nothing if the backlinks plugin
+  were disabled (its spans would disappear), making its enable/disable semantics
+  misleading.
+- Adding the feature inside the existing plugin keeps all `cm-wiki-link` behaviour in one
+  file and one `onEnable`/`onDisable` cycle, matching the established pattern for the
+  click handler (`_wikiLinkClickHandler`).
 
-At runtime the page DOM structure around the editor is:
-
-```
-<body>
-  <div id="titlebar">…</div>
-  <div id="tab-strip">…</div>          <!-- tab renderer mounts here -->
-  <div id="app">
-    <div id="app-row">                  <!-- created by initSidebar() -->
-      <div id="sidebar-left">…</div>
-      <div id="editor">…</div>          <!-- CodeMirror mounts here -->
-      <div id="sidebar-right">…</div>
-    </div>
-    <div id="statusbar">…</div>
-  </div>
-</body>
-```
-
-`#editor` is a flex child of `#app-row` with `flex: 1`. It is the sole
-non-sidebar element in the content area.
-
-### 2.3 Tab System Architecture
-
-`TabManager` (in `src/tabs/tab-manager.ts`) owns the ordered list of open
-`TabEntry` objects and the single shared `EditorView` instance. The CM6
-`EditorView` is always mounted in `#editor` and is never destroyed. Tab
-switching is performed by dispatching a transaction that replaces the
-document text in the shared view.
-
-`TabEntry` (in `src/tabs/tab-types.ts`) currently has the following shape:
-
-```typescript
-interface TabEntry {
-  id: string;
-  filePath: string | null;
-  title: string;
-  isDirty: boolean;
-  doc: string;
-  scrollTop: number;
-}
-```
-
-There is no `kind` field. All tabs today are text/editor tabs.
-
-### 2.4 The File Browser Plugin Is an IIFE
-
-`file-browser.plugin.ts` is compiled to an IIFE and cannot import from
-`tab-manager.ts` at runtime. It reaches the tab manager exclusively via
-`window.__MARKABLE_TAB_MANAGER__`. Any new method added to `TabManager` must
-also be exposed on that window global (the assignment in `main.ts` assigns the
-entire `tabManager` instance, so new methods are available automatically with no
-change to `main.ts`).
-
-### 2.5 `openFileInTab` Crashes on Binary Files
-
-`openFileInTab` calls `readFile()` (Rust `read_file` → `fs::read_to_string`),
-which fails with `InvalidData` on binary files. Media files must never go through
-`openFileInTab`. The new code path for media files must bypass all text-reading
-logic.
-
-### 2.6 Existing Window Globals Available in the IIFE
-
-- `window.__MARKABLE_TAB_MANAGER__` — the `TabManager` singleton
-- `window.__MARKABLE_CONVERT_FILE_SRC__(path)` — converts an absolute path to an `asset://` URL
+The popover logic is added as a discrete, named group of functions and module-level
+variables within the existing file, following the step-numbered section convention
+already used (Step 10: Hover Popover).
 
 ---
 
-## 3. Design Decisions
+## 3. Functional Requirements
 
-### 3.1 A New Tab Kind
+### FR-1: Show delay
 
-`TabEntry` gains a discriminated-union `kind` field:
+FR-1.1 — After the cursor enters a `.cm-wiki-link` span (`mouseenter` event), the system
+waits a fixed delay of 180 ms before beginning the file fetch and showing the popover. This
+prevents flicker on brief/accidental cursor passes.
 
-```typescript
-type TabKind = "editor" | "media";
-```
+FR-1.2 — If the cursor leaves the span (or the popover) before the 180 ms elapses, the
+pending timer is cancelled and no fetch is issued.
 
-All current tabs are `kind: "editor"`. A new `kind: "media"` tab holds a file
-path and a display title but no `doc` text (the content area renders an HTML
-viewer element, not a CM6 editor state).
+### FR-2: File fetch
 
-### 3.2 DOM Strategy: Sibling Viewer Panel Inside `#editor`
+FR-2.1 — When the delay elapses, the system reads `window.__MARKABLE_CURRENT_FILE__` to
+obtain the base path for resolution. If the value is null (untitled document, EC-07), the
+popover is not shown and no fetch is issued.
 
-The CM6 editor (`div.cm-editor`) lives inside `#editor` as a child element
-inserted by CodeMirror. Rather than moving the `EditorView` or manipulating
-`#app-row`, a new `div#media-viewer` is inserted as a sibling of `div.cm-editor`
-inside `#editor`. The two children of `#editor` are mutually exclusive:
+FR-2.2 — The system calls `resolveWikiLinkPath(currentFile, target)` using the same
+function already used by the click handler. The `target` is extracted from the hovered
+element: the `data-wiki-target` attribute set on the span during decoration (see FR-7).
 
-- When a `kind: "editor"` tab is active, `div.cm-editor` has `display: flex`
-  (its normal value) and `div#media-viewer` has `display: none`.
-- When a `kind: "media"` tab is active, `div.cm-editor` has `display: none`
-  and `div#media-viewer` has `display: flex`.
+FR-2.3 — The file content is read via `window.__TAURI_INTERNALS__.invoke("read_file", {
+path })`, following the `invokeReadFile` pattern already in the plugin. This is the
+only Tauri call the feature makes.
 
-`#editor` keeps `flex: 1` and fills the content area exactly as before. No
-changes to `index.html`, `#app-row`, or the sidebar layout are required.
+FR-2.4 — At most one file fetch is in flight at any given moment (EC-04). If a second
+hover fires while a fetch is already pending (not yet settled), the pending fetch's result
+is discarded on arrival (the `_hoverPopoverFetchVersion` counter pattern: increment
+before each fetch; on arrival check that the counter still matches).
 
-`div#media-viewer` is created once by `TabManager.init()`, inserted into
-`#editor`, and toggled via CSS class rather than inline style. `TabManager`
-adds class `has-media-tab` to `#editor` when the active tab is `kind: "media"`,
-and removes it when switching back to an editor tab. The styles that show/hide
-the two panels live in `src/tabs/tabs.css`:
+FR-2.5 — File content is capped at the first 2 048 bytes before any processing (EC-03).
+This cap is applied by slicing the raw UTF-8 string before the content extraction step,
+not after, so large files never allocate large working strings.
 
-```css
-/* Default: editor visible, viewer hidden */
-#media-viewer { display: none; }
-/* When a media tab is active */
-#editor.has-media-tab .cm-editor { display: none; }
-#editor.has-media-tab #media-viewer { display: flex; }
-```
+### FR-3: Content extraction
 
-### 3.3 TabManager Gets One New Public Method
+FR-3.1 — **Title**: extracted by the following priority chain, stopping at the first match:
+  1. YAML front matter `title:` field — scan the leading `---` block (if any) for a line
+     matching `/^title:\s*["']?(.+?)["']?\s*$/`.
+  2. First `# H1` heading — first line matching `/^#\s+(.+)/`.
+  3. Filename stem — the path component after the last `/`, with the `.md` extension
+     removed.
 
-`TabManager` gains a single new public method:
+FR-3.2 — **Excerpt**: the first ~200 words of the document body after stripping:
+  - YAML front matter block (everything between the opening `---` and the closing `---`
+    or `...`).
+  - Markdown syntax characters: heading `#` markers, bold/italic markers (`*`, `_`,
+    `**`, `__`), link syntax `[text](url)`, image syntax `![alt](url)`, inline code
+    backticks, horizontal rules.
+  - Fenced code block contents (everything between triple-backtick or triple-tilde fences,
+    inclusive of the fence lines themselves).
+  - Blank lines collapsed to a single space.
+  
+  The word count is approximate (split on whitespace); truncation adds an ellipsis `…`
+  if the excerpt was cut short.
 
-```typescript
-openMediaInTab(filePath: string): boolean
-```
+FR-3.3 — **File path label**: the vault-relative path if a vault is active (obtained from
+`window.__MARKABLE_VAULT_MANAGER__?.getActiveVault()?.rootPaths?.[0]`; strip that prefix
+from the resolved path), otherwise the basename only.
 
-This method:
-1. Checks for a duplicate-path guard (same as `openFileInTab` EC-4 equivalent).
-2. Creates a `TabEntry` with `kind: "media"`, `doc: ""`, `filePath`, and a title
-   derived from `_titleFromPath(filePath)`.
-3. Pushes the tab, updates `activeIndex`, calls `_notifyRenderer()`.
-4. Calls a new private method `_applyActiveTab()` that already handles both
-   kinds (see FR-4 below).
-5. Returns `true` if a new tab was created, `false` if an existing media tab for
-   the same path was activated.
+### FR-4: Popover DOM
 
-The method does NOT call `readFile()` and does NOT access the `EditorView`
-document. It only populates the viewer element.
+FR-4.1 — The popover is a single `<div>` element appended to `document.body` (not to the
+`.cm-editor` scroll container, to avoid clipping by `overflow: hidden`).
 
-### 3.4 Sidebar Preview Code Is Fully Removed
+FR-4.2 — The popover contains three child elements in order:
+  - `.wl-popover-title` — the title text.
+  - `.wl-popover-path` — the file path label.
+  - `.wl-popover-excerpt` — the plain-text excerpt.
 
-All of the following are deleted in this change:
+FR-4.3 — The popover element carries `data-markable-wiki-popover="true"` for idempotent
+lookup and targeted CSS scoping.
 
-- The `file-browser-media-preview` CSS block and all `fbmp-*` CSS rules
-  from `FILE_BROWSER_CSS` in `file-browser.plugin.ts`.
-- The module-level variable `_previewedPath`.
-- The functions `showMediaPreview()` and `closeMediaPreview()`.
-- All call sites of `closeMediaPreview()` (in `renderPanel()`, `destroy()`,
-  `_vaultChangedCb`).
-- The `buildActivateHandler` branch that called `showMediaPreview` / `closeMediaPreview`.
-- The test file `tests/plugins/file-browser/media-preview.test.ts`.
+FR-4.4 — Only one popover instance exists at a time. Before creating a new one, any
+existing popover is removed from the DOM.
 
-The `buildActivateHandler` non-md branch is replaced with a single call:
-```typescript
-void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
-```
+### FR-5: Positioning
 
-The active-highlight logic in `buildNodeEl` that read `_previewedPath` is removed.
-Only `_activeFile` (the currently open `.md` tab path) continues to drive
-`tree-node-active`. Non-md files no longer receive a special active highlight
-in the sidebar when their tab is open; this matches VSCode's behaviour.
+FR-5.1 — The popover is positioned absolutely using `getBoundingClientRect()` on the
+hovered `.cm-wiki-link` span. It appears below the span by default (top edge =
+`spanRect.bottom + 8px`, left edge = `spanRect.left`).
 
-### 3.5 Session Persistence for Media Tabs
+FR-5.2 — If the computed left edge plus the popover's natural width (max-width 320 px)
+would exceed `window.innerWidth - 16px`, the popover is right-aligned instead
+(right edge = `window.innerWidth - spanRect.right` equivalent, clamped to `16px`
+from the viewport edge).
 
-Media tabs are excluded from `saveSession()` serialization (same rule as
-`openContentTab` — no `filePath`-based persistence for non-editor tabs). When
-Markable restarts, media tabs are not restored. This is consistent with VSCode,
-which also does not restore binary-file tabs across restarts.
+FR-5.3 — If the computed bottom edge (top + natural height) would exceed
+`window.innerHeight - 16px`, the popover flips to appear above the span instead
+(bottom edge = `spanRect.top - 8px`).
+
+FR-5.4 — Positioning is applied with `position: fixed` (not `absolute`) so the popover
+stays anchored to the viewport regardless of document scroll.
+
+### FR-6: Dismissal
+
+FR-6.1 — The popover is dismissed (removed from DOM, pending timer cancelled, pending
+fetch version incremented) when:
+  - `mouseleave` fires on the hovered `.cm-wiki-link` span AND the cursor did not move
+    into the popover itself (EC-08). A 60 ms grace-period timer is used: if the cursor
+    enters the popover within 60 ms, the dismissal is cancelled.
+  - `mouseleave` fires on the popover element itself AND the cursor did not move back into
+    the originating span.
+  - A `click` event fires anywhere in the document (the user is navigating away).
+  - `onDisable` is called (plugin teardown).
+
+FR-6.2 — The popover must NOT be dismissed when the cursor moves from the span directly
+into the popover (EC-08). The grace-period timer in FR-6.1 handles this.
+
+### FR-7: Decoration data attribute
+
+FR-7.1 — The existing `buildWikiLinkDecorations` function currently marks spans with
+`class: "cm-live-link cm-wiki-link"`. This must be augmented to also set
+`data-wiki-target` to the raw (un-normalized) target string, so the hover handler can
+read the target without reverse-parsing the span's text content.
+
+FR-7.2 — For piped links `[[target|display]]`, `data-wiki-target` contains `target` (the
+part before the pipe), not the display text (EC-11).
+
+FR-7.3 — The `Decoration.mark` call in `buildWikiLinkDecorations` must include the
+`attributes: { "data-wiki-target": match.target }` option. This is backward-compatible:
+no existing code reads `data-wiki-target`.
+
+### FR-8: Event listener lifecycle
+
+FR-8.1 — `onEnable` attaches a single `mouseover` listener to `document` (capture phase,
+`true`) to handle hover events on all current and future `.cm-wiki-link` spans without
+needing to re-attach per span. A stored reference (`_wikiLinkHoverHandler`) is used for
+cleanup.
+
+FR-8.2 — `onDisable` removes the `mouseover` listener, cancels any pending show timer,
+removes the popover from the DOM, and nulls all stored references. This follows the exact
+pattern of `_wikiLinkClickHandler` already in `onDisable`.
+
+### FR-9: CSS styling
+
+FR-9.1 — Popover styles are injected via an additional `<style>` tag identified by
+`data-markable-wiki-popover-styles="true"`. The tag is created by
+`injectWikiPopoverStyles()` and removed by `removeWikiPopoverStyles()`, both called from
+`onEnable`/`onDisable`.
+
+FR-9.2 — Popover appearance uses existing CSS variables only:
+
+| CSS variable       | Used for                         |
+|--------------------|----------------------------------|
+| `--bg-primary`     | popover background                |
+| `--border-color`   | 1px solid border                 |
+| `--text-primary`   | title text colour                 |
+| `--text-secondary` | excerpt and path label colour     |
+| `--ui-font`        | all text in the popover           |
+| `--link-color`     | title text colour (accent)        |
+
+FR-9.3 — Fixed popover dimensions: max-width 320 px, max-height 240 px, overflow hidden.
+Font size 13 px for title, 11 px for path label, 12 px for excerpt. Padding 12 px.
+Box-shadow `0 4px 16px rgba(0,0,0,0.18)` (provides depth on both light and dark themes).
+Border-radius 6 px. `z-index: 10000` (above all other UI including sidebar and settings).
+
+FR-9.4 — A CSS fade-in transition of 100 ms is applied using `opacity` from 0 to 1 and a
+`translate(0, 4px)` to `translate(0, 0)` transform. No JS animation frame is needed.
+
+### FR-10: Non-functional requirements
+
+FR-10.1 — No flicker: the 180 ms show delay (FR-1.1) and 60 ms grace-period (FR-6.1)
+together prevent the popover from flashing on rapid cursor movements over multiple links.
+
+FR-10.2 — At most one `read_file` Tauri call is in flight at any moment (FR-2.4).
+
+FR-10.3 — The popover does not appear during keyboard editing. The hover popover is
+mouse-only. When the cursor moves to a link line in the editor, the raw syntax is shown
+(existing behavior) and no popover fires because no `mouseover` event fires on a DOM span
+during cursor-key navigation (EC-10).
+
+FR-10.4 — z-index must be 10000 or higher, above the autocomplete dropdown (which is
+typically in the 1000–9999 range).
+
+FR-10.5 — The popover must not be selectable (`user-select: none`) to avoid accidentally
+selecting its text when the user means to click a link or continue editing.
+
+FR-10.6 — The feature must not regress any existing backlinks tests. All new logic is
+additive; no existing functions are modified except `buildWikiLinkDecorations` (FR-7.3)
+and `onEnable`/`onDisable` (FR-8).
 
 ---
 
-## 4. Functional Requirements
+## 4. Edge Case Inventory
 
-### FR-1 — New `TabEntry.kind` Field
+**EC-01: Target file does not exist on disk.**
+`invokeReadFile` returns `{ ok: false, ... }`. The popover is not shown. No alert is
+displayed. A `console.debug` log is emitted. The fetch version counter is reset so the
+next hover can proceed normally.
 
-`tab-types.ts` gains a `kind` field on `TabEntry`:
+**EC-02: Target file is in a subdirectory (vault context).**
+`resolveWikiLinkPath` resolves from the current file's directory. For a link like
+`[[subfolder/note]]`, `normalizeTarget` will produce `subfolder/note.md` and the
+resolved path will be `<currentDir>/subfolder/note.md`. This is correct for vault
+subdirectory navigation. No special-casing is needed; the existing helpers handle it.
 
-```typescript
-export type TabKind = "editor" | "media";
+**EC-03: Target file is very large.**
+Content is sliced to the first 2 048 bytes before any other processing (FR-2.5). This
+bounds memory and processing time regardless of file size.
 
-export interface TabEntry {
-  id: string;
-  kind: TabKind;           // NEW — defaults to "editor" for all existing tabs
-  filePath: string | null;
-  title: string;
-  isDirty: boolean;
-  doc: string;
-  scrollTop: number;
-}
-```
+**EC-04: Multiple rapid hovers (debounce / version counter).**
+Each new hover increments the `_hoverFetchVersion` counter. On fetch completion, if the
+local version captured at fetch-start no longer matches the module-level counter, the
+result is silently discarded. No stale popover appears.
 
-All existing `TabEntry` construction sites in `tab-manager.ts`
-(`_createUntitledTab`, `openFileInTab`, `openContentTab`, session restore) must
-add `kind: "editor"` explicitly. No runtime breakage is acceptable.
+**EC-05: Backlinks plugin is disabled.**
+The `mouseover` listener is not attached when the plugin is disabled. No popover can
+appear. The `cm-wiki-link` spans are also absent (plugin removed its decorations), so
+even if a stale listener somehow fired, the event target would never match
+`.cm-wiki-link`.
 
-### FR-2 — `div#media-viewer` Created Once in `TabManager.init()`
+**EC-06: Wiki-link target is a self-link (link to the currently open file).**
+`invokeReadFile` succeeds; the popover shows the current file's own content. This is
+correct and expected behavior (the user may want to preview a section of the current
+document via a self-reference).
 
-`TabManager.init()` creates a `div` with `id="media-viewer"` and appends it
-as a child of `#editor` after the CM6 editor mounts (the CM6 `EditorView` is
-passed to `init()` so `#editor` is already populated by then). The element
-starts with no special class (hidden by the default CSS rule `display: none`).
+**EC-07: Untitled document (no current file path).**
+`window.__MARKABLE_CURRENT_FILE__` is null. After the 180 ms delay fires, the handler
+checks this value, finds null, cancels quietly, and shows nothing. No error is thrown.
 
-The viewer element is created once for the app lifetime. It is not destroyed on
-tab close or vault switch.
+**EC-08: Cursor moves from the span directly into the popover.**
+A 60 ms grace-period timer is used (FR-6.1). If `mouseleave` fires on the span and
+then `mouseenter` fires on the popover within 60 ms, the dismissal timer is cancelled
+and the popover remains visible. The cursor is then tracked on the popover itself for
+dismissal.
 
-### FR-3 — `TabManager.openMediaInTab(filePath)` Public Method
+**EC-09: Wiki-link with pipe syntax `[[target|display]]`.**
+`data-wiki-target` is set to `target` (FR-7.2). The popover fetches and shows the
+content of `target`, not `display`. The popover title is derived from `target`'s file
+content via FR-3.1, not from the display text in the wikilink.
 
-```typescript
-openMediaInTab(filePath: string): boolean
-```
+**EC-10: Keyboard navigation (cursor moves to a link line).**
+No `mouseover` event fires during keyboard cursor movement. The popover is never shown.
+This is a non-issue by design; the feature is mouse-only.
 
-Behaviour:
+**EC-11: Wiki-link with pipe and multiple `|` characters `[[target|text|more]]`.**
+`data-wiki-target` is set to `target` only (the part before the first pipe), consistent
+with `parseWikiLinks` behavior. The popover resolves and shows `target`.
 
-1. **Duplicate guard**: if any existing tab has `kind: "media"` and
-   `filePath === filePath`, activate that tab and return `false`.
-2. Capture the current active tab via `_captureActiveTab()`.
-3. Create a new `TabEntry`:
-   ```typescript
-   {
-     id: crypto.randomUUID(),
-     kind: "media",
-     filePath,
-     title: this._titleFromPath(filePath),
-     isDirty: false,
-     doc: "",
-     scrollTop: 0,
-   }
-   ```
-4. Push the tab, set `activeIndex` to its position.
-5. Call `_applyActiveTab()` — the modified version (see FR-4) handles the
-   media case.
-6. Call `_notifyRenderer()`.
-7. Call `addRecentFile(filePath)` (non-blocking, void).
-8. Call `saveSession()` (non-blocking, void) — the session serialization
-   filter already excludes media tabs because `saveSession` only saves
-   `kind: "editor"` tabs with a `filePath`.
+**EC-12: Empty wiki-link `[[]]`.**
+`data-wiki-target` would be an empty string. In `resolveWikiLinkPath("", ...)`,
+`normalizeTarget("")` produces `.md`. The resulting path is invalid. `invokeReadFile`
+returns `{ ok: false }` and the popover is silently suppressed. No crash.
 
-   > Note: `saveSession()` must be updated to filter `t.kind === "editor" && t.filePath !== null` instead of the current `t.filePath !== null` to ensure a future media tab with a non-null `filePath` is never accidentally serialised.
+**EC-13: Popover is visible when user opens settings or a modal.**
+The popover has `z-index: 10000`. If a modal opens on top, the modal should have a higher
+z-index. The settings panel must be confirmed to use a z-index higher than 10000 (or the
+popover must be explicitly dismissed on any `click` event, which FR-6.1 already specifies).
+This is a cross-cutting concern; the architect must verify the settings panel z-index.
 
-9. Return `true`.
+**EC-14: Vault is active and file is in a different vault subdirectory.**
+`resolveWikiLinkPath` resolves relative to the current file's directory, not the vault
+root. For a vault-wide link like `[[notes/project]]`, if the current file is in
+`vault/docs/current.md`, the resolved path is `vault/docs/notes/project.md`, which may
+not exist. This is a known limitation of the directory-relative resolution strategy
+inherited from the click handler. The popover falls back gracefully: `invokeReadFile`
+returns `{ ok: false }` and nothing is shown (EC-01). Vault-wide fuzzy resolution is
+out of scope (see Section 5).
 
-The auto-close-clean-Untitled logic that exists in `openFileInTab` (removes the
-Untitled tab when opening the first real file) also applies to
-`openMediaInTab`. If, after pushing the media tab, exactly two tabs exist and
-the other tab is `kind: "editor"`, `filePath === null`, and `isDirty === false`,
-remove it and recalculate `activeIndex`.
+**EC-15: Two `.cm-wiki-link` spans are very close together (rapid hover transitions).**
+The version counter (EC-04) ensures only the most recently hovered link's fetch result
+is used. The old popover is removed before the new one is shown (FR-4.4).
 
-### FR-4 — `_applyActiveTab()` Updated for Media Tabs
+**EC-16: `window.__TAURI_INTERNALS__` is absent (unit test environment).**
+The `invokeReadFile` function already guards against this with a try/catch and returns
+`{ ok: false }`. No popover is shown. Tests that exercise popover DOM logic must mock the
+global.
 
-The existing `_applyActiveTab()` dispatches a document-replacement transaction
-into the `EditorView`. For media tabs this must not happen (the CM6 editor
-should not receive binary content).
+**EC-17: The `.cm-wiki-link` span scrolls out of view while the popover is visible.**
+The popover is positioned `fixed` (FR-5.4), so it does not move with document scroll.
+When the user scrolls the span away, the popover remains at its original screen position
+until a `mouseleave` on the span (which fires before scroll in most cases) or a `click`
+dismisses it. If scroll happens without a `mouseleave` (e.g., trackpad inertia scroll
+after moving the cursor away), the popover is dismissed by the `click` guard or by the
+next hover elsewhere. This is acceptable behavior; scroll-based dismissal is out of scope.
 
-Updated logic:
+**EC-18: File content is entirely YAML front matter with no body.**
+FR-3.1 extracts the title from front matter. FR-3.2 excerpt extraction finds no body
+content. The excerpt is shown as empty or as a single line after front matter removal.
+The popover still appears with the title and path label; the excerpt section is omitted
+if it would be empty.
 
-```
-if (tab.kind === "media") {
-  // 1. Hide the CM6 editor; show the media viewer.
-  editorContainer.classList.add("has-media-tab");
-  // 2. Populate #media-viewer with the appropriate element.
-  _renderMediaViewer(tab.filePath!);
-  // 3. Update the title bar.
-  _updateTitleBar(tab);
-} else {
-  // Existing editor-tab path (unchanged).
-  editorContainer.classList.remove("has-media-tab");
-  // ... existing dispatch transaction ...
-}
-```
-
-`editorContainer` is `document.getElementById("editor")` — looked up once in
-`init()` and stored, matching the pattern already used for `tabStripEl`.
-
-### FR-5 — `_renderMediaViewer(filePath)` Private Method
-
-Creates or replaces the content of `div#media-viewer`. Must be synchronous.
-
-Routing table (extension matching is case-insensitive):
-
-| Category | Extensions | Rendered element |
-|---|---|---|
-| Raster image | jpg, jpeg, png, gif, webp, bmp, ico | `<img src="{asset_url}" alt="{basename}">` |
-| SVG | svg | `<img src="{asset_url}" alt="{basename}">` |
-| PDF | pdf | `<embed src="{asset_url}" type="application/pdf">` |
-| Unsupported | everything else | `<p class="mv-unsupported">Cannot preview this file type.</p>` |
-
-The asset URL is produced by `convertFileSrc(filePath)` (available as a direct
-import from `@tauri-apps/api/core` — `tab-manager.ts` is NOT an IIFE and can
-import app internals directly).
-
-The viewer element is cleared (`innerHTML = ""`) before each render to prevent
-stale content when switching between media tabs.
-
-The `<img>` element uses inline style `object-fit: contain; max-width: 100%;
-max-height: 100%` so images are proportionally scaled within the content area
-at any window size. No explicit `width` or `height` attributes.
-
-An `error` event listener on `<img>` and `<embed>` replaces the viewer content
-with `<p class="mv-load-error">Could not load file.</p>` (see EC-05).
-
-### FR-6 — Media Viewer CSS in `src/tabs/tabs.css`
-
-New rules added to `tabs.css`:
-
-```css
-/* Media viewer: fills #editor when a media tab is active */
-#media-viewer {
-  display: none;
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-color);
-  padding: var(--content-padding, 24px);
-  box-sizing: border-box;
-}
-
-#editor.has-media-tab .cm-editor {
-  display: none;
-}
-
-#editor.has-media-tab #media-viewer {
-  display: flex;
-}
-
-#media-viewer img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  display: block;
-}
-
-#media-viewer embed {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-.mv-unsupported,
-.mv-load-error {
-  font-size: 14px;
-  color: var(--text-muted);
-  font-family: var(--ui-font);
-  text-align: center;
-}
-```
-
-No hardcoded hex colors. No hardcoded font families.
-
-### FR-7 — Closing a Media Tab
-
-`closeTab(id)` already handles all tab types. For media tabs:
-
-- If the media tab is the last tab and a vault is active: tabs drop to 0,
-  `activeIndex` to -1, renderer notified. `_applyActiveTab()` with zero tabs
-  calls a new guard to remove `has-media-tab` from `#editor` and clear
-  `#media-viewer` (so the CM6 editor is visible again for the next file opened).
-- If the media tab is the last tab and no vault is active: existing window-close
-  path unchanged.
-- If other tabs remain: after tab removal and `activeIndex` recalculation, the
-  new active tab determines whether `has-media-tab` is added or removed in
-  `_applyActiveTab()`.
-
-A media tab's `isDirty` is always `false` — no confirmation dialog is shown on
-close. The dirty-check guard in `closeTab` must be updated:
-```typescript
-if (tab.isDirty && tab.kind !== "media") { /* show confirm */ }
-```
-
-### FR-8 — `_captureActiveTab()` Skips Media Tabs
-
-The existing `_captureActiveTab()` reads `editorView.state.doc.toString()` and
-the scroll position. For media tabs, neither field is meaningful. The method
-must short-circuit when `tab.kind === "media"` rather than writing garbage into
-`tab.doc`.
-
-### FR-9 — `saveSession()` Filters to Editor Tabs Only
-
-The filter expression:
-```typescript
-this.tabs.filter((t) => t.filePath !== null)
-```
-becomes:
-```typescript
-this.tabs.filter((t) => t.kind === "editor" && t.filePath !== null)
-```
-
-### FR-10 — Renderers Receive No Changes
-
-All three renderers (`MinimalTabBar`, `RegularTabBar`, `VerticalTabStrip`)
-iterate over `tabs: TabEntry[]` and render one button/pill per tab. They read
-`tab.title`, `tab.id`, `tab.isDirty`, and `activeIndex`. None of these properties
-change meaning for media tabs. Renderers do not need modification. A media tab
-appears in the tab strip with its filename title, no dirty bullet, and standard
-close-button behaviour — identical to a read-only content tab.
-
-### FR-11 — File Browser Plugin: Routing Update
-
-In `buildActivateHandler` inside `file-browser.plugin.ts`, the non-md branch is
-replaced entirely:
-
-```typescript
-// Before (removed):
-if (_previewedPath === path) {
-  closeMediaPreview();
-} else {
-  showMediaPreview(path);
-}
-
-// After:
-void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
-```
-
-No other changes to `file-browser.plugin.ts` routing logic are required.
-
-### FR-12 — Remove All Sidebar Preview Code
-
-The following are deleted from `file-browser.plugin.ts`:
-
-1. Module-level variable `let _previewedPath: string | null = null;`
-2. Function `showMediaPreview(path: string): void` (approx. lines 1554–1660)
-3. Function `closeMediaPreview(): void` (approx. lines 1506–1527)
-4. CSS block `/* ── Media Preview Panel … */` through to end of `fbmp-*` rules
-   (approx. CSS lines 517–577 of the `FILE_BROWSER_CSS` constant)
-5. In `buildNodeEl`: the `|| node.path === _previewedPath` predicate in the
-   `tree-node-active` condition
-6. In `renderPanel`: the `closeMediaPreview()` call before `innerHTML = ""`
-7. In `_vaultChangedCb` (or `onVaultChanged`): the `closeMediaPreview()` call
-8. In `destroy`: the `closeMediaPreview()` call
-
-### FR-13 — Remove `tests/plugins/file-browser/media-preview.test.ts`
-
-The test file for the old sidebar preview feature is deleted entirely, as the
-feature it tested no longer exists.
-
-### FR-14 — New Test Coverage
-
-New tests are added to `tests/plugins/file-browser/file-browser.test.ts`:
-
-- Non-md file click calls `window.__MARKABLE_TAB_MANAGER__.openMediaInTab(path)`.
-- `.md` file click still calls `window.__MARKABLE_TAB_MANAGER__.openFileInTab(path)`.
-- The `_previewedPath` symbol is no longer exported by `_testing`.
-
-New tests are added to a new file `tests/tabs/media-tab.test.ts`:
-
-- `openMediaInTab` creates a `kind: "media"` tab with correct title.
-- `openMediaInTab` activates an existing media tab if path already open (duplicate guard).
-- `openMediaInTab` auto-removes a clean Untitled editor tab when it is the only other tab.
-- `_applyActiveTab` adds `has-media-tab` class to `#editor` for a media tab.
-- `_applyActiveTab` removes `has-media-tab` class when switching back to an editor tab.
-- `_captureActiveTab` does not read `editorView.state.doc` when tab is `kind: "media"`.
-- `saveSession` excludes media tabs from the serialized `openFiles` list.
-- `closeTab` on a media tab does not show a confirm dialog.
-- `closeTab` on the last media tab (vault active) drops to 0 tabs and clears `#media-viewer`.
+**EC-19: File is a binary file accidentally named `.md`.**
+`invokeReadFile` will either fail (Rust `read_file` may reject non-UTF-8) or return
+garbled text. If it fails, the popover is suppressed (EC-01). If it succeeds with garbled
+content, the content extraction strips most characters via the markdown-stripping pass,
+likely leaving the excerpt empty or near-empty. The popover shows the filename stem as
+title and an empty excerpt. This is acceptable.
 
 ---
 
-## 5. Out of Scope (v1)
+## 5. Out of Scope
 
-- Audio playback (`<audio>` element) for `.mp3`, `.wav`, `.ogg`, etc.
-- Video playback (`<video>` element) for `.mp4`, `.mov`, etc.
-- Zoom / pan controls on images.
-- PDF page navigation controls (native browser embed only).
-- File size or pixel dimension display in the tab title or a status bar entry.
-- A "reveal in Finder" or "copy asset URL" button in the media viewer.
-- Resizing the viewer (the content area is always full-width).
-- Persisting open media tabs across app restarts.
-- Media tabs opened from sources other than the file browser (e.g., drag-and-drop).
-- A thumbnail or inline preview remaining in the sidebar when a media tab is open.
-- Preview of files outside the active vault.
-
----
-
-## 6. Edge Case Inventory
-
-**EC-01: Non-md file already open in a media tab — user clicks it again in the
-file browser.** `openMediaInTab` finds the existing tab via the duplicate-path
-guard, activates it, and returns `false`. No second tab is created.
-
-**EC-02: User closes the media tab, then re-clicks the file in the file browser.**
-The previous media tab no longer exists. `openMediaInTab` creates a fresh tab.
-The `#media-viewer` is re-populated. Normal flow.
-
-**EC-03: Media file is deleted between file-browser render and the user clicking
-it.** `openMediaInTab` succeeds (no disk read). The `<img>` or `<embed>` fires an
-`error` event. `_renderMediaViewer`'s error listener replaces the viewer content
-with `<p class="mv-load-error">Could not load file.</p>`. No crash.
-
-**EC-04: Non-md file with no extension (e.g., `Makefile`, `LICENSE`).** Extension
-lookup finds no match. The "unsupported" path renders
-`<p class="mv-unsupported">Cannot preview this file type.</p>`. A media tab is
-still created with the correct filename title. No crash. No text-read attempted.
-
-**EC-05: Non-md file with an uppercase extension (e.g., `photo.JPG`, `report.PDF`).** Extension check uses `.toLowerCase()`. File is correctly routed to raster-image
-or PDF rendering. The `asset://` URL is passed with the original case preserved.
-
-**EC-06: Multiple media tabs open simultaneously (e.g., image.png, diagram.svg,
-notes.pdf).** Each is a separate `TabEntry` with `kind: "media"`. Switching
-between them calls `_applyActiveTab()` each time, which re-populates
-`#media-viewer` for each tab. No stale content remains. Each tab button appears
-in the tab strip renderer.
-
-**EC-07: User switches from a media tab to an editor tab.** `_applyActiveTab()`
-removes the `has-media-tab` class from `#editor`. The `cm-editor` becomes
-visible again. `#media-viewer` is hidden. The CM6 editor receives the correct
-document dispatch. Title bar updated to the editor tab's title.
-
-**EC-08: User switches from an editor tab to a media tab.** `_captureActiveTab()`
-correctly saves the editor tab's doc and scroll position before switching.
-`_applyActiveTab()` adds `has-media-tab`, populates `#media-viewer`, and does
-NOT dispatch a doc-replacement transaction to the CM6 editor. The editor's
-current doc is preserved for when the user switches back.
-
-**EC-09: Vault is switched while a media tab is open.** Vault change fires
-`onVaultChanged`. The file browser re-renders. Any media tab for a file in the
-old vault remains open (consistent with VSCode — switching vault does not close
-tabs). The user can close it manually. The vault file browser does not show
-a stale active highlight for the media file because `_previewedPath` no longer
-exists.
-
-**EC-10: `openMediaInTab` called before `TabManager.init()` completes.** The
-`editorView` field is `null` and `this.editorContainer` would be `null`.
-`openMediaInTab` must guard on `this.editorContainer !== null` before calling
-`_applyActiveTab()`. If the guard fires, the tab is pushed to the array but not
-displayed; on `init()` completion `_applyActiveTab()` is called normally.
-
-**EC-11: `convertFileSrc` is unavailable (hypothetical startup ordering bug).**
-`tab-manager.ts` is a compiled module, not an IIFE — `convertFileSrc` is a
-direct ES module import from `@tauri-apps/api/core`. It cannot be absent unless
-the Tauri API package is broken. No guard required; failure is a hard import
-error that surfaces at module load time.
-
-**EC-12: Media tab is the only open tab and the user closes it — vault is NOT
-active.** Existing `closeTab` last-tab + no-vault path closes the window via
-`appWindow.close()`. This path is unchanged and correct.
-
-**EC-13: Media tab is the only open tab and the user closes it — vault IS active.**
-Existing `closeTab` last-tab + vault path drops to `tabs = []`, `activeIndex = -1`,
-notifies renderer. `_applyActiveTab()` early-returns when `tabs.length === 0`.
-The new zero-tab guard must also remove `has-media-tab` from `#editor` and call
-`_clearMediaViewer()` so the CM6 editor is visible (ready for the next file
-the user opens from the file browser).
-
-**EC-14: Rapid successive clicks on different non-md files in the file browser.**
-Each click calls `openMediaInTab`. The first call pushes a new tab; subsequent
-calls for different paths push additional tabs (they are not duplicates). For the
-same path the duplicate guard activates the existing tab. All operations are
-synchronous on the JS thread. No race condition.
-
-**EC-15: `openMediaInTab` called for a path that is currently open as a
-`kind: "editor"` tab (e.g., a `.md` file renamed to `.png` outside the app).**
-The duplicate guard checks `kind: "media"` AND `filePath`. A `kind: "editor"`
-tab with the same path is not considered a duplicate. A new media tab is
-created. Two tabs with the same `filePath` but different `kind` co-exist. This
-is an edge case that does not require special handling in v1.
-
-**EC-16: Session restore on next launch — media tabs are absent from saved state.**
-`saveSession` filters to `kind: "editor"` tabs only. On next launch the session
-restore loop sees no entry for the media file. The media tab is not re-created.
-This is correct and intentional.
+- **Vault-wide fuzzy link resolution**: resolving `[[note]]` to any `.md` file anywhere in
+  the vault by filename stem match. The current feature uses the same directory-relative
+  resolution as the click handler.
+- **Click to navigate from the popover**: the popover is read-only. Clicking within it
+  dismisses it via the click-anywhere rule (FR-6.1). Navigation is done by clicking the
+  decorated span itself, as before.
+- **Markdown rendering inside the popover**: the excerpt is plain text only. No HTML
+  rendering via `marked`.
+- **Images or embedded media in the popover**: not shown.
+- **Scroll-based dismissal**: scroll events do not dismiss the popover.
+- **Touch / pointer events**: hover is mouse-only. Touch devices are out of scope for
+  Markable (macOS native app).
+- **Keyboard shortcut to trigger the popover**: hover-only trigger.
+- **Popover for standard Markdown links `[text](url.md)`**: only `cm-wiki-link` spans are
+  targeted. Standard links are not in scope.
+- **Moving the feature to a separate plugin**: explicitly rejected (see Section 2).
+- **Persisting popover on click**: the click rule dismisses the popover. Pin-to-stay is
+  out of scope.
 
 ---
 
-## 7. Non-Functional Requirements
+## 6. Affected Code Locations
 
-**NFR-1: No Tauri IPC in the media-tab open path.** `openMediaInTab` is entirely
-synchronous (no `readFile` call, no `invoke` call). The only async work is the
-browser's native load of the `asset://` URL inside the `<img>` or `<embed>`.
+| Location | Nature of change |
+|---|---|
+| `src/plugins/backlinks/backlinks.plugin.ts` | Primary implementation file. All new code lives here. |
+| `buildWikiLinkDecorations` (existing function) | Add `attributes: { "data-wiki-target": match.target }` to `Decoration.mark` call (FR-7.3). This is the only change to an existing function. |
+| `onEnable` | Attach `mouseover` listener; call `injectWikiPopoverStyles()`. |
+| `onDisable` | Remove listener; dismiss popover; call `removeWikiPopoverStyles()`. |
+| New functions to add | `injectWikiPopoverStyles`, `removeWikiPopoverStyles`, `extractPopoverContent`, `positionPopover`, `showWikiPopover`, `dismissWikiPopover`. |
+| New module-level state | `_wikiLinkHoverHandler`, `_wikiLinkHoverLeaveHandler`, `_hoverShowTimer`, `_hoverDismissTimer`, `_hoverFetchVersion`, `_activePopoverEl`. |
 
-**NFR-2: One `EditorView` for the app lifetime.** This change does not create a
-second `EditorView`. The invariant documented in `tab-manager.ts` line 1 is
-preserved.
+No changes to `live-preview.ts`, `bridge.ts`, `styles.css`, or any Rust command.
 
-**NFR-3: No orphaned DOM.** `div#media-viewer` is created once in `init()` and
-never removed. Its `innerHTML` is replaced (not appended) on each media tab
-activation. On switch back to an editor tab, `innerHTML` is cleared. No element
-accumulation.
+---
 
-**NFR-4: CSS variable compliance.** All colors, backgrounds, and fonts in
-`tabs.css` media-viewer rules use CSS variables from the existing Markable
-theme system. No hardcoded hex colors.
+## 7. Test Surface
 
-**NFR-5: Renderer unchanged.** The `ITabRenderer` interface, and all three
-renderer implementations, must not be modified. A media tab is visually
-indistinguishable from a read-only content tab in the tab strip.
+The following test cases must be added to
+`tests/plugins/backlinks/backlinks.test.ts` (or a new sibling file
+`tests/plugins/backlinks/hover-popover.test.ts`):
 
-**NFR-6: Test coverage.** All 16 edge cases in the Edge Case Inventory must have
-a corresponding test assertion (unit or integration, in jsdom). EC-03 (file
-deleted) and EC-11 (convertFileSrc) are covered with mocked `convertFileSrc`
-returning a URL whose load triggers an error event.
+- `extractPopoverContent` with: normal file, front-matter-only file, H1-heading file,
+  no-title file (uses stem), file longer than 2 048 bytes (truncated), empty file.
+- `positionPopover` with: span near right edge (right-aligns), span near bottom edge
+  (flips above), span in middle (default position).
+- `buildWikiLinkDecorations` — verify that `data-wiki-target` attribute is present on
+  produced mark decorations (requires updating the existing decoration tests).
+- Fetch-version counter: two overlapping hover events — first result is discarded.
+- Dismissal grace period: mouseleave from span + immediate mouseenter on popover cancels
+  dismissal.
+- EC-01: file not found — popover not shown, no error thrown.
+- EC-07: null `__MARKABLE_CURRENT_FILE__` — popover not shown.
+- EC-12: empty target string — popover not shown.
 
 ---
 
@@ -624,6 +399,6 @@ returning a URL whose load triggers an error event.
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 16 items (EC-01 through EC-16)
+- Edge cases to verify in tests: 19 items in Edge Case Inventory (EC-01 through EC-19)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

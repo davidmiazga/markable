@@ -1,9 +1,9 @@
 /**
- * Backlinks Plugin (Steps 3, 4, 5, 6, 7, 8, 9)
+ * Backlinks Plugin (Steps 3, 4, 5, 6, 7, 8, 9, 10)
  *
  * This module contains wiki-link parsing, decoration, navigation,
- * autocomplete, index building, sidebar panel, and plugin lifecycle
- * functionality for the backlinks feature.
+ * autocomplete, index building, sidebar panel, hover preview popover,
+ * and plugin lifecycle functionality for the backlinks feature.
  *
  * Step 3: parseWikiLinks, normalizeTarget, resolveWikiLinkPath,
  *         extractOutgoingLinks, isInsideFencedCode, filenameFromPath.
@@ -18,6 +18,9 @@
  * Step 8: rebuildBacklinksDOM, injectBacklinksCSS, removeBacklinksCSS,
  *         _onScanningStateChanged, _onIndexRebuilt, _testing.
  * Step 9: Plugin export with onEnable/onDisable lifecycle.
+ * Step 10: Wiki-link hover preview popover — injectWikiPopoverStyles,
+ *          removeWikiPopoverStyles, extractPopoverContent, positionPopover,
+ *          showWikiPopover, dismissWikiPopover, module-level hover state.
  *
  * All functions are exported as named exports for direct test imports,
  * alongside the default plugin export used by the IIFE plugin loader.
@@ -402,6 +405,12 @@ export function filenameFromPath(filePath: string): string {
  *   Used for `[[`, `]]`, and the `target|` prefix in piped wiki-links.
  * - `"mark"` — styles the range with `.cm-live-link` and `.cm-wiki-link`
  *   classes via `Decoration.mark(...)`. Used for the visible text portion.
+ *
+ * The optional `target` field is populated only on `"mark"` ranges. It
+ * carries the raw (un-normalized) wiki-link target string (the part before
+ * the pipe in `[[target|display]]`). `buildWikiLinkDecorations` uses this
+ * to set the `data-wiki-target` HTML attribute on each `.cm-wiki-link` span
+ * so the hover handler can read the target without re-parsing the DOM text.
  */
 export interface WikiLinkDecorationRange {
   /** Start of the decoration range (absolute document offset). */
@@ -410,6 +419,12 @@ export interface WikiLinkDecorationRange {
   to: number;
   /** Whether to hide (`replace`) or style (`mark`) this range. */
   type: "replace" | "mark";
+  /**
+   * Raw (un-normalized) wiki-link target. Present on `type === "mark"`
+   * ranges only. For `[[target|display]]` this is `"target"` (before
+   * the pipe). Used to set the `data-wiki-target` DOM attribute (FR-7).
+   */
+  target?: string;
 }
 
 /**
@@ -519,18 +534,24 @@ export function computeWikiLinkDecorationRanges(
         const pipeEnd = openEnd + match.target.length + 1;
         results.push({ from: openEnd, to: pipeEnd, type: "replace" });
 
-        /* Style the display text (from after `|` to before `]]`) */
+        /*
+         * Style the display text (from after `|` to before `]]`).
+         * Carry `match.target` so `buildWikiLinkDecorations` can set the
+         * `data-wiki-target` attribute on the span (FR-7.2: for piped links
+         * the attribute must be the target, not the display text).
+         */
         if (pipeEnd < closeStart) {
-          results.push({ from: pipeEnd, to: closeStart, type: "mark" });
+          results.push({ from: pipeEnd, to: closeStart, type: "mark", target: match.target });
         }
       } else {
         /*
          * Simple wiki-link: [[target]]
          * Style the target text (from after `[[` to before `]]`).
          * Skip the mark if the content is empty (EC-9: `[[]]`).
+         * Carry `match.target` for the `data-wiki-target` DOM attribute (FR-7.1).
          */
         if (openEnd < closeStart) {
-          results.push({ from: openEnd, to: closeStart, type: "mark" });
+          results.push({ from: openEnd, to: closeStart, type: "mark", target: match.target });
         }
       }
 
@@ -592,9 +613,20 @@ export function buildWikiLinkDecorations(view: any): any {
         Decoration.replace({}).range(range.from, range.to)
       );
     } else {
+      /*
+       * Mark decoration: style the visible link text.
+       * When `range.target` is present, add a `data-wiki-target` attribute
+       * to the span so the hover handler can read the target without
+       * re-parsing the text content of the span (FR-7.3, FR-7.1).
+       * The conditional guard prevents a TypeScript error from the optional
+       * field; in practice every "mark" range has a target.
+       */
       decorations.push(
         Decoration.mark({
           class: "cm-live-link cm-wiki-link",
+          attributes: range.target !== undefined
+            ? { "data-wiki-target": range.target }
+            : {},
         }).range(range.from, range.to)
       );
     }
@@ -1842,6 +1874,59 @@ export const _testing = {
   getBacklinksListEl(): HTMLElement | null {
     return _backlinksListEl;
   },
+
+  // ── Step 10 test-only accessors ──────────────────────────────────────────
+
+  /**
+   * Directly set the `_enabled` flag.
+   *
+   * Required by hover-popover tests that call `showWikiPopover` in
+   * isolation, without going through the full `onEnable` lifecycle.
+   * This accessor must not be used in production code.
+   *
+   * @param val - New value for `_enabled`.
+   */
+  setEnabled(val: boolean): void {
+    _enabled = val;
+  },
+
+  /**
+   * Read the current `_hoverFetchVersion` counter.
+   *
+   * Used by the race-safety test to verify that `dismissWikiPopover`
+   * increments the version (EC-04).
+   *
+   * @returns Current fetch version number.
+   */
+  getHoverFetchVersion(): number {
+    return _hoverFetchVersion;
+  },
+
+  /**
+   * Read the current `_activePopoverEl` reference.
+   *
+   * Used by EC-07, EC-01, EC-12 tests to assert that `showWikiPopover`
+   * did not create a popover element.
+   *
+   * @returns The active popover element, or null if none is shown.
+   */
+  getActivePopoverEl(): HTMLElement | null {
+    return _activePopoverEl;
+  },
+
+  /**
+   * Directly set the `_activePopoverEl` reference.
+   *
+   * Required by the EC-08 grace-period test (CRITICAL-1): the test creates
+   * a fake popover element and installs it as the "active" popover so that
+   * the hover and dismiss handlers treat it as the currently visible element.
+   * This accessor must not be used in production code.
+   *
+   * @param el - The element to treat as the active popover, or null to clear it.
+   */
+  setActivePopoverEl(el: HTMLElement | null): void {
+    _activePopoverEl = el;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1882,11 +1967,971 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 let _view: any = null;
 
 // ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — CSS
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS for the wiki-link hover popover.
+ *
+ * All colors reference existing CSS variables so the popover adopts the
+ * active theme automatically. The element starts hidden (`display: none;
+ * opacity: 0`) in the base CSS. Visibility is controlled imperatively in
+ * `showWikiPopover` via inline style assignments (LOW-2 WebKit fix: class-
+ * toggle transitions fail when display:none is involved).
+ *
+ * Design notes:
+ * - `pointer-events: auto` is required so the popover catches
+ *   `mouseenter`/`mouseleave` for the EC-08 grace period.
+ * - `user-select: none` prevents text selection drag from triggering
+ *   dismiss (FR-10.5).
+ * - z-index 10000 matches the markdown toolbar layer (FR-10.4). See
+ *   the z-index audit in `00_index.md` for the full layer table.
+ * - `-webkit-line-clamp: 7` limits the excerpt to ~7 lines at 1.5 line
+ *   height (≈126px), staying within the 240px max-height when title and
+ *   path rows are included.
+ */
+const WIKI_POPOVER_CSS = `
+[data-markable-wiki-popover] {
+  position: fixed;
+  z-index: 10000;
+  max-width: 320px;
+  max-height: 240px;
+  overflow: hidden;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  padding: 12px;
+  font-family: var(--ui-font);
+  user-select: none;
+  pointer-events: auto;
+  display: none;
+  opacity: 0;
+  transform: translate(0, 4px);
+}
+/*
+ * Note: visibility is now controlled imperatively in showWikiPopover via
+ * inline style assignments (LOW-2 WebKit fix). The .wl-popover-visible class
+ * is no longer needed; the base hidden state above remains for reset purposes.
+ */
+
+.wl-popover-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--link-color);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wl-popover-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wl-popover-excerpt {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+}
+`;
+
+/**
+ * Inject the wiki-link hover popover CSS into the document head.
+ *
+ * Uses a `data-markable-wiki-popover-styles` sentinel attribute so that
+ * repeated calls are idempotent — the style tag is inserted only once.
+ * Mirrors the pattern used by `injectWikiLinkStyles` and `injectBacklinksCSS`.
+ */
+export function injectWikiPopoverStyles(): void {
+  if (typeof document === "undefined") return;
+  if (document.querySelector("[data-markable-wiki-popover-styles]")) return;
+
+  const style = document.createElement("style");
+  style.setAttribute("data-markable-wiki-popover-styles", "true");
+  style.textContent = WIKI_POPOVER_CSS;
+  document.head.appendChild(style);
+}
+
+/**
+ * Remove the wiki-link hover popover CSS from the document head.
+ *
+ * No-op if the tag is absent (e.g., `onDisable` called before `onEnable`
+ * or running in a test environment without document access).
+ */
+export function removeWikiPopoverStyles(): void {
+  if (typeof document === "undefined") return;
+  const el = document.querySelector("[data-markable-wiki-popover-styles]");
+  if (el) el.remove();
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Module-Level State
+// ---------------------------------------------------------------------------
+
+/** Document-level mouseover handler reference, stored for cleanup in onDisable. */
+let _wikiLinkHoverHandler: ((e: MouseEvent) => void) | null = null;
+
+/**
+ * Document-level mouseleave/click handler for popover dismissal.
+ *
+ * A single handler handles both `mouseleave` (on the span or popover) and
+ * `click` (anywhere on the document). Stored here so `onDisable` can remove
+ * all three event-listener registrations (mouseleave, click, and the second
+ * click listener) with a single reference.
+ */
+let _wikiLinkHoverLeaveHandler: ((e: MouseEvent) => void) | null = null;
+
+/** Timer handle for the 180 ms show-delay (FR-1.1). */
+let _hoverShowTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Timer handle for the 60 ms grace-period dismiss timer (FR-6.1, EC-08). */
+let _hoverDismissTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Monotonically incrementing counter for fetch race safety (FR-2.4, EC-04).
+ *
+ * Incremented BEFORE each fetch in `showWikiPopover` and also inside
+ * `dismissWikiPopover`. On fetch completion the captured pre-fetch value is
+ * compared against the current counter; a mismatch means the result is stale
+ * and should be discarded rather than rendered.
+ */
+let _hoverFetchVersion = 0;
+
+/** The currently visible popover element, or null when no popover is shown. */
+let _activePopoverEl: HTMLElement | null = null;
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Content Extraction
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — extractPopoverContent helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the character offset just after the closing `---` (or `...`) line of a
+ * YAML front-matter block, or -1 if no valid front-matter block is present.
+ *
+ * A valid front-matter block must:
+ *  - Begin at character 0 with `---`.
+ *  - Have a closing `\n---` or `\n...` line somewhere after the opening.
+ *
+ * When both markers are present the earlier one wins (the front-matter block
+ * ends at whichever delimiter appears first).
+ *
+ * The returned offset points to the character IMMEDIATELY AFTER the three-
+ * character `---`/`...` sequence (i.e. `\n---` occupies 4 chars starting at
+ * the found index, so the returned value is `foundIndex + 4`). Callers that
+ * want the body text starting after the closing fence should use this offset
+ * directly as the `slice` start argument.
+ *
+ * Exported so that unit tests can verify the offset calculation without
+ * calling the full `extractPopoverContent` pipeline.
+ *
+ * @param content - The (possibly byte-capped) file content string.
+ * @returns Character offset just after the closing front-matter line, or -1.
+ */
+export function findFrontMatterEnd(content: string): number {
+  if (!content.startsWith("---")) return -1;
+
+  const endMarker = content.indexOf("\n---", 3);
+  const dotMarker = content.indexOf("\n...", 3);
+
+  /*
+   * Resolve which marker appears first, ignoring absent markers (value === -1).
+   * When both are present, take the smaller (earlier) index.
+   */
+  const fmEnd =
+    endMarker !== -1 && dotMarker !== -1
+      ? Math.min(endMarker, dotMarker)
+      : endMarker !== -1
+      ? endMarker
+      : dotMarker;
+
+  return fmEnd;
+}
+
+/**
+ * Remove fenced code blocks from a body text string.
+ *
+ * Matches triple-backtick or triple-tilde fenced blocks (including any
+ * language specifier on the opening fence line) and replaces each block
+ * with an empty string.
+ *
+ * The backreference `\1` ensures the same fence character opens and closes
+ * the block. `[\s\S]*?` is lazy so it stops at the first matching fence.
+ * The `gm` flags apply the replacement globally and treat `^`/`$` as
+ * line anchors.
+ *
+ * Exported for direct unit testing.
+ *
+ * @param text - Body text that may contain fenced code blocks.
+ * @returns Text with all fenced code blocks removed.
+ */
+export function stripFencedCodeBlocks(text: string): string {
+  return text.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*$/gm, "");
+}
+
+/**
+ * Strip common Markdown syntax characters from a body text string.
+ *
+ * Removes (in order):
+ *  - Heading markers (`##`, `###`, etc. — the `#` chars + trailing space)
+ *  - Images: replaced with alt text only
+ *  - Links: replaced with link text only
+ *  - Inline decoration chars: `*`, `_`, `~`, backtick (bold/italic/strikethrough/code)
+ *  - Horizontal rules (`---`, `***`, `___`)
+ *  - Consecutive blank lines (collapsed to a single space)
+ *
+ * The result is intended for popover excerpt display, not for round-trip
+ * Markdown parsing, so lossy simplifications (e.g., collapsing blank lines)
+ * are acceptable.
+ *
+ * Exported for direct unit testing.
+ *
+ * @param text - Body text that may contain Markdown syntax.
+ * @returns Plain-text approximation suitable for an excerpt.
+ */
+export function stripMarkdownSyntax(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")             // heading markers (##, ###, etc.)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1") // image: keep alt text only
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")  // link: keep link text only
+    .replace(/[*_~`]/g, "")                   // bold, italic, strikethrough, code
+    .replace(/^[-*_]{3,}\s*$/gm, "")          // horizontal rules
+    .replace(/\n{2,}/g, " ");                 // collapse blank lines to a space
+}
+
+/**
+ * Extract popover display content from a file's raw text.
+ *
+ * This is a **deterministic function** (no DOM, no globals except optional-chained
+ * vault-manager access for the path label). It is exported for direct unit
+ * testing in `hover-popover.test.ts`.
+ *
+ * Processing steps (in order):
+ *  1. Byte-cap: slice to 2048 characters (FR-2.5, EC-03).
+ *  2. Title extraction with three-level priority chain (FR-3.1):
+ *     a. YAML front-matter `title:` field (handles quoted and bare values)
+ *     b. First `# H1` heading
+ *     c. Filename stem from `resolvedPath`
+ *  3. Vault-relative path label (FR-3.3); falls back to bare filename when
+ *     no vault manager is available (graceful for unit tests).
+ *  4. Strip front matter from body.
+ *  5. Strip fenced code blocks from body (via `stripFencedCodeBlocks`).
+ *  6. Strip Markdown syntax characters from body (via `stripMarkdownSyntax`).
+ *  7. Produce an excerpt of at most 200 words, appending "…" if truncated.
+ *
+ * @param raw          - Full file content string.
+ * @param resolvedPath - Absolute path to the file (used for title fallback
+ *                       and vault-relative label computation).
+ * @returns `{ title, pathLabel, excerpt }` where `title` and `pathLabel` are
+ *          always non-empty strings, and `excerpt` may be `""` (EC-18).
+ */
+export function extractPopoverContent(
+  raw: string,
+  resolvedPath: string
+): { title: string; pathLabel: string; excerpt: string } {
+  /*
+   * Step 1 — Byte-cap to 2048 characters.
+   * JavaScript strings are UTF-16; slicing by character index at 2048 is a
+   * conservative approximation of a UTF-8 byte limit (never over-reads for
+   * multi-byte chars). This prevents processing of arbitrarily large files.
+   */
+  const content = raw.length > 2048 ? raw.slice(0, 2048) : raw;
+
+  // ── Step 2: Extract title ─────────────────────────────────────────────────
+
+  let title: string | null = null;
+
+  /*
+   * Priority 1: YAML front-matter `title:` field.
+   * `findFrontMatterEnd` handles the `---`/`...` marker resolution so
+   * this call site only needs to act on the returned offset. The regex
+   * handles optional single- or double-quote wrapping around the value.
+   */
+  const fmEnd = findFrontMatterEnd(content);
+  if (fmEnd !== -1) {
+    const frontMatter = content.slice(3, fmEnd);
+    const titleMatch = frontMatter.match(/^title:\s*["']?(.+?)["']?\s*$/m);
+    if (titleMatch) title = titleMatch[1].trim();
+  }
+
+  /* Priority 2: first `# H1` heading (strip any inline formatting). */
+  if (!title) {
+    const h1Match = content.match(/^#\s+(.+)/m);
+    if (h1Match) title = h1Match[1].replace(/[*_~`]/g, "").trim();
+  }
+
+  /* Priority 3: filename stem derived from the resolved path. */
+  if (!title) {
+    const filename = filenameFromPath(resolvedPath);
+    title = filename.endsWith(".md") ? filename.slice(0, -3) : filename;
+  }
+
+  // ── Step 3: Vault-relative path label ────────────────────────────────────
+
+  /*
+   * Optional-chain through the vault manager so this function does not throw
+   * in unit tests where `window.__MARKABLE_VAULT_MANAGER__` is undefined.
+   */
+  let pathLabel: string;
+  const vaultRoot: string | undefined = (window as any)
+    .__MARKABLE_VAULT_MANAGER__?.getActiveVault?.()?.rootPaths?.[0];
+  if (vaultRoot && resolvedPath.startsWith(vaultRoot + "/")) {
+    pathLabel = resolvedPath.slice(vaultRoot.length + 1);
+  } else {
+    pathLabel = filenameFromPath(resolvedPath);
+  }
+
+  // ── Step 4: Strip front matter from body ─────────────────────────────────
+
+  /*
+   * Re-use the `fmEnd` value already computed in Step 2.
+   * `fmEnd` is -1 when no front-matter block is present; otherwise it
+   * points to the first character of the closing `\n---` or `\n...`
+   * sequence. We skip past those 4 characters to reach the body text.
+   */
+  let body = fmEnd !== -1 ? content.slice(fmEnd + 4) : content;
+
+  // ── Steps 5-6: Strip fenced code blocks then Markdown syntax ─────────────
+
+  body = stripFencedCodeBlocks(body);
+  body = stripMarkdownSyntax(body);
+
+  // ── Step 7: Extract excerpt (≤200 words) ─────────────────────────────────
+
+  const words = body.trim().split(/\s+/).filter(Boolean);
+  let excerpt = "";
+  if (words.length > 0) {
+    const truncated = words.length > 200;
+    excerpt = words.slice(0, 200).join(" ");
+    /* Append Unicode ellipsis (U+2026) when the content was truncated. */
+    if (truncated) excerpt += "\u2026";
+  }
+
+  return { title: title!, pathLabel, excerpt };
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Positioning
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply `position: fixed` coordinates to a popover element relative to a
+ * span element's bounding rectangle.
+ *
+ * Default placement: below the span, left-aligned with it. Two adjustments
+ * are applied when needed:
+ *  - Right-clamp (FR-5.2): shift left if the popover would overflow the
+ *    right viewport edge.
+ *  - Flip-above (FR-5.3): place above the span when it would overflow the
+ *    bottom viewport edge. Uses the CSS `max-height` (240px) as a
+ *    conservative height estimate because the element is hidden at call
+ *    time and `scrollHeight` returns 0 for `display: none` elements.
+ *
+ * @param spanEl    - The hovered `.cm-wiki-link` span element.
+ * @param popoverEl - The popover `<div>` whose `style.top`/`style.left`
+ *                    will be set.
+ */
+export function positionPopover(
+  spanEl: HTMLElement,
+  popoverEl: HTMLElement
+): void {
+  const rect = spanEl.getBoundingClientRect();
+  const popoverWidth = 320; // CSS max-width
+  const margin = 16;        // minimum gap from any viewport edge (FR-5.2/FR-5.3)
+  const gap = 8;            // vertical gap between span bottom and popover top (FR-5.1)
+
+  /* Default: below the span, left-aligned. */
+  let top = rect.bottom + gap;
+  let left = rect.left;
+
+  /*
+   * Right-clamp (FR-5.2): if the popover would extend beyond the right
+   * viewport edge, shift it left until it fits. Clamp at the left margin
+   * to avoid going off-screen to the left.
+   */
+  if (left + popoverWidth > window.innerWidth - margin) {
+    left = window.innerWidth - popoverWidth - margin;
+    if (left < margin) left = margin;
+  }
+
+  popoverEl.style.top = top + "px";
+  popoverEl.style.left = left + "px";
+
+  /*
+   * Flip-above (FR-5.3): use max-height (240) as a conservative estimate
+   * because `scrollHeight` is 0 for hidden (`display: none`) elements.
+   * If the popover bottom would exceed the viewport bottom, place it above
+   * the span instead. Clamp at the top margin to handle very large popovers.
+   *
+   * Note: `left` does not change inside this block, so the earlier
+   * `style.left` assignment above already holds the correct final value.
+   * Only `style.top` needs to be updated when flipping above the span.
+   */
+  const estimatedHeight = 240; // matches CSS max-height
+  if (top + estimatedHeight > window.innerHeight - margin) {
+    top = rect.top - estimatedHeight - gap;
+    if (top < margin) top = margin;
+    popoverEl.style.top = top + "px";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — DOM Builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the popover `<div>` element with title, path label, and excerpt rows.
+ *
+ * This helper is extracted from `showWikiPopover` so the DOM construction
+ * logic can be read and tested independently of the async fetch orchestration.
+ *
+ * The returned element is NOT yet attached to the document. The caller is
+ * responsible for appending it, setting `_activePopoverEl`, and positioning
+ * it via `positionPopover`.
+ *
+ * @param title     - Note title (from front-matter, H1, or filename stem).
+ * @param pathLabel - Vault-relative path or bare filename for the subtitle row.
+ * @param excerpt   - Plain-text body excerpt (may be empty for front-matter-only
+ *                    files — EC-18). When empty the excerpt row is hidden.
+ * @returns A new `<div>` element with the `data-markable-wiki-popover` attribute
+ *          and three child rows appended.
+ */
+export function createPopoverElement(
+  title: string,
+  pathLabel: string,
+  excerpt: string
+): HTMLElement {
+  const popoverEl = document.createElement("div");
+  /* data-markable-wiki-popover attribute is used by the CSS selector. */
+  popoverEl.setAttribute("data-markable-wiki-popover", "true");
+
+  const titleEl = document.createElement("div");
+  titleEl.className = "wl-popover-title";
+  titleEl.textContent = title;
+
+  const pathEl = document.createElement("div");
+  pathEl.className = "wl-popover-path";
+  pathEl.textContent = pathLabel;
+
+  const excerptEl = document.createElement("div");
+  excerptEl.className = "wl-popover-excerpt";
+  excerptEl.textContent = excerpt;
+  /* EC-18: hide the excerpt row entirely when the body was empty. */
+  if (!excerpt) excerptEl.style.display = "none";
+
+  popoverEl.appendChild(titleEl);
+  popoverEl.appendChild(pathEl);
+  popoverEl.appendChild(excerptEl);
+
+  return popoverEl;
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Show / Dismiss
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove the active popover from the DOM and cancel all pending timers.
+ *
+ * Safe to call when no popover is visible (idempotent). Also increments
+ * `_hoverFetchVersion` so any in-flight `invokeReadFile` call that
+ * completes after `dismissWikiPopover` runs will see a version mismatch
+ * and discard its result rather than rendering a stale popover.
+ *
+ * Called from:
+ *  - The 60 ms dismiss timer when the cursor leaves the span/popover.
+ *  - The click-anywhere handler.
+ *  - `showWikiPopover` before creating a new popover (FR-4.4).
+ *  - `onDisable` cleanup.
+ */
+export function dismissWikiPopover(): void {
+  /* Cancel the show-delay timer if it is pending. */
+  if (_hoverShowTimer !== null) {
+    clearTimeout(_hoverShowTimer);
+    _hoverShowTimer = null;
+  }
+
+  /* Cancel the grace-period dismiss timer if it is pending. */
+  if (_hoverDismissTimer !== null) {
+    clearTimeout(_hoverDismissTimer);
+    _hoverDismissTimer = null;
+  }
+
+  /*
+   * Increment the fetch version so any in-flight fetch discards its result
+   * (FR-2.4). This is critical for the race condition where the user dismisses
+   * a popover while a slow network read is still in progress (EC-04, EC-15).
+   */
+  _hoverFetchVersion++;
+
+  /* Remove the popover element from the DOM. */
+  if (_activePopoverEl) {
+    _activePopoverEl.remove();
+    _activePopoverEl = null;
+  }
+}
+
+/**
+ * Fetch the linked file, extract display content, build and show the popover.
+ *
+ * This is the async orchestration function called by the hover show-timer.
+ * It is exported so that `hover-popover.test.ts` can call it directly via
+ * the test-only export (step_05 recommendation).
+ *
+ * Race safety (FR-2.4, EC-04): `_hoverFetchVersion` is incremented before
+ * the fetch and captured in a local constant. If the version has changed by
+ * the time the fetch resolves (because the user moved away or dismissed), the
+ * function returns without rendering.
+ *
+ * @param spanEl - The hovered `.cm-wiki-link` span element (used for positioning).
+ * @param target - Raw wiki-link target string (before normalization).
+ */
+export async function showWikiPopover(
+  spanEl: HTMLElement,
+  target: string
+): Promise<void> {
+  /* Guard: plugin must be enabled (async callback safety). */
+  if (!_enabled) return;
+
+  /*
+   * EC-07: an untitled (unsaved) document has no file path.
+   * Without a current file we cannot resolve the wiki-link target.
+   */
+  const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
+    | string
+    | null;
+  if (!currentFile) return;
+
+  /*
+   * Race safety: increment the shared version counter and capture a local
+   * copy. If `_hoverFetchVersion` changes before the fetch resolves, the
+   * local copy will no longer match and the result will be discarded.
+   */
+  _hoverFetchVersion++;
+  const myVersion = _hoverFetchVersion;
+
+  /* Resolve the absolute path from the current file's directory. */
+  const resolvedPath = resolveWikiLinkPath(currentFile, target);
+
+  /* Fetch the file content via the existing invokeReadFile helper. */
+  const result = await invokeReadFile(resolvedPath);
+
+  /*
+   * Stale-result guard: if the version changed while we were waiting,
+   * another hover (or dismiss) superseded this fetch — discard it.
+   */
+  if (myVersion !== _hoverFetchVersion) return;
+
+  /* Guard again after await: plugin may have been disabled while waiting. */
+  if (!_enabled) return;
+
+  /* EC-01: file not found or read error — silently abort. */
+  if (!result.ok) {
+    console.debug(
+      "[backlinks] hover-popover: file not found:",
+      resolvedPath
+    );
+    return;
+  }
+
+  /* Extract title, path label, and excerpt from raw content. */
+  const { title, pathLabel, excerpt } = extractPopoverContent(
+    result.value,
+    resolvedPath
+  );
+
+  /* Dismiss any previously visible popover before creating a new one (FR-4.4). */
+  dismissWikiPopover();
+
+  /* Build and attach the popover DOM element (FR-4.2, FR-4.3). */
+  const popoverEl = createPopoverElement(title, pathLabel, excerpt);
+  document.body.appendChild(popoverEl);
+  _activePopoverEl = popoverEl;
+
+  /* Position before making visible so the initial paint is in the right place. */
+  positionPopover(spanEl, popoverEl);
+
+  /*
+   * Trigger the CSS fade-in transition (FR-9.4).
+   *
+   * LOW-2 (WebKit fix): instead of toggling a class (which does not animate
+   * from display:none in WebKit), we set styles imperatively:
+   *  1. Set opacity:0 so the transition has a defined start value.
+   *  2. Set display:block to make the element layout-participating.
+   *  3. Force a layout flush via offsetHeight so WebKit registers the
+   *     opacity:0 state before we transition away from it.
+   *  4. Apply the transition property and target values in one assignment.
+   */
+  popoverEl.style.opacity = "0";
+  popoverEl.style.display = "block";
+  void popoverEl.offsetHeight; // force layout so transition works in WebKit
+  popoverEl.style.transition = "opacity 100ms ease, transform 100ms ease";
+  popoverEl.style.opacity = "1";
+  popoverEl.style.transform = "translate(0, 0)";
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Handler Builders
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the `mouseover` handler closure for wiki-link hover detection.
+ *
+ * Extracted from `onEnable` so that:
+ *  - The handler body is readable in isolation (not buried in a 300-line method).
+ *  - Tests can invoke the returned closure directly via `buildHoverHandler()(e)`
+ *    without going through the full `onEnable` lifecycle.
+ *
+ * The returned closure:
+ *  1. Guards against disabled state (`_enabled` flag check).
+ *  2. EC-08 grace period: if the cursor moves INTO the active popover, cancel
+ *     any pending dismiss timer and return early (keeps popover alive).
+ *  3. If the event target is or is inside a `[data-wiki-target]` span, cancel
+ *     any pending show/dismiss timers from a prior span and start the 180 ms
+ *     show-delay timer (FR-1.1). EC-12: empty target attribute → skip.
+ *
+ * @returns A `(e: MouseEvent) => void` closure that reads and writes the
+ *          module-level hover state variables.
+ */
+export function buildHoverHandler(): (e: MouseEvent) => void {
+  return (e: MouseEvent) => {
+    if (!_enabled) return;
+
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+
+    /*
+     * EC-08 grace period: if the cursor moves INTO the active popover,
+     * cancel any pending dismiss timer so the popover stays visible while
+     * the user reads it. Return without starting a new show timer.
+     */
+    if (
+      _activePopoverEl &&
+      (target === _activePopoverEl || _activePopoverEl.contains(target))
+    ) {
+      if (_hoverDismissTimer !== null) {
+        clearTimeout(_hoverDismissTimer);
+        _hoverDismissTimer = null;
+      }
+      return;
+    }
+
+    /* Find the closest ancestor (or self) with a data-wiki-target attribute. */
+    const spanEl = target.closest("[data-wiki-target]") as HTMLElement | null;
+    if (!spanEl) return;
+
+    /*
+     * The cursor has moved onto a new wiki-link span. Cancel any timers
+     * from a prior span so they don't fire for the wrong target.
+     */
+    if (_hoverShowTimer !== null) {
+      clearTimeout(_hoverShowTimer);
+      _hoverShowTimer = null;
+    }
+    if (_hoverDismissTimer !== null) {
+      clearTimeout(_hoverDismissTimer);
+      _hoverDismissTimer = null;
+    }
+
+    const wikiTarget = spanEl.getAttribute("data-wiki-target");
+    /* EC-12: empty target attribute — skip to avoid a vacuous fetch. */
+    if (!wikiTarget) return;
+
+    /*
+     * Start the 180 ms show-delay timer (FR-1.1).
+     * If the user leaves before it fires, the dismiss handler cancels it.
+     */
+    _hoverShowTimer = setTimeout(() => {
+      _hoverShowTimer = null;
+      void showWikiPopover(spanEl, wikiTarget);
+    }, 180);
+  };
+}
+
+/**
+ * Build the `mouseleave` / `click` dismiss handler closure.
+ *
+ * Extracted from `onEnable` so that:
+ *  - The handler body is readable in isolation.
+ *  - Tests can invoke the returned closure directly via `buildDismissHandler()(e)`
+ *    without going through the full `onEnable` lifecycle.
+ *
+ * The returned closure handles three dismissal scenarios:
+ *  1. `click` anywhere on the document → immediate dismiss (FR-6.1).
+ *  2. `mouseleave` on a wiki-link span → start 60 ms grace timer (EC-08).
+ *  3. `mouseleave` on the popover itself → start 60 ms grace timer (EC-08).
+ *
+ * `mouseleave` is used instead of `mouseout` for span/popover because
+ * `mouseleave` does not fire when moving to a child element, matching the
+ * desired "stay alive while hovering children" behavior.
+ *
+ * @returns A `(e: MouseEvent) => void` closure that reads and writes the
+ *          module-level hover state variables.
+ */
+export function buildDismissHandler(): (e: MouseEvent) => void {
+  /*
+   * The handler accepts `Event` internally (it handles both `mouseleave` and
+   * `click` events registered at capture phase). The outer return type is cast
+   * to `(e: MouseEvent) => void` because the stored reference type
+   * `_wikiLinkHoverLeaveHandler` requires a MouseEvent signature for the
+   * removeEventListener call in `onDisable`.
+   */
+  const handler = (e: Event): void => {
+    if (!_enabled) return;
+
+    /* Case 1: click anywhere → immediate dismiss. */
+    if (e.type === "click") {
+      if (_activePopoverEl) dismissWikiPopover();
+      return;
+    }
+
+    /* Cases 2 & 3: mouseleave on span or popover. */
+    const me = e as MouseEvent;
+    const evTarget = me.target as HTMLElement | null;
+    if (!evTarget) return;
+
+    const isLeavingSpan = !!(
+      evTarget.hasAttribute("data-wiki-target") ||
+      evTarget.closest("[data-wiki-target]")
+    );
+    const isLeavingPopover = !!(
+      _activePopoverEl &&
+      (evTarget === _activePopoverEl || _activePopoverEl.contains(evTarget))
+    );
+
+    if (!isLeavingSpan && !isLeavingPopover) return;
+
+    /* Cancel any pending show timer so it cannot fire after the cursor left. */
+    if (_hoverShowTimer !== null) {
+      clearTimeout(_hoverShowTimer);
+      _hoverShowTimer = null;
+    }
+
+    /* If no popover is currently visible, nothing to dismiss. */
+    if (!_activePopoverEl) return;
+
+    /*
+     * Start the 60 ms grace-period dismiss timer (FR-6.1, EC-08).
+     * If the cursor enters the popover within 60 ms, the hover handler
+     * cancels this timer (see EC-08 branch in `buildHoverHandler`).
+     */
+    if (_hoverDismissTimer !== null) {
+      clearTimeout(_hoverDismissTimer);
+    }
+    _hoverDismissTimer = setTimeout(() => {
+      _hoverDismissTimer = null;
+      dismissWikiPopover();
+    }, 60);
+  };
+
+  return handler as (e: MouseEvent) => void;
+}
+
+// ---------------------------------------------------------------------------
 // Step 9: Plugin Export
 // ---------------------------------------------------------------------------
 
 // Type-only import — erased by tsc, no runtime code emitted.
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+
+// ---------------------------------------------------------------------------
+// onEnable helpers — extracted for readability and testability
+// ---------------------------------------------------------------------------
+
+/**
+ * Inject the wiki-popover CSS, build the hover and dismiss closures, and
+ * attach both to `document` as capturing event listeners.
+ *
+ * Extracted from `onEnable` so that:
+ *  - The listener setup is readable in isolation.
+ *  - The stored references (`_wikiLinkHoverHandler`,
+ *    `_wikiLinkHoverLeaveHandler`) are set in one place.
+ *
+ * Called as the first side-effectful step in `onEnable`, before the CM6
+ * extensions are built, because the hover handler depends only on the
+ * `_enabled` flag (already set before this function runs).
+ */
+function _wireHoverListeners(): void {
+  injectWikiPopoverStyles();
+
+  /*
+   * Build and register the hover handler (mouseover, capture phase).
+   *
+   * Using `mouseover` (not `mouseenter`) allows a single top-level
+   * listener to intercept events from any `.cm-wiki-link` span, including
+   * spans that are created or replaced after `onEnable` runs (as visible
+   * ranges change). Capture phase (`true`) ensures this fires before any
+   * CM6 event handlers.
+   *
+   * The handler body lives in the named function `buildHoverHandler` so
+   * that tests can invoke it directly without going through `onEnable`.
+   */
+  _wikiLinkHoverHandler = buildHoverHandler();
+  document.addEventListener("mouseover", _wikiLinkHoverHandler, true);
+
+  /*
+   * Build and register the dismiss handler (mouseleave + click, capture phase).
+   *
+   * Handles three dismissal scenarios:
+   *  1. `mouseleave` on a wiki-link span → start 60 ms grace timer.
+   *  2. `mouseleave` on the popover itself → start 60 ms grace timer.
+   *  3. `click` anywhere on the document → immediate dismiss (FR-6.1).
+   *
+   * A single function reference is registered for both event types so
+   * that both can be removed with one stored reference in `onDisable`.
+   *
+   * The handler body lives in the named function `buildDismissHandler` so
+   * that tests can invoke it directly without going through `onEnable`.
+   */
+  _wikiLinkHoverLeaveHandler = buildDismissHandler();
+  document.addEventListener("mouseleave", _wikiLinkHoverLeaveHandler, true);
+  document.addEventListener("click", _wikiLinkHoverLeaveHandler, true);
+}
+
+/**
+ * Build the CM6 extension array and register it via `api.addExtensions()`.
+ *
+ * Assembles (in dependency order):
+ *  1. Wiki-link decoration ViewPlugin (Step 4) — hides `[[`/`]]` syntax.
+ *  2. Click-to-navigate document listener (Step 5) — opens the linked file.
+ *  3. Autocomplete extension (Step 6) — `[[` completion source.
+ *  4. Tab-switch updateListener (Step 7) — detects file changes, triggers
+ *     index rebuilds.
+ *  5. Fallback poll timer (Step 7) — catches tab switches that do not
+ *     produce a CM6 transaction.
+ *
+ * All extensions that depend on `__CM_VIEW__` are guarded with a null
+ * check and degrade gracefully (empty array / no-op) when the global is
+ * absent (e.g. in the test environment).
+ *
+ * @param api    - The `MarkablePluginAPI` instance passed to `onEnable`.
+ */
+function _buildCmExtensions(api: MarkablePluginAPI): void {
+  const cmView = (window as any).__CM_VIEW__;
+  const extensions: any[] = [];
+
+  /* 1. Wiki-link decoration ViewPlugin (Step 4) */
+  extensions.push(...buildWikiLinkDecorationExtension());
+
+  /*
+   * 2. Click handler for wiki-link navigation (Step 5).
+   * Uses a document-level click listener (not CM6 domEventHandlers) to
+   * avoid interfering with CM6's mousedown/selection handling. The
+   * listener is added on enable and removed on disable.
+   */
+  if (cmView && cmView.EditorView) {
+    const clickHandler = (event: MouseEvent) => {
+      if (!_enabled) return;
+      const target = event.target as HTMLElement;
+      if (!target) return;
+
+      /* Check if click landed on a decorated .cm-wiki-link span */
+      const wikiEl = target.closest(".cm-wiki-link") as HTMLElement | null;
+      if (!wikiEl) return;
+
+      /* Find the wiki-link target from the document text at this position */
+      const editorView = (window as any).__MARKABLE_EDITOR_VIEW__;
+      if (!editorView) return;
+
+      const pos = editorView.posAtDOM(wikiEl);
+      if (pos === null || pos === undefined) return;
+
+      const line = editorView.state.doc.lineAt(pos);
+      const match = findWikiLinkAtPosition(line.text, line.from, pos);
+      if (!match) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void handleWikiLinkClick(match.target);
+    };
+
+    document.addEventListener("click", clickHandler, true);
+    _wikiLinkClickHandler = clickHandler;
+  }
+
+  /* 3. Autocomplete extension (Step 6) — gracefully absent if global missing */
+  extensions.push(...buildAutocompleteExtension());
+
+  /*
+   * 4. Tab-switch and doc-change listener (Step 7).
+   * A single EditorView.updateListener handles both:
+   * - Detecting tab switches by monitoring __MARKABLE_CURRENT_FILE__
+   * - Triggering index rebuilds on document saves (via menu-event)
+   */
+  if (cmView && cmView.EditorView) {
+    extensions.push(
+      cmView.EditorView.updateListener.of((update: any) => {
+        if (!_enabled) return;
+
+        /* Always capture the latest view reference */
+        _view = update.view;
+
+        /*
+         * Check the current file on EVERY update (not just docChanged).
+         * Tab switches update __MARKABLE_CURRENT_FILE__ and dispatch a
+         * doc-replace transaction. We poll on every update tick because
+         * the global may be set slightly after the transaction fires.
+         */
+        const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
+          | string
+          | null;
+        if (currentFile !== _lastKnownFile) {
+          _lastKnownFile = currentFile;
+          _isScanning = true;
+          rebuildBacklinksDOM();
+          scheduleIndexRebuild((backlinks, outgoing) => {
+            if (!_enabled) return;
+            _currentBacklinks = backlinks;
+            _currentOutgoing = outgoing;
+            _isScanning = false;
+            rebuildBacklinksDOM();
+          });
+        }
+      })
+    );
+  }
+
+  /*
+   * 5. Fallback: poll for file path changes every 500ms.
+   * The CM6 updateListener only fires on editor transactions.
+   * If the tab switch doesn't trigger a transaction (e.g. when
+   * clicking a wiki-link opens a file via tabManager), this
+   * interval catches the change.
+   */
+  _pollTimer = setInterval(() => {
+    if (!_enabled) return;
+    const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
+      | string
+      | null;
+    if (currentFile !== _lastKnownFile) {
+      _lastKnownFile = currentFile;
+      _isScanning = true;
+      rebuildBacklinksDOM();
+      scheduleIndexRebuild((backlinks, outgoing) => {
+        if (!_enabled) return;
+        _currentBacklinks = backlinks;
+        _currentOutgoing = outgoing;
+        _isScanning = false;
+        rebuildBacklinksDOM();
+      });
+    }
+  }, 500);
+
+  api.addExtensions(extensions);
+}
 
 /**
  * Backlinks plugin definition.
@@ -1899,9 +2944,8 @@ import type { MarkablePluginAPI } from "../markable-plugin-api";
  * onEnable sequence:
  *   1. Set _enabled flag.
  *   2. Inject CSS (wiki-link styles + backlinks panel styles).
- *   3. Build CM6 extensions: decoration ViewPlugin, click handler,
- *      autocomplete, tab-switch + doc-change listeners.
- *   4. Register extensions via api.addExtensions().
+ *   3. Wire hover popover listeners via `_wireHoverListeners`.
+ *   4. Build and register CM6 extensions via `_buildCmExtensions`.
  *   5. Register sidebar panel via api.registerSidebarPanel().
  *   6. Trigger initial index build.
  *
@@ -1924,131 +2968,27 @@ const plugin = {
     "current document.",
   sidebarPanelId: "backlinks",
 
+  /*
+   * onEnable is a lifecycle orchestrator. Its length is justified by the
+   * ordered dependency chain: CSS must be injected before listeners, listeners
+   * must be wired before extensions (so hover state is valid when the first
+   * CM6 transaction fires), and the sidebar panel must be registered before
+   * the initial index rebuild fires its callback (which calls rebuildBacklinksDOM).
+   * Each numbered step below corresponds to a step in the sequence above.
+   */
   onEnable(api: MarkablePluginAPI): void {
+    /* Step 1: Mark plugin as active (guards all async callbacks) */
     _enabled = true;
 
-    /* Step 1: Inject CSS for wiki-link decorations and backlinks panel */
+    /* Step 2: Inject CSS — wiki-link decorations and backlinks panel */
     injectWikiLinkStyles();
     injectBacklinksCSS();
 
-    /* Step 2-3: Build CM6 extensions array */
-    const cmView = (window as any).__CM_VIEW__;
-    const extensions: any[] = [];
+    /* Step 3: Wire hover-popover CSS + document listeners (FR-8.1) */
+    _wireHoverListeners();
 
-    /* Wiki-link decoration ViewPlugin (Step 4) */
-    extensions.push(...buildWikiLinkDecorationExtension());
-
-    /*
-     * Click handler for wiki-link navigation (Step 5).
-     * Uses EditorView.domEventHandlers to intercept clicks on
-     * decorated wiki-link ranges.
-     */
-    if (cmView && cmView.EditorView) {
-      /*
-       * Click handler for wiki-link navigation.
-       * Uses a document-level click listener (not CM6 domEventHandlers)
-       * to avoid interfering with CM6's mousedown/selection handling.
-       * The listener is added on enable and removed on disable.
-       */
-      const clickHandler = (event: MouseEvent) => {
-        if (!_enabled) return;
-        const target = event.target as HTMLElement;
-        if (!target) return;
-
-        /* Check if click landed on a decorated .cm-wiki-link span */
-        const wikiEl = target.closest(".cm-wiki-link") as HTMLElement | null;
-        if (!wikiEl) return;
-
-        /* Find the wiki-link target from the document text at this position */
-        const editorView = (window as any).__MARKABLE_EDITOR_VIEW__;
-        if (!editorView) return;
-
-        const pos = editorView.posAtDOM(wikiEl);
-        if (pos === null || pos === undefined) return;
-
-        const line = editorView.state.doc.lineAt(pos);
-        const match = findWikiLinkAtPosition(line.text, line.from, pos);
-        if (!match) return;
-
-        event.preventDefault();
-        event.stopPropagation();
-        void handleWikiLinkClick(match.target);
-      };
-
-      document.addEventListener("click", clickHandler, true);
-      _wikiLinkClickHandler = clickHandler;
-    }
-
-    /* Autocomplete extension (Step 6) — gracefully absent if global missing */
-    extensions.push(...buildAutocompleteExtension());
-
-    /*
-     * Tab-switch and doc-change listener (Step 7).
-     * A single EditorView.updateListener handles both:
-     * - Detecting tab switches by monitoring __MARKABLE_CURRENT_FILE__
-     * - Triggering index rebuilds on document saves (via menu-event)
-     */
-    if (cmView && cmView.EditorView) {
-      extensions.push(
-        cmView.EditorView.updateListener.of((update: any) => {
-          if (!_enabled) return;
-
-          /* Always capture the latest view reference */
-          _view = update.view;
-
-          /*
-           * Check the current file on EVERY update (not just docChanged).
-           * Tab switches update __MARKABLE_CURRENT_FILE__ and dispatch a
-           * doc-replace transaction. We poll on every update tick because
-           * the global may be set slightly after the transaction fires.
-           */
-          const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
-            | string
-            | null;
-          if (currentFile !== _lastKnownFile) {
-            _lastKnownFile = currentFile;
-            _isScanning = true;
-            rebuildBacklinksDOM();
-            scheduleIndexRebuild((backlinks, outgoing) => {
-              if (!_enabled) return;
-              _currentBacklinks = backlinks;
-              _currentOutgoing = outgoing;
-              _isScanning = false;
-              rebuildBacklinksDOM();
-            });
-          }
-        })
-      );
-    }
-
-    /*
-     * Fallback: poll for file path changes every 500ms.
-     * The CM6 updateListener only fires on editor transactions.
-     * If the tab switch doesn't trigger a transaction (e.g. when
-     * clicking a wiki-link opens a file via tabManager), this
-     * interval catches the change.
-     */
-    _pollTimer = setInterval(() => {
-      if (!_enabled) return;
-      const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
-        | string
-        | null;
-      if (currentFile !== _lastKnownFile) {
-        _lastKnownFile = currentFile;
-        _isScanning = true;
-        rebuildBacklinksDOM();
-        scheduleIndexRebuild((backlinks, outgoing) => {
-          if (!_enabled) return;
-          _currentBacklinks = backlinks;
-          _currentOutgoing = outgoing;
-          _isScanning = false;
-          rebuildBacklinksDOM();
-        });
-      }
-    }, 500);
-
-    /* Step 4: Register extensions with the editor */
-    api.addExtensions(extensions);
+    /* Step 4: Build CM6 extension array and register with the editor */
+    _buildCmExtensions(api);
 
     /* Step 5: Register sidebar panel */
     api.registerSidebarPanel({
@@ -2122,6 +3062,46 @@ const plugin = {
       clearInterval(_pollTimer);
       _pollTimer = null;
     }
+
+    // ── Step 10: Hover popover cleanup (FR-8.2) ──────────────────────────────
+
+    /*
+     * Dismiss any visible popover and cancel all pending timers before
+     * removing the event listeners. This ensures a clean state even if the
+     * plugin is disabled while a popover is visible or a fetch is in flight.
+     */
+    dismissWikiPopover();
+
+    if (_wikiLinkHoverHandler) {
+      document.removeEventListener("mouseover", _wikiLinkHoverHandler, true);
+      _wikiLinkHoverHandler = null;
+    }
+    if (_wikiLinkHoverLeaveHandler) {
+      /*
+       * The same function reference was registered for both `mouseleave` and
+       * `click`. Both must be removed with the same `true` (capture) flag to
+       * match the registration in `onEnable`. A mismatched flag would silently
+       * fail to deregister the listener, causing a memory and behavior leak.
+       */
+      document.removeEventListener("mouseleave", _wikiLinkHoverLeaveHandler, true);
+      document.removeEventListener("click", _wikiLinkHoverLeaveHandler, true);
+      _wikiLinkHoverLeaveHandler = null;
+    }
+
+    removeWikiPopoverStyles();
+
+    /*
+     * Belt-and-suspenders: explicitly null the hover state variables.
+     * `dismissWikiPopover` handles most of this, but these explicit resets
+     * mirror the defensive pattern used for `_view`, `_lastKnownFile`, etc.
+     *
+     * _hoverFetchVersion is intentionally not reset: it is a monotonic counter.
+     * Resetting it risks a stale deferred fetch matching the post-re-enable version
+     * on a rapid disable/re-enable cycle.
+     */
+    _hoverShowTimer = null;
+    _hoverDismissTimer = null;
+    _activePopoverEl = null;
 
     /* Step 6: Clear all module-level state to initial values */
     _view = null;
