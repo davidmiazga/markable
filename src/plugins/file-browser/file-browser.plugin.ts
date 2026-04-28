@@ -513,7 +513,9 @@ const FILE_BROWSER_CSS = `
   justify-content: space-between;
   margin-bottom: 12px;
 }
+
 `;
+
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
 
@@ -986,8 +988,11 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
     li.appendChild(unmountBtn);
   }
 
-  /* Active file highlight */
-  if (node.type === "file" && activeFile && node.path === activeFile) {
+  /* Active file highlight — open tab (markdown). */
+  if (
+    node.type === "file" &&
+    (activeFile && node.path === activeFile)
+  ) {
     li.classList.add("tree-node-active");
   }
 
@@ -1284,9 +1289,24 @@ function renderTreeContent(wrapper: HTMLElement): void {
 
   if (vaultIndex.capped) buildCapNotice(wrapper, vaultIndex);
 
+  /* Merge .md entries with non-Markdown files (images, PDFs, etc.) so the
+     tree reflects the vault's full contents, not just notes. */
+  const allEntries = [
+    ...vaultIndex.entries,
+    ...(vaultIndex.nonMdFiles ?? []).map((f) => ({
+      path: f.path,
+      name: f.name,
+      title: f.name,
+      outboundLinks: [] as string[],
+      tags: [] as string[],
+      modified: 0,
+      size: 0,
+    })),
+  ];
+
   /* Build, sort, and cache the tree */
   const tree = buildTreeFromIndex(
-    vaultIndex.entries,
+    allEntries,
     activeVault.rootPaths,
     _expandedPaths,
     activeVault,
@@ -1388,7 +1408,15 @@ function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => v
     const path = el.getAttribute("data-path") ?? "";
 
     if (type === "file") {
-      void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+      if (path.toLowerCase().endsWith(".md")) {
+        /* Markdown file: open in editor tab (unchanged behaviour). */
+        void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+      } else {
+        // Non-md asset (image, PDF, etc.): open in the content-area media viewer.
+        // Optional chain guards against test environments where the global may
+        // not yet have openMediaInTab registered.
+        void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
+      }
     } else if (type === "vault") {
       const nodeVaultId = el.getAttribute("data-vault-id") ?? "";
       const vm = (window as any).__MARKABLE_VAULT_MANAGER__;

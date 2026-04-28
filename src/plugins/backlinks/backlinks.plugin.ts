@@ -1015,7 +1015,8 @@ export function buildAutocompleteExtension(): any[] {
    *     are sourced directly from `VaultIndexEntry[]`. Each completion carries
    *     a vault-relative path as `detail` (AD-03/AD-04) and a `title` as `info`
    *     when it differs from `name` (AD-03). Self-link exclusion is NOT applied
-   *     (FR-A.2, AD-02). `filter: false` is used because we pre-filter.
+   *     (FR-A.2, AD-02). All entries are returned; CM6 `filter: true` narrows
+   *     the list as the user types. `validFor` keeps the completions alive.
    *  2. **No-vault fallback** (FR-A.3): when no vault is active, falls through
    *     to the existing `_cachedFileList` path. `null` is passed for the current
    *     filename so no file is excluded (AD-02). `filter: true` is used here so
@@ -1084,29 +1085,22 @@ export function buildAutocompleteExtension(): any[] {
        * Vault is active. Source completions from the pre-built index.
        * We do NOT call filterCompletions here because it cannot carry
        * `detail` or `info` metadata (AD-01).
+       *
+       * All entries are returned (no pre-filter by prefix). CM6's own
+       * `filter: true` narrows the list as the user types, and the
+       * `validFor` guard keeps completions alive across keystrokes and
+       * backspaces so the menu persists without needing to be re-requested
+       * after every character.
        */
       const vaultRoot: string =
         vaultManager.getActiveVault()?.rootPaths?.[0] ?? "";
-      const lowerPrefix = prefix.toLowerCase();
 
       const options = vaultIndex.entries
-        .filter((entry: { name: string }) =>
-          entry.name.toLowerCase().startsWith(lowerPrefix)
-        )
         .sort(
           (a: { name: string }, b: { name: string }) =>
             a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
         )
         .map((entry: { name: string; path: string; title: string }) => {
-          /*
-           * Compute vault-relative path without the .md extension (AD-04).
-           * Example: path = "/vault/research/meeting.md", root = "/vault"
-           *   → detail = "research/meeting"
-           *
-           * If the path does not start with the vault root (unusual — could
-           * happen with multi-root vaults), fall back to entry.name so the
-           * detail field is always a non-empty string.
-           */
           let detail: string;
           if (vaultRoot && entry.path.startsWith(vaultRoot + "/")) {
             detail = entry.path
@@ -1116,22 +1110,12 @@ export function buildAutocompleteExtension(): any[] {
             detail = entry.name;
           }
 
-          /*
-           * info is shown in a secondary tooltip on the right of the dropdown
-           * and is only populated when the stored title differs from the
-           * filename stem (AD-03). A lazy function form is used so the value
-           * is never computed until CM6 needs to render it.
-           */
-          const infoFn =
-            entry.title !== entry.name
-              ? () => entry.title
-              : undefined;
+          /* CM6 info: plain string is valid; a function must return a DOM Node.
+             Using a plain string avoids the type mismatch that crashed arrow-key
+             navigation when CM6 tried to mount the info panel. */
+          const infoFn: string | undefined =
+            entry.title !== entry.name ? entry.title : undefined;
 
-          /*
-           * The label is the filename stem (entry.name, no extension).
-           * Capture label in a closure so the apply callback can reference it
-           * after the map iteration ends.
-           */
           const label = entry.name;
 
           return {
@@ -1143,24 +1127,16 @@ export function buildAutocompleteExtension(): any[] {
           };
         });
 
-      /*
-       * Return the vault-mode result.
-       * `filter: false` disables CM6's own substring re-filter because we
-       * already pre-filter with `startsWith(lowerPrefix)` above (AD-01 note).
-       * An empty `options` array is intentional (EC-A.02, EC-A.03) — CM6
-       * hides the dropdown automatically when the array is empty.
-       */
-      return { from: before.from + 2, options, filter: false };
+      return {
+        from: before.from + 2,
+        options,
+        filter: true,
+        /* Keep completions alive while the cursor stays inside [[…  */
+        validFor: /^[^\]\n|]*$/,
+      };
     }
 
     // ── No-vault fallback (FR-A.3) ───────────────────────────────────────────
-    /*
-     * No vault is active. Fall back to the directory-level `_cachedFileList`
-     * that is populated by `buildIndex()` during the last index scan.
-     *
-     * Pass `null` as `currentFile` so no file is excluded from suggestions
-     * (AD-02: self-exclusion removed from both paths per FR-A.2).
-     */
     const matchingFiles = filterCompletions(_cachedFileList, prefix, null);
 
     /* EC-22: empty result — return null so the popup does not appear */
@@ -1178,13 +1154,40 @@ export function buildAutocompleteExtension(): any[] {
       };
     });
 
-    return { from: before.from + 2, options, filter: true };
+    return {
+      from: before.from + 2,
+      options,
+      filter: true,
+      validFor: /^[^\]\n|]*$/,
+    };
   };
+
+  /*
+   * updateListener re-triggers the popup whenever the cursor moves into or
+   * stays inside a [[… context — including after Escape, tab switch, or mouse
+   * click. Without this, CM6's activateOnTyping only fires on text insertion,
+   * so clicking back into [[text]] or pressing Escape and then repositioning
+   * the cursor would leave the popup permanently closed.
+   */
+  const cmView = (window as any).__CM_VIEW__;
+  const retriggerListener =
+    cmView?.EditorView?.updateListener.of((update: any) => {
+      if (!update.docChanged && !update.selectionSet) return;
+      const state = update.view.state;
+      const pos = state.selection.main.head;
+      const line = state.doc.lineAt(pos);
+      const before = line.text.slice(0, pos - line.from);
+      if (!/\[\[[^\]\n|]*$/.test(before)) return;
+      if (cmAuto.completionStatus(state) !== null) return;
+      cmAuto.startCompletion(update.view);
+    });
 
   return [
     cmAuto.autocompletion({
       override: [wikiLinkCompletionSource],
+      activateOnTyping: true,
     }),
+    ...(retriggerListener ? [retriggerListener] : []),
   ];
 }
 

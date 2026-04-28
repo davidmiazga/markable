@@ -131,7 +131,8 @@
       "Read(//Users/daveslaptop/.cargo/bin/**)",
       "Read(//Users/daveslaptop/.cargo/**)",
       "Bash(command -v rustup)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(~/.cargo/bin/cargo test *)"
     ]
   }
 }

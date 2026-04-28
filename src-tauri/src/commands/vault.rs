@@ -62,6 +62,17 @@ pub struct VaultIndexEntry {
     pub outbound_links: Vec<String>,
 }
 
+/// Lightweight record for a non-Markdown file (image, PDF, etc.).
+/// Included in VaultIndexPayload so the File Browser can display all vault
+/// contents, not just .md notes.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NonMdFile {
+    pub path: String,
+    /// Filename with extension (e.g. "photo.png").
+    pub name: String,
+}
+
 /// Complete index payload returned by build_vault_index.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +84,9 @@ pub struct VaultIndexPayload {
     pub total_files_found: u32,
     pub skipped_count: u32,
     pub capped: bool,
+    /// All non-Markdown files found during the walk (images, PDFs, etc.).
+    /// Not capped — the md-only cap does not apply here.
+    pub non_md_files: Vec<NonMdFile>,
 }
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
@@ -549,6 +563,7 @@ pub async fn build_vault_index(
 ) -> Result<VaultIndexPayload, String> {
     let max = max_count as usize;
     let mut entries: Vec<VaultIndexEntry> = Vec::new();
+    let mut non_md_files: Vec<NonMdFile> = Vec::new();
     let mut total_files_found: u32 = 0;
     let mut skipped_count: u32 = 0;
     let mut capped = false;
@@ -586,14 +601,25 @@ pub async fn build_vault_index(
                 continue;
             }
 
-            // Only process .md files (directories are used for tree structure
-            // in Phase 2a but are not indexed as entries here).
             if !entry.file_type().is_file() {
                 continue;
             }
 
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if !ext.eq_ignore_ascii_case("md") {
+                // Non-Markdown file: collect for the File Browser tree but do
+                // not count against the .md cap or parse for links/tags.
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() && !name.starts_with('.') {
+                    non_md_files.push(NonMdFile {
+                        path: path.to_string_lossy().to_string(),
+                        name,
+                    });
+                }
                 continue;
             }
 
@@ -622,6 +648,7 @@ pub async fn build_vault_index(
         total_files_found,
         skipped_count,
         capped,
+        non_md_files,
     })
 }
 

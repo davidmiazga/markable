@@ -10,8 +10,6 @@ import { getSettings, saveSettings } from "./bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import type { VaultEntry } from "./vault-types";
-import { spellCheckCompartment } from "../editor/extensions";
-import { EditorView } from "@codemirror/view";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
@@ -481,21 +479,27 @@ export function applyEditorSettings(editor: EditorSettings): void {
    */
   const spellCheckEnabled = editor.spellCheck ?? false;
   const view = (window as any).__MARKABLE_EDITOR_VIEW__;
-  if (view) {
+  const compartment = (window as any).__MARKABLE_SPELL_CHECK_COMPARTMENT__;
+  const cmView = (window as any).__CM_VIEW__;
+  if (view && compartment && cmView) {
     /*
      * EditorView.contentAttributes is a Facet — its value is provided via
      * `.of()` not via a direct call. This mirrors the initial value set in
      * buildExtensions() and the CM6 Facet API contract.
+     *
+     * CM6 is accessed via window globals (same pattern as plugin IIFE bundles)
+     * to avoid pulling @codemirror/* imports into settings.ts, which is a
+     * shared module imported by the file-browser bundle chain.
      */
     view.dispatch({
-      effects: spellCheckCompartment.reconfigure(
-        EditorView.contentAttributes.of({
+      effects: compartment.reconfigure(
+        cmView.EditorView.contentAttributes.of({
           spellcheck: spellCheckEnabled ? "true" : "false",
         })
       ),
     });
   }
-  // EC-B.04: if view is null/undefined (called before editor mounts), the
+  // EC-B.04: if view/compartment/cmView are absent (called before editor mounts),
   // dispatch is skipped; the compartment's initial value ("false") holds.
 }
 

@@ -15,8 +15,8 @@
  * Cycling with Cmd-Opt-←/→ moves which tab is active; update() is called by
  * TabManager after each activation and the layout adjusts automatically.
  *
- * TODO: add a small document icon below the close button in each column once
- *       the icon system is in place (FC2 future work).
+ * A small document icon below the close button in each column is deferred
+ * until the icon system is in place (FC2).
  *
  * DOM structure per column:
  * ```html

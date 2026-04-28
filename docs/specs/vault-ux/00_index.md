@@ -114,17 +114,11 @@ Use `chip_extraction` Material Symbol — added to index.ts as `ICON_UNMOUNT`. R
 
 ---
 
-## Review Request
+## Review Request (Revised — 2026-04-27)
 
 - **Files changed**:
-  - `src/plugins/file-browser/file-browser.plugin.ts` — steps 01–04 + step 05 global registration
-  - `src/plugins/file-browser/icons/material/index.ts` — `ICON_UNMOUNT` export (pre-existing, verified present)
-  - `src/plugins/plugins-panel/plugins-panel.ts` — step 05 footer button
-  - `src/plugins/plugins-panel/plugins-panel.css` — step 05 footer styles
-  - `src/keybindings/keybindings-panel.ts` — step 05 `vault-manage` command entry
-  - `src/main.ts` — step 05 `vault-manage` case in `handleAction()`
-  - `docs/keybindings-default.json` — step 05 `vault-manage` default (empty string)
-  - `tests/plugins/file-browser/vault-ux.test.ts` — step 06 (new file, 31 tests)
+  - `src/plugins/file-browser/file-browser.plugin.ts` — Issues 1, 2, 3: JSDoc justification + renderPanel fix + buildNodeEl ordering comment
+  - `tests/plugins/file-browser/media-preview.test.ts` — Issues 2, 4: new orphaned-state test, new FR-7 clause 3 test, updated FR-8/FR-11/NFR-3 tests to match new renderPanel behaviour
 
 - **Steps completed** (in order):
   - step_01_new-vault-direct.md
@@ -134,9 +128,16 @@ Use `chip_extraction` Material Symbol — added to index.ts as `ICON_UNMOUNT`. R
   - step_05_manage-vaults-entrypoints.md
   - step_06_tests.md
 
+- **Reviewer issues addressed**:
+  - Issue 1 (High): Added `showMediaPreview` JSDoc length justification paragraph per spec.
+  - Issue 2 (High): `renderPanel()` now calls `closeMediaPreview()` before `innerHTML = ""`. Updated `_vaultChangedCb` comment to reflect the new belt-and-suspenders role of its own `closeMediaPreview()` call. Updated FR-8, FR-11, and NFR-3 tests that depended on the old behaviour. Added the required "renderPanel called while preview is open closes the preview (no orphaned state)" test.
+  - Issue 3 (High): Replaced the inaccurate `buildNodeEl` ordering comment with the accurate version that references `renderPanel()` calling `closeMediaPreview()` directly.
+  - Issue 4 (Medium): Added FR-7 clause 3 test — clicking a `.md` file while a non-md preview is open does not close the preview.
+
 - **Known limitations**:
   - The `plugin-panel-footer` "Manage Vaults" button is hidden when the File Browser plugin is disabled (rather than showing an alert). This is the recommended approach from step_05 spec note.
   - `startVaultDblClickListener()` does not debounce the first single-click activate on a vault row before double-click fires. Per the spec, the double-click-then-rename on an inactive vault first switches to it (harmless), then renames. The spec defers any single-click suppression to a future polish pass.
+  - FR-8 (active highlight persists across incremental re-renders) is now removed as a design goal. After Issue 2's fix, all `renderPanel()` calls — including those from `_indexUpdatedCb` — close the active preview. This is the correct behaviour per the reviewer's guidance: a full DOM teardown-and-rebuild always clears the preview.
 
 - **Edge cases covered by tests**:
 
@@ -152,16 +153,70 @@ Use `chip_extraction` Material Symbol — added to index.ts as `ICON_UNMOUNT`. R
   | EC-VUX-07: Empty-state "New Vault" button opens create form | `empty-state 'New Vault' button click opens the create form directly` |
   | EC-VUX-08: Double-open guard on modal | `double-open guard: calling openNewVaultModal() twice produces only one overlay` |
   | EC-VUX-09: Plugin Panel closed before modal opened | `buildManageVaultsFooter` calls `closePluginsPanel()` first (code audit; not unit-testable without full plugin mount) |
+  | Issue 2 orphaned-state: renderPanel while preview open | `renderPanel called while preview is open closes the preview (no orphaned state)` |
+  | FR-7 clause 3: .md click does not close non-md preview | `clicking a .md file while a non-md preview is open keeps the preview visible` |
 
 ---
 
-## Review Sign-off
+## Review Request (Revised — 2026-04-27, round 3)
+
+- **Files changed**:
+  - `src/tabs/tab-manager.ts` — C-1, H-1, H-2, M-1: media guards on saveActiveTab / saveActiveTabAs / markActiveTabDirty / saveSession scrollTop; JSDoc length justifications on openMediaInTab, _applyActiveTab, _renderMediaViewer
+  - `src/tabs/tabs.css` — L-1: removed TODO comment at ~line 383
+  - `src/tabs/renderers/vertical-tab-strip.ts` — L-1: removed TODO comment at ~line 18
+  - `tests/tabs/media-tab.test.ts` — C-1, H-1, M-1, EC-09, EC-12 window-close, EC-14, L-2 (EC-02 close/reopen): 14 new tests across Groups J–P
+
+- **Steps completed** (all prior steps unchanged; this round is a reviewer-issue fix pass only):
+  - step_01_new-vault-direct.md
+  - step_02_vault-hover-unmount.md
+  - step_03_vault-double-click-rename.md
+  - step_04_vault-context-menu.md
+  - step_05_manage-vaults-entrypoints.md
+  - step_06_tests.md
+
+- **Reviewer issues addressed**:
+  - C-1 (Critical): Added `tab.kind === "media"` early-return guard to `saveActiveTab()` and `saveActiveTabAs()`. Without this guard, Cmd-S on a media tab would overwrite a binary file with the stale CM6 editor buffer (data corruption). Guard is silent — no error dialog is shown.
+  - C-2 (Critical): Added explicit tests for EC-09 (vault switch while media tab open — Group M), EC-12 window-close variant (last media tab, no vault — Group O), and EC-14 (rapid successive clicks — Group N).
+  - H-1 (High): Guarded the scrollTop write in `saveSession()` so it only runs when the active tab is `kind === "editor"`. Media tabs have no CM6 scroll state; writing editorView.scrollDOM.scrollTop to them stored stale text-editor values.
+  - H-2 (High): Added JSDoc length-justification paragraphs to `openMediaInTab`, `_applyActiveTab`, and `_renderMediaViewer` explaining the cohesion constraint for each.
+  - M-1 (Medium): Added `tab.kind === "media"` guard to `markActiveTabDirty()`. Media tabs have no editable content and must never be considered dirty; this guard keeps isDirty permanently false on them.
+  - L-1 (Low): Replaced both TODO comments in `tabs.css` and `vertical-tab-strip.ts` with regular inline comments.
+  - L-2 (Low): Added EC-02 close-then-reopen test (Group P) verifying that a closed media tab does not persist as a deduplication entry.
+
+- **Known limitations** (unchanged from round 2):
+  - The `plugin-panel-footer` "Manage Vaults" button is hidden when the File Browser plugin is disabled.
+  - `startVaultDblClickListener()` does not debounce the single-click activate before double-click fires.
+  - FR-8 (active highlight across incremental re-renders) removed as a design goal per reviewer guidance.
+
+- **Edge cases covered by tests**:
+
+  | Edge Case | Test |
+  |---|---|
+  | EC-VUX-01: Confirm before unmounting active vault | `clicking unmount on the active vault shows window.confirm` |
+  | EC-VUX-01: Cancelling confirm does not delete | `cancelling the confirm dialog does NOT call deleteVault` |
+  | EC-VUX-02: Silent unmount for inactive vault | `clicking unmount on an inactive vault calls deleteVault without window.confirm` |
+  | EC-VUX-03: Duplicate vault names allowed | `unchanged name cancels without calling updateVault` |
+  | EC-VUX-04: Escape/blur cancels rename | `Escape cancels rename`, `blur cancels rename` |
+  | EC-VUX-05: Double-click anywhere on vault row fires rename | `startVaultInlineRename inserts an input into the row` |
+  | EC-VUX-06: Unmount button click does not propagate | `unmount button click does not propagate to the row's activate handler` |
+  | EC-VUX-07: Empty-state "New Vault" button opens create form | `empty-state 'New Vault' button click opens the create form directly` |
+  | EC-VUX-08: Double-open guard on modal | `double-open guard: calling openNewVaultModal() twice produces only one overlay` |
+  | EC-VUX-09: Plugin Panel closed before modal opened | code audit (not unit-testable without full plugin mount) |
+  | C-1: saveActiveTab() no-op for media tabs | `saveActiveTab() is a no-op when a media tab is active` |
+  | C-1: saveActiveTabAs() no-op for media tabs | `saveActiveTabAs() is a no-op when a media tab is active` |
+  | H-1: saveSession scrollTop not written from CM6 view for media | `does not write editorView scrollTop to a media tab's scrollTop field` |
+  | M-1: markActiveTabDirty() no-op for media tabs | `markActiveTabDirty() is a no-op when a media tab is active` |
+  | EC-09: vault switch while media tab open | `media tab survives a settings update (simulated vault switch) without state corruption` |
+  | EC-12 (window-close): last media tab, no vault | `closing the last media tab (no vault) calls appWindow.close() without confirm()` |
+  | EC-14: rapid successive openMediaInTab calls | `opening two different media files in quick succession creates two tabs with the second active` |
+  | EC-02: close then reopen same file | `closing a media tab then re-clicking the file opens a fresh tab` |
+  | Issue 2 orphaned-state: renderPanel while preview open | `renderPanel called while preview is open closes the preview (no orphaned state)` |
+  | FR-7 clause 3: .md click does not close non-md preview | `clicking a .md file while a non-md preview is open keeps the preview visible` |
+
+---
+
+## Previous Review Sign-off
 
 - **Date**: 2026-04-25
 - **Findings summary**: 0 Critical, 0 High, 0 Medium, 0 Low — both targeted fixes verified clean; no new issues introduced by the changes under review.
-- **Requirements traceability**: FR-02.4 (panel header menu action at `headerActions[1]` with stable `id`), FR-02.6 / step_03 (vault inline rename), and all vault-ux edge cases (EC-VUX-01 through EC-VUX-09) remain covered.
-- **Edge case coverage**: All Edge Case Inventory items in `docs/requirements/active_task.md` that are in scope for Phase 2 (vault UX refactor) are covered by passing tests. `tests/plugins/file-browser/file-browser.test.ts` — 102 tests, 0 failures confirmed by `npm run test:run`.
-- **Specific items verified**:
-  1. `tests/plugins/file-browser/file-browser.test.ts` line 722 — `headerActions[1]` check: `action.icon === "⋯"`, `action.title === "Panel menu"`, `action.id === "file-browser-manage-vaults-btn"`. Assertion is correct and the test passes.
-  2. `src/plugins/file-browser/file-browser.plugin.ts` lines 1504–1525 — `startVaultInlineRename` carries a substantive length-justification comment. The comment correctly names the irreducible-closure pattern (shared mutable state: `input`, `errSpan`, `originalName`, `labelEl`), explains why splitting into helper functions would increase indirection rather than clarity, and explicitly cross-references the identical pattern accepted on `renderTreeContent`. The justification mirrors the `renderTreeContent` JSDoc at lines 1251–1259 in structure and reasoning.
-- **Status**: Approved for Merge
+- **Status**: Approved for Merge (superseded by reviewer round 2 issues listed above)

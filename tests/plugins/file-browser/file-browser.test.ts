@@ -66,6 +66,7 @@ function makeVaultIndex(paths: string[]): VaultIndex {
     totalFilesFound: paths.length,
     skippedCount: 0,
     capped: false,
+    nonMdFiles: [],
   };
 }
 
@@ -113,6 +114,7 @@ function makeIndexWithBacklink(): VaultIndex {
     totalFilesFound: 2,
     skippedCount: 0,
     capped: false,
+    nonMdFiles: [],
   };
 }
 
@@ -179,6 +181,7 @@ function setupVaultManager(
 function setupTabManager() {
   (window as any).__MARKABLE_TAB_MANAGER__ = {
     openFileInTab: vi.fn().mockResolvedValue(true),
+    openMediaInTab: vi.fn(),
   };
 }
 
@@ -1919,6 +1922,7 @@ describe("link-update banner — edge cases (FR-02.11)", () => {
       totalFilesFound: 1,
       skippedCount: 0,
       capped: false,
+      nonMdFiles: [],
     };
     setupVaultManager(vault, index);
 
@@ -2211,6 +2215,64 @@ describe("link-update banner — edge cases (FR-02.11)", () => {
     const addedToBody = document.body.childElementCount > bodyChildCountBefore &&
       document.body.querySelector(".file-browser-link-banner") !== null;
     expect(addedToBody).toBe(false);
+  });
+});
+
+// ── buildActivateHandler — openMediaInTab routing (media-preview-v2) ─────────
+//
+// These three tests replace the old sidebar-preview routing assertions that
+// were removed in step_01 together with media-preview.test.ts.
+// They verify the new VSCode-style content-area routing behaviour.
+
+describe("buildActivateHandler — openMediaInTab routing (media-preview-v2)", () => {
+  /**
+   * Helper: mounts a panel with the given file paths, then returns the
+   * container element so tests can query nodes by data-path.
+   *
+   * @param paths  Array of absolute file paths to include in the vault index.
+   */
+  function renderWithPaths(paths: string[]): HTMLElement {
+    const vault = makeVault();
+    const index = makeVaultIndex(paths);
+    setupVaultManager(vault, index);
+    const container = makeContainer();
+    _testing.setPanelContainer(container);
+    renderPanel();
+    return container;
+  }
+
+  it("clicking a non-md file calls openMediaInTab, not openFileInTab", () => {
+    const container = renderWithPaths(["/notes/photo.jpg"]);
+    const node = container.querySelector<HTMLElement>('[data-path="/notes/photo.jpg"]');
+    expect(node).not.toBeNull();
+    node!.click();
+
+    const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+    expect(tm.openMediaInTab).toHaveBeenCalledWith("/notes/photo.jpg");
+    expect(tm.openFileInTab).not.toHaveBeenCalled();
+  });
+
+  it("clicking a .md file still calls openFileInTab (regression guard)", () => {
+    // Uses makeVaultIndex which generates entries; the node is rendered as a
+    // .md file because the path ends in ".md".
+    const container = renderWithPaths(["/notes/note.md"]);
+    const node = container.querySelector<HTMLElement>('[data-path="/notes/note.md"]');
+    expect(node).not.toBeNull();
+    node!.click();
+
+    const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+    expect(tm.openFileInTab).toHaveBeenCalledWith("/notes/note.md");
+    expect(tm.openMediaInTab).not.toHaveBeenCalled();
+  });
+
+  it("_testing no longer exports getPreviewedPath, setPreviewedPath, showMediaPreview, closeMediaPreview", () => {
+    // These four exports existed in the old sidebar-preview implementation and
+    // must be absent after step_01 removal to prevent test suites from
+    // accidentally relying on deleted internals.
+    expect((_testing as any).getPreviewedPath).toBeUndefined();
+    expect((_testing as any).setPreviewedPath).toBeUndefined();
+    expect((_testing as any).showMediaPreview).toBeUndefined();
+    expect((_testing as any).closeMediaPreview).toBeUndefined();
   });
 });
 

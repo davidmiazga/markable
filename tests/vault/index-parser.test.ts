@@ -48,6 +48,7 @@ function makeIndex(vaultId: string, entryPaths: string[] = []): VaultIndex {
     totalFilesFound: entryPaths.length,
     skippedCount: 0,
     capped: false,
+    nonMdFiles: [],
   };
 }
 

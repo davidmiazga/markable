@@ -34,12 +34,24 @@ import { applyEditorSettings, DEFAULT_SETTINGS } from "../../src/lib/settings";
 // ---------------------------------------------------------------------------
 
 /**
- * Install a mock EditorView on `window.__MARKABLE_EDITOR_VIEW__`.
+ * Install mock globals for the spell-check dispatch path:
+ *   __MARKABLE_EDITOR_VIEW__           — mock EditorView with dispatch spy
+ *   __MARKABLE_SPELL_CHECK_COMPARTMENT__ — mock Compartment with reconfigure stub
+ *   __CM_VIEW__                        — mock CM6 view module with contentAttributes stub
+ *
  * Returns the `dispatch` spy so callers can assert on it.
  */
 function installMockView(): ReturnType<typeof vi.fn> {
   const dispatchMock = vi.fn();
   (window as any).__MARKABLE_EDITOR_VIEW__ = { dispatch: dispatchMock };
+  (window as any).__MARKABLE_SPELL_CHECK_COMPARTMENT__ = {
+    reconfigure: vi.fn(() => "mock-effect"),
+  };
+  (window as any).__CM_VIEW__ = {
+    EditorView: {
+      contentAttributes: { of: vi.fn(() => "mock-attr") },
+    },
+  };
   return dispatchMock;
 }
 
@@ -49,8 +61,9 @@ function installMockView(): ReturnType<typeof vi.fn> {
 
 describe("spell check — applyEditorSettings", () => {
   afterEach(() => {
-    // Clean up the mock view global between tests to prevent cross-test leakage.
     delete (window as any).__MARKABLE_EDITOR_VIEW__;
+    delete (window as any).__MARKABLE_SPELL_CHECK_COMPARTMENT__;
+    delete (window as any).__CM_VIEW__;
     vi.restoreAllMocks();
   });
 

@@ -28,6 +28,7 @@ import { readFile, writeFile, saveFileDialog } from "../lib/bridge";
 import { getCurrentSettings, updateSettings, addRecentFile } from "../lib/settings";
 import { setLivePreviewFilePath, setViewMode } from "../editor/live-preview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { convertFileSrc } from "@tauri-apps/api/core";
 // editableCompartment is used by openContentTab() to set read-only mode for
 // help file tabs. Imported from extensions — TabManager is not a plugin and
 // is explicitly allowed to access editor internals directly.
@@ -81,6 +82,12 @@ export class TabManager {
    */
   private _hidSidebarForVertical = false;
 
+  /** The #editor DOM element, stored in init() for fast access in _applyActiveTab. */
+  private editorContainer: HTMLElement | null = null;
+
+  /** The #media-viewer DOM element injected by init(). Never removed from DOM. */
+  private mediaViewerEl: HTMLElement | null = null;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   /**
@@ -102,9 +109,11 @@ export class TabManager {
   async init(editorView: EditorView): Promise<void> {
     this.editorView = editorView;
 
-    // Step 2: locate the permanent tab-strip container.
+    // Step 2: locate the permanent tab-strip container and the #editor container.
     // Its absence means index.html has not been updated (step_02 prerequisite).
     this.tabStripEl = document.getElementById("tab-strip");
+    // Store the #editor container for fast access by _applyActiveTab.
+    this.editorContainer = document.getElementById("editor");
     if (!this.tabStripEl) {
       console.error(
         "TabManager.init: #tab-strip element not found in DOM. " +
@@ -133,6 +142,7 @@ export class TabManager {
       }
       this.tabs.push({
         id: crypto.randomUUID(),
+        kind: "editor",
         filePath: entry.filePath,
         title: this._titleFromPath(entry.filePath),
         isDirty: false,
@@ -172,6 +182,15 @@ export class TabManager {
 
     // Step 8: apply active tab to the EditorView.
     this._applyActiveTab();
+
+    // Inject #media-viewer as a sibling to .cm-editor inside #editor.
+    // Created once for the app lifetime; hidden by default via CSS.
+    if (this.editorContainer) {
+      const mv = document.createElement("div");
+      mv.id = "media-viewer";
+      this.editorContainer.appendChild(mv);
+      this.mediaViewerEl = mv;
+    }
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────────
@@ -200,6 +219,19 @@ export class TabManager {
   }
 
   /**
+   * Returns the full filename (including extension) from an absolute path.
+   *
+   * Used for media tab titles where the extension is part of the identity
+   * (e.g. "photo.jpg" rather than "photo").
+   *
+   * @param filePath  Absolute file path.
+   * @returns  The last path component with extension, never empty.
+   */
+  private _basenameFromPath(filePath: string): string {
+    return filePath.split("/").pop() ?? filePath;
+  }
+
+  /**
    * Returns true when the user has a vault configured and active in settings.
    *
    * Reads from settings directly rather than the vault-manager global because
@@ -224,6 +256,7 @@ export class TabManager {
   private _createUntitledTab(): TabEntry {
     return {
       id: crypto.randomUUID(),
+      kind: "editor",
       filePath: null,
       title: "Untitled",
       isDirty: false,
@@ -241,15 +274,47 @@ export class TabManager {
    * tab switches. setState would wipe every extension registered after editor
    * creation (live preview, syntax highlighting, plugin compartments, etc.).
    *
+   * This function cannot be split below ~55 lines because it handles two
+   * fundamentally different tab kinds (media and editor) that share the same
+   * entry contract (zero-tab guard, editorView null guard) and the same exit
+   * contract (title bar update). Extracting the media branch into a helper would
+   * require threading four fields through a parameter object, and extracting the
+   * editor branch would split the setLivePreviewFilePath + dispatch + scrollTop
+   * trio that must execute in a specific order (path before dispatch, scroll after
+   * dispatch). Any split introduces ordering bugs that are harder to catch than the
+   * length itself.
+   *
    * This is called after:
    *   - init() completes
    *   - activateTab() switches to a different tab
    *   - openNewTab() or openFileInTab() adds a tab and activates it
    */
   private _applyActiveTab(): void {
-    if (this.tabs.length === 0 || this.editorView === null) return;
+    // Zero-tab guard: last tab was closed. Restore the editor view so the next
+    // file opened from the file browser is not obscured by the media viewer.
+    if (this.tabs.length === 0) {
+      this.editorContainer?.classList.remove("has-media-tab");
+      if (this.mediaViewerEl) this.mediaViewerEl.innerHTML = "";
+      return;
+    }
+
+    if (this.editorView === null) return;
 
     const tab = this.tabs[this.activeIndex];
+
+    if (tab.kind === "media") {
+      // Show the media viewer; hide the CM6 editor.
+      this.editorContainer?.classList.add("has-media-tab");
+      this._renderMediaViewer(tab.filePath!);
+      this._updateTitleBar(tab);
+      // AD-6: expose current file path for IIFE plugins.
+      (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] =
+        tab.filePath;
+      return;
+    }
+
+    // Editor tab: hide the media viewer and restore the CM6 editor.
+    this.editorContainer?.classList.remove("has-media-tab");
 
     // Set the file path BEFORE dispatching the document so that
     // buildDecorations() has the correct path on its first run.
@@ -294,6 +359,10 @@ export class TabManager {
     if (this.tabs.length === 0 || this.editorView === null) return;
 
     const tab = this.tabs[this.activeIndex];
+    // Media tabs have no document text or meaningful scroll position.
+    // Capturing them would overwrite doc: "" with stale EditorView content.
+    if (tab.kind === "media") return;
+
     tab.doc = this.editorView.state.doc.toString();
     tab.scrollTop = this.editorView.scrollDOM.scrollTop;
   }
@@ -311,6 +380,68 @@ export class TabManager {
     const titleEl = document.getElementById("titlebar-title");
     if (!titleEl) return;
     titleEl.textContent = tab.isDirty ? `${tab.title} •` : tab.title;
+  }
+
+  /**
+   * Populates #media-viewer with the appropriate element for the given file.
+   *
+   * Synchronous — no Tauri IPC. The file is loaded by the browser's native
+   * rendering after src is set (NFR-1).
+   *
+   * This function cannot be split below ~44 lines because it is a dispatch table
+   * over three mutually exclusive rendering strategies (raster/vector image,
+   * PDF embed, and unsupported fallback), each of which must set element
+   * attributes, wire an error handler, and append to mediaViewerEl. Factoring
+   * the shared "create element → set src → wire error → append" into a helper
+   * would require conditional generics for HTMLImageElement vs HTMLEmbedElement —
+   * the resulting abstraction would be longer and harder to follow than the
+   * explicit if/else branches already here.
+   *
+   * @param filePath  Absolute path to the media file.
+   */
+  private _renderMediaViewer(filePath: string): void {
+    if (!this.mediaViewerEl) return;
+
+    // Clear stale content from a previous media tab (NFR-3).
+    this.mediaViewerEl.innerHTML = "";
+
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const assetUrl = convertFileSrc(filePath);
+    const basename = this._basenameFromPath(filePath);
+
+    // Raster and vector image types rendered natively as <img>.
+    const RASTER_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "svg"]);
+
+    if (RASTER_EXTS.has(ext)) {
+      const img = document.createElement("img");
+      img.src = assetUrl;
+      img.alt = basename;
+      // EC-03: if the browser cannot load the file, replace the viewer content
+      // with an error message instead of showing a broken image icon.
+      img.addEventListener("error", () => {
+        if (this.mediaViewerEl) {
+          this.mediaViewerEl.innerHTML = '<p class="mv-load-error">Could not load file.</p>';
+        }
+      });
+      this.mediaViewerEl.appendChild(img);
+    } else if (ext === "pdf") {
+      const embed = document.createElement("embed");
+      embed.src = assetUrl;
+      embed.type = "application/pdf";
+      // EC-03: same error pattern as img.
+      embed.addEventListener("error", () => {
+        if (this.mediaViewerEl) {
+          this.mediaViewerEl.innerHTML = '<p class="mv-load-error">Could not load file.</p>';
+        }
+      });
+      this.mediaViewerEl.appendChild(embed);
+    } else {
+      // EC-04: unknown or missing extension — show a human-readable message.
+      const p = document.createElement("p");
+      p.className = "mv-unsupported";
+      p.textContent = "Cannot preview this file type.";
+      this.mediaViewerEl.appendChild(p);
+    }
   }
 
   /**
@@ -442,6 +573,7 @@ export class TabManager {
 
     const newTab: TabEntry = {
       id: crypto.randomUUID(),
+      kind: "editor",
       filePath,
       title: this._titleFromPath(filePath),
       isDirty: false,
@@ -502,6 +634,7 @@ export class TabManager {
 
     const tab: TabEntry = {
       id: crypto.randomUUID(),
+      kind: "editor",
       filePath: null,          // Content tabs are not backed by a file path.
       title,
       isDirty: false,
@@ -524,6 +657,84 @@ export class TabManager {
     this._notifyRenderer();
     // Do NOT call saveSession() here — content tabs have no filePath and should
     // not appear in the persisted session list (FR-6.3).
+  }
+
+  /**
+   * Opens a non-text asset (image, PDF, etc.) in a new media tab.
+   *
+   * Unlike openFileInTab(), this method does NOT read file contents from disk —
+   * the file is rendered directly in #media-viewer via an asset:// URL. This
+   * prevents the InvalidData error that fs::read_to_string raises on binary files.
+   *
+   * This function cannot be split below ~56 lines because its operations form a
+   * single atomic state transition: duplicate check → capture current tab → build
+   * the new tab record → push it → guard for the pre-init case → call
+   * _applyActiveTab → notify renderer → persist session → auto-close the stale
+   * Untitled tab. Every step depends on in-flight local variables (newTab,
+   * existingIdx) and on the array being in a consistent state throughout. Splitting
+   * the auto-close block into a helper would require passing at least three
+   * arguments that are already available as locals here, making the call site less
+   * readable than the inline code.
+   *
+   * @param filePath  Absolute path to the media file.
+   * @returns  true if a new tab was created; false if an existing media tab
+   *           for the same path was activated (duplicate guard).
+   */
+  openMediaInTab(filePath: string): boolean {
+    // Duplicate guard: activate existing media tab for this path rather than
+    // opening a second copy (EC-01 / requirements FR-3 step 1).
+    const existingIdx = this.tabs.findIndex(
+      (t) => t.kind === "media" && t.filePath === filePath,
+    );
+    if (existingIdx !== -1) {
+      this._captureActiveTab();
+      this.activeIndex = existingIdx;
+      this._applyActiveTab();
+      this._notifyRenderer();
+      return false;
+    }
+
+    this._captureActiveTab();
+
+    const newTab: TabEntry = {
+      id: crypto.randomUUID(),
+      kind: "media",
+      filePath,
+      title: this._basenameFromPath(filePath),
+      isDirty: false,
+      doc: "",
+      scrollTop: 0,
+    };
+
+    this.tabs.push(newTab);
+    this.activeIndex = this.tabs.length - 1;
+
+    // Guard for EC-10: called before init() completes (editorContainer is null).
+    // Push the tab into the array so it exists, but defer _applyActiveTab until
+    // init() calls it at the end of its own sequence.
+    if (this.editorContainer !== null) {
+      this._applyActiveTab();
+    }
+
+    this._notifyRenderer();
+
+    void addRecentFile(filePath);
+    void this.saveSession();
+
+    // Auto-close a clean Untitled editor tab when it was the only other tab
+    // (matches the same behaviour in openFileInTab).
+    if (this.tabs.length === 2) {
+      const otherIdx = this.tabs.findIndex((t) => t.id !== newTab.id);
+      const other = otherIdx !== -1 ? this.tabs[otherIdx] : null;
+      if (other && other.kind === "editor" && other.filePath === null && !other.isDirty) {
+        this.tabs.splice(otherIdx, 1);
+        this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
+        this._notifyRenderer();
+        void this.saveSession();
+      }
+    }
+
+    return true;
   }
 
   /**
@@ -550,7 +761,8 @@ export class TabManager {
 
     if (this.tabs.length === 1) {
       // This is the last tab.
-      if (tab.isDirty) {
+      // Media tabs are never dirty — skip the confirm dialog for them (FR-7).
+      if (tab.isDirty && tab.kind !== "media") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -562,6 +774,7 @@ export class TabManager {
       if (hasActiveVault) {
         this.tabs = [];
         this.activeIndex = -1;
+        this._applyActiveTab();
         this._notifyRenderer();
         void this.saveSession();
         return;
@@ -575,7 +788,8 @@ export class TabManager {
     }
 
     // Multiple tabs remain — closing this tab does not exit the app.
-    if (tab.isDirty) {
+    // Media tabs are never dirty — skip the confirm dialog for them (FR-7).
+    if (tab.isDirty && tab.kind !== "media") {
       const confirmed = confirm(
         `"${tab.title}" has unsaved changes. Close without saving?`
       );
@@ -676,10 +890,15 @@ export class TabManager {
    *
    * If the tab is untitled (filePath === null), delegates to saveActiveTabAs()
    * to prompt the user for a save location.
+   *
+   * Media tabs are never text documents — saving them would overwrite binary
+   * file contents with stale editor state (data corruption). The early-return
+   * guard prevents this without surfacing an error to the user; Cmd-S on a
+   * media tab is intentionally silent.
    */
   async saveActiveTab(): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab) return;
+    if (!tab || tab.kind === "media") return;
 
     if (tab.filePath === null) {
       await this.saveActiveTabAs();
@@ -707,10 +926,15 @@ export class TabManager {
    *
    * If the dialog is cancelled (EC-12), the method returns without side effects.
    * On success, the tab's filePath and title are updated to reflect the new path.
+   *
+   * Media tabs are never text documents — running "Save As" on one would write
+   * binary file content to an arbitrary path using the stale editor buffer.
+   * The early-return guard makes this a silent no-op for media tabs, which
+   * matches the same protection applied in saveActiveTab().
    */
   async saveActiveTabAs(): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab) return;
+    if (!tab || tab.kind === "media") return;
 
     const dialogResult = await saveFileDialog();
     if (dialogResult.cancelled) return; // User cancelled (EC-12).
@@ -746,10 +970,15 @@ export class TabManager {
    * Idempotent: calling this method on an already-dirty tab is a no-op (FR-7).
    * This allows callers (e.g. the CM6 onChange listener) to call it on every
    * keystroke without triggering unnecessary title-bar updates or renderer calls.
+   *
+   * Media tabs can never be dirty — they have no editable text content and their
+   * binary file is never written by TabManager. The kind guard keeps isDirty
+   * permanently false on media tabs, which is the contract the rest of the close
+   * and save paths rely on (FR-7 / M-1).
    */
   markActiveTabDirty(): void {
     const tab = this.getActiveTab();
-    if (!tab || tab.isDirty) return; // Idempotency guard (FR-7).
+    if (!tab || tab.isDirty || tab.kind === "media") return; // Idempotency and media guard (FR-7 / M-1).
     tab.isDirty = true;
     this._updateTitleBar(tab);
     this._notifyRenderer();
@@ -858,13 +1087,18 @@ export class TabManager {
     // Capture the active tab's current scroll position before serialising.
     // scrollTop is normally updated by _captureActiveTab() on tab-switch, but
     // if the user never switched tabs the stored value is stale (FR-6.2 / M-3).
+    // The kind check is required: media tabs have no CM6 scroll state —
+    // writing editorView.scrollDOM.scrollTop to a media tab would store a
+    // value from a previously displayed editor document (H-1).
     if (this.editorView && this.tabs.length > 0) {
-      this.tabs[this.activeIndex].scrollTop =
-        this.editorView.scrollDOM.scrollTop;
+      const activeTab = this.tabs[this.activeIndex];
+      if (activeTab.kind === "editor") {
+        activeTab.scrollTop = this.editorView.scrollDOM.scrollTop;
+      }
     }
 
     const openFiles = this.tabs
-      .filter((t) => t.filePath !== null)
+      .filter((t) => t.kind === "editor" && t.filePath !== null)
       .map((t) => ({ filePath: t.filePath!, scrollTop: t.scrollTop }));
 
     await updateSettings((s) => ({

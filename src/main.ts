@@ -18,7 +18,7 @@ import "./lib/cm-globals";
 import { EditorView } from "@codemirror/view";
 import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
-import { previewCompartment, previewExtensions } from "./editor/extensions";
+import { previewCompartment, previewExtensions, spellCheckCompartment } from "./editor/extensions";
 import { setViewMode } from "./editor/live-preview";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
@@ -843,6 +843,11 @@ async function initApp() {
   // plugins that read this global must degrade gracefully when it is absent.
   (window as unknown as Record<string, unknown>)["__MARKABLE_EDITOR_VIEW__"] =
     editor;
+
+  // Expose the spell-check Compartment so applyEditorSettings() in settings.ts
+  // can reconfigure it without importing @codemirror/* into that shared module.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_SPELL_CHECK_COMPARTMENT__"] =
+    spellCheckCompartment;
 
   // AD-8: expose the tab manager so IIFE plugins (e.g. backlinks) can call
   // openFileInTab() for click-to-navigate without an app-internal import.

@@ -1,11 +1,11 @@
 ---
-title: "Wikilink Autocomplete (Vault-Index Source) + Spell Check Toggle"
+title: "Media File Preview — VSCode-Style Content Area (Replaces Sidebar Panel)"
 last-updated: "2026-04-27"
 review-cadence-days: 7
 status: active
 ---
 
-# Wikilink Autocomplete (Vault-Index Source) + Spell Check Toggle
+# Media File Preview — VSCode-Style Content Area
 
 ## Validation Status
 
@@ -13,212 +13,617 @@ status: active
 
 ---
 
-## 1. Feature Summaries
+## 1. Feature Summary
 
-**Feature A — Wikilink Autocomplete (Vault-Index Source)**
-As a user I want typing `[[` in the editor to show an inline autocomplete dropdown of every `.md` file in the active vault, filtered as I type, so I can insert a correctly formatted `[[stem]]` link without leaving the keyboard.
-
-**Feature B — Spell Check Toggle**
-As a user I want a "Spell check" toggle in the Editor settings section so I can enable or disable the browser's native spell-check underlines on editor content, with the setting persisted across sessions.
+As a user I want clicking an image, PDF, or other non-markdown asset in the file
+browser to open that file as a tab in the main content area — exactly as VSCode
+does — so I can view it at full size while keeping the file browser sidebar open.
 
 ---
 
 ## 2. Background and Codebase Context
 
-### 2.1 Existing Autocomplete Infrastructure (Feature A)
+### 2.1 What Was Built and Why It Is Being Replaced
 
-The backlinks plugin (`src/plugins/backlinks/backlinks.plugin.ts`) already contains a working autocomplete implementation. The following functions exist and are exported for testing:
+The previous implementation (now superseded) injected a fixed 200px
+`file-browser-media-preview` panel at the bottom of the file browser sidebar.
+This was rejected by the user as the wrong UX. The entire sidebar-preview
+approach — `showMediaPreview()`, `closeMediaPreview()`, `_previewedPath`,
+`file-browser-media-preview` CSS, and `fbmp-*` CSS classes — is removed by
+this change.
 
-- `getCompletionContext(lineText, cursorInLine)` — pure helper; detects open `[[` context and returns `{ from, prefix }` or `null`.
-- `filterCompletions(cachedFileList, prefix)` — pure helper; filters filenames by prefix and strips `.md` extension.
-- `setCachedFileList(files: string[])` — updates the module-level `_cachedFileList` array used as the completion source.
-- `buildAutocompleteExtension()` — builds the CM6 `autocompletion()` extension with `wikiLinkCompletionSource` as the override.
+### 2.2 Relevant DOM Layout
 
-The `buildIndex()` function (Step 7) currently calls `setCachedFileList()` with the result of `list_md_files` (a flat filename list). When a vault is active, `scheduleIndexRebuild` uses `getVaultIndex()` entries to populate the same cache via `e.name + ".md"`.
+At runtime the page DOM structure around the editor is:
 
-**The change required by Feature A** is:
-1. The autocomplete dropdown must source completions from the vault index (`VaultIndexEntry[]`) when a vault is active — specifically using `VaultIndexEntry.name` as the stem and either `VaultIndexEntry.title` or vault-relative path as the detail line shown in the dropdown.
-2. When no vault is active, the existing `_cachedFileList` fallback (populated from `list_md_files`) continues unchanged — no regression on pre-vault workflows.
+```
+<body>
+  <div id="titlebar">…</div>
+  <div id="tab-strip">…</div>          <!-- tab renderer mounts here -->
+  <div id="app">
+    <div id="app-row">                  <!-- created by initSidebar() -->
+      <div id="sidebar-left">…</div>
+      <div id="editor">…</div>          <!-- CodeMirror mounts here -->
+      <div id="sidebar-right">…</div>
+    </div>
+    <div id="statusbar">…</div>
+  </div>
+</body>
+```
 
-No new plugin or new CM6 extension is needed. The Architect must determine whether `buildAutocompleteExtension` and the completion source need modification to carry `detail` text from vault index entries, or whether a separate vault-aware completion source is wired in alongside the existing one.
+`#editor` is a flex child of `#app-row` with `flex: 1`. It is the sole
+non-sidebar element in the content area.
 
-### 2.2 Spell Check (Feature B)
+### 2.3 Tab System Architecture
 
-`applyEditorSettings()` in `src/lib/settings.ts` currently applies CSS variables for font size and content width. It does not touch `contentAttributes`. The `EditorSettings` interface does not have a `spellCheck` field. The `buildExtensions()` function in `src/editor/extensions.ts` does not include any `contentAttributes` extension. The settings panel (`src/settings/settings-panel.ts`) has an "Appearance" and a "Tabs" section but no "Editor" section. There is no existing spell-check control anywhere in the codebase.
+`TabManager` (in `src/tabs/tab-manager.ts`) owns the ordered list of open
+`TabEntry` objects and the single shared `EditorView` instance. The CM6
+`EditorView` is always mounted in `#editor` and is never destroyed. Tab
+switching is performed by dispatching a transaction that replaces the
+document text in the shared view.
 
----
+`TabEntry` (in `src/tabs/tab-types.ts`) currently has the following shape:
 
-## 3. Feature A — Functional Requirements: Wikilink Autocomplete
+```typescript
+interface TabEntry {
+  id: string;
+  filePath: string | null;
+  title: string;
+  isDirty: boolean;
+  doc: string;
+  scrollTop: number;
+}
+```
 
-### FR-A.1 — Trigger
+There is no `kind` field. All tabs today are text/editor tabs.
 
-The autocomplete dropdown must activate whenever the CM6 cursor position immediately follows `[[` with zero or more characters that are not `]` or newline. Concretely: the `matchBefore(/\[\[([^\]\n]*)/)` pattern used by the existing `wikiLinkCompletionSource` is the canonical trigger definition. No other trigger mechanism is required.
+### 2.4 The File Browser Plugin Is an IIFE
 
-The dropdown must activate on explicit invocation (the user types `[[` and then characters) and must NOT re-trigger when the cursor moves into or after an already-closed `[[stem]]` link.
+`file-browser.plugin.ts` is compiled to an IIFE and cannot import from
+`tab-manager.ts` at runtime. It reaches the tab manager exclusively via
+`window.__MARKABLE_TAB_MANAGER__`. Any new method added to `TabManager` must
+also be exposed on that window global (the assignment in `main.ts` assigns the
+entire `tabManager` instance, so new methods are available automatically with no
+change to `main.ts`).
 
-### FR-A.2 — Completion Source: Vault-Active Mode
+### 2.5 `openFileInTab` Crashes on Binary Files
 
-When the active vault's index is available (i.e., `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` returns a `VaultIndex` with a non-empty `entries` array), the completion source must:
+`openFileInTab` calls `readFile()` (Rust `read_file` → `fs::read_to_string`),
+which fails with `InvalidData` on binary files. Media files must never go through
+`openFileInTab`. The new code path for media files must bypass all text-reading
+logic.
 
-- Use `VaultIndexEntry.name` as the completion label (the stem, without `.md`).
-- Use the vault-relative path of the file as the `detail` string shown in the dropdown (e.g., `"research/meeting"` for a file at `<vault-root>/research/meeting.md`). The vault root is available from `window.__MARKABLE_VAULT_MANAGER__` — the Architect must identify the correct accessor.
-- If `VaultIndexEntry.title` differs from `VaultIndexEntry.name` (i.e., the file has a front-matter title or an H1 different from the filename stem), display `title` as the CM6 `info` or `detail` field so the user can distinguish files with the same stem. The Architect will decide whether to use the CM6 `detail` or `info` property for the path vs. title distinction.
-- Filter completions using the typed prefix (text after `[[` up to the cursor), case-insensitively.
-- Sort completions alphabetically by stem (locale-insensitive, case-insensitive), matching the existing `filterCompletions` sort behavior.
-- The currently open file must NOT be excluded from completions (self-linking is a valid pattern in PKM workflows).
+### 2.6 Existing Window Globals Available in the IIFE
 
-### FR-A.3 — Completion Source: No-Vault Fallback Mode
-
-When no vault is active, or when `getVaultIndex()` returns `null` or an index with zero entries, the completion source must fall back to the existing `_cachedFileList` behavior (populated by `list_md_files` via `setCachedFileList`). No `detail` text is shown in this mode (preserves existing behavior).
-
-If `_cachedFileList` is also empty (e.g., fresh untitled document, no directory scanned), the completion source returns `null` (no dropdown shown). This is not an error state.
-
-### FR-A.4 — Completion Insertion
-
-Selecting a completion item must:
-
-- Replace the typed partial stem (the text between `[[` and the cursor) with the selected stem, and close the link with `]]`.
-- Result in `[[stem]]` with the cursor positioned immediately after `]]`.
-- Not insert `[[` a second time (the user has already typed `[[`; the completion source's `from` position starts after `[[`).
-- Not leave a dangling or unclosed `[[` in any code path.
-
-The CM6 `apply` callback on the `Completion` object controls insertion behavior. The Architect must implement an `apply` function that replaces from `before.from + 2` (after the `[[`) to `context.pos` (current cursor) with `stem + "]]"`. This is the same approach used in the existing implementation; it must be verified to work correctly when the user has typed a partial prefix (e.g., `[[not` → select `notes` → result is `[[notes]]`).
-
-### FR-A.5 — Pipe Syntax: No Retrigger on Display Text
-
-If the user types `[[stem|` and continues typing, the autocomplete must NOT re-trigger for the display-text portion. The existing `matchBefore(/\[\[([^\]\n]*)/)` pattern already captures text containing `|` because `|` is not excluded from `[^\]\n]`. The `getCompletionContext` pure helper must be verified to return `null` when a `|` is present between `[[` and the cursor, OR the completion source must detect a `|` in the matched prefix and return `null` explicitly. The Architect must confirm or fix the pipe-suppression behavior before implementation.
-
-### FR-A.6 — Already-Closed Link: No Retrigger
-
-When the cursor is positioned inside or after a fully closed `[[stem]]` (i.e., a `]]` exists between the `[[` and the cursor position), the completion source must return `null`. The existing `getCompletionContext` already implements this check — it must be preserved.
-
-### FR-A.7 — Works in Both Preview Modes
-
-The autocomplete extension must function identically in live-preview mode (the `previewCompartment` active) and in plain-syntax mode. No mode-switching logic is required; since both modes use the same underlying CM6 `EditorState`, the completion source operates on raw document text in both cases.
-
-### FR-A.8 — Performance
-
-The vault index is in-memory. No Tauri IPC call and no disk I/O is permitted inside the completion source callback. The completion source reads `VaultIndexEntry[]` directly from the in-memory object returned by `getVaultIndex()`. For a vault of up to 500 files (the documented `maxIndexSize`), the completion source must produce its result set within the synchronous execution time of a single CM6 update cycle (target: under 5ms on a modern Apple Silicon chip). No debouncing or async completion sources are required.
-
----
-
-## 4. Feature A — Edge Case Inventory
-
-**EC-A.01: No vault active, no directory scanned** — `getVaultIndex()` returns null and `_cachedFileList` is empty. Completion source returns `null`. No dropdown is shown. No error is thrown.
-
-**EC-A.02: Vault active but index is empty (zero entries)** — `getVaultIndex()` returns a `VaultIndex` with `entries: []`. The vault-mode completion path produces an empty options array. No dropdown is shown (CM6 hides the dropdown when `options` is empty). The fallback to `_cachedFileList` does NOT apply — an active vault with zero entries is a legitimate vault-mode result, not a missing-vault scenario.
-
-**EC-A.03: Typed prefix matches no stems** — e.g., user types `[[zzz` and no file has a stem starting with `zzz`. The completion source returns `{ from, options: [] }`. CM6 hides the dropdown. No error.
-
-**EC-A.04: Two files share the same stem in different folders** — e.g., `notes/meeting.md` and `work/meeting.md`, both have `name: "meeting"`. Both appear in the dropdown as separate completions. The `detail` field (vault-relative path) disambiguates them visually. Both are selectable and both insert `[[meeting]]` on selection (bare-stem insertion — path qualification is out of scope for v1).
-
-**EC-A.05: Cursor is placed inside an already-closed `[[stem]]`** — e.g., document contains `[[notes]]` and the user clicks between `[` and `n`. The completion source must return `null` because `getCompletionContext` detects the `]]` closure. No dropdown appears.
-
-**EC-A.06: User types `[[stem|` (pipe present)** — The completion source detects the `|` in the matched prefix and returns `null`. No dropdown appears for the display-text portion. The Architect must confirm this is correctly handled by `getCompletionContext` or add a `|`-check in the completion source.
-
-**EC-A.07: Completion selected when prefix is empty — `[[` with cursor immediately after** — `getCompletionContext` returns `{ from: <pos after [[>, prefix: "" }`. All vault stems are shown unfiltered. Selecting one inserts `[[stem]]`. The cursor lands after `]]`.
-
-**EC-A.08: Completion selected when partial prefix present** — e.g., `[[not` → user selects `notes`. The `apply` callback replaces from `before.from + 2` to `context.pos` (current cursor, which is after `t`) with `"notes]]"`. The result is `[[notes]]`. No duplicate `[[` or stray characters.
-
-**EC-A.09: Vault index refreshes while dropdown is open** — The vault watcher triggers a `getVaultIndex()` update while the user has the autocomplete dropdown visible. The completion source re-runs on the next keypress and reflects the new index. There is no mechanism to update an already-rendered dropdown mid-display; this is acceptable (CM6 behavior). No crash or stale pointer.
-
-**EC-A.10: `window.__MARKABLE_VAULT_MANAGER__` is undefined** — The vault manager global has not been set (e.g., the plugin is loaded before the vault manager initializes). The optional-chain accessor `?.getVaultIndex?.()` returns `undefined`. The completion source falls through to the `_cachedFileList` path. No error.
-
-**EC-A.11: `VaultIndexEntry.name` contains special characters (spaces, hyphens, Unicode)** — e.g., `name: "meeting notes"`. The stem `"meeting notes"` is used as the label and inserted as `[[meeting notes]]`. No escaping is applied. CM6 displays the label verbatim. No crash.
-
-**EC-A.12: Fenced code block context** — The user types `[[` inside a fenced code block. The existing `wikiLinkCompletionSource` uses `context.matchBefore()` on the raw document text. Whether completions suppress inside fenced code blocks depends on whether CM6's autocomplete respects language context. For v1, completions inside fenced code blocks are acceptable (not a regression from current behavior). If the Architect determines suppression is feasible via `context.tokenBefore()`, it may be added — but it is not a hard requirement.
-
-**EC-A.13: Plugin disabled while dropdown is open** — The backlinks plugin is disabled (toggled off) via the plugins panel while the autocomplete dropdown is visible. CM6 reconfigures the `pluginCompartment`, removing the `autocompletion()` extension. CM6 closes any open autocomplete dropdown automatically on extension removal. No crash or orphaned UI.
+- `window.__MARKABLE_TAB_MANAGER__` — the `TabManager` singleton
+- `window.__MARKABLE_CONVERT_FILE_SRC__(path)` — converts an absolute path to an `asset://` URL
 
 ---
 
-## 5. Feature B — Functional Requirements: Spell Check Toggle
+## 3. Design Decisions
 
-### FR-B.1 — Settings Key
+### 3.1 A New Tab Kind
 
-A new boolean field `spellCheck` is added to the `EditorSettings` interface in `src/lib/settings.ts`. Default value: `false`. The `DEFAULT_SETTINGS.editor` object must include `spellCheck: false`.
+`TabEntry` gains a discriminated-union `kind` field:
 
-### FR-B.2 — Applying the Setting to the Editor
+```typescript
+type TabKind = "editor" | "media";
+```
 
-When `spellCheck` is `true`, the editor's content element must have the HTML attribute `spellcheck="true"` applied. When `false` (or absent for backwards compatibility with old settings files that pre-date this field), the attribute must be absent or set to `"false"`.
+All current tabs are `kind: "editor"`. A new `kind: "media"` tab holds a file
+path and a display title but no `doc` text (the content area renders an HTML
+viewer element, not a CM6 editor state).
 
-The implementation mechanism is `EditorView.contentAttributes({ spellcheck: booleanValue ? "true" : "false" })`. This extension must be hot-swappable without a full editor rebuild. The Architect must introduce a new `Compartment` — named `spellCheckCompartment` — in `src/editor/extensions.ts`, initialized to `spellCheckCompartment.of(EditorView.contentAttributes({ spellcheck: "false" }))`. When the setting changes, `applyEditorSettings()` must dispatch a `spellCheckCompartment.reconfigure(...)` effect to the active `EditorView`.
+### 3.2 DOM Strategy: Sibling Viewer Panel Inside `#editor`
 
-The `applyEditorSettings()` function in `src/lib/settings.ts` requires access to the active `EditorView` to dispatch the reconfiguration. The Architect must determine the cleanest injection pattern (e.g., accept an optional `view?: EditorView` parameter, or use the existing `window.__MARKABLE_EDITOR__` global if one exists, or add a setter function). This architectural decision must be documented in the spec.
+The CM6 editor (`div.cm-editor`) lives inside `#editor` as a child element
+inserted by CodeMirror. Rather than moving the `EditorView` or manipulating
+`#app-row`, a new `div#media-viewer` is inserted as a sibling of `div.cm-editor`
+inside `#editor`. The two children of `#editor` are mutually exclusive:
 
-### FR-B.3 — Settings Panel UI
+- When a `kind: "editor"` tab is active, `div.cm-editor` has `display: flex`
+  (its normal value) and `div#media-viewer` has `display: none`.
+- When a `kind: "media"` tab is active, `div.cm-editor` has `display: none`
+  and `div#media-viewer` has `display: flex`.
 
-A new "Editor" section must be added to the settings panel in `src/settings/settings-panel.ts` (currently no Editor section exists). The section must be labeled `"Editor"` and must contain:
+`#editor` keeps `flex: 1` and fills the content area exactly as before. No
+changes to `index.html`, `#app-row`, or the sidebar layout are required.
 
-- A checkbox-style toggle row labeled `"Spell check"`.
-- A brief description below the toggle: `"Underline misspelled words using the system dictionary."` (or equivalent short copy; the Architect may refine wording).
+`div#media-viewer` is created once by `TabManager.init()`, inserted into
+`#editor`, and toggled via CSS class rather than inline style. `TabManager`
+adds class `has-media-tab` to `#editor` when the active tab is `kind: "media"`,
+and removes it when switching back to an editor tab. The styles that show/hide
+the two panels live in `src/tabs/tabs.css`:
 
-The toggle element must use the existing settings panel's checkbox markup pattern (matching the "Maximize on Launch" checkbox as a structural reference). It must be wired to read the current `editor.spellCheck` value on panel open (`syncPanelToSettings`) and write the new value immediately via `updateSettings` on toggle change, followed by a call to `applyEditorSettings`.
+```css
+/* Default: editor visible, viewer hidden */
+#media-viewer { display: none; }
+/* When a media tab is active */
+#editor.has-media-tab .cm-editor { display: none; }
+#editor.has-media-tab #media-viewer { display: flex; }
+```
 
-### FR-B.4 — Persistence
+### 3.3 TabManager Gets One New Public Method
 
-The `spellCheck` value is persisted as part of the standard `MarkableSettings` object via the existing `updateSettings` / `saveSettings` flow. No new Tauri command or new settings file is required. Old settings files that pre-date this field load with `spellCheck` absent; the in-memory merge in `loadSettings` (`{ ...structuredClone(DEFAULT_SETTINGS), ...result.value }`) does not merge nested objects — it replaces `editor` wholesale. Therefore `DEFAULT_SETTINGS.editor.spellCheck` must be `false` to ensure the field is present after load when old files are opened.
+`TabManager` gains a single new public method:
 
-> Note: the current merge strategy in `loadSettings` uses a shallow spread. Nested objects like `editor` are replaced by the persisted value, which will not contain `spellCheck` if the file predates this feature. The Architect must verify that `applyEditorSettings` treats an absent `spellCheck` field as `false` (i.e., uses `settings.editor.spellCheck ?? false`), not as `undefined`, which could incorrectly set `spellcheck="undefined"` on the content element.
+```typescript
+openMediaInTab(filePath: string): boolean
+```
 
-### FR-B.5 — No Vault Dependency
+This method:
+1. Checks for a duplicate-path guard (same as `openFileInTab` EC-4 equivalent).
+2. Creates a `TabEntry` with `kind: "media"`, `doc: ""`, `filePath`, and a title
+   derived from `_titleFromPath(filePath)`.
+3. Pushes the tab, updates `activeIndex`, calls `_notifyRenderer()`.
+4. Calls a new private method `_applyActiveTab()` that already handles both
+   kinds (see FR-4 below).
+5. Returns `true` if a new tab was created, `false` if an existing media tab for
+   the same path was activated.
 
-Spell check is a pure editor attribute. It must work with or without an active vault and must not depend on the plugin system. It is part of the core editor setup, not a plugin extension.
+The method does NOT call `readFile()` and does NOT access the `EditorView`
+document. It only populates the viewer element.
 
-### FR-B.6 — Reset to Defaults
+### 3.4 Sidebar Preview Code Is Fully Removed
 
-The "Reset All" button in the settings panel footer calls `DEFAULT_SETTINGS`. After reset, `editor.spellCheck` is `false`. The editor's `spellCheckCompartment` must be reconfigured to `{ spellcheck: "false" }` as part of the reset flow.
+All of the following are deleted in this change:
+
+- The `file-browser-media-preview` CSS block and all `fbmp-*` CSS rules
+  from `FILE_BROWSER_CSS` in `file-browser.plugin.ts`.
+- The module-level variable `_previewedPath`.
+- The functions `showMediaPreview()` and `closeMediaPreview()`.
+- All call sites of `closeMediaPreview()` (in `renderPanel()`, `destroy()`,
+  `_vaultChangedCb`).
+- The `buildActivateHandler` branch that called `showMediaPreview` / `closeMediaPreview`.
+- The test file `tests/plugins/file-browser/media-preview.test.ts`.
+
+The `buildActivateHandler` non-md branch is replaced with a single call:
+```typescript
+void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
+```
+
+The active-highlight logic in `buildNodeEl` that read `_previewedPath` is removed.
+Only `_activeFile` (the currently open `.md` tab path) continues to drive
+`tree-node-active`. Non-md files no longer receive a special active highlight
+in the sidebar when their tab is open; this matches VSCode's behaviour.
+
+### 3.5 Session Persistence for Media Tabs
+
+Media tabs are excluded from `saveSession()` serialization (same rule as
+`openContentTab` — no `filePath`-based persistence for non-editor tabs). When
+Markable restarts, media tabs are not restored. This is consistent with VSCode,
+which also does not restore binary-file tabs across restarts.
 
 ---
 
-## 6. Feature B — Edge Case Inventory
+## 4. Functional Requirements
 
-**EC-B.01: Old settings file without `spellCheck` field** — `result.value.editor` does not contain `spellCheck`. After the shallow merge in `loadSettings`, `currentSettings.editor` is the persisted `editor` object, which lacks `spellCheck`. `applyEditorSettings` must use `settings.editor.spellCheck ?? false` to prevent setting `spellcheck="undefined"` on the content element. Expected: spell check remains off; no attribute error.
+### FR-1 — New `TabEntry.kind` Field
 
-**EC-B.02: Toggle on, close app, reopen** — `spellCheck: true` is written to `settings.json`. On next launch, `loadSettings` reads it, `applyEditorSettings` is called during init, and the editor content element receives `spellcheck="true"`. The setting survives a full app restart.
+`tab-types.ts` gains a `kind` field on `TabEntry`:
 
-**EC-B.03: Toggle flipped rapidly multiple times** — Each toggle change dispatches a `spellCheckCompartment.reconfigure(...)` effect. CM6 handles compartment reconfiguration synchronously within a transaction; rapid successive dispatches do not cause errors or desync. The final toggle state is the one applied to the DOM.
+```typescript
+export type TabKind = "editor" | "media";
 
-**EC-B.04: Editor view not yet initialized when `applyEditorSettings` is called** — During the settings load sequence, `applyEditorSettings` may be called before the CM6 `EditorView` is constructed (e.g., if settings are applied before the editor is mounted). The Architect must ensure the `spellCheckCompartment.reconfigure` dispatch is a no-op or deferred when no `EditorView` is available. Expected: no crash; the initial compartment value (`{ spellcheck: "false" }`) holds until the view is available and `applyEditorSettings` is called again post-mount.
+export interface TabEntry {
+  id: string;
+  kind: TabKind;           // NEW — defaults to "editor" for all existing tabs
+  filePath: string | null;
+  title: string;
+  isDirty: boolean;
+  doc: string;
+  scrollTop: number;
+}
+```
 
-**EC-B.05: Settings panel "Reset All" with spell check enabled** — User has spell check on, clicks "Reset All." `DEFAULT_SETTINGS` has `spellCheck: false`. The settings panel checkbox updates to unchecked. `applyEditorSettings` is called with the reset settings, reconfiguring the compartment to `{ spellcheck: "false" }`. The red underlines disappear immediately.
+All existing `TabEntry` construction sites in `tab-manager.ts`
+(`_createUntitledTab`, `openFileInTab`, `openContentTab`, session restore) must
+add `kind: "editor"` explicitly. No runtime breakage is acceptable.
 
-**EC-B.06: Multiple editor tabs open** — Markable supports multiple tabs, each with its own CM6 `EditorState`. However, `buildExtensions` is called once per editor instance. The `spellCheckCompartment` is a module-level singleton. If `spellCheckCompartment.reconfigure` is dispatched on only one view, other tab views' compartments retain their current value. The Architect must determine whether `spellCheckCompartment` should be per-tab or shared, and document the decision. Suggested resolution: the compartment is per-tab (instantiated inside `buildExtensions` rather than at module level), and `applyEditorSettings` reconfigures all active editor views. Alternatively, since `contentAttributes` is a low-cost extension, it can be re-applied on tab switch.
+### FR-2 — `div#media-viewer` Created Once in `TabManager.init()`
+
+`TabManager.init()` creates a `div` with `id="media-viewer"` and appends it
+as a child of `#editor` after the CM6 editor mounts (the CM6 `EditorView` is
+passed to `init()` so `#editor` is already populated by then). The element
+starts with no special class (hidden by the default CSS rule `display: none`).
+
+The viewer element is created once for the app lifetime. It is not destroyed on
+tab close or vault switch.
+
+### FR-3 — `TabManager.openMediaInTab(filePath)` Public Method
+
+```typescript
+openMediaInTab(filePath: string): boolean
+```
+
+Behaviour:
+
+1. **Duplicate guard**: if any existing tab has `kind: "media"` and
+   `filePath === filePath`, activate that tab and return `false`.
+2. Capture the current active tab via `_captureActiveTab()`.
+3. Create a new `TabEntry`:
+   ```typescript
+   {
+     id: crypto.randomUUID(),
+     kind: "media",
+     filePath,
+     title: this._titleFromPath(filePath),
+     isDirty: false,
+     doc: "",
+     scrollTop: 0,
+   }
+   ```
+4. Push the tab, set `activeIndex` to its position.
+5. Call `_applyActiveTab()` — the modified version (see FR-4) handles the
+   media case.
+6. Call `_notifyRenderer()`.
+7. Call `addRecentFile(filePath)` (non-blocking, void).
+8. Call `saveSession()` (non-blocking, void) — the session serialization
+   filter already excludes media tabs because `saveSession` only saves
+   `kind: "editor"` tabs with a `filePath`.
+
+   > Note: `saveSession()` must be updated to filter `t.kind === "editor" && t.filePath !== null` instead of the current `t.filePath !== null` to ensure a future media tab with a non-null `filePath` is never accidentally serialised.
+
+9. Return `true`.
+
+The auto-close-clean-Untitled logic that exists in `openFileInTab` (removes the
+Untitled tab when opening the first real file) also applies to
+`openMediaInTab`. If, after pushing the media tab, exactly two tabs exist and
+the other tab is `kind: "editor"`, `filePath === null`, and `isDirty === false`,
+remove it and recalculate `activeIndex`.
+
+### FR-4 — `_applyActiveTab()` Updated for Media Tabs
+
+The existing `_applyActiveTab()` dispatches a document-replacement transaction
+into the `EditorView`. For media tabs this must not happen (the CM6 editor
+should not receive binary content).
+
+Updated logic:
+
+```
+if (tab.kind === "media") {
+  // 1. Hide the CM6 editor; show the media viewer.
+  editorContainer.classList.add("has-media-tab");
+  // 2. Populate #media-viewer with the appropriate element.
+  _renderMediaViewer(tab.filePath!);
+  // 3. Update the title bar.
+  _updateTitleBar(tab);
+} else {
+  // Existing editor-tab path (unchanged).
+  editorContainer.classList.remove("has-media-tab");
+  // ... existing dispatch transaction ...
+}
+```
+
+`editorContainer` is `document.getElementById("editor")` — looked up once in
+`init()` and stored, matching the pattern already used for `tabStripEl`.
+
+### FR-5 — `_renderMediaViewer(filePath)` Private Method
+
+Creates or replaces the content of `div#media-viewer`. Must be synchronous.
+
+Routing table (extension matching is case-insensitive):
+
+| Category | Extensions | Rendered element |
+|---|---|---|
+| Raster image | jpg, jpeg, png, gif, webp, bmp, ico | `<img src="{asset_url}" alt="{basename}">` |
+| SVG | svg | `<img src="{asset_url}" alt="{basename}">` |
+| PDF | pdf | `<embed src="{asset_url}" type="application/pdf">` |
+| Unsupported | everything else | `<p class="mv-unsupported">Cannot preview this file type.</p>` |
+
+The asset URL is produced by `convertFileSrc(filePath)` (available as a direct
+import from `@tauri-apps/api/core` — `tab-manager.ts` is NOT an IIFE and can
+import app internals directly).
+
+The viewer element is cleared (`innerHTML = ""`) before each render to prevent
+stale content when switching between media tabs.
+
+The `<img>` element uses inline style `object-fit: contain; max-width: 100%;
+max-height: 100%` so images are proportionally scaled within the content area
+at any window size. No explicit `width` or `height` attributes.
+
+An `error` event listener on `<img>` and `<embed>` replaces the viewer content
+with `<p class="mv-load-error">Could not load file.</p>` (see EC-05).
+
+### FR-6 — Media Viewer CSS in `src/tabs/tabs.css`
+
+New rules added to `tabs.css`:
+
+```css
+/* Media viewer: fills #editor when a media tab is active */
+#media-viewer {
+  display: none;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-color);
+  padding: var(--content-padding, 24px);
+  box-sizing: border-box;
+}
+
+#editor.has-media-tab .cm-editor {
+  display: none;
+}
+
+#editor.has-media-tab #media-viewer {
+  display: flex;
+}
+
+#media-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+#media-viewer embed {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.mv-unsupported,
+.mv-load-error {
+  font-size: 14px;
+  color: var(--text-muted);
+  font-family: var(--ui-font);
+  text-align: center;
+}
+```
+
+No hardcoded hex colors. No hardcoded font families.
+
+### FR-7 — Closing a Media Tab
+
+`closeTab(id)` already handles all tab types. For media tabs:
+
+- If the media tab is the last tab and a vault is active: tabs drop to 0,
+  `activeIndex` to -1, renderer notified. `_applyActiveTab()` with zero tabs
+  calls a new guard to remove `has-media-tab` from `#editor` and clear
+  `#media-viewer` (so the CM6 editor is visible again for the next file opened).
+- If the media tab is the last tab and no vault is active: existing window-close
+  path unchanged.
+- If other tabs remain: after tab removal and `activeIndex` recalculation, the
+  new active tab determines whether `has-media-tab` is added or removed in
+  `_applyActiveTab()`.
+
+A media tab's `isDirty` is always `false` — no confirmation dialog is shown on
+close. The dirty-check guard in `closeTab` must be updated:
+```typescript
+if (tab.isDirty && tab.kind !== "media") { /* show confirm */ }
+```
+
+### FR-8 — `_captureActiveTab()` Skips Media Tabs
+
+The existing `_captureActiveTab()` reads `editorView.state.doc.toString()` and
+the scroll position. For media tabs, neither field is meaningful. The method
+must short-circuit when `tab.kind === "media"` rather than writing garbage into
+`tab.doc`.
+
+### FR-9 — `saveSession()` Filters to Editor Tabs Only
+
+The filter expression:
+```typescript
+this.tabs.filter((t) => t.filePath !== null)
+```
+becomes:
+```typescript
+this.tabs.filter((t) => t.kind === "editor" && t.filePath !== null)
+```
+
+### FR-10 — Renderers Receive No Changes
+
+All three renderers (`MinimalTabBar`, `RegularTabBar`, `VerticalTabStrip`)
+iterate over `tabs: TabEntry[]` and render one button/pill per tab. They read
+`tab.title`, `tab.id`, `tab.isDirty`, and `activeIndex`. None of these properties
+change meaning for media tabs. Renderers do not need modification. A media tab
+appears in the tab strip with its filename title, no dirty bullet, and standard
+close-button behaviour — identical to a read-only content tab.
+
+### FR-11 — File Browser Plugin: Routing Update
+
+In `buildActivateHandler` inside `file-browser.plugin.ts`, the non-md branch is
+replaced entirely:
+
+```typescript
+// Before (removed):
+if (_previewedPath === path) {
+  closeMediaPreview();
+} else {
+  showMediaPreview(path);
+}
+
+// After:
+void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
+```
+
+No other changes to `file-browser.plugin.ts` routing logic are required.
+
+### FR-12 — Remove All Sidebar Preview Code
+
+The following are deleted from `file-browser.plugin.ts`:
+
+1. Module-level variable `let _previewedPath: string | null = null;`
+2. Function `showMediaPreview(path: string): void` (approx. lines 1554–1660)
+3. Function `closeMediaPreview(): void` (approx. lines 1506–1527)
+4. CSS block `/* ── Media Preview Panel … */` through to end of `fbmp-*` rules
+   (approx. CSS lines 517–577 of the `FILE_BROWSER_CSS` constant)
+5. In `buildNodeEl`: the `|| node.path === _previewedPath` predicate in the
+   `tree-node-active` condition
+6. In `renderPanel`: the `closeMediaPreview()` call before `innerHTML = ""`
+7. In `_vaultChangedCb` (or `onVaultChanged`): the `closeMediaPreview()` call
+8. In `destroy`: the `closeMediaPreview()` call
+
+### FR-13 — Remove `tests/plugins/file-browser/media-preview.test.ts`
+
+The test file for the old sidebar preview feature is deleted entirely, as the
+feature it tested no longer exists.
+
+### FR-14 — New Test Coverage
+
+New tests are added to `tests/plugins/file-browser/file-browser.test.ts`:
+
+- Non-md file click calls `window.__MARKABLE_TAB_MANAGER__.openMediaInTab(path)`.
+- `.md` file click still calls `window.__MARKABLE_TAB_MANAGER__.openFileInTab(path)`.
+- The `_previewedPath` symbol is no longer exported by `_testing`.
+
+New tests are added to a new file `tests/tabs/media-tab.test.ts`:
+
+- `openMediaInTab` creates a `kind: "media"` tab with correct title.
+- `openMediaInTab` activates an existing media tab if path already open (duplicate guard).
+- `openMediaInTab` auto-removes a clean Untitled editor tab when it is the only other tab.
+- `_applyActiveTab` adds `has-media-tab` class to `#editor` for a media tab.
+- `_applyActiveTab` removes `has-media-tab` class when switching back to an editor tab.
+- `_captureActiveTab` does not read `editorView.state.doc` when tab is `kind: "media"`.
+- `saveSession` excludes media tabs from the serialized `openFiles` list.
+- `closeTab` on a media tab does not show a confirm dialog.
+- `closeTab` on the last media tab (vault active) drops to 0 tabs and clears `#media-viewer`.
+
+---
+
+## 5. Out of Scope (v1)
+
+- Audio playback (`<audio>` element) for `.mp3`, `.wav`, `.ogg`, etc.
+- Video playback (`<video>` element) for `.mp4`, `.mov`, etc.
+- Zoom / pan controls on images.
+- PDF page navigation controls (native browser embed only).
+- File size or pixel dimension display in the tab title or a status bar entry.
+- A "reveal in Finder" or "copy asset URL" button in the media viewer.
+- Resizing the viewer (the content area is always full-width).
+- Persisting open media tabs across app restarts.
+- Media tabs opened from sources other than the file browser (e.g., drag-and-drop).
+- A thumbnail or inline preview remaining in the sidebar when a media tab is open.
+- Preview of files outside the active vault.
+
+---
+
+## 6. Edge Case Inventory
+
+**EC-01: Non-md file already open in a media tab — user clicks it again in the
+file browser.** `openMediaInTab` finds the existing tab via the duplicate-path
+guard, activates it, and returns `false`. No second tab is created.
+
+**EC-02: User closes the media tab, then re-clicks the file in the file browser.**
+The previous media tab no longer exists. `openMediaInTab` creates a fresh tab.
+The `#media-viewer` is re-populated. Normal flow.
+
+**EC-03: Media file is deleted between file-browser render and the user clicking
+it.** `openMediaInTab` succeeds (no disk read). The `<img>` or `<embed>` fires an
+`error` event. `_renderMediaViewer`'s error listener replaces the viewer content
+with `<p class="mv-load-error">Could not load file.</p>`. No crash.
+
+**EC-04: Non-md file with no extension (e.g., `Makefile`, `LICENSE`).** Extension
+lookup finds no match. The "unsupported" path renders
+`<p class="mv-unsupported">Cannot preview this file type.</p>`. A media tab is
+still created with the correct filename title. No crash. No text-read attempted.
+
+**EC-05: Non-md file with an uppercase extension (e.g., `photo.JPG`, `report.PDF`).** Extension check uses `.toLowerCase()`. File is correctly routed to raster-image
+or PDF rendering. The `asset://` URL is passed with the original case preserved.
+
+**EC-06: Multiple media tabs open simultaneously (e.g., image.png, diagram.svg,
+notes.pdf).** Each is a separate `TabEntry` with `kind: "media"`. Switching
+between them calls `_applyActiveTab()` each time, which re-populates
+`#media-viewer` for each tab. No stale content remains. Each tab button appears
+in the tab strip renderer.
+
+**EC-07: User switches from a media tab to an editor tab.** `_applyActiveTab()`
+removes the `has-media-tab` class from `#editor`. The `cm-editor` becomes
+visible again. `#media-viewer` is hidden. The CM6 editor receives the correct
+document dispatch. Title bar updated to the editor tab's title.
+
+**EC-08: User switches from an editor tab to a media tab.** `_captureActiveTab()`
+correctly saves the editor tab's doc and scroll position before switching.
+`_applyActiveTab()` adds `has-media-tab`, populates `#media-viewer`, and does
+NOT dispatch a doc-replacement transaction to the CM6 editor. The editor's
+current doc is preserved for when the user switches back.
+
+**EC-09: Vault is switched while a media tab is open.** Vault change fires
+`onVaultChanged`. The file browser re-renders. Any media tab for a file in the
+old vault remains open (consistent with VSCode — switching vault does not close
+tabs). The user can close it manually. The vault file browser does not show
+a stale active highlight for the media file because `_previewedPath` no longer
+exists.
+
+**EC-10: `openMediaInTab` called before `TabManager.init()` completes.** The
+`editorView` field is `null` and `this.editorContainer` would be `null`.
+`openMediaInTab` must guard on `this.editorContainer !== null` before calling
+`_applyActiveTab()`. If the guard fires, the tab is pushed to the array but not
+displayed; on `init()` completion `_applyActiveTab()` is called normally.
+
+**EC-11: `convertFileSrc` is unavailable (hypothetical startup ordering bug).**
+`tab-manager.ts` is a compiled module, not an IIFE — `convertFileSrc` is a
+direct ES module import from `@tauri-apps/api/core`. It cannot be absent unless
+the Tauri API package is broken. No guard required; failure is a hard import
+error that surfaces at module load time.
+
+**EC-12: Media tab is the only open tab and the user closes it — vault is NOT
+active.** Existing `closeTab` last-tab + no-vault path closes the window via
+`appWindow.close()`. This path is unchanged and correct.
+
+**EC-13: Media tab is the only open tab and the user closes it — vault IS active.**
+Existing `closeTab` last-tab + vault path drops to `tabs = []`, `activeIndex = -1`,
+notifies renderer. `_applyActiveTab()` early-returns when `tabs.length === 0`.
+The new zero-tab guard must also remove `has-media-tab` from `#editor` and call
+`_clearMediaViewer()` so the CM6 editor is visible (ready for the next file
+the user opens from the file browser).
+
+**EC-14: Rapid successive clicks on different non-md files in the file browser.**
+Each click calls `openMediaInTab`. The first call pushes a new tab; subsequent
+calls for different paths push additional tabs (they are not duplicates). For the
+same path the duplicate guard activates the existing tab. All operations are
+synchronous on the JS thread. No race condition.
+
+**EC-15: `openMediaInTab` called for a path that is currently open as a
+`kind: "editor"` tab (e.g., a `.md` file renamed to `.png` outside the app).**
+The duplicate guard checks `kind: "media"` AND `filePath`. A `kind: "editor"`
+tab with the same path is not considered a duplicate. A new media tab is
+created. Two tabs with the same `filePath` but different `kind` co-exist. This
+is an edge case that does not require special handling in v1.
+
+**EC-16: Session restore on next launch — media tabs are absent from saved state.**
+`saveSession` filters to `kind: "editor"` tabs only. On next launch the session
+restore loop sees no entry for the media file. The media tab is not re-created.
+This is correct and intentional.
 
 ---
 
 ## 7. Non-Functional Requirements
 
-**NFR-1: Autocomplete latency** — The completion source (Feature A) must execute synchronously and complete within 5ms for a vault of up to 500 entries on Apple Silicon. No async operations are permitted inside the completion source callback.
+**NFR-1: No Tauri IPC in the media-tab open path.** `openMediaInTab` is entirely
+synchronous (no `readFile` call, no `invoke` call). The only async work is the
+browser's native load of the `asset://` URL inside the `<img>` or `<embed>`.
 
-**NFR-2: Autocomplete UX responsiveness** — The dropdown must appear within one frame (16ms) of the user typing `[[` or any character after `[[`. CM6's built-in `autocompletion()` handles display timing; no additional debounce is required beyond what CM6 applies by default. The `activateOnTyping` option (CM6 default: true) must not be overridden to false.
+**NFR-2: One `EditorView` for the app lifetime.** This change does not create a
+second `EditorView`. The invariant documented in `tab-manager.ts` line 1 is
+preserved.
 
-**NFR-3: No disk I/O in completion path** — The completion source reads only from the in-memory vault index. No Tauri `invoke()` calls are permitted in the hot path.
+**NFR-3: No orphaned DOM.** `div#media-viewer` is created once in `init()` and
+never removed. Its `innerHTML` is replaced (not appended) on each media tab
+activation. On switch back to an editor tab, `innerHTML` is cleared. No element
+accumulation.
 
-**NFR-4: Spell check toggle latency** — Toggling spell check in the settings panel must cause the editor's `spellcheck` attribute to change within one animation frame. A CM6 compartment reconfiguration dispatched synchronously in the toggle handler achieves this without any additional debouncing.
+**NFR-4: CSS variable compliance.** All colors, backgrounds, and fonts in
+`tabs.css` media-viewer rules use CSS variables from the existing Markable
+theme system. No hardcoded hex colors.
 
-**NFR-5: Backward compatibility** — Both features must be additive only. No existing behavior is regressed. The backlinks plugin's existing autocomplete (in no-vault mode using `_cachedFileList`) must continue working without a vault. Settings files pre-dating these features must load without errors.
+**NFR-5: Renderer unchanged.** The `ITabRenderer` interface, and all three
+renderer implementations, must not be modified. A media tab is visually
+indistinguishable from a read-only content tab in the tab strip.
 
-**NFR-6: CSS variable compliance** — Any new UI elements (settings section, toggle row) must use CSS variables for colors and typography, matching the existing settings panel conventions. No hardcoded hex or font values.
-
-**NFR-7: Test coverage** — All edge cases in the Edge Case Inventories (Sections 4 and 6) must have a corresponding test in the appropriate test file, or a documented rationale for exclusion. Feature A tests belong in `tests/plugins/backlinks/backlinks.test.ts` (or a new `wikilink-autocomplete.test.ts` if the Architect judges the file size warrants a split). Feature B tests belong in a settings-focused test file; the Architect must determine the appropriate location given no dedicated settings test file currently exists.
-
----
-
-## 8. Out of Scope (v1)
-
-- Path-qualified autocomplete insertions (`[[folder/stem]]`). Bare-stem insertion only.
-- Autocomplete for `[[stem|` display-text portion.
-- Grammar checking or third-party spell-check dictionaries.
-- Custom dictionary additions (OS-native spell check only).
-- Suppressing autocomplete inside fenced code blocks (acceptable if trivially implemented; not required).
+**NFR-6: Test coverage.** All 16 edge cases in the Edge Case Inventory must have
+a corresponding test assertion (unit or integration, in jsdom). EC-03 (file
+deleted) and EC-11 (convertFileSrc) are covered with mocked `convertFileSrc`
+returning a URL whose load triggers an error event.
 
 ---
 
 ## Handoff Summary
 
-- Artifact: docs/requirements/active_task.md
+- Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 13 items in Edge Case Inventory (EC-A.01 through EC-A.13 for Feature A; EC-B.01 through EC-B.06 for Feature B)
+- Edge cases to verify in tests: 16 items (EC-01 through EC-16)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

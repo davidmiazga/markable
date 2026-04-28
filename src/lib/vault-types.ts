@@ -91,6 +91,17 @@ export interface VaultIndexEntry {
 }
 
 /**
+ * Lightweight record for a non-Markdown file (image, PDF, etc.) found during
+ * the vault walk. Used by the File Browser to display the full vault contents.
+ */
+export interface NonMdFile {
+  /** Absolute path to the file. */
+  path: string;
+  /** Filename with extension (e.g. "photo.png"). */
+  name: string;
+}
+
+/**
  * The complete index for one vault.
  *
  * Persisted to app_data_dir/vault-index/{vaultId}.json after every build
@@ -102,7 +113,7 @@ export interface VaultIndex {
   vaultId: string;
   /** Unix timestamp (ms) when this index was built. */
   builtAt: number;
-  /** All indexed file entries. */
+  /** All indexed .md file entries. */
   entries: VaultIndexEntry[];
   /** Total .md files found before the cap was applied. */
   totalFilesFound: number;
@@ -110,6 +121,8 @@ export interface VaultIndex {
   skippedCount: number;
   /** True if totalFilesFound exceeded maxIndexSize. */
   capped: boolean;
+  /** All non-Markdown files found during the walk (images, PDFs, etc.). */
+  nonMdFiles?: NonMdFile[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────

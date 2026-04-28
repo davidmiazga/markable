@@ -7,6 +7,17 @@
  */
 
 /**
+ * Discriminant for a tab's content kind.
+ *
+ * "editor" — a Markdown document managed by the shared CodeMirror 6 EditorView.
+ * "media"  — an image, PDF, or other non-text asset rendered in #media-viewer.
+ *
+ * All tabs created before this field was added default to "editor". No
+ * migration is required because session restore only persists editor tabs.
+ */
+export type TabKind = "editor" | "media";
+
+/**
  * All data needed to represent one open document tab.
  *
  * Each TabEntry is the single source of truth for a document: its file path,
@@ -22,6 +33,12 @@
 export interface TabEntry {
   /** Unique identifier, generated with crypto.randomUUID(). */
   id: string;
+
+  /**
+   * Discriminates between a Markdown editor tab and a media-file viewer tab.
+   * Defaults to "editor" for all tabs created before this field existed.
+   */
+  kind: TabKind;
 
   /**
    * Absolute file path, or null when the document has never been saved

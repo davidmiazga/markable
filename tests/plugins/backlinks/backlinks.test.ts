@@ -1151,11 +1151,13 @@ describe("buildAutocompleteExtension — vault mode", () => {
     expect(result.options).toEqual([]);
   });
 
-  // EC-A.03 — vault active, prefix matches nothing
-  it("returns empty options when prefix matches nothing", () => {
+  // EC-A.03 — vault active: source returns all entries; CM6 filter:true handles narrowing
+  it("returns all entries with filter:true so CM6 can narrow (EC-A.03)", () => {
     const result = invokeSource("zzz");
     expect(result).not.toBeNull();
-    expect(result.options).toHaveLength(0);
+    // Source no longer pre-filters — CM6 does it. All entries returned.
+    expect(result.options).toHaveLength(mockEntries.length);
+    expect(result.filter).toBe(true);
   });
 
   // EC-A.04 — detail is vault-relative path without .md extension
@@ -1183,14 +1185,15 @@ describe("buildAutocompleteExtension — vault mode", () => {
     expect(details).toContain("work/meeting");
   });
 
-  // AD-03 — info is set when VaultIndexEntry.title differs from name
-  it("info is a function returning the title when title differs from name", () => {
+  // AD-03 — info is a plain string (not a function) when title differs from name
+  it("info is a plain string equal to the title when title differs from name", () => {
     const result = invokeSource("notes");
     const notesOption = result.options.find((o: any) => o.label === "notes");
     expect(notesOption).toBeDefined();
-    // notes.title = "My Notes", notes.name = "notes" → info should be a function
-    expect(typeof notesOption.info).toBe("function");
-    expect(notesOption.info()).toBe("My Notes");
+    // CM6 info: plain string is valid; function form must return a DOM Node.
+    // notes.title = "My Notes", notes.name = "notes" → info should be the string
+    expect(typeof notesOption.info).toBe("string");
+    expect(notesOption.info).toBe("My Notes");
   });
 
   // AD-03 — info is undefined when title equals name
@@ -1218,20 +1221,24 @@ describe("buildAutocompleteExtension — vault mode", () => {
     expect(result).toBeNull();
   });
 
-  // EC-A.07 — empty prefix returns all entries
-  it("returns all entries when prefix is empty string", () => {
+  // EC-A.07 — empty prefix returns all entries; filter:true and validFor present
+  it("returns all entries with filter:true and validFor when prefix is empty (EC-A.07)", () => {
     const result = invokeSource("");
     expect(result).not.toBeNull();
     expect(result.options).toHaveLength(mockEntries.length);
+    expect(result.filter).toBe(true);
+    expect(result.validFor).toBeInstanceOf(RegExp);
   });
 
-  // EC-A.08 — prefix filter is case-insensitive
-  it("filters by prefix case-insensitively", () => {
+  // EC-A.08 — filter:true delegated to CM6; source returns all entries regardless of prefix
+  it("returns all entries regardless of prefix (CM6 handles case-insensitive filter)", () => {
     const result = invokeSource("NOTE");
+    expect(result.filter).toBe(true);
+    // All entries are present; CM6 narrows to case-insensitive prefix matches at render time
     const labels = result.options.map((o: any) => o.label);
     expect(labels).toContain("notes");
-    expect(labels).not.toContain("meeting");
-    expect(labels).not.toContain("readme");
+    expect(labels).toContain("meeting");
+    expect(labels).toContain("readme");
   });
 
   // EC-A.10 — vault manager global absent → falls through to _cachedFileList

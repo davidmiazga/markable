@@ -1,48 +1,54 @@
-# Markable 2.0 — Claude Code Project Guide
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 Markable 2.0 is a native macOS Markdown editor built with **Tauri v2** (Rust backend) + **CodeMirror 6** (TypeScript frontend) + **Vite**. The editor features a "Typora-style" live preview mode that hides Markdown syntax unless the cursor is on the active line.
 
-## Agent Workflow (Mandatory)
+## Commands
 
-This project uses a **phased agent pipeline**. Each phase has a dedicated agent in `/agents/` and must be activated in order. **Do not skip phases.**
-
-1. **Requirements Analyst** (`@requirements-analyst`) — Extracts and validates requirements. Produces `docs/requirements/active_task.md`.
-2. **Software Architect** (`@software-architect`) — Designs system architecture. Produces `docs/specs/[feature]/00_index.md` + step files.
-3. **Lead Developer** (`@lead-developer`) — Implements via TDD (Red/Green/Refactor). Follows step files exactly.
-4. **Code Reviewer** (`@code-reviewer`) — Final audit against requirements and edge cases. Must approve before merge.
-
-### Phase Gates
-- Requirements phase produces: `docs/requirements/active_task.md` (includes Edge Case Inventory)
-- Architecture phase produces: `docs/specs/[feature]/00_index.md` + `step_NN_*.md` files
-- Development phase: all tests pass, no TODOs in source, `00_index.md` steps checked off
-- Review phase: all Critical/High issues resolved, edge cases covered by tests
-
-## Tech Stack
-
-- **Frontend**: TypeScript, Vite, CodeMirror 6
-- **Backend**: Rust (Tauri v2 commands)
-- **Bundler**: Tauri CLI (`cargo tauri build`)
-- **Package manager**: npm
-- **Test runner**: TBD (Vitest likely for frontend, `cargo test` for Rust)
-
-## Project Structure
-
+```bash
+npm run tauri dev          # Start dev server + Tauri window
+npm run tauri build        # Production build
+npm test                   # Run frontend tests (watch mode)
+npm run test:run           # Run frontend tests once (CI/non-watch)
+npm run test:run -- tests/some.test.ts   # Run a single test file
+cargo test                 # Run Rust tests (from src-tauri/)
 ```
-markable-2.0/
-  agents/                    # Agent persona definitions (do not modify without discussion)
-  docs/
-    requirements/            # Validated requirement specs (active_task.md)
-    specs/                   # Architecture blueprints and step files
-    architecture/            # High-level architecture diagrams/docs
-    build-notes/             # Build workarounds, signing notes, CI config
-  src/                       # Frontend source (TypeScript + CM6)
-  src-tauri/                 # Rust backend (created by Tauri scaffolding)
-  tests/                     # Test suites
-  PLAN.md                    # Vision document and phase overview
-  FEATURES.md                # Feature specifications and requirements
-```
+
+## Architecture
+
+### Frontend → Backend boundary (`src/lib/bridge.ts`)
+
+All Tauri Rust commands are called through `src/lib/bridge.ts`, which wraps `invoke()` with typed discriminated-union results (`FileResult<T>` with `ok: true/false`). Never call `invoke()` directly in feature code — always add a typed wrapper to `bridge.ts`.
+
+### Editor layer (`src/editor/`)
+
+- `editor.ts` — creates the CodeMirror 6 instance
+- `extensions.ts` — assembles all CM6 extensions; the `previewCompartment` and `pluginCompartment` are the two hot-swap Compartments
+- `live-preview.ts` — the Typora-style hide-syntax ViewPlugin; uses `marked` for inline HTML rendering. This is the most complex file in the frontend.
+- `format.ts` — all formatting commands (bold, heading, list toggling, etc.)
+- `list-engine.ts` / `list-keybindings.ts` — smart list continuation and indent/outdent
+
+### Plugin system (`src/plugins/`)
+
+All plugins (core and user) are loaded as IIFE `.js` files from disk at runtime, not compiled in. `index.ts` exports a singleton `pluginManager` (PluginManager class) that:
+1. Scans `plugins/core/` and `plugins/user/` via Tauri commands
+2. Evaluates each file via `evaluatePlugin()` (in `user-plugin-loader.ts`)
+3. Injects a `MarkablePluginAPI` object (from `markable-plugin-api.ts`) — the only API surface plugins may use
+
+A user file with the same filename as a core file overrides the core file (EC-7/EC-8). CM6 globals (`@codemirror/*`) are exposed as `window` globals before any plugin IIFE runs (`src/lib/cm-globals.ts`) so plugins can bundle them as externals and share the same slot-ID namespace.
+
+### Vault / file system (`src/lib/vault-manager.ts`, `src/lib/vault-types.ts`)
+
+A "vault" is a watched folder. The vault index (built by `build_vault_index` Rust command) tracks all `.md` files and wiki-link relationships. `vault-manager.ts` manages the current vault state, file-watcher events, and index updates. File system operations always go through the Rust commands in `src-tauri/src/commands/`.
+
+### UI chrome (`src/tabs/`, `src/sidebar/`, `src/settings/`)
+
+- `tabs/tab-manager.ts` — manages open documents as tabs; each tab owns its own CM6 editor state
+- `sidebar/sidebar-manager.ts` — panels register themselves via `MarkablePluginAPI.registerSidebarPanel()`; the sidebar toggles per-panel
+- `settings/settings-panel.ts` — settings are a plain `MarkableSettings` object persisted via `get_settings`/`save_settings` Tauri commands
 
 ## Key Conventions
 
@@ -71,17 +77,16 @@ window.center();
 
 ## Build Notes
 
-The macOS Sequoia/Tahoe DMG compiler has known incompatibilities with Tauri v2. See `docs/build-notes/macos-dmg-workaround.md` for current workarounds. Key points:
+The macOS Sequoia/Tahoe DMG compiler has known incompatibilities with Tauri v2. See `docs/build-notes/macos-dmg-workaround.md` for current workarounds:
 - Set `CI=true` in build env to use headless DMG creation
 - Fallback: build `.app` only via `cargo tauri build --bundles app`, then use `create-dmg`
 - A valid `signingIdentity` must be configured in `tauri.conf.json`
 
-## Commands
+## Agent Workflow
 
-```bash
-# Development (after Tauri scaffolding is complete)
-npm run tauri dev          # Start dev server + Tauri window
-npm run tauri build        # Production build
-cargo test                 # Run Rust tests
-npm test                   # Run frontend tests (TBD)
-```
+This project uses a phased agent pipeline in `.claude/agents/`. **Do not skip phases.**
+
+1. **Requirements Analyst** — produces `docs/requirements/active_task.md`
+2. **Software Architect** — produces `docs/specs/[feature]/00_index.md` + step files
+3. **Lead Developer** — implements via TDD following step files exactly
+4. **Code Reviewer** — final audit; all Critical/High issues must be resolved before merge

@@ -3,6 +3,7 @@ import type { TabEntry } from "../../src/tabs/tab-types";
 export function makeTab(overrides: Partial<TabEntry> = {}): TabEntry {
   return {
     id: crypto.randomUUID(),
+    kind: "editor",
     filePath: null,
     title: "Untitled",
     isDirty: false,
