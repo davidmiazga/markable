@@ -262,7 +262,7 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     fullscreen: false,
     maximized: false,
     sizeW: "50%",
-    sizeH: "50%",
+    sizeH: "80%",
   },
   editor: {
     contentMaxWidth: 900,
@@ -314,7 +314,7 @@ export async function applyWindowSettings(settings: WindowSettings): Promise<voi
   }
 
   const modeW = settings.sizeW ?? "50%";
-  const modeH = settings.sizeH ?? "50%";
+  const modeH = settings.sizeH ?? "80%";
   const scaleFactor = window.devicePixelRatio || 1;
   const screenW = window.screen.width * scaleFactor;
   const screenH = window.screen.height * scaleFactor;

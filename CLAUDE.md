@@ -62,7 +62,15 @@ A "vault" is a watched folder. The vault index (built by `build_vault_index` Rus
 
 **The window must always launch at 50% width × 80% height, centered. This must never regress.**
 
-File: `src-tauri/src/lib.rs` — the `.setup()` hook must always read:
+### Two locations that must always agree
+
+**Location 1 — `src/lib/settings.ts`** (`DEFAULT_SETTINGS.window`):
+```typescript
+sizeW: "50%",   // 50% of screen width
+sizeH: "80%",   // 80% of screen height — NOT "50%", this is the one that regresses
+```
+
+**Location 2 — `src-tauri/src/lib.rs`** (the `.setup()` hook):
 ```rust
 let phys  = monitor.size();
 let scale = monitor.scale_factor();
@@ -71,9 +79,54 @@ let logical_h = phys.height as f64 / scale * 0.8;
 window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: logical_w, height: logical_h }));
 window.center();
 ```
+
+If you change one location you must change the other. The percentage values in
+`DEFAULT_SETTINGS` (TypeScript) and the multipliers in `lib.rs` (Rust) are
+two representations of the same invariant.
+
+### Rules
+
 - Uses `LogicalSize` (NOT `PhysicalSize`) — Retina displays return physical pixels from `monitor.size()`, dividing by `scale_factor()` is mandatory.
 - Do NOT hardcode pixel values. Do NOT switch to `PhysicalSize`.
-- **Verify this code is still intact any time `lib.rs` is touched for any reason.**
+- **Verify both locations are still intact any time `lib.rs` or `settings.ts` is touched for any reason.**
+
+### Regression test
+
+`tests/settings/window-defaults.test.ts` asserts the exact values of `sizeW`
+and `sizeH` in `DEFAULT_SETTINGS`. Run it with:
+
+```bash
+npm run test:run -- tests/settings/window-defaults.test.ts
+```
+
+A failing test here means a regression has been introduced. Fix it before merge.
+
+### If the window still launches at the wrong size after fixing the code
+
+Fixing source code alone is not enough. The app persists settings to disk and
+the saved file overrides `DEFAULT_SETTINGS` on every launch. Patch the cached
+file too:
+
+```bash
+python3 -c "
+import json
+path = '/Users/daveslaptop/Library/Application Support/com.markable.app/settings.json'
+with open(path) as f:
+    data = json.load(f)
+data['window']['sizeH'] = '80%'
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+print('Done. sizeH is now:', data['window']['sizeH'])
+"
+```
+
+Then restart the app. Full recovery steps are in
+`docs/specs/invariants/window-size-defaults.md`.
+
+### Canonical reference
+
+Full invariant rationale, all affected locations, and the complete recovery
+procedure are documented in `docs/specs/invariants/window-size-defaults.md`.
 
 ## Build Notes
 
