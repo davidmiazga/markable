@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-04-27
+**Last Updated:** 2026-04-27 (evening)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -39,6 +39,9 @@
 - **Knowledge Graph** — Plugin
 - **File Browser link update (FR-02.11)** — Post-rename/move `[[wiki-link]]` update banner; same-stem guard suppresses no-op moves; `reloadVaultIndex` after update; 12 new Vitest tests (EC-01–EC-09, EC-11, EC-18); code-reviewer approved 2026-04-27
 - **Wikilink Autocomplete + Spell Check** — Vault-index autocomplete source for `[[` with vault-relative `detail`, lazy `info` title, pipe suppression, self-link allowed; module-level `spellCheckCompartment` toggle; `EditorSettings.spellCheck` field; "Editor" settings section; `makeApplyCallback` refactor; 18 new Vitest tests; code-reviewer approved 2026-04-27
+- **Non-MD file support in vault index** — `NonMdFile` struct in Rust `build_vault_index`; `nonMdFiles?: NonMdFile[]` on `VaultIndex` TypeScript type; file browser renders images/PDFs/other assets alongside `.md` files in the tree; `nonMdFiles` optional to handle cached indexes; `@codemirror` import leak from `settings.ts` fixed (moved `spellCheckCompartment` to `window.__MARKABLE_SPELL_CHECK_COMPARTMENT__` global); 2026-04-27
+- **Media file preview — VSCode-style content area** — Clicking a non-MD asset in the file browser opens it as a tab in the main content area (images via `<img>`, PDFs via `<embed>`, unsupported types show "Cannot preview" message); `TabEntry.kind: "editor" | "media"` discriminated union; `openMediaInTab()` on TabManager with dedup; `div#media-viewer` permanent DOM fixture in `#editor` toggled via `has-media-tab` CSS class; `saveActiveTab`/`saveActiveTabAs`/`markActiveTabDirty`/`saveSession` all guarded for media tabs; sidebar preview approach (200px panel) designed, built, then superseded by this content-area approach; 42 new Vitest tests; code-reviewer approved (2 rounds) 2026-04-27
+- **Window size default invariant enforcement** — `sizeH` regression (`"50%"` instead of `"80%"`) found and fixed in `DEFAULT_SETTINGS` and `applyWindowSettings` fallback; `tests/settings/window-defaults.test.ts` (6 tests) added as permanent regression guard; `docs/specs/invariants/window-size-defaults.md` canonical invariant spec; `CLAUDE.md` ⚠️ section expanded with recovery procedure including on-disk `settings.json` patch one-liner; 2026-04-27
 
 ### Known Regressions 🔴
 None — all pre-existing test failures resolved 2026-04-27.

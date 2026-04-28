@@ -1463,6 +1463,56 @@ export function scheduleIndexRebuild(
     _rebuildInProgress = true;
 
     try {
+      /*
+       * Vault fast path: use the pre-built VaultIndex rather than re-reading
+       * all files from disk. This fixes two bugs:
+       *   1. buildIndex constructed wrong paths for cross-directory vault files
+       *      (it joined currentFileDir + bareFilename, missing subdirectory info).
+       *   2. Unsaved editor content was invisible to the disk-based reader.
+       *
+       * After seeding from the persisted vault index we override any open editor
+       * tabs with their current in-memory tab.doc so that a freshly typed
+       * [[link]] (not yet auto-saved) is included before the file-watcher has
+       * time to refresh the vault index.
+       */
+      const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+      const vaultIndex = vaultManager?.getVaultIndex?.() as
+        | { entries: Array<{ name: string; outboundLinks: string[] }> }
+        | null
+        | undefined;
+
+      if (vaultIndex && Array.isArray(vaultIndex.entries)) {
+        const newIndex = new Map<string, string[]>();
+
+        /* Seed from vault index (Rust-parsed, all directories, persisted links) */
+        for (const entry of vaultIndex.entries) {
+          newIndex.set(
+            entry.name + ".md",
+            entry.outboundLinks.map((l) => normalizeTarget(l))
+          );
+        }
+
+        /* Override with in-memory content for every open editor tab */
+        const tabManager = (window as any).__MARKABLE_TAB_MANAGER__;
+        const tabs: Array<{ kind: string; filePath: string | null; doc: string }> =
+          tabManager?.tabs ?? [];
+        for (const tab of tabs) {
+          if (tab.kind !== "editor" || !tab.filePath) continue;
+          const filename = filenameFromPath(tab.filePath);
+          newIndex.set(filename, extractOutgoingLinks(tab.doc ?? ""));
+        }
+
+        _linkIndex = newIndex;
+        _currentDir = dir;
+        setCachedFileList([...newIndex.keys()]);
+
+        const backlinks = computeBacklinks(_linkIndex, currentFilename);
+        const outgoing = _linkIndex.get(currentFilename) ?? [];
+        callback(backlinks, outgoing);
+        return;
+      }
+
+      /* No-vault fallback: directory scan (unchanged behaviour) */
       const newIndex = await buildIndex(dir);
 
       /* Commit the new index to module-level state */
