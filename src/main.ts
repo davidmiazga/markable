@@ -87,6 +87,7 @@ import {
 // editor and sidebar are both ready. The singleton is used directly; it is
 // not re-exported from main.ts.
 import { tabManager } from "./tabs";
+import { createDragDropHandler } from "./tabs/drag-drop";
 import { openExportDialog, printDocument } from "./lib/export";
 import * as vaultManager from "./lib/vault-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -1103,17 +1104,9 @@ async function initApp() {
   // EC-14: all dropped files open in new tabs; duplicate-path guard inside
   // openFileInTab() prevents the same file from opening twice.
   // Multiple-file drops are supported — each valid path gets its own tab.
-  await getCurrentWebviewWindow().onDragDropEvent(async (event) => {
-    if (event.payload.type !== "drop") return;
-    const paths = event.payload.paths.filter(
-      (p) => p.endsWith(".md") || p.endsWith(".txt")
-    );
-    if (paths.length === 0) return;
-    for (const path of paths) {
-      await tabManager.openFileInTab(path);
-    }
-    await refreshRecentFilesMenu();
-  });
+  await getCurrentWebviewWindow().onDragDropEvent(
+    createDragDropHandler(tabManager, refreshRecentFilesMenu)
+  );
 
   // D-7: Intercept Cmd-F and Cmd-Shift-F at the document level so the custom
   // FindWidget opens for BOTH the menu event path and the direct keypress path.

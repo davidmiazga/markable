@@ -45,12 +45,13 @@
 - **Backlinks bug fix** — Two bugs in `scheduleIndexRebuild`: (1) vault-mode path construction used `currentFileDir + bareFilename`, giving wrong paths for cross-directory vault files; (2) index always read from disk so unsaved in-memory `[[links]]` were invisible. Fix: vault fast path seeds link map directly from `VaultIndexEntry.outboundLinks` (Rust-parsed, all directories), then overrides each open editor tab's entry with its in-memory `tab.doc`; no-vault directory-scan path unchanged; 2026-04-28
 - **Wiki-link hover preview popover** — Hovering a `[[wikilink]]` span for 180 ms triggers async file read; popover shows title (front matter / H1 / filename stem), vault-relative path label, and 200-word plain-text excerpt. 60 ms grace period keeps popover alive when mouse moves from span into popover (EC-08). Monotonic version counter discards stale overlapping fetches (EC-04). `position: fixed` with right/bottom viewport clamping. Full cleanup in `onDisable`. 31 new Vitest tests; code-reviewer approved 2026-04-28
 - **Tab right-click context menu** — four-item menu (Close Tab, Close Other Tabs, Close All Tabs, Reveal in Finder) on all three tab renderers (regular, vertical, minimal). `tab-context-menu.ts` singleton DOM module with viewport clamping and outside-click/Escape/renderer-re-render dismissal. `closeOtherTabs(id)` and `closeAllTabs()` added to TabManager using snapshot-and-batch pattern. `revealInFinder` bridge wrapper added. Reviewer-caught `closeOtherTabs` stale-renderer bug fixed (direct `_notifyRenderer()` call, no `activateTab` delegation) plus `_captureActiveTab()` guard in `closeAllTabs` survived-branch. 28 new Vitest tests; code-reviewer approved 2026-04-28
+- **Drag & drop `.md`/`.txt` files to open** — Feature already existed in `main.ts` (`onDragDropEvent` handler). Extracted handler to `src/tabs/drag-drop.ts` (`createDragDropHandler` factory) for testability. 23 new Vitest tests covering EC-01–EC-07, EC-10, EC-12–EC-13, NFR-6: event type guard (enter/over/leave ignored), empty-paths guard, extension filter (.pdf/.png/.docx/.MD all rejected, .txt/.md accepted, case-sensitive), mixed payload, dedup passthrough, sequential ordering, `refreshRecentFilesMenu` called after all opens. TypeScript clean. 2026-04-28
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
-- Drag & drop `.md` files to open
+- TBD
 
 ---
 

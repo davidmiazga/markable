@@ -1,421 +1,202 @@
 ---
-title: Tab Right-Click Context Menu
+title: Drag & Drop Files to Open
 last-updated: "2026-04-28"
 review-cadence-days: 7
 status: active
 ---
 
-# Tab Right-Click Context Menu — Requirements
+# Drag & Drop Files to Open — Requirements
 
 ## Feature Summary
 
-As a user, I want to right-click any tab in any tab renderer (regular, vertical,
-or minimal) and see a small context menu with Close Tab, Close Other Tabs,
-Close All Tabs, and Reveal in Finder actions, so I can manage open documents
-without reaching for the keyboard.
+As a user, I want to drag one or more `.md` or `.txt` files from Finder (or any macOS source) onto the Markable window and have them open as tabs, so that I can open files without using File > Open or the file browser.
 
 ---
 
-## Codebase Context
+## Codebase Context Findings
 
-### TabManager (`src/tabs/tab-manager.ts`)
+These findings are the authoritative result of reading the codebase before requirements were written. They directly shape which files need to change and which do not.
 
-- `closeTab(id: string): Promise<void>` — exists. Handles dirty confirmation,
-  last-tab-closes-window logic, and session persistence.
-- `closeAllTabs()` — does NOT exist. Must be added.
-- `closeOtherTabs(id: string)` — does NOT exist. Must be added.
-- `activateTab(id)`, `getTabs()`, `getTabCount()` — all exist and accessible
-  on the singleton `tabManager`.
-- The `TabManager` class and its methods are the only sanctioned mutation path
-  for tab state. The context menu must call these methods; it must never mutate
-  the `tabs` array directly.
+### Finding 1 — The handler is already implemented
 
-### TabEntry (`src/tabs/tab-types.ts`)
+`src/main.ts` lines 1106–1116 contain a complete, functional drag-and-drop handler:
 
-Relevant fields for this feature:
+```
+await getCurrentWebviewWindow().onDragDropEvent(async (event) => {
+  if (event.payload.type !== "drop") return;
+  const paths = event.payload.paths.filter(
+    (p) => p.endsWith(".md") || p.endsWith(".txt")
+  );
+  if (paths.length === 0) return;
+  for (const path of paths) {
+    await tabManager.openFileInTab(path);
+  }
+  await refreshRecentFilesMenu();
+});
+```
 
-- `id: string` — unique identifier per tab
-- `kind: "editor" | "media"` — media tabs have a non-null `filePath` but are
-  never dirty
-- `filePath: string | null` — null for untitled editor tabs
-- `isDirty: boolean` — always false for media tabs
+This uses the correct Tauri v2 API (`onDragDropEvent` on the `WebviewWindow` object), the correct event shape (`event.payload.type === "drop"`, `event.payload.paths: string[]`), correct file filtering, and delegates to the existing `tabManager.openFileInTab()` path which handles deduplication, error alerting, and session persistence.
 
-### Renderers
+### Finding 2 — No Rust-side changes are needed
 
-All three renderers build DOM via full `innerHTML` clear and rebuild on every
-`update()` call. Right-click listeners attached inside the element-build loop
-are automatically discarded when `innerHTML = ""` runs — no manual cleanup.
+`src-tauri/src/lib.rs` has no drag-drop handler and needs none. Tauri v2 emits `DragDropEvent` automatically to the frontend via the WebviewWindow event bus. There is no Rust hook required.
 
-- **RegularTabBar** (`src/tabs/renderers/regular-tab-bar.ts`): each tab is a
-  `<button class="tab-label">`. Tab `id` is captured by closure in
-  `_buildTabEl()`. The right-click listener must be added inside `_buildTabEl()`.
+### Finding 3 — No capability permission is needed
 
-- **VerticalTabStrip** (`src/tabs/renderers/vertical-tab-strip.ts`): each tab
-  is a `<div class="tab-vertical-col">`. Right-click added inside `_buildColEl()`.
+`src-tauri/capabilities/default.json` does not list a `drag-drop` permission, and none is required. Tauri v2's drag-drop events are part of the core window event surface and are not gated behind a separate ACL permission.
 
-- **MinimalTabBar** (`src/tabs/renderers/minimal-tab-bar.ts`): each tab is a
-  `<button class="tab-dot">`. Right-click added inside `_createDotButton()`.
+### Finding 4 — No new Cargo feature flag is needed
 
-### Reveal in Finder — Rust Command
+`src-tauri/Cargo.toml` lists `tauri = { version = "2", features = ["protocol-asset"] }`. No `drag-drop` feature flag exists in Tauri v2; drag-drop is always enabled.
 
-- `reveal_in_finder(path: String)` exists in
-  `src-tauri/src/commands/file_ops.rs` (line 386) and is registered in
-  `src-tauri/src/commands/mod.rs`.
-- It is NOT currently wrapped in `src/lib/bridge.ts`. A typed bridge wrapper
-  must be added as part of this feature.
-- The file-browser plugin currently calls this command via raw
-  `__TAURI_INTERNALS__.invoke`. The bridge wrapper is the canonical path going
-  forward; the file-browser raw invoke is pre-existing technical debt and is
-  out of scope for this feature.
+### Finding 5 — `openFileInTab` handles all downstream concerns
 
-### Existing Context Menu Pattern
+`src/tabs/tab-manager.ts` `openFileInTab(filePath)`:
+- Returns `false` if the file is already open (activates the existing tab instead — dedup is built in).
+- Calls `readFile()` from `bridge.ts`, which wraps `invoke("read_file")` with a typed error result. On failure it calls `alert()` with the error message.
+- Records the file in the recent-files list and saves the session.
+- Auto-closes the clean Untitled tab if it was the only other tab.
 
-`src/plugins/file-browser/file-browser.plugin.ts` contains a complete,
-battle-tested context menu implementation:
+### Finding 6 — No `dropToOpen` setting exists
 
-- `showContextMenu(items, x, y)` creates a `<ul class="context-menu">`,
-  appends to `document.body`, clamps to viewport, wires outside-click and
-  Escape dismissal.
-- `closeContextMenu()` removes the element and removes all listeners.
-- CSS classes: `.context-menu`, `.context-menu-item`,
-  `.context-menu-item.disabled`, `.context-menu-separator`.
+`src/lib/settings.ts` has no `dropToOpen` or drag-drop-related setting. None is needed for the initial implementation.
 
-The tab context menu must use the same visual language but must be implemented
-in a separate module (`src/tabs/tab-context-menu.ts`). The file-browser is a
-plugin; the tab system is core infrastructure. Imports across that boundary
-are prohibited. The matching CSS must be added to `src/tabs/tabs.css`.
+### Finding 7 — The comment in main.ts already references EC-14
+
+The existing handler comment reads: "EC-14: all dropped files open in new tabs; duplicate-path guard inside openFileInTab() prevents the same file from opening twice." This confirms the feature was intentionally implemented but never formally specified.
+
+### Finding 8 — No visual drop-zone highlight is implemented
+
+The existing handler responds only to `type === "drop"`. There is no `type === "enter"` or `type === "over"` handling that would produce a visual overlay. The handler silently accepts files.
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Context Menu Trigger
+**FR-1 — Accepted file types**
+The handler must open files whose path ends with `.md` or `.txt` (case-sensitive match, consistent with the existing filter). All other extensions are silently ignored; no error dialog is shown.
 
-FR-1.1 A `contextmenu` event listener must be attached to every rendered tab
-element in all three renderers: the `<button class="tab-label">` in
-RegularTabBar, the `<div class="tab-vertical-col">` in VerticalTabStrip, and
-the `<button class="tab-dot">` in MinimalTabBar.
+**FR-2 — Multiple files**
+When multiple files are dropped simultaneously, every accepted file (`.md` or `.txt`) must be opened. Each file opens in its own tab. Files are processed in the order they appear in `event.payload.paths`.
 
-FR-1.2 Right-clicking on the tab strip background (not on a tab element) must
-NOT show a context menu. Each tab element's handler calls `e.stopPropagation()`
-and no contextmenu listener is attached to the strip container element.
+**FR-3 — Deduplication**
+If a dropped file is already open in any tab, `openFileInTab` activates that tab rather than opening a second copy. This is handled by the existing duplicate-path guard in `tab-manager.ts` and requires no additional logic in the drop handler.
 
-FR-1.3 `e.preventDefault()` must be called on the contextmenu event to
-suppress the browser's native context menu.
+**FR-4 — Recent files refresh**
+After all dropped files are processed, the native Open Recent submenu must be refreshed via `refreshRecentFilesMenu()`, matching the behaviour of File > Open.
 
-FR-1.4 The context menu must appear at `(e.clientX, e.clientY)` and be clamped
-to the viewport so no part of it renders off-screen (see EC-08).
+**FR-5 — Whole-window drop target**
+The entire Markable window surface is the drop target. There is no restricted zone. The `onDragDropEvent` listener is registered on the root `WebviewWindow` object, which covers the full window.
 
-### FR-2: Menu Actions
+**FR-6 — Drop ignored for directories**
+If a directory path is included in the drop payload, it must be ignored. Directory paths do not end in `.md` or `.txt`, so the existing extension filter handles this without additional code.
 
-FR-2.1 **Close Tab** — always enabled. Calls `tabManager.closeTab(tab.id)`.
-The existing dirty-confirmation dialog inside `closeTab()` runs as normal.
-No additional confirmation layer is added at the context menu level.
+**FR-7 — No visual drop-zone indicator (initial scope)**
+The initial implementation does not render a dashed border, overlay, or any visual feedback during the drag-over phase. Silent acceptance is the specified behaviour. Visual feedback is deferred to a future enhancement (see Out of Scope).
 
-FR-2.2 **Close Other Tabs** — calls `tabManager.closeOtherTabs(tab.id)`.
-Disabled (greyed out, `pointer-events: none`) when `tabManager.getTabCount() === 1`.
-The item is visible but not clickable when there is only one tab.
-
-FR-2.3 **Close All Tabs** — always enabled. Calls `tabManager.closeAllTabs()`.
-
-FR-2.4 **Reveal in Finder** — calls `bridge.revealInFinder(tab.filePath)`.
-Disabled when `tab.filePath === null` (untitled editor tab). Enabled for all
-tabs where `filePath` is non-null, including media tabs (images and PDFs are
-valid to reveal in Finder).
-
-FR-2.5 A visual separator must appear between the "Close All Tabs" item and
-the "Reveal in Finder" item, using a `<li class="context-menu-separator">`.
-
-### FR-3: Context Menu Module
-
-FR-3.1 All context menu DOM logic must live in a new module:
-`src/tabs/tab-context-menu.ts`.
-
-FR-3.2 The module must export one entry-point function:
-
-```typescript
-function showTabContextMenu(tab: TabEntry, x: number, y: number): void
-```
-
-Renderers call this from their `contextmenu` event handlers. The module owns
-the menu's full lifecycle.
-
-FR-3.3 The module must maintain at most one context menu element in the DOM at
-a time. A second call while a menu is already open closes the first, then opens
-a new one at the new coordinates.
-
-FR-3.4 The module must export a cleanup function:
-
-```typescript
-function closeTabContextMenu(): void
-```
-
-Renderers call this from `update()` and `destroy()` to ensure any open menu
-is removed during re-renders and mode switches.
-
-### FR-4: New TabManager Methods
-
-**FR-4.1 `closeOtherTabs(id: string): Promise<void>`**
-
-- Closes all tabs whose `id !== id`.
-- Dirty tabs among the "other" tabs each receive their individual confirm
-  dialog (same dialog text as in `closeTab`). Cancelling for one dirty tab
-  does not stop processing of the remaining tabs.
-- The tab identified by `id` is never closed by this method.
-- After the loop, calls `activateTab(id)` to ensure the right-clicked tab
-  becomes (or remains) active.
-- Calls `saveSession()` once after all close operations complete.
-
-**FR-4.2 `closeAllTabs(): Promise<void>`**
-
-- Closes all open tabs.
-- Dirty tabs each receive their individual confirm dialog. Cancelling any
-  one does not abort closing the others; each is evaluated independently.
-- When the final remaining tab is closed, follows the same vault-branching
-  logic as `closeTab()`: no active vault closes the window; active vault
-  leaves the app open at 0 tabs.
-- Implementation strategy to avoid "last-tab triggers window-close during
-  a loop" hazard: iterate a snapshot of the tabs array, collect confirmed
-  closes, apply in one batch, then call `saveSession()` once. Do not call
-  `closeTab()` in a loop — the side effects (window-close, per-call
-  saveSession) are incompatible with batch operation.
-
-### FR-5: Dismiss Behavior
-
-FR-5.1 The context menu closes on a mousedown outside the menu element
-(document-level `mousedown` listener, same pattern as the file-browser plugin).
-
-FR-5.2 The context menu closes when the user presses Escape (document-level
-`keydown` listener).
-
-FR-5.3 The context menu closes immediately after any action item is selected
-(action handler fires, then menu closes).
-
-FR-5.4 The context menu closes when the tab strip re-renders. Each renderer's
-`update()` method must call `closeTabContextMenu()` at its start, before
-rebuilding the DOM.
-
-FR-5.5 The context menu closes when the renderer is destroyed. Each renderer's
-`destroy()` method must call `closeTabContextMenu()`.
-
-### FR-6: Bridge Wrapper
-
-FR-6.1 A typed wrapper for `reveal_in_finder` must be added to
-`src/lib/bridge.ts`:
-
-```typescript
-export async function revealInFinder(path: string): Promise<void>
-```
-
-It wraps `invoke("reveal_in_finder", { path })` in a try/catch and logs
-errors via `console.error` without re-throwing, so a Finder failure (e.g.
-file deleted since the tab was opened) is non-fatal.
-
-### FR-7: CSS
-
-FR-7.1 Context menu styles must be added to `src/tabs/tabs.css` using the
-following class names to match the file-browser plugin's visual language:
-
-- `.context-menu` — the `<ul>` container
-- `.context-menu-item` — each `<li>` action
-- `.context-menu-item.disabled` — greyed-out, non-interactive state
-- `.context-menu-separator` — visual divider between item groups
-
-FR-7.2 All color values must use CSS custom properties with fallbacks:
-`--bg-secondary`, `--text-primary`, `--border-color`, `--bg-hover`,
-`--text-muted`. No hardcoded color values.
-
-FR-7.3 The menu must use `position: fixed` and `z-index: 9999` (same as
-`#tab-tooltip`) so it renders above the tab strip, editor, and sidebar panels.
+**FR-8 — Guard against uninitialized tabManager**
+The `onDragDropEvent` listener is registered after `tabManager.init(editor)` completes (line 966 precedes line 1106 in `main.ts`). The ordering constraint must be preserved in any future refactoring. If `tabManager` is not yet initialized when the event fires, the handler must be a no-op rather than throw.
 
 ---
 
 ## Edge Case Inventory
 
-EC-01: **Right-click on the only open tab — "Close Other Tabs" must be
-disabled.** When `tabs.length === 1`, the item renders with `.disabled` class
-and `pointer-events: none`. It is visible but not actionable.
+**EC-01 — Already-open file dropped**
+A file whose `filePath` matches an open tab is dropped. Expected: `openFileInTab` returns `false` and activates the existing tab. No duplicate tab is created. No error is shown.
 
-EC-02: **Right-click on a dirty tab — "Close Tab" shows the confirm dialog.**
-The confirmation is inside `closeTab()` and is not affected by the context
-menu. No additional dialog is added.
+**EC-02 — Non-.md / non-.txt file dropped (e.g. `.pdf`, `.png`, `.docx`)**
+The extension filter `p.endsWith(".md") || p.endsWith(".txt")` excludes the path. Expected: the file is silently ignored. No error dialog.
 
-EC-03: **"Close Other Tabs" with multiple dirty "other" tabs.** Each dirty tab
-among the others shows its own confirm dialog in sequence. The user may confirm
-some and cancel others independently. The right-clicked tab is never closed.
+**EC-03 — Directory dropped**
+A directory path is included in the payload (e.g. dragging a folder from Finder). Expected: silently ignored by the extension filter. No crash, no error.
 
-EC-04: **"Close All Tabs" with all tabs dirty.** Each dirty tab shows its own
-confirm dialog sequentially. If the user cancels all, no tabs close. The
-`closeAllTabs()` method iterates a snapshot so mutation during the loop does
-not cause missed entries.
+**EC-04 — Mix of valid and invalid files dropped together**
+Payload contains `/notes/foo.md`, `/images/photo.png`, `/data/report.pdf`. Expected: only `foo.md` opens; the two invalid files are ignored.
 
-EC-05: **"Close All Tabs" — last-tab behavior.** When the final tab is closed,
-the same vault/no-vault branching applies as in `closeTab()`: no vault active
-closes the window; vault active leaves the app at 0 tabs. The
-`closeAllTabs()` implementation must replicate this branch, not call
-`closeTab()` recursively.
+**EC-05 — File with spaces in path**
+Path is `/Users/dave/My Notes/Meeting Notes April.md`. Expected: Tauri's `onDragDropEvent` provides native OS paths — no URL encoding is applied. `openFileInTab` calls `invoke("read_file", { path })` which handles the raw path correctly on the Rust side.
 
-EC-06: **Media tab — "Reveal in Finder" enabled.** Media tabs always have a
-non-null `filePath`. The item is enabled. Calling `revealInFinder` on an
-image or PDF path is valid.
+**EC-06 — File with Unicode characters in path**
+Path is `/Users/dave/日本語ノート/レシピ.md`. Expected: Tauri passes the raw UTF-8 path. `read_file` uses Rust's `std::fs::read_to_string` which handles UTF-8 paths. No special handling is needed.
 
-EC-07: **Untitled editor tab — "Reveal in Finder" disabled.**
-`tab.filePath === null`. The item renders with `.disabled` class.
+**EC-07 — Drop while Settings panel is open**
+The settings panel is a DOM overlay; it does not intercept OS-level drag events. Expected: the drop event fires normally, files open as tabs in the background. The settings panel remains open.
 
-EC-08: **Context menu near the right or bottom viewport edge.** Clamp
-logic: after appending the `<ul>` to `document.body`, read its bounding rect,
-then set `left = min(x, window.innerWidth - rect.width - 4)` and
-`top = min(y, window.innerHeight - rect.height - 4)`, each floored at 0.
-This matches the file-browser plugin's clamping strategy.
+**EC-08 — Drop while Vault / Manage Vaults modal is open**
+Same reasoning as EC-07. The modal is a DOM overlay. Expected: files open as tabs; the modal remains open.
 
-EC-09: **Multiple right-clicks in quick succession.** `showTabContextMenu()`
-calls `closeTabContextMenu()` before creating a new menu. No stacking occurs;
-each call produces exactly one menu.
+**EC-09 — Drop before tabManager is initialized**
+Under abnormal startup timing, `onDragDropEvent` could theoretically fire before `tabManager.init()` completes. Expected: the `tabManager` reference exists but the listener is not yet registered (the `await` on line 1106 only resolves after `tabManager.init()` on line 966). This ordering is safe as long as the registration sequence in `initApp()` is not reordered.
 
-EC-10: **Right-click on the tab strip background, not on a tab.** No menu
-appears. Each tab element handler calls `e.stopPropagation()`. No contextmenu
-listener is attached to the strip container.
+**EC-10 — Drop event fires with empty paths array**
+`event.payload.paths` is `[]` (e.g. user drags a non-file object). Expected: the `paths.length === 0` guard exits immediately. No error.
 
-EC-11: **Context menu open when mode switches (e.g. regular to vertical).**
-`TabManager.setMode()` tears down the renderer via `_instantiateRenderer()`,
-which calls `renderer.destroy()`. The updated `destroy()` calls
-`closeTabContextMenu()`, ensuring the menu is removed.
+**EC-11 — Drop of a `.txt` file that contains binary data**
+Tauri's `read_file` calls `fs::read_to_string`, which returns an error on invalid UTF-8. Expected: `openFileInTab` receives `result.ok === false` and calls `alert()` with the error message. Matches existing error-handling behaviour for any unreadable file.
 
-EC-12: **Context menu open when a tab closes via the close button (not the
-context menu).** The close button calls `tabManager.closeTab()`, which calls
-`_notifyRenderer()`, which calls `renderer.update()`. The updated `update()`
-calls `closeTabContextMenu()` at its start, removing any open menu.
+**EC-12 — Drop while window is hidden (Dock-click reopen before file opens)**
+The window is hidden (no-close pattern). A file is dropped onto the Markable Dock icon or a visible portion of the window. Expected: on macOS, dragging to the Dock icon triggers `applicationShouldHandleReopen` — this is outside Tauri's drag-drop surface and is not handled by this feature.
 
-EC-13: **Right-click in minimal mode (small dot buttons).** The dots are 8 px
-circles expanding to 22 px pills. The context menu appears at `(e.clientX,
-e.clientY)` regardless of element size. No minimum target size requirement
-beyond what the native click event provides.
-
-EC-14: **"Reveal in Finder" when the file has been deleted from disk.** macOS
-`open -R` on a missing path fails silently or reveals the parent folder. The
-bridge wrapper catches any invoke error and logs via `console.error`. No
-user-facing alert is shown.
-
-EC-15: **"Close Other Tabs" when the right-clicked tab is NOT the currently
-active tab.** The method closes all other tabs (with dirty confirmations) and
-then calls `activateTab(id)` to make the right-clicked tab active. The user
-keeps the tab they right-clicked on.
-
-EC-16: **Tab strip re-renders while the context menu is open (e.g. a background
-tab becomes dirty and triggers `_notifyRenderer()`).** The `update()` call
-closes the menu. The user must right-click again to reopen it. This is
-acceptable; keeping the menu alive across rebuilds would require holding a
-stale `TabEntry` reference.
-
-EC-17: **Cmd-W pressed while the context menu is open for a different tab.**
-Cmd-W fires `closeTab(activeTab)` via the keyboard handler. This calls
-`_notifyRenderer()`, which closes the menu (EC-16). The active tab is closed;
-the keyboard shortcut and context menu do not conflict.
+**EC-13 — Drop of a `.md` file that no longer exists on disk**
+The file appears in Finder but is deleted between drag-start and drop-complete. Expected: `read_file` returns an error; `openFileInTab` shows `alert()`. Matches existing error-handling for stale files.
 
 ---
 
 ## Non-Functional Requirements
 
-NFR-1: `src/tabs/tab-context-menu.ts` must import only from
-`src/tabs/tab-types.ts`, `src/tabs/tab-manager.ts`, and `src/lib/bridge.ts`.
-No imports from plugin code.
+**NFR-1 — No additional Rust code**
+The feature is implemented entirely in TypeScript. No new Tauri commands, no new Rust modules, no changes to `lib.rs`.
 
-NFR-2: The context menu DOM element must be a single `<ul>` appended to
-`document.body`. It must be removed from the DOM on close, not merely hidden,
-to prevent accumulating ghost elements.
+**NFR-2 — No new capability permissions**
+`src-tauri/capabilities/default.json` must not be modified for this feature.
 
-NFR-3: All event listeners registered by `showTabContextMenu()` (outside-click,
-Escape) must be removed in `closeTabContextMenu()`. No listener leaks.
+**NFR-3 — No new settings fields**
+`MarkableSettings` must not be extended. No user-configurable toggle for drag-drop is required.
 
-NFR-4: The two new `TabManager` methods (`closeOtherTabs`, `closeAllTabs`)
-must be covered by unit tests.
+**NFR-4 — No visible loading state**
+`.md` and `.txt` files are small. No spinner or progress indicator is needed. Files open immediately via the existing `openFileInTab` path.
 
-NFR-5: No changes to `index.html`, `main.ts`, or the plugin system are required.
-The feature is self-contained within `src/tabs/` and `src/lib/bridge.ts`.
+**NFR-5 — No flicker**
+The drop handler must not cause any visible layout reflow or flash. There is no CSS change or DOM manipulation during the drag phase (no visual feedback, per FR-7).
 
-NFR-6: No external library dependencies are introduced.
+**NFR-6 — Sequential tab opening**
+Multiple files must be opened in sequence (`for...of` with `await`) to preserve the order they appear in the payload and to avoid race conditions in `tabManager` state.
+
+---
+
+## Files That Must Change
+
+Given the codebase findings, the implementation state is assessed as follows:
+
+| File | Status | Change Required |
+|------|--------|-----------------|
+| `src/main.ts` | Implemented (lines 1106–1116) | Validate against this spec; add EC-09 guard if absent |
+| `src-tauri/src/lib.rs` | No change needed | None |
+| `src-tauri/Cargo.toml` | No change needed | None |
+| `src-tauri/capabilities/default.json` | No change needed | None |
+| `src/lib/bridge.ts` | No change needed | None |
+| `src/tabs/tab-manager.ts` | No change needed | None |
+| `src/lib/settings.ts` | No change needed | None |
+
+The primary deliverable is a **test file** that exercises the edge cases above using the existing implementation.
 
 ---
 
 ## Out of Scope
 
-- Keyboard navigation within the context menu (arrow keys, Enter to select items).
-- Drag-and-drop reordering of tabs from the context menu.
-- "Move to New Window" or "Duplicate Tab" actions.
-- Open/close animation on the context menu.
-- Replacing the file-browser plugin's raw `__TAURI_INTERNALS__` invoke with
-  the new `bridge.revealInFinder` wrapper (noted as technical debt; separate task).
-- Touch / long-press support.
-
----
-
-## Architecture Decision Record
-
-**ADR-1: Where does the context menu logic live?**
-
-A new `src/tabs/tab-context-menu.ts` module. Rationale:
-
-1. All three renderers need identical behavior. A shared module avoids
-   duplicating the same `show`/`close` logic across three files.
-2. The tab system is core infrastructure and must not import from plugins.
-   The file-browser's `showContextMenu` is inaccessible to core modules by
-   design.
-3. `tab-manager.ts` is already approximately 1,150 lines and its responsibility
-   is tab state, not DOM presentation. Adding context menu DOM logic there
-   would violate single responsibility.
-4. A thin, focused module (expected ~120 lines) mirrors the established pattern
-   of `minimal-tab-bar.ts` and `regular-tab-bar.ts`.
-
-**ADR-2: Reveal in Finder for media tabs.**
-
-Media tabs always have a non-null `filePath` (an image or PDF on disk).
-Revealing a binary asset in Finder is a valid and useful operation. "Reveal
-in Finder" is therefore enabled for media tabs, not disabled.
-
-**ADR-3: Individual dirty-confirm dialogs in "Close Other Tabs" and "Close All
-Tabs."**
-
-Each dirty tab receives its own dialog, not a single bulk-confirm. This matches
-macOS conventions (each document is asked independently), reuses the existing
-dialog text already in `closeTab()`, and gives the user granular control.
-
-**ADR-4: `closeAllTabs()` batch approach.**
-
-Iterating `closeTab()` in a loop is unsafe because `closeTab()` has side
-effects that depend on the number of remaining tabs (window-close on last tab,
-session-save on each call). The correct implementation collects confirmed
-closes from a snapshot, then applies them in one pass before calling
-`saveSession()` once.
-
-**ADR-5: Disabled vs. hidden for unavailable items.**
-
-Disabled items (`.disabled` class, `pointer-events: none`) are kept visible
-rather than hidden. This follows the established pattern in the file-browser
-plugin (`.context-menu-item.disabled`) and makes it clear to the user that
-the action exists but is not currently applicable, rather than confusing them
-with a shorter menu whose item count changes contextually.
-
----
-
-## Affected Files
-
-| File | Change |
-|---|---|
-| `src/tabs/tab-context-menu.ts` | New file. Owns all context menu DOM and lifecycle. |
-| `src/tabs/tab-manager.ts` | Add `closeOtherTabs(id)` and `closeAllTabs()` methods. |
-| `src/tabs/renderers/regular-tab-bar.ts` | Add contextmenu listener in `_buildTabEl()`, call `closeTabContextMenu()` in `update()` and `destroy()`. |
-| `src/tabs/renderers/vertical-tab-strip.ts` | Same as above, in `_buildColEl()`. |
-| `src/tabs/renderers/minimal-tab-bar.ts` | Same as above, in `_createDotButton()`. |
-| `src/tabs/tabs.css` | Add `.context-menu`, `.context-menu-item`, `.context-menu-item.disabled`, `.context-menu-separator` rules. |
-| `src/lib/bridge.ts` | Add `revealInFinder(path)` wrapper. |
+- **Visual drag-over feedback** (dashed border, translucent overlay, "Drop to open" label) — deferred.
+- **`.txt` extension case-insensitivity** (e.g. `.TXT`, `.MD`) — not required; existing filter is case-sensitive.
+- **Dock-icon drag target** — macOS `applicationShouldHandleReopen` is outside Tauri's drag-drop API surface.
+- **Opening non-Markdown binary files** (images, PDFs) via drag-drop — handled by the existing media tab path (`openMediaTab`), but that is not wired into the drag-drop handler and is not in scope here.
+- **Drag-and-drop from within the app** (reordering tabs by drag) — separate feature.
+- **A user preference to disable drag-drop** — not required.
 
 ---
 
 ## Handoff Summary
 
-- Artifact: `/Users/daveslaptop/work-LocalArea/markable-2.0/docs/requirements/active_task.md`
+- Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 17 items in Edge Case Inventory (EC-01 through EC-17)
+- Edge cases to verify in tests: 13 items in Edge Case Inventory (EC-01 through EC-13)
 
-Next step: Activate @software-architect and provide
-`docs/requirements/active_task.md` as context.
+Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.
