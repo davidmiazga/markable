@@ -542,3 +542,55 @@
   font-family: var(--ui-font);
   text-align: center;
 }
+
+/* ── Tab context menu ────────────────────────────────────────────────────── */
+/*
+ * The tab context menu is a <ul class="context-menu"> appended to document.body
+ * by tab-context-menu.ts. Its visual language matches the file-browser plugin's
+ * context menu (same class names, same CSS variables) so the two menus look
+ * identical even though they are separate modules.
+ *
+ * z-index: 9999 matches #tab-tooltip to ensure the menu renders above the tab
+ * strip, editor, and all sidebar panels (FR-7.3).
+ *
+ * All color values use CSS custom properties with fallbacks so the menu
+ * inherits the active theme automatically (FR-7.2).
+ */
+
+.context-menu {
+  position: fixed;
+  z-index: 9999;
+  list-style: none;
+  padding: 4px 0;
+  margin: 0;
+  min-width: 160px;
+  background: var(--bg-secondary, #252526);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow-color, rgba(0, 0, 0, 0.2));
+  font-family: var(--ui-font, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-size: 13px;
+}
+
+.context-menu-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--text-primary, #cccccc);
+  white-space: nowrap;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+.context-menu-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border-color, rgba(128, 128, 128, 0.15));
+  margin: 4px 0;
+}

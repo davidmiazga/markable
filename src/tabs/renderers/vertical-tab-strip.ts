@@ -35,6 +35,7 @@ import "../tabs.css";
 
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
+import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
 
 export const LEFT_STRIP_ID = "tab-vertical-left";
 export const RIGHT_STRIP_ID = "tab-vertical-right";
@@ -137,6 +138,8 @@ export class VerticalTabStrip implements ITabRenderer {
    */
   update(tabs: TabEntry[], activeIndex: number): void {
     if (!this.leftStripEl || !this.rightStripEl) return;
+    // Close any open context menu before rebuilding DOM (EC-12, EC-16, EC-17).
+    closeTabContextMenu();
 
     this.leftStripEl.innerHTML = "";
     this.rightStripEl.innerHTML = "";
@@ -169,6 +172,9 @@ export class VerticalTabStrip implements ITabRenderer {
    * Idempotent — safe to call multiple times or before mount().
    */
   destroy(): void {
+    // Close any open context menu before tearing down the renderer DOM (EC-11).
+    closeTabContextMenu();
+
     this.leftStripEl?.remove();
     this.rightStripEl?.remove();
     this.leftStripEl = null;
@@ -218,6 +224,15 @@ export class VerticalTabStrip implements ITabRenderer {
     // Clicking anywhere on the column (outside the close button) activates it.
     col.addEventListener("click", () => {
       this.onActivate(tab.id);
+    });
+
+    // Right-click: show the tab context menu (FR-1.1).
+    // stopPropagation prevents the event from reaching any ancestor elements
+    // that might also have a contextmenu handler (EC-10).
+    col.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showTabContextMenu(tab, e.clientX, e.clientY);
     });
 
     return col;

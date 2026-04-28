@@ -390,3 +390,25 @@ export async function writePluginSettings(
   const json = JSON.stringify(data);
   await invoke("write_plugin_settings", { pluginId, data: json });
 }
+
+/**
+ * Reveal a file in Finder (macOS only).
+ *
+ * Opens a Finder window with the file at `path` selected, equivalent to
+ * "Show in Finder" in most macOS apps. Wraps the Rust `reveal_in_finder`
+ * command which calls `open -R <path>` under the hood.
+ *
+ * Errors are caught and logged via console.error. They are NOT re-thrown
+ * because a Finder failure (e.g. file moved or deleted since the tab was
+ * opened) is non-fatal — the user's tab and document are unaffected.
+ * This satisfies EC-14 in the tab context menu spec.
+ *
+ * @param path  Absolute path to the file to reveal.
+ */
+export async function revealInFinder(path: string): Promise<void> {
+  try {
+    await invoke("reveal_in_finder", { path });
+  } catch (error) {
+    console.error("revealInFinder failed:", error);
+  }
+}

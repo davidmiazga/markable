@@ -132,7 +132,9 @@
       "Read(//Users/daveslaptop/.cargo/**)",
       "Bash(command -v rustup)",
       "Bash(git config *)",
-      "Bash(~/.cargo/bin/cargo test *)"
+      "Bash(~/.cargo/bin/cargo test *)",
+      "Bash(sed -n '969,980p' /Users/daveslaptop/work-LocalArea/markable-2.0/src/tabs/tab-manager.ts)",
+      "Bash(sed -n '873,880p' /Users/daveslaptop/work-LocalArea/markable-2.0/src/tabs/tab-manager.ts)"
     ]
   }
 }

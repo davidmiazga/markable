@@ -21,6 +21,7 @@ import "../tabs.css";
 
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
+import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
 
 /** Delay in milliseconds before the hover tooltip appears (FR-3.1). */
 const TOOLTIP_DELAY_MS = 800;
@@ -140,6 +141,8 @@ export class MinimalTabBar implements ITabRenderer {
    */
   update(tabs: TabEntry[], activeIndex: number): void {
     if (!this.container || !this.trackEl) return;
+    // Close any open context menu before rebuilding DOM (EC-12, EC-16, EC-17).
+    closeTabContextMenu();
 
     // Wipe the existing dots. Any event listeners on the old <button> elements
     // are garbage-collected with their nodes — no manual cleanup required.
@@ -176,6 +179,9 @@ export class MinimalTabBar implements ITabRenderer {
    * document.body to prevent dangling DOM nodes (NFR-5).
    */
   destroy(): void {
+    // Close any open context menu before tearing down the renderer DOM (EC-11).
+    closeTabContextMenu();
+
     // Cancel any pending tooltip timer to prevent the tooltip from appearing
     // after the renderer has been destroyed (would reference a removed element).
     this._cancelTooltipTimer();
@@ -241,6 +247,17 @@ export class MinimalTabBar implements ITabRenderer {
       this._cancelTooltipTimer();
       this._hideTooltip();
       this.onActivate(tab.id);
+    });
+
+    // Right-click: show the tab context menu (FR-1.1 / EC-13).
+    // EC-13: even for the small dot buttons (8px circles), clientX/clientY
+    // from the native event provides the correct viewport coordinates.
+    // stopPropagation prevents the event from reaching any ancestor that might
+    // also have a contextmenu handler (EC-10).
+    btn.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showTabContextMenu(tab, e.clientX, e.clientY);
     });
 
     return btn;

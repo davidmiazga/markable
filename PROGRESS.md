@@ -44,12 +44,12 @@
 - **Window size default invariant enforcement** — `sizeH` regression (`"50%"` instead of `"80%"`) found and fixed in `DEFAULT_SETTINGS` and `applyWindowSettings` fallback; `tests/settings/window-defaults.test.ts` (6 tests) added as permanent regression guard; `docs/specs/invariants/window-size-defaults.md` canonical invariant spec; `CLAUDE.md` ⚠️ section expanded with recovery procedure including on-disk `settings.json` patch one-liner; 2026-04-27
 - **Backlinks bug fix** — Two bugs in `scheduleIndexRebuild`: (1) vault-mode path construction used `currentFileDir + bareFilename`, giving wrong paths for cross-directory vault files; (2) index always read from disk so unsaved in-memory `[[links]]` were invisible. Fix: vault fast path seeds link map directly from `VaultIndexEntry.outboundLinks` (Rust-parsed, all directories), then overrides each open editor tab's entry with its in-memory `tab.doc`; no-vault directory-scan path unchanged; 2026-04-28
 - **Wiki-link hover preview popover** — Hovering a `[[wikilink]]` span for 180 ms triggers async file read; popover shows title (front matter / H1 / filename stem), vault-relative path label, and 200-word plain-text excerpt. 60 ms grace period keeps popover alive when mouse moves from span into popover (EC-08). Monotonic version counter discards stale overlapping fetches (EC-04). `position: fixed` with right/bottom viewport clamping. Full cleanup in `onDisable`. 31 new Vitest tests; code-reviewer approved 2026-04-28
+- **Tab right-click context menu** — four-item menu (Close Tab, Close Other Tabs, Close All Tabs, Reveal in Finder) on all three tab renderers (regular, vertical, minimal). `tab-context-menu.ts` singleton DOM module with viewport clamping and outside-click/Escape/renderer-re-render dismissal. `closeOtherTabs(id)` and `closeAllTabs()` added to TabManager using snapshot-and-batch pattern. `revealInFinder` bridge wrapper added. Reviewer-caught `closeOtherTabs` stale-renderer bug fixed (direct `_notifyRenderer()` call, no `activateTab` delegation) plus `_captureActiveTab()` guard in `closeAllTabs` survived-branch. 28 new Vitest tests; code-reviewer approved 2026-04-28
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
-- Tab right-click context menu (close, close others, reveal in Finder)
 - Drag & drop `.md` files to open
 
 ---

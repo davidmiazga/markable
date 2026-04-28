@@ -1,404 +1,421 @@
 ---
-title: "Wiki-link hover preview popover"
+title: Tab Right-Click Context Menu
 last-updated: "2026-04-28"
 review-cadence-days: 7
 status: active
 ---
 
-# Wiki-link Hover Preview Popover
+# Tab Right-Click Context Menu — Requirements
 
-## 1. Feature Summary
+## Feature Summary
 
-As a user I want to hover the mouse over any `[[wikilink]]` span in the editor and see a
-small floating popover showing the linked document's title and a plain-text excerpt of its
-content, so I can read the destination note without leaving the current document — the same
-hover-preview behaviour present in Obsidian and Notion.
-
----
-
-## 2. Where the Code Lives
-
-**The hover popover is implemented inside the existing backlinks plugin
-(`src/plugins/backlinks/backlinks.plugin.ts`), not as a separate plugin.**
-
-Justification:
-
-- The backlinks plugin already owns every piece of infrastructure this feature needs:
-  the `cm-wiki-link` DOM class it applies to decorated spans, the `resolveWikiLinkPath`
-  and `normalizeTarget` path-resolution helpers, the `invokeReadFile` Tauri bridge
-  wrapper, and the `_enabled` guard used to make async callbacks no-ops after disable.
-- A separate IIFE plugin would have to duplicate `resolveWikiLinkPath`,
-  `normalizeTarget`, and `invokeReadFile` because IIFE plugins cannot import from one
-  another at runtime.
-- Splitting ownership of `cm-wiki-link` spans between two plugins would create a
-  temporal coupling: the popover plugin would silently do nothing if the backlinks plugin
-  were disabled (its spans would disappear), making its enable/disable semantics
-  misleading.
-- Adding the feature inside the existing plugin keeps all `cm-wiki-link` behaviour in one
-  file and one `onEnable`/`onDisable` cycle, matching the established pattern for the
-  click handler (`_wikiLinkClickHandler`).
-
-The popover logic is added as a discrete, named group of functions and module-level
-variables within the existing file, following the step-numbered section convention
-already used (Step 10: Hover Popover).
+As a user, I want to right-click any tab in any tab renderer (regular, vertical,
+or minimal) and see a small context menu with Close Tab, Close Other Tabs,
+Close All Tabs, and Reveal in Finder actions, so I can manage open documents
+without reaching for the keyboard.
 
 ---
 
-## 3. Functional Requirements
+## Codebase Context
 
-### FR-1: Show delay
+### TabManager (`src/tabs/tab-manager.ts`)
 
-FR-1.1 — After the cursor enters a `.cm-wiki-link` span (`mouseenter` event), the system
-waits a fixed delay of 180 ms before beginning the file fetch and showing the popover. This
-prevents flicker on brief/accidental cursor passes.
+- `closeTab(id: string): Promise<void>` — exists. Handles dirty confirmation,
+  last-tab-closes-window logic, and session persistence.
+- `closeAllTabs()` — does NOT exist. Must be added.
+- `closeOtherTabs(id: string)` — does NOT exist. Must be added.
+- `activateTab(id)`, `getTabs()`, `getTabCount()` — all exist and accessible
+  on the singleton `tabManager`.
+- The `TabManager` class and its methods are the only sanctioned mutation path
+  for tab state. The context menu must call these methods; it must never mutate
+  the `tabs` array directly.
 
-FR-1.2 — If the cursor leaves the span (or the popover) before the 180 ms elapses, the
-pending timer is cancelled and no fetch is issued.
+### TabEntry (`src/tabs/tab-types.ts`)
 
-### FR-2: File fetch
+Relevant fields for this feature:
 
-FR-2.1 — When the delay elapses, the system reads `window.__MARKABLE_CURRENT_FILE__` to
-obtain the base path for resolution. If the value is null (untitled document, EC-07), the
-popover is not shown and no fetch is issued.
+- `id: string` — unique identifier per tab
+- `kind: "editor" | "media"` — media tabs have a non-null `filePath` but are
+  never dirty
+- `filePath: string | null` — null for untitled editor tabs
+- `isDirty: boolean` — always false for media tabs
 
-FR-2.2 — The system calls `resolveWikiLinkPath(currentFile, target)` using the same
-function already used by the click handler. The `target` is extracted from the hovered
-element: the `data-wiki-target` attribute set on the span during decoration (see FR-7).
+### Renderers
 
-FR-2.3 — The file content is read via `window.__TAURI_INTERNALS__.invoke("read_file", {
-path })`, following the `invokeReadFile` pattern already in the plugin. This is the
-only Tauri call the feature makes.
+All three renderers build DOM via full `innerHTML` clear and rebuild on every
+`update()` call. Right-click listeners attached inside the element-build loop
+are automatically discarded when `innerHTML = ""` runs — no manual cleanup.
 
-FR-2.4 — At most one file fetch is in flight at any given moment (EC-04). If a second
-hover fires while a fetch is already pending (not yet settled), the pending fetch's result
-is discarded on arrival (the `_hoverPopoverFetchVersion` counter pattern: increment
-before each fetch; on arrival check that the counter still matches).
+- **RegularTabBar** (`src/tabs/renderers/regular-tab-bar.ts`): each tab is a
+  `<button class="tab-label">`. Tab `id` is captured by closure in
+  `_buildTabEl()`. The right-click listener must be added inside `_buildTabEl()`.
 
-FR-2.5 — File content is capped at the first 2 048 bytes before any processing (EC-03).
-This cap is applied by slicing the raw UTF-8 string before the content extraction step,
-not after, so large files never allocate large working strings.
+- **VerticalTabStrip** (`src/tabs/renderers/vertical-tab-strip.ts`): each tab
+  is a `<div class="tab-vertical-col">`. Right-click added inside `_buildColEl()`.
 
-### FR-3: Content extraction
+- **MinimalTabBar** (`src/tabs/renderers/minimal-tab-bar.ts`): each tab is a
+  `<button class="tab-dot">`. Right-click added inside `_createDotButton()`.
 
-FR-3.1 — **Title**: extracted by the following priority chain, stopping at the first match:
-  1. YAML front matter `title:` field — scan the leading `---` block (if any) for a line
-     matching `/^title:\s*["']?(.+?)["']?\s*$/`.
-  2. First `# H1` heading — first line matching `/^#\s+(.+)/`.
-  3. Filename stem — the path component after the last `/`, with the `.md` extension
-     removed.
+### Reveal in Finder — Rust Command
 
-FR-3.2 — **Excerpt**: the first ~200 words of the document body after stripping:
-  - YAML front matter block (everything between the opening `---` and the closing `---`
-    or `...`).
-  - Markdown syntax characters: heading `#` markers, bold/italic markers (`*`, `_`,
-    `**`, `__`), link syntax `[text](url)`, image syntax `![alt](url)`, inline code
-    backticks, horizontal rules.
-  - Fenced code block contents (everything between triple-backtick or triple-tilde fences,
-    inclusive of the fence lines themselves).
-  - Blank lines collapsed to a single space.
-  
-  The word count is approximate (split on whitespace); truncation adds an ellipsis `…`
-  if the excerpt was cut short.
+- `reveal_in_finder(path: String)` exists in
+  `src-tauri/src/commands/file_ops.rs` (line 386) and is registered in
+  `src-tauri/src/commands/mod.rs`.
+- It is NOT currently wrapped in `src/lib/bridge.ts`. A typed bridge wrapper
+  must be added as part of this feature.
+- The file-browser plugin currently calls this command via raw
+  `__TAURI_INTERNALS__.invoke`. The bridge wrapper is the canonical path going
+  forward; the file-browser raw invoke is pre-existing technical debt and is
+  out of scope for this feature.
 
-FR-3.3 — **File path label**: the vault-relative path if a vault is active (obtained from
-`window.__MARKABLE_VAULT_MANAGER__?.getActiveVault()?.rootPaths?.[0]`; strip that prefix
-from the resolved path), otherwise the basename only.
+### Existing Context Menu Pattern
 
-### FR-4: Popover DOM
+`src/plugins/file-browser/file-browser.plugin.ts` contains a complete,
+battle-tested context menu implementation:
 
-FR-4.1 — The popover is a single `<div>` element appended to `document.body` (not to the
-`.cm-editor` scroll container, to avoid clipping by `overflow: hidden`).
+- `showContextMenu(items, x, y)` creates a `<ul class="context-menu">`,
+  appends to `document.body`, clamps to viewport, wires outside-click and
+  Escape dismissal.
+- `closeContextMenu()` removes the element and removes all listeners.
+- CSS classes: `.context-menu`, `.context-menu-item`,
+  `.context-menu-item.disabled`, `.context-menu-separator`.
 
-FR-4.2 — The popover contains three child elements in order:
-  - `.wl-popover-title` — the title text.
-  - `.wl-popover-path` — the file path label.
-  - `.wl-popover-excerpt` — the plain-text excerpt.
-
-FR-4.3 — The popover element carries `data-markable-wiki-popover="true"` for idempotent
-lookup and targeted CSS scoping.
-
-FR-4.4 — Only one popover instance exists at a time. Before creating a new one, any
-existing popover is removed from the DOM.
-
-### FR-5: Positioning
-
-FR-5.1 — The popover is positioned absolutely using `getBoundingClientRect()` on the
-hovered `.cm-wiki-link` span. It appears below the span by default (top edge =
-`spanRect.bottom + 8px`, left edge = `spanRect.left`).
-
-FR-5.2 — If the computed left edge plus the popover's natural width (max-width 320 px)
-would exceed `window.innerWidth - 16px`, the popover is right-aligned instead
-(right edge = `window.innerWidth - spanRect.right` equivalent, clamped to `16px`
-from the viewport edge).
-
-FR-5.3 — If the computed bottom edge (top + natural height) would exceed
-`window.innerHeight - 16px`, the popover flips to appear above the span instead
-(bottom edge = `spanRect.top - 8px`).
-
-FR-5.4 — Positioning is applied with `position: fixed` (not `absolute`) so the popover
-stays anchored to the viewport regardless of document scroll.
-
-### FR-6: Dismissal
-
-FR-6.1 — The popover is dismissed (removed from DOM, pending timer cancelled, pending
-fetch version incremented) when:
-  - `mouseleave` fires on the hovered `.cm-wiki-link` span AND the cursor did not move
-    into the popover itself (EC-08). A 60 ms grace-period timer is used: if the cursor
-    enters the popover within 60 ms, the dismissal is cancelled.
-  - `mouseleave` fires on the popover element itself AND the cursor did not move back into
-    the originating span.
-  - A `click` event fires anywhere in the document (the user is navigating away).
-  - `onDisable` is called (plugin teardown).
-
-FR-6.2 — The popover must NOT be dismissed when the cursor moves from the span directly
-into the popover (EC-08). The grace-period timer in FR-6.1 handles this.
-
-### FR-7: Decoration data attribute
-
-FR-7.1 — The existing `buildWikiLinkDecorations` function currently marks spans with
-`class: "cm-live-link cm-wiki-link"`. This must be augmented to also set
-`data-wiki-target` to the raw (un-normalized) target string, so the hover handler can
-read the target without reverse-parsing the span's text content.
-
-FR-7.2 — For piped links `[[target|display]]`, `data-wiki-target` contains `target` (the
-part before the pipe), not the display text (EC-11).
-
-FR-7.3 — The `Decoration.mark` call in `buildWikiLinkDecorations` must include the
-`attributes: { "data-wiki-target": match.target }` option. This is backward-compatible:
-no existing code reads `data-wiki-target`.
-
-### FR-8: Event listener lifecycle
-
-FR-8.1 — `onEnable` attaches a single `mouseover` listener to `document` (capture phase,
-`true`) to handle hover events on all current and future `.cm-wiki-link` spans without
-needing to re-attach per span. A stored reference (`_wikiLinkHoverHandler`) is used for
-cleanup.
-
-FR-8.2 — `onDisable` removes the `mouseover` listener, cancels any pending show timer,
-removes the popover from the DOM, and nulls all stored references. This follows the exact
-pattern of `_wikiLinkClickHandler` already in `onDisable`.
-
-### FR-9: CSS styling
-
-FR-9.1 — Popover styles are injected via an additional `<style>` tag identified by
-`data-markable-wiki-popover-styles="true"`. The tag is created by
-`injectWikiPopoverStyles()` and removed by `removeWikiPopoverStyles()`, both called from
-`onEnable`/`onDisable`.
-
-FR-9.2 — Popover appearance uses existing CSS variables only:
-
-| CSS variable       | Used for                         |
-|--------------------|----------------------------------|
-| `--bg-primary`     | popover background                |
-| `--border-color`   | 1px solid border                 |
-| `--text-primary`   | title text colour                 |
-| `--text-secondary` | excerpt and path label colour     |
-| `--ui-font`        | all text in the popover           |
-| `--link-color`     | title text colour (accent)        |
-
-FR-9.3 — Fixed popover dimensions: max-width 320 px, max-height 240 px, overflow hidden.
-Font size 13 px for title, 11 px for path label, 12 px for excerpt. Padding 12 px.
-Box-shadow `0 4px 16px rgba(0,0,0,0.18)` (provides depth on both light and dark themes).
-Border-radius 6 px. `z-index: 10000` (above all other UI including sidebar and settings).
-
-FR-9.4 — A CSS fade-in transition of 100 ms is applied using `opacity` from 0 to 1 and a
-`translate(0, 4px)` to `translate(0, 0)` transform. No JS animation frame is needed.
-
-### FR-10: Non-functional requirements
-
-FR-10.1 — No flicker: the 180 ms show delay (FR-1.1) and 60 ms grace-period (FR-6.1)
-together prevent the popover from flashing on rapid cursor movements over multiple links.
-
-FR-10.2 — At most one `read_file` Tauri call is in flight at any moment (FR-2.4).
-
-FR-10.3 — The popover does not appear during keyboard editing. The hover popover is
-mouse-only. When the cursor moves to a link line in the editor, the raw syntax is shown
-(existing behavior) and no popover fires because no `mouseover` event fires on a DOM span
-during cursor-key navigation (EC-10).
-
-FR-10.4 — z-index must be 10000 or higher, above the autocomplete dropdown (which is
-typically in the 1000–9999 range).
-
-FR-10.5 — The popover must not be selectable (`user-select: none`) to avoid accidentally
-selecting its text when the user means to click a link or continue editing.
-
-FR-10.6 — The feature must not regress any existing backlinks tests. All new logic is
-additive; no existing functions are modified except `buildWikiLinkDecorations` (FR-7.3)
-and `onEnable`/`onDisable` (FR-8).
+The tab context menu must use the same visual language but must be implemented
+in a separate module (`src/tabs/tab-context-menu.ts`). The file-browser is a
+plugin; the tab system is core infrastructure. Imports across that boundary
+are prohibited. The matching CSS must be added to `src/tabs/tabs.css`.
 
 ---
 
-## 4. Edge Case Inventory
+## Functional Requirements
 
-**EC-01: Target file does not exist on disk.**
-`invokeReadFile` returns `{ ok: false, ... }`. The popover is not shown. No alert is
-displayed. A `console.debug` log is emitted. The fetch version counter is reset so the
-next hover can proceed normally.
+### FR-1: Context Menu Trigger
 
-**EC-02: Target file is in a subdirectory (vault context).**
-`resolveWikiLinkPath` resolves from the current file's directory. For a link like
-`[[subfolder/note]]`, `normalizeTarget` will produce `subfolder/note.md` and the
-resolved path will be `<currentDir>/subfolder/note.md`. This is correct for vault
-subdirectory navigation. No special-casing is needed; the existing helpers handle it.
+FR-1.1 A `contextmenu` event listener must be attached to every rendered tab
+element in all three renderers: the `<button class="tab-label">` in
+RegularTabBar, the `<div class="tab-vertical-col">` in VerticalTabStrip, and
+the `<button class="tab-dot">` in MinimalTabBar.
 
-**EC-03: Target file is very large.**
-Content is sliced to the first 2 048 bytes before any other processing (FR-2.5). This
-bounds memory and processing time regardless of file size.
+FR-1.2 Right-clicking on the tab strip background (not on a tab element) must
+NOT show a context menu. Each tab element's handler calls `e.stopPropagation()`
+and no contextmenu listener is attached to the strip container element.
 
-**EC-04: Multiple rapid hovers (debounce / version counter).**
-Each new hover increments the `_hoverFetchVersion` counter. On fetch completion, if the
-local version captured at fetch-start no longer matches the module-level counter, the
-result is silently discarded. No stale popover appears.
+FR-1.3 `e.preventDefault()` must be called on the contextmenu event to
+suppress the browser's native context menu.
 
-**EC-05: Backlinks plugin is disabled.**
-The `mouseover` listener is not attached when the plugin is disabled. No popover can
-appear. The `cm-wiki-link` spans are also absent (plugin removed its decorations), so
-even if a stale listener somehow fired, the event target would never match
-`.cm-wiki-link`.
+FR-1.4 The context menu must appear at `(e.clientX, e.clientY)` and be clamped
+to the viewport so no part of it renders off-screen (see EC-08).
 
-**EC-06: Wiki-link target is a self-link (link to the currently open file).**
-`invokeReadFile` succeeds; the popover shows the current file's own content. This is
-correct and expected behavior (the user may want to preview a section of the current
-document via a self-reference).
+### FR-2: Menu Actions
 
-**EC-07: Untitled document (no current file path).**
-`window.__MARKABLE_CURRENT_FILE__` is null. After the 180 ms delay fires, the handler
-checks this value, finds null, cancels quietly, and shows nothing. No error is thrown.
+FR-2.1 **Close Tab** — always enabled. Calls `tabManager.closeTab(tab.id)`.
+The existing dirty-confirmation dialog inside `closeTab()` runs as normal.
+No additional confirmation layer is added at the context menu level.
 
-**EC-08: Cursor moves from the span directly into the popover.**
-A 60 ms grace-period timer is used (FR-6.1). If `mouseleave` fires on the span and
-then `mouseenter` fires on the popover within 60 ms, the dismissal timer is cancelled
-and the popover remains visible. The cursor is then tracked on the popover itself for
-dismissal.
+FR-2.2 **Close Other Tabs** — calls `tabManager.closeOtherTabs(tab.id)`.
+Disabled (greyed out, `pointer-events: none`) when `tabManager.getTabCount() === 1`.
+The item is visible but not clickable when there is only one tab.
 
-**EC-09: Wiki-link with pipe syntax `[[target|display]]`.**
-`data-wiki-target` is set to `target` (FR-7.2). The popover fetches and shows the
-content of `target`, not `display`. The popover title is derived from `target`'s file
-content via FR-3.1, not from the display text in the wikilink.
+FR-2.3 **Close All Tabs** — always enabled. Calls `tabManager.closeAllTabs()`.
 
-**EC-10: Keyboard navigation (cursor moves to a link line).**
-No `mouseover` event fires during keyboard cursor movement. The popover is never shown.
-This is a non-issue by design; the feature is mouse-only.
+FR-2.4 **Reveal in Finder** — calls `bridge.revealInFinder(tab.filePath)`.
+Disabled when `tab.filePath === null` (untitled editor tab). Enabled for all
+tabs where `filePath` is non-null, including media tabs (images and PDFs are
+valid to reveal in Finder).
 
-**EC-11: Wiki-link with pipe and multiple `|` characters `[[target|text|more]]`.**
-`data-wiki-target` is set to `target` only (the part before the first pipe), consistent
-with `parseWikiLinks` behavior. The popover resolves and shows `target`.
+FR-2.5 A visual separator must appear between the "Close All Tabs" item and
+the "Reveal in Finder" item, using a `<li class="context-menu-separator">`.
 
-**EC-12: Empty wiki-link `[[]]`.**
-`data-wiki-target` would be an empty string. In `resolveWikiLinkPath("", ...)`,
-`normalizeTarget("")` produces `.md`. The resulting path is invalid. `invokeReadFile`
-returns `{ ok: false }` and the popover is silently suppressed. No crash.
+### FR-3: Context Menu Module
 
-**EC-13: Popover is visible when user opens settings or a modal.**
-The popover has `z-index: 10000`. If a modal opens on top, the modal should have a higher
-z-index. The settings panel must be confirmed to use a z-index higher than 10000 (or the
-popover must be explicitly dismissed on any `click` event, which FR-6.1 already specifies).
-This is a cross-cutting concern; the architect must verify the settings panel z-index.
+FR-3.1 All context menu DOM logic must live in a new module:
+`src/tabs/tab-context-menu.ts`.
 
-**EC-14: Vault is active and file is in a different vault subdirectory.**
-`resolveWikiLinkPath` resolves relative to the current file's directory, not the vault
-root. For a vault-wide link like `[[notes/project]]`, if the current file is in
-`vault/docs/current.md`, the resolved path is `vault/docs/notes/project.md`, which may
-not exist. This is a known limitation of the directory-relative resolution strategy
-inherited from the click handler. The popover falls back gracefully: `invokeReadFile`
-returns `{ ok: false }` and nothing is shown (EC-01). Vault-wide fuzzy resolution is
-out of scope (see Section 5).
+FR-3.2 The module must export one entry-point function:
 
-**EC-15: Two `.cm-wiki-link` spans are very close together (rapid hover transitions).**
-The version counter (EC-04) ensures only the most recently hovered link's fetch result
-is used. The old popover is removed before the new one is shown (FR-4.4).
+```typescript
+function showTabContextMenu(tab: TabEntry, x: number, y: number): void
+```
 
-**EC-16: `window.__TAURI_INTERNALS__` is absent (unit test environment).**
-The `invokeReadFile` function already guards against this with a try/catch and returns
-`{ ok: false }`. No popover is shown. Tests that exercise popover DOM logic must mock the
-global.
+Renderers call this from their `contextmenu` event handlers. The module owns
+the menu's full lifecycle.
 
-**EC-17: The `.cm-wiki-link` span scrolls out of view while the popover is visible.**
-The popover is positioned `fixed` (FR-5.4), so it does not move with document scroll.
-When the user scrolls the span away, the popover remains at its original screen position
-until a `mouseleave` on the span (which fires before scroll in most cases) or a `click`
-dismisses it. If scroll happens without a `mouseleave` (e.g., trackpad inertia scroll
-after moving the cursor away), the popover is dismissed by the `click` guard or by the
-next hover elsewhere. This is acceptable behavior; scroll-based dismissal is out of scope.
+FR-3.3 The module must maintain at most one context menu element in the DOM at
+a time. A second call while a menu is already open closes the first, then opens
+a new one at the new coordinates.
 
-**EC-18: File content is entirely YAML front matter with no body.**
-FR-3.1 extracts the title from front matter. FR-3.2 excerpt extraction finds no body
-content. The excerpt is shown as empty or as a single line after front matter removal.
-The popover still appears with the title and path label; the excerpt section is omitted
-if it would be empty.
+FR-3.4 The module must export a cleanup function:
 
-**EC-19: File is a binary file accidentally named `.md`.**
-`invokeReadFile` will either fail (Rust `read_file` may reject non-UTF-8) or return
-garbled text. If it fails, the popover is suppressed (EC-01). If it succeeds with garbled
-content, the content extraction strips most characters via the markdown-stripping pass,
-likely leaving the excerpt empty or near-empty. The popover shows the filename stem as
-title and an empty excerpt. This is acceptable.
+```typescript
+function closeTabContextMenu(): void
+```
+
+Renderers call this from `update()` and `destroy()` to ensure any open menu
+is removed during re-renders and mode switches.
+
+### FR-4: New TabManager Methods
+
+**FR-4.1 `closeOtherTabs(id: string): Promise<void>`**
+
+- Closes all tabs whose `id !== id`.
+- Dirty tabs among the "other" tabs each receive their individual confirm
+  dialog (same dialog text as in `closeTab`). Cancelling for one dirty tab
+  does not stop processing of the remaining tabs.
+- The tab identified by `id` is never closed by this method.
+- After the loop, calls `activateTab(id)` to ensure the right-clicked tab
+  becomes (or remains) active.
+- Calls `saveSession()` once after all close operations complete.
+
+**FR-4.2 `closeAllTabs(): Promise<void>`**
+
+- Closes all open tabs.
+- Dirty tabs each receive their individual confirm dialog. Cancelling any
+  one does not abort closing the others; each is evaluated independently.
+- When the final remaining tab is closed, follows the same vault-branching
+  logic as `closeTab()`: no active vault closes the window; active vault
+  leaves the app open at 0 tabs.
+- Implementation strategy to avoid "last-tab triggers window-close during
+  a loop" hazard: iterate a snapshot of the tabs array, collect confirmed
+  closes, apply in one batch, then call `saveSession()` once. Do not call
+  `closeTab()` in a loop — the side effects (window-close, per-call
+  saveSession) are incompatible with batch operation.
+
+### FR-5: Dismiss Behavior
+
+FR-5.1 The context menu closes on a mousedown outside the menu element
+(document-level `mousedown` listener, same pattern as the file-browser plugin).
+
+FR-5.2 The context menu closes when the user presses Escape (document-level
+`keydown` listener).
+
+FR-5.3 The context menu closes immediately after any action item is selected
+(action handler fires, then menu closes).
+
+FR-5.4 The context menu closes when the tab strip re-renders. Each renderer's
+`update()` method must call `closeTabContextMenu()` at its start, before
+rebuilding the DOM.
+
+FR-5.5 The context menu closes when the renderer is destroyed. Each renderer's
+`destroy()` method must call `closeTabContextMenu()`.
+
+### FR-6: Bridge Wrapper
+
+FR-6.1 A typed wrapper for `reveal_in_finder` must be added to
+`src/lib/bridge.ts`:
+
+```typescript
+export async function revealInFinder(path: string): Promise<void>
+```
+
+It wraps `invoke("reveal_in_finder", { path })` in a try/catch and logs
+errors via `console.error` without re-throwing, so a Finder failure (e.g.
+file deleted since the tab was opened) is non-fatal.
+
+### FR-7: CSS
+
+FR-7.1 Context menu styles must be added to `src/tabs/tabs.css` using the
+following class names to match the file-browser plugin's visual language:
+
+- `.context-menu` — the `<ul>` container
+- `.context-menu-item` — each `<li>` action
+- `.context-menu-item.disabled` — greyed-out, non-interactive state
+- `.context-menu-separator` — visual divider between item groups
+
+FR-7.2 All color values must use CSS custom properties with fallbacks:
+`--bg-secondary`, `--text-primary`, `--border-color`, `--bg-hover`,
+`--text-muted`. No hardcoded color values.
+
+FR-7.3 The menu must use `position: fixed` and `z-index: 9999` (same as
+`#tab-tooltip`) so it renders above the tab strip, editor, and sidebar panels.
 
 ---
 
-## 5. Out of Scope
+## Edge Case Inventory
 
-- **Vault-wide fuzzy link resolution**: resolving `[[note]]` to any `.md` file anywhere in
-  the vault by filename stem match. The current feature uses the same directory-relative
-  resolution as the click handler.
-- **Click to navigate from the popover**: the popover is read-only. Clicking within it
-  dismisses it via the click-anywhere rule (FR-6.1). Navigation is done by clicking the
-  decorated span itself, as before.
-- **Markdown rendering inside the popover**: the excerpt is plain text only. No HTML
-  rendering via `marked`.
-- **Images or embedded media in the popover**: not shown.
-- **Scroll-based dismissal**: scroll events do not dismiss the popover.
-- **Touch / pointer events**: hover is mouse-only. Touch devices are out of scope for
-  Markable (macOS native app).
-- **Keyboard shortcut to trigger the popover**: hover-only trigger.
-- **Popover for standard Markdown links `[text](url.md)`**: only `cm-wiki-link` spans are
-  targeted. Standard links are not in scope.
-- **Moving the feature to a separate plugin**: explicitly rejected (see Section 2).
-- **Persisting popover on click**: the click rule dismisses the popover. Pin-to-stay is
-  out of scope.
+EC-01: **Right-click on the only open tab — "Close Other Tabs" must be
+disabled.** When `tabs.length === 1`, the item renders with `.disabled` class
+and `pointer-events: none`. It is visible but not actionable.
+
+EC-02: **Right-click on a dirty tab — "Close Tab" shows the confirm dialog.**
+The confirmation is inside `closeTab()` and is not affected by the context
+menu. No additional dialog is added.
+
+EC-03: **"Close Other Tabs" with multiple dirty "other" tabs.** Each dirty tab
+among the others shows its own confirm dialog in sequence. The user may confirm
+some and cancel others independently. The right-clicked tab is never closed.
+
+EC-04: **"Close All Tabs" with all tabs dirty.** Each dirty tab shows its own
+confirm dialog sequentially. If the user cancels all, no tabs close. The
+`closeAllTabs()` method iterates a snapshot so mutation during the loop does
+not cause missed entries.
+
+EC-05: **"Close All Tabs" — last-tab behavior.** When the final tab is closed,
+the same vault/no-vault branching applies as in `closeTab()`: no vault active
+closes the window; vault active leaves the app at 0 tabs. The
+`closeAllTabs()` implementation must replicate this branch, not call
+`closeTab()` recursively.
+
+EC-06: **Media tab — "Reveal in Finder" enabled.** Media tabs always have a
+non-null `filePath`. The item is enabled. Calling `revealInFinder` on an
+image or PDF path is valid.
+
+EC-07: **Untitled editor tab — "Reveal in Finder" disabled.**
+`tab.filePath === null`. The item renders with `.disabled` class.
+
+EC-08: **Context menu near the right or bottom viewport edge.** Clamp
+logic: after appending the `<ul>` to `document.body`, read its bounding rect,
+then set `left = min(x, window.innerWidth - rect.width - 4)` and
+`top = min(y, window.innerHeight - rect.height - 4)`, each floored at 0.
+This matches the file-browser plugin's clamping strategy.
+
+EC-09: **Multiple right-clicks in quick succession.** `showTabContextMenu()`
+calls `closeTabContextMenu()` before creating a new menu. No stacking occurs;
+each call produces exactly one menu.
+
+EC-10: **Right-click on the tab strip background, not on a tab.** No menu
+appears. Each tab element handler calls `e.stopPropagation()`. No contextmenu
+listener is attached to the strip container.
+
+EC-11: **Context menu open when mode switches (e.g. regular to vertical).**
+`TabManager.setMode()` tears down the renderer via `_instantiateRenderer()`,
+which calls `renderer.destroy()`. The updated `destroy()` calls
+`closeTabContextMenu()`, ensuring the menu is removed.
+
+EC-12: **Context menu open when a tab closes via the close button (not the
+context menu).** The close button calls `tabManager.closeTab()`, which calls
+`_notifyRenderer()`, which calls `renderer.update()`. The updated `update()`
+calls `closeTabContextMenu()` at its start, removing any open menu.
+
+EC-13: **Right-click in minimal mode (small dot buttons).** The dots are 8 px
+circles expanding to 22 px pills. The context menu appears at `(e.clientX,
+e.clientY)` regardless of element size. No minimum target size requirement
+beyond what the native click event provides.
+
+EC-14: **"Reveal in Finder" when the file has been deleted from disk.** macOS
+`open -R` on a missing path fails silently or reveals the parent folder. The
+bridge wrapper catches any invoke error and logs via `console.error`. No
+user-facing alert is shown.
+
+EC-15: **"Close Other Tabs" when the right-clicked tab is NOT the currently
+active tab.** The method closes all other tabs (with dirty confirmations) and
+then calls `activateTab(id)` to make the right-clicked tab active. The user
+keeps the tab they right-clicked on.
+
+EC-16: **Tab strip re-renders while the context menu is open (e.g. a background
+tab becomes dirty and triggers `_notifyRenderer()`).** The `update()` call
+closes the menu. The user must right-click again to reopen it. This is
+acceptable; keeping the menu alive across rebuilds would require holding a
+stale `TabEntry` reference.
+
+EC-17: **Cmd-W pressed while the context menu is open for a different tab.**
+Cmd-W fires `closeTab(activeTab)` via the keyboard handler. This calls
+`_notifyRenderer()`, which closes the menu (EC-16). The active tab is closed;
+the keyboard shortcut and context menu do not conflict.
 
 ---
 
-## 6. Affected Code Locations
+## Non-Functional Requirements
 
-| Location | Nature of change |
+NFR-1: `src/tabs/tab-context-menu.ts` must import only from
+`src/tabs/tab-types.ts`, `src/tabs/tab-manager.ts`, and `src/lib/bridge.ts`.
+No imports from plugin code.
+
+NFR-2: The context menu DOM element must be a single `<ul>` appended to
+`document.body`. It must be removed from the DOM on close, not merely hidden,
+to prevent accumulating ghost elements.
+
+NFR-3: All event listeners registered by `showTabContextMenu()` (outside-click,
+Escape) must be removed in `closeTabContextMenu()`. No listener leaks.
+
+NFR-4: The two new `TabManager` methods (`closeOtherTabs`, `closeAllTabs`)
+must be covered by unit tests.
+
+NFR-5: No changes to `index.html`, `main.ts`, or the plugin system are required.
+The feature is self-contained within `src/tabs/` and `src/lib/bridge.ts`.
+
+NFR-6: No external library dependencies are introduced.
+
+---
+
+## Out of Scope
+
+- Keyboard navigation within the context menu (arrow keys, Enter to select items).
+- Drag-and-drop reordering of tabs from the context menu.
+- "Move to New Window" or "Duplicate Tab" actions.
+- Open/close animation on the context menu.
+- Replacing the file-browser plugin's raw `__TAURI_INTERNALS__` invoke with
+  the new `bridge.revealInFinder` wrapper (noted as technical debt; separate task).
+- Touch / long-press support.
+
+---
+
+## Architecture Decision Record
+
+**ADR-1: Where does the context menu logic live?**
+
+A new `src/tabs/tab-context-menu.ts` module. Rationale:
+
+1. All three renderers need identical behavior. A shared module avoids
+   duplicating the same `show`/`close` logic across three files.
+2. The tab system is core infrastructure and must not import from plugins.
+   The file-browser's `showContextMenu` is inaccessible to core modules by
+   design.
+3. `tab-manager.ts` is already approximately 1,150 lines and its responsibility
+   is tab state, not DOM presentation. Adding context menu DOM logic there
+   would violate single responsibility.
+4. A thin, focused module (expected ~120 lines) mirrors the established pattern
+   of `minimal-tab-bar.ts` and `regular-tab-bar.ts`.
+
+**ADR-2: Reveal in Finder for media tabs.**
+
+Media tabs always have a non-null `filePath` (an image or PDF on disk).
+Revealing a binary asset in Finder is a valid and useful operation. "Reveal
+in Finder" is therefore enabled for media tabs, not disabled.
+
+**ADR-3: Individual dirty-confirm dialogs in "Close Other Tabs" and "Close All
+Tabs."**
+
+Each dirty tab receives its own dialog, not a single bulk-confirm. This matches
+macOS conventions (each document is asked independently), reuses the existing
+dialog text already in `closeTab()`, and gives the user granular control.
+
+**ADR-4: `closeAllTabs()` batch approach.**
+
+Iterating `closeTab()` in a loop is unsafe because `closeTab()` has side
+effects that depend on the number of remaining tabs (window-close on last tab,
+session-save on each call). The correct implementation collects confirmed
+closes from a snapshot, then applies them in one pass before calling
+`saveSession()` once.
+
+**ADR-5: Disabled vs. hidden for unavailable items.**
+
+Disabled items (`.disabled` class, `pointer-events: none`) are kept visible
+rather than hidden. This follows the established pattern in the file-browser
+plugin (`.context-menu-item.disabled`) and makes it clear to the user that
+the action exists but is not currently applicable, rather than confusing them
+with a shorter menu whose item count changes contextually.
+
+---
+
+## Affected Files
+
+| File | Change |
 |---|---|
-| `src/plugins/backlinks/backlinks.plugin.ts` | Primary implementation file. All new code lives here. |
-| `buildWikiLinkDecorations` (existing function) | Add `attributes: { "data-wiki-target": match.target }` to `Decoration.mark` call (FR-7.3). This is the only change to an existing function. |
-| `onEnable` | Attach `mouseover` listener; call `injectWikiPopoverStyles()`. |
-| `onDisable` | Remove listener; dismiss popover; call `removeWikiPopoverStyles()`. |
-| New functions to add | `injectWikiPopoverStyles`, `removeWikiPopoverStyles`, `extractPopoverContent`, `positionPopover`, `showWikiPopover`, `dismissWikiPopover`. |
-| New module-level state | `_wikiLinkHoverHandler`, `_wikiLinkHoverLeaveHandler`, `_hoverShowTimer`, `_hoverDismissTimer`, `_hoverFetchVersion`, `_activePopoverEl`. |
-
-No changes to `live-preview.ts`, `bridge.ts`, `styles.css`, or any Rust command.
-
----
-
-## 7. Test Surface
-
-The following test cases must be added to
-`tests/plugins/backlinks/backlinks.test.ts` (or a new sibling file
-`tests/plugins/backlinks/hover-popover.test.ts`):
-
-- `extractPopoverContent` with: normal file, front-matter-only file, H1-heading file,
-  no-title file (uses stem), file longer than 2 048 bytes (truncated), empty file.
-- `positionPopover` with: span near right edge (right-aligns), span near bottom edge
-  (flips above), span in middle (default position).
-- `buildWikiLinkDecorations` — verify that `data-wiki-target` attribute is present on
-  produced mark decorations (requires updating the existing decoration tests).
-- Fetch-version counter: two overlapping hover events — first result is discarded.
-- Dismissal grace period: mouseleave from span + immediate mouseenter on popover cancels
-  dismissal.
-- EC-01: file not found — popover not shown, no error thrown.
-- EC-07: null `__MARKABLE_CURRENT_FILE__` — popover not shown.
-- EC-12: empty target string — popover not shown.
+| `src/tabs/tab-context-menu.ts` | New file. Owns all context menu DOM and lifecycle. |
+| `src/tabs/tab-manager.ts` | Add `closeOtherTabs(id)` and `closeAllTabs()` methods. |
+| `src/tabs/renderers/regular-tab-bar.ts` | Add contextmenu listener in `_buildTabEl()`, call `closeTabContextMenu()` in `update()` and `destroy()`. |
+| `src/tabs/renderers/vertical-tab-strip.ts` | Same as above, in `_buildColEl()`. |
+| `src/tabs/renderers/minimal-tab-bar.ts` | Same as above, in `_createDotButton()`. |
+| `src/tabs/tabs.css` | Add `.context-menu`, `.context-menu-item`, `.context-menu-item.disabled`, `.context-menu-separator` rules. |
+| `src/lib/bridge.ts` | Add `revealInFinder(path)` wrapper. |
 
 ---
 
 ## Handoff Summary
 
-- Artifact: `docs/requirements/active_task.md`
+- Artifact: `/Users/daveslaptop/work-LocalArea/markable-2.0/docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 19 items in Edge Case Inventory (EC-01 through EC-19)
+- Edge cases to verify in tests: 17 items in Edge Case Inventory (EC-01 through EC-17)
 
-Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.
+Next step: Activate @software-architect and provide
+`docs/requirements/active_task.md` as context.

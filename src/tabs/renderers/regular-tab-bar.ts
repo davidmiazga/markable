@@ -28,6 +28,7 @@ import "../tabs.css";
 
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
+import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
 
 export class RegularTabBar implements ITabRenderer {
   // ── Private state ────────────────────────────────────────────────────────────
@@ -164,6 +165,10 @@ export class RegularTabBar implements ITabRenderer {
    */
   update(tabs: TabEntry[], activeIndex: number): void {
     if (!this.innerEl || !this.newBtnEl) return;
+    // Close any open context menu before rebuilding the DOM. This handles
+    // EC-12 (close button fires while menu is open) and EC-16 (any background
+    // state change triggers a re-render while the menu is visible).
+    closeTabContextMenu();
 
     // Wipe existing tab label buttons. Event listeners attached to the old
     // <button> elements are garbage-collected with their nodes — no manual
@@ -201,6 +206,11 @@ export class RegularTabBar implements ITabRenderer {
    * all attached to child elements that are deleted by clearing innerHTML (NFR-5).
    */
   destroy(): void {
+    // Close any open context menu before tearing down the renderer DOM.
+    // This handles EC-11 (mode switch while menu is open). Called before the
+    // container guard so it fires even on early-return paths.
+    closeTabContextMenu();
+
     if (!this.container) return;
 
     // Remove the mode class so the next renderer starts with a clean container.
@@ -296,6 +306,18 @@ export class RegularTabBar implements ITabRenderer {
     // clicks the tab label area, not the close button (stopPropagation guards).
     btn.addEventListener("click", () => {
       this.onActivate(tab.id);
+    });
+
+    // Right-click: show the tab context menu (FR-1.1 / FR-1.2 / FR-1.3).
+    // e.preventDefault() suppresses the browser's native context menu.
+    // e.stopPropagation() prevents the event from bubbling to the strip
+    // container so that right-clicking the strip background shows no menu
+    // (EC-10 — no listener is attached to the container, and propagation is
+    // stopped here at the tab element level).
+    btn.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showTabContextMenu(tab, e.clientX, e.clientY);
     });
 
     return btn;

@@ -825,6 +825,154 @@ export class TabManager {
   }
 
   /**
+   * Closes all tabs except the one with the given id.
+   *
+   * Each dirty "other" tab receives its own confirm dialog. Cancelling one
+   * does not prevent the remaining tabs from being evaluated.
+   * After the loop, the right-clicked tab is activated and the session saved.
+   *
+   * Implementation note: `getTabs()` returns a shallow copy so the iteration
+   * is not affected by splices to `this.tabs` during the loop. The array
+   * element's current index must be re-looked-up on each iteration for the
+   * same reason.
+   *
+   * @param id  The TabEntry.id of the tab to keep open.
+   */
+  async closeOtherTabs(id: string): Promise<void> {
+    // Build the list of tabs to attempt closing (all except the target).
+    // getTabs() returns a shallow copy so the array can be safely mutated below.
+    const others = this.getTabs().filter((t) => t.id !== id);
+
+    for (const tab of others) {
+      // Media tabs are never dirty — skip the confirm dialog for them.
+      if (tab.isDirty && tab.kind !== "media") {
+        const confirmed = confirm(
+          `"${tab.title}" has unsaved changes. Close without saving?`
+        );
+        if (!confirmed) continue; // Skip this tab; continue evaluating the rest.
+      }
+
+      // Re-look-up the current index after previous iterations may have shifted
+      // the array. If the tab was already removed (should not happen), skip it.
+      const idx = this.tabs.findIndex((t) => t.id === tab.id);
+      if (idx === -1) continue;
+
+      this.tabs.splice(idx, 1);
+
+      // Keep activeIndex consistent with the same rules used in closeTab().
+      if (idx < this.activeIndex) {
+        // A tab to the left of the active one was removed — shift index left.
+        this.activeIndex -= 1;
+      } else if (idx === this.activeIndex) {
+        // The active tab was removed — clamp to the nearest remaining tab.
+        this.activeIndex = Math.min(this.activeIndex, this.tabs.length - 1);
+      }
+      // If idx > this.activeIndex the active tab position is unchanged.
+    }
+
+    // Find the target tab's current (post-splice) index. All splices above may
+    // have shifted the array, so we must re-locate the target by id rather than
+    // using a cached index.
+    const targetIdx = this.tabs.findIndex((t) => t.id === id);
+    if (targetIdx !== -1) {
+      this.activeIndex = targetIdx;
+    }
+
+    // Capture editor state into the now-active tab and apply it to the view.
+    // We do NOT delegate through activateTab() here because activateTab() has an
+    // early-return guard (`if (idx === this.activeIndex) return`) that short-circuits
+    // when the target was already active before the splice loop — the common case when
+    // the user right-clicks the active tab and chooses "Close Other Tabs". In that
+    // scenario activateTab() would return without calling _notifyRenderer() or
+    // _applyActiveTab(), leaving all three tab-bar renderers displaying stale DOM.
+    // By driving the three-step sequence directly we guarantee notification always fires.
+    this._captureActiveTab();
+    this._applyActiveTab();
+    this._notifyRenderer();
+
+    // Persist the session exactly once after all removals.
+    void this.saveSession();
+  }
+
+  /**
+   * Closes all open tabs.
+   *
+   * Dirty tabs each receive their own confirm dialog. Cancelling one does not
+   * prevent others from being evaluated. The last-tab side effects (vault-stay
+   * vs window-close) are applied once after all removals, not per-iteration.
+   *
+   * Why NOT a closeTab() loop: closeTab() checks `this.tabs.length === 1` on
+   * every call and fires the last-tab window/vault branch when only one tab
+   * remains. In a loop that starts with N tabs, iteration N-1 would trigger
+   * that branch early and call window.close() or saveSession() prematurely.
+   *
+   * Safe pattern: snapshot → collect confirmed IDs → apply all removals once
+   * → execute last-tab branch exactly once.
+   */
+  async closeAllTabs(): Promise<void> {
+    if (this.tabs.length === 0) return;
+
+    // Step 1: Snapshot prevents "mutation during iteration" hazards.
+    const snapshot = [...this.tabs];
+
+    // Step 2: Collect the IDs the user confirmed closing.
+    const confirmedIds = new Set<string>();
+    for (const tab of snapshot) {
+      // Media tabs are never dirty — close without dialog.
+      if (tab.isDirty && tab.kind !== "media") {
+        const confirmed = confirm(
+          `"${tab.title}" has unsaved changes. Close without saving?`
+        );
+        if (confirmed) {
+          confirmedIds.add(tab.id);
+        }
+        // If not confirmed, the tab is implicitly kept (not added to confirmedIds).
+      } else {
+        // Clean tabs always close without dialog.
+        confirmedIds.add(tab.id);
+      }
+    }
+
+    // Step 3: Apply all removals in one pass.
+    // Filtering instead of splicing avoids off-by-one problems with multiple
+    // simultaneous removes.
+    this.tabs = this.tabs.filter((t) => !confirmedIds.has(t.id));
+
+    // Step 4: Post-removal state handling.
+    if (this.tabs.length > 0) {
+      // Some dirty tabs were cancelled — they survive. Clamp activeIndex to
+      // the valid range and notify the renderer of the new state.
+      this.activeIndex = Math.max(
+        0,
+        Math.min(this.activeIndex, this.tabs.length - 1)
+      );
+      this._captureActiveTab();
+      this._applyActiveTab();
+      this._notifyRenderer();
+      void this.saveSession();
+      return;
+    }
+
+    // All tabs were closed (every confirm was accepted, or no dirty tabs existed).
+    this.activeIndex = -1;
+
+    const hasActiveVault = this._settingsHaveActiveVault();
+    if (hasActiveVault) {
+      // Vault active: stay open at 0 tabs. The file browser leads the next action.
+      this._applyActiveTab();
+      this._notifyRenderer();
+      void this.saveSession();
+      return;
+    }
+
+    // No vault: close the app window.
+    // Clear state before closing so any saveSession() triggered by the window-close
+    // event (if any) writes empty state.
+    const appWindow = getCurrentWebviewWindow();
+    await appWindow.close();
+  }
+
+  /**
    * Activates the tab with the given id.
    *
    * Captures the current tab's state first (scroll position, editor state)
