@@ -62,6 +62,45 @@ pub struct VaultIndexEntry {
     pub outbound_links: Vec<String>,
 }
 
+/// A single line that matched the search query in a content search.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineMatch {
+    /// 1-based line number within the file.
+    pub line_number: u32,
+    /// Full text of the matching line, trimmed of leading/trailing whitespace.
+    pub line_text: String,
+    /// 0-based character (Unicode scalar) offset of the first match start within
+    /// `line_text` (after trimming). This is a character count, not a byte offset,
+    /// so JavaScript's `String.prototype.slice()` can use it directly even when the
+    /// line contains multi-byte UTF-8 characters before the match position.
+    pub column_start: u32,
+}
+
+/// All matching lines found in a single file during a content search.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContentResult {
+    /// Absolute path to the file.
+    pub path: String,
+    /// Display title: front-matter `title`, first H1 heading, or filename stem.
+    pub title: String,
+    /// All lines that matched the query, in line-number order.
+    pub matches: Vec<LineMatch>,
+}
+
+/// Top-level payload returned by `search_vault_content`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentSearchPayload {
+    /// Matched files, sorted by match count descending (AD-GS-10).
+    pub results: Vec<FileContentResult>,
+    /// True when the result count was truncated at `max_results`.
+    pub capped: bool,
+    /// Count of files that could not be read (permission error, invalid path, etc.).
+    pub skipped_count: u32,
+}
+
 /// Lightweight record for a non-Markdown file (image, PDF, etc.).
 /// Included in VaultIndexPayload so the File Browser can display all vault
 /// contents, not just .md notes.
@@ -194,6 +233,10 @@ fn should_exclude(rel_path: &Path, exclude_patterns: &[String]) -> bool {
 
 /// Maximum bytes read for front matter parsing (NFR-07).
 const FRONT_MATTER_MAX_BYTES: usize = 4096;
+
+/// Maximum bytes read per file during content search (NFR-7, EC-10).
+/// Files larger than this are truncated before line scanning.
+const SEARCH_MAX_FILE_BYTES: usize = 1_048_576; // 1 MB
 
 /// Parsed result of a Markdown file's front matter section.
 struct ParsedFrontMatter {
@@ -903,6 +946,161 @@ pub fn unwatch_vault(
     Ok(())
 }
 
+/// Search the text content of all `.md` files in `root_paths` for a case-insensitive
+/// substring match of `query`.
+///
+/// Walk algorithm:
+///   1. Use `WalkDir` over each root path in `root_paths`.
+///   2. Skip entries that `should_exclude` returns true for (hidden files, patterns).
+///   3. Process only files whose extension is `.md` (case-insensitive).
+///   4. Read up to `SEARCH_MAX_FILE_BYTES` bytes per file. Files that cannot be
+///      opened are silently skipped (EC-8, EC-9); `skipped_count` is incremented.
+///   5. Convert raw bytes to a string via `String::from_utf8_lossy` (AD-GS-02).
+///   6. Scan each line for a case-insensitive substring match of `query`.
+///   7. Collect all matching lines into a `FileContentResult`. A file is only added
+///      to `results` when at least one line matches.
+///   8. Stop adding new files once `results.len() == max_results as usize`
+///      (set `capped = true`). Files already in `results` are still fully scanned
+///      (all their matches are included); the cap applies to the count of *files*.
+///   9. Sort `results` by match count descending before returning (AD-GS-10).
+///
+/// Returns `Err` only when `query` is empty after trimming (caller should guard,
+/// but the Rust side validates too for safety).
+#[tauri::command]
+pub async fn search_vault_content(
+    root_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+    query: String,
+    max_results: u32,
+) -> Result<ContentSearchPayload, String> {
+    // Length justified: file-at-a-time streaming pipeline with per-file error isolation;
+    // extracting inner loops would require passing 4+ mutable accumulators by reference.
+    use std::io::Read;
+
+    let query_trimmed = query.trim().to_lowercase();
+    if query_trimmed.is_empty() {
+        return Err("query must not be empty".to_string());
+    }
+
+    let max = max_results as usize;
+    let mut results: Vec<FileContentResult> = Vec::new();
+    let mut capped = false;
+    let mut skipped_count: u32 = 0;
+
+    'roots: for root_str in &root_paths {
+        let root = Path::new(root_str);
+        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    skipped_count += 1;
+                    continue;
+                }
+            };
+
+            // Only process regular files.
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+
+            // Exclude hidden/excluded paths (vault-relative, so strip the root prefix).
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if should_exclude(rel, &exclude_patterns) {
+                continue;
+            }
+
+            // Only .md files (case-insensitive extension check).
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+
+            // Stop adding new files if the cap is reached.
+            if results.len() >= max {
+                capped = true;
+                break 'roots;
+            }
+
+            // Read up to SEARCH_MAX_FILE_BYTES bytes (EC-10, NFR-7).
+            // Using File::open + take() rather than read_to_string so we can enforce
+            // the per-file size cap before the full file is read into memory.
+            let bytes: Vec<u8> = {
+                let file = match std::fs::File::open(path) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        skipped_count += 1;
+                        continue;
+                    }
+                };
+                let mut reader = file.take(SEARCH_MAX_FILE_BYTES as u64);
+                let mut buf = Vec::with_capacity(SEARCH_MAX_FILE_BYTES);
+                match reader.read_to_end(&mut buf) {
+                    Ok(_) => buf,
+                    Err(_) => {
+                        skipped_count += 1;
+                        continue;
+                    }
+                }
+            };
+
+            // Lossy UTF-8 decode (AD-GS-02): invalid sequences become U+FFFD, which
+            // cannot match any valid user query string, so search quality is unaffected.
+            let content = String::from_utf8_lossy(&bytes);
+
+            // Extract title for display (same priority as build_vault_index).
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let fm = parse_front_matter(&content);
+            let title = fm.title.unwrap_or_else(|| stem.clone());
+
+            // Scan lines for case-insensitive substring matches.
+            let mut file_matches: Vec<LineMatch> = Vec::new();
+            for (line_idx, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                let lower = trimmed.to_lowercase();
+                // `str::find()` returns a *byte* offset. We convert it to a
+                // *character* (Unicode scalar) count so that JavaScript's
+                // `String.prototype.slice()` can use `column_start` directly,
+                // even when multi-byte UTF-8 characters appear before the match
+                // (e.g. "日本語notes" — "notes" starts at char index 3, not byte 9).
+                if let Some(byte_pos) = lower.find(&query_trimmed) {
+                    let char_offset = lower[..byte_pos].chars().count() as u32;
+                    file_matches.push(LineMatch {
+                        line_number: (line_idx + 1) as u32,
+                        line_text: trimmed.to_string(),
+                        column_start: char_offset,
+                    });
+                }
+            }
+
+            if !file_matches.is_empty() {
+                results.push(FileContentResult {
+                    path: path.to_string_lossy().to_string(),
+                    title,
+                    matches: file_matches,
+                });
+            }
+        }
+    }
+
+    // Sort by match count descending so the most-relevant files appear first (AD-GS-10).
+    results.sort_by(|a, b| b.matches.len().cmp(&a.matches.len()));
+
+    Ok(ContentSearchPayload {
+        results,
+        capped,
+        skipped_count,
+    })
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1306,5 +1504,341 @@ mod tests {
         assert_eq!(result.entries.len(), 0);
         assert_eq!(result.total_files_found, 0);
         assert!(!result.capped);
+    }
+}
+
+// ─── Content search tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod content_search_tests {
+    use super::*;
+
+    // Helper: create a temp vault directory with named files and contents.
+    fn make_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, content) in files {
+            let path = dir.path().join(name);
+            std::fs::write(&path, content).unwrap();
+        }
+        dir
+    }
+
+    /// D-1 — basic match returns correct LineMatch fields.
+    #[tokio::test]
+    async fn test_basic_match() {
+        let dir = make_vault(&[("note.md", "line one\nfoo bar\nline three\n")]);
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "foo".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.results.len(), 1);
+        let file = &result.results[0];
+        assert_eq!(file.matches.len(), 1);
+        let m = &file.matches[0];
+        assert_eq!(m.line_number, 2);
+        assert_eq!(m.line_text, "foo bar");
+        assert_eq!(m.column_start, 0);
+        assert!(!result.capped);
+        assert_eq!(result.skipped_count, 0);
+    }
+
+    /// D-2 — case-insensitive search (EC-11 related).
+    #[tokio::test]
+    async fn test_case_insensitive() {
+        let dir = make_vault(&[("a.md", "Hello World\n")]);
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "hello".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].matches[0].line_text, "Hello World");
+    }
+
+    /// D-3 — EC-11: regex special characters treated as literals, not patterns.
+    /// If regex were used, "$" would be an end-of-string anchor and would never match
+    /// in the middle of a line. Substring matching must find it as a literal character.
+    #[tokio::test]
+    async fn test_regex_chars_literal() {
+        let dir = make_vault(&[("a.md", "price: $5.00\nno match\n")]);
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "$5.00".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 1);
+    }
+
+    /// D-4 — EC-10: file larger than 1 MB is truncated, not skipped.
+    /// The match is placed 100 bytes beyond the 1 MB boundary; the search must NOT
+    /// find it, but skipped_count must remain 0 (the file was opened and read, not
+    /// skipped). Using 1 MB + 100 bytes as the filler ensures "FINDME" is clearly
+    /// past the cap, not straddling the exact boundary (L-2).
+    #[tokio::test]
+    async fn test_large_file_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        // Fill 1 MB + 100 bytes with 'x', then append the search target immediately
+        // after. The 100-byte margin guarantees "FINDME" is not straddling the cap.
+        let filler = "x".repeat(1_048_576 + 100); // 1 MB + 100 bytes
+        let beyond = "FINDME";
+        std::fs::write(&path, format!("{}{}", filler, beyond)).unwrap();
+
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "FINDME".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        // FINDME is beyond the 1 MB cap, so it should NOT be found.
+        assert_eq!(result.results.len(), 0);
+        // The file was processed (not skipped) — skipped_count must be 0.
+        assert_eq!(result.skipped_count, 0);
+    }
+
+    /// D-5 — EC-10: a match within the first 1 MB IS found even on a large file.
+    #[tokio::test]
+    async fn test_match_within_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        // "FINDME" near the start, then 2 MB of filler beyond the cap.
+        let content = format!("FINDME\n{}", "y".repeat(2_000_000));
+        std::fs::write(&path, content).unwrap();
+
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "FINDME".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 1);
+    }
+
+    /// D-6 — EC-5: empty vault returns empty results, not an error.
+    #[tokio::test]
+    async fn test_empty_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "anything".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 0);
+        assert!(!result.capped);
+        assert_eq!(result.skipped_count, 0);
+    }
+
+    /// D-7 — max_results cap sets capped = true when more files match than max_results.
+    #[tokio::test]
+    async fn test_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("note{}.md", i)), "foo").unwrap();
+        }
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "foo".to_string(),
+            3, // max_results = 3, but 5 files match
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 3);
+        assert!(result.capped);
+    }
+
+    /// D-8 — EC-8/EC-9: unreadable file increments skipped_count.
+    /// Requires Unix permission control; skipped on non-Unix targets.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_unreadable_file_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.md");
+        std::fs::write(&path, "hidden content foo").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o000); // remove all permissions
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "foo".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.skipped_count, 1);
+        assert_eq!(result.results.len(), 0);
+
+        // Restore permissions so the temp directory can be cleaned up.
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    /// D-9 — AD-GS-10: results are sorted by match count descending.
+    #[tokio::test]
+    async fn test_results_sorted_by_match_count() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one_match.md"), "foo\n").unwrap();
+        std::fs::write(dir.path().join("three_matches.md"), "foo\nfoo\nfoo\n").unwrap();
+        std::fs::write(dir.path().join("two_matches.md"), "foo\nfoo\n").unwrap();
+
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "foo".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 3);
+        // Most matches first.
+        assert_eq!(result.results[0].matches.len(), 3);
+        assert_eq!(result.results[1].matches.len(), 2);
+        assert_eq!(result.results[2].matches.len(), 1);
+    }
+
+    /// D-10 — EC-20: multi-root vault merges results from all roots into one list.
+    #[tokio::test]
+    async fn test_multi_root() {
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(dir1.path().join("a.md"), "foo in root1\n").unwrap();
+        std::fs::write(dir2.path().join("b.md"), "foo in root2\n").unwrap();
+
+        let result = search_vault_content(
+            vec![
+                dir1.path().to_str().unwrap().to_string(),
+                dir2.path().to_str().unwrap().to_string(),
+            ],
+            vec![],
+            "foo".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.results.len(), 2);
+    }
+
+    /// D-11 — empty query returns Err (Rust-side validation).
+    #[tokio::test]
+    async fn test_empty_query_returns_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "".to_string(),
+            50,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    /// D-12 — NFR-3: large vault does not panic or hang (smoke test).
+    /// Not a hard timing assertion — verifies no infinite loop or crash.
+    #[tokio::test]
+    async fn test_large_vault_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            std::fs::write(
+                dir.path().join(format!("note{}.md", i)),
+                format!("content line {}\nanother line\n", i),
+            )
+            .unwrap();
+        }
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "line".to_string(),
+            50,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    /// D-12b — H-1: multi-byte UTF-8 characters before the match produce a
+    /// character-count column_start, not a byte-offset column_start.
+    ///
+    /// "日本語notes" — "日", "本", "語" are each 3 bytes in UTF-8, so "notes"
+    /// starts at byte offset 9 but at character index 3. The fix in
+    /// `search_vault_content` must return `column_start = 3`, not 9.
+    #[tokio::test]
+    async fn test_multibyte_column_start_is_char_count() {
+        let dir = make_vault(&[("cjk.md", "日本語notes\n")]);
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "notes".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.results.len(), 1, "should find one matching file");
+        let m = &result.results[0].matches[0];
+        assert_eq!(
+            m.column_start, 3,
+            "column_start must be the char count (3), not the byte offset (9)"
+        );
+        assert_eq!(m.line_text, "日本語notes");
+    }
+
+    /// D-13 — M-4 / AD-GS-02: files with invalid UTF-8 bytes are searched lossily
+    /// (via `from_utf8_lossy`) rather than skipped, so `skipped_count` is NOT
+    /// incremented. This test verifies the implemented behaviour deviates from the
+    /// original EC-9 requirement (which said "file skipped, counted") as documented
+    /// in AD-GS-02.
+    #[tokio::test]
+    async fn test_invalid_utf8_searched_lossily_not_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invalid.md");
+
+        // Write a file that contains invalid UTF-8 bytes followed by a valid ASCII
+        // query target. The 0xFF byte is not valid in UTF-8; from_utf8_lossy replaces
+        // it with U+FFFD, which cannot match any user query (so it does not interfere).
+        let mut content: Vec<u8> = b"valid prefix ".to_vec();
+        content.push(0xFF); // invalid UTF-8 byte
+        content.extend_from_slice(b" FINDME\n");
+        std::fs::write(&path, &content).unwrap();
+
+        let result = search_vault_content(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "FINDME".to_string(),
+            50,
+        )
+        .await
+        .unwrap();
+
+        // The file must NOT be skipped (skipped_count stays 0).
+        assert_eq!(
+            result.skipped_count, 0,
+            "invalid UTF-8 file should not increment skipped_count (lossy decode, not skip)"
+        );
+        // The valid ASCII query must still be found in the lossily-decoded content.
+        assert_eq!(
+            result.results.len(), 1,
+            "FINDME must be found in the lossily-decoded file"
+        );
     }
 }

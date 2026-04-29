@@ -412,3 +412,94 @@ export async function revealInFinder(path: string): Promise<void> {
     console.error("revealInFinder failed:", error);
   }
 }
+
+// ─── Content search types (step_01) ──────────────────────────────────────────
+
+/**
+ * A single line that matched the search query.
+ * Mirrors the Rust LineMatch struct (serde camelCase).
+ */
+export interface LineMatch {
+  /** 1-based line number within the file. */
+  lineNumber: number;
+  /** Full text of the matching line (trimmed). */
+  lineText: string;
+  /**
+   * 0-based character (Unicode scalar) offset of the match start within lineText.
+   * This is a character count, not a byte offset, so it can be used directly with
+   * JavaScript's String.prototype.slice() even when multi-byte characters precede
+   * the match position.
+   */
+  columnStart: number;
+}
+
+/**
+ * All matching lines found in a single file.
+ * Mirrors the Rust FileContentResult struct.
+ */
+export interface FileContentResult {
+  /** Absolute path to the file. */
+  path: string;
+  /** Display title: front-matter title, H1 heading, or filename stem. */
+  title: string;
+  /** All lines that matched, in line-number order. */
+  matches: LineMatch[];
+}
+
+/**
+ * Top-level payload returned by the search_vault_content Tauri command.
+ * Mirrors the Rust ContentSearchPayload struct.
+ */
+export interface ContentSearchPayload {
+  /** Matched files, sorted by match count descending. */
+  results: FileContentResult[];
+  /** True when the result set was truncated at max_results. */
+  capped: boolean;
+  /** Count of files that could not be read. */
+  skippedCount: number;
+}
+
+/**
+ * Search file contents across all root paths in the vault.
+ *
+ * This is the typed bridge wrapper for the `search_vault_content` Tauri command.
+ * The IIFE command-bar plugin calls the command directly via
+ * `__TAURI_INTERNALS__.invoke` (IIFE constraint — AD-GS from 00_index.md).
+ * This wrapper exists for testability and future non-IIFE consumers (FR-15, NFR-8).
+ *
+ * Invoke parameter names are snake_case because Tauri's generate_handler! macro
+ * reads argument names from the Rust function signature, not from serde renames.
+ * The serde rename_all = "camelCase" applies only to the returned payload, not
+ * to the invocation parameters.
+ *
+ * @param params.rootPaths - Absolute paths of vault root directories to search.
+ * @param params.excludePatterns - Glob patterns for directories/files to skip.
+ * @param params.query - Substring to search for (case-insensitive).
+ * @param params.maxResults - Maximum number of files to include in results.
+ * @returns FileResult<ContentSearchPayload> — never throws.
+ */
+export async function searchVaultContent(params: {
+  rootPaths: string[];
+  excludePatterns: string[];
+  query: string;
+  maxResults: number;
+}): Promise<FileResult<ContentSearchPayload>> {
+  try {
+    const payload = await invoke<ContentSearchPayload>("search_vault_content", {
+      root_paths: params.rootPaths,
+      exclude_patterns: params.excludePatterns,
+      query: params.query,
+      max_results: params.maxResults,
+    });
+    return { ok: true, value: payload };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "search_vault_content",
+      } satisfies TauriCommandError,
+    };
+  }
+}

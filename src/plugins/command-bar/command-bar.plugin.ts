@@ -54,19 +54,25 @@ export { renderHighlightedLabel };
 // ---------------------------------------------------------------------------
 
 /**
- * The three operating modes of the modal command bar.
+ * The four operating modes of the modal command bar.
  *
- *   files       — open tabs + workspace file search (Cmd-P)
+ *   files       — open tabs + vault-wide file search (Cmd-P)
  *   commands    — app commands + headings (Cmd-Shift-P, legacy default)
  *   keybindings — browse and reassign keyboard shortcuts (Cmd-Shift-K)
+ *   content     — full-text vault content search (accessed via '/' prefix)
  *
  * Mode state is stored as a module-level variable (_mode) — never derived from
  * DOM attributes — to keep transitions O(1) and avoid layout reads (AD-CB-01).
  */
-export type BarMode = "files" | "commands" | "keybindings";
+export type BarMode = "files" | "commands" | "keybindings" | "content";
 
-/** The three result categories shown in the Command Bar. */
-type ResultCategory = "commands" | "headings" | "recent";
+/**
+ * The result categories shown in the Command Bar.
+ * "content" is used for content-search result rows registered in _visibleResults;
+ * the rendering path for content mode ignores this field, but having a proper
+ * literal avoids the `as any` cast that would otherwise be needed.
+ */
+type ResultCategory = "commands" | "headings" | "recent" | "content";
 
 /**
  * A single item in the Command Bar results list.
@@ -172,6 +178,10 @@ const CATEGORY_LABELS: Record<ResultCategory, string> = {
   commands:  "Commands",
   headings:  "Headings",
   recent:    "Recent Files",
+  // "content" is used for rows registered in _visibleResults during content-mode
+  // search results. The label is never surfaced in the UI (content mode has its
+  // own section header rendering path), but the exhaustive Record type requires it.
+  content:   "Content Search",
 };
 
 /**
@@ -210,47 +220,53 @@ const DEFAULT_SETTINGS: CommandBarSettings = {
 /**
  * Placeholder text shown in the search input for each mode.
  * Gives the user an immediate visual cue about what the current mode searches.
+ * FR-4: files mode now says "Search vault files…" to communicate vault-wide scope.
  */
-const MODE_PLACEHOLDERS: Record<BarMode, string> = {
-  files:       "Open file or tab…",
+export const MODE_PLACEHOLDERS: Record<BarMode, string> = {
+  files:       "Search vault files…",
   commands:    "Type a command or search headings…",
   keybindings: "Search actions to assign shortcut…",
+  content:     "Search file contents…",
 };
 
 /**
  * Footer hint text for each mode. Shown in the .cb-footer bar at the bottom
  * of the overlay panel so the user knows what Enter and Escape do.
  */
-const MODE_FOOTER_HINTS: Record<BarMode, string> = {
+export const MODE_FOOTER_HINTS: Record<BarMode, string> = {
   files:       "Enter to open  ·  Esc to close",
   commands:    "Enter to run  ·  Esc to close",
   keybindings: "Enter to assign shortcut  ·  Esc to close",
+  content:     "Enter to search  ·  Esc to close",
 };
 
 /**
  * Human-readable mode labels displayed in the mode badge button.
  */
-const MODE_BADGE_LABELS: Record<BarMode, string> = {
+export const MODE_BADGE_LABELS: Record<BarMode, string> = {
   files:       "Files",
   commands:    "Commands",
   keybindings: "Keybindings",
+  content:     "Content",
 };
 
 /**
- * Cycle order for tab strip clicks (FR-08.3).
- * Kept for keyboard / fallback cycling logic.
+ * Cycle order for tab strip clicks (FR-08.3, AD-GS-07).
+ * Content is appended at the end — accessed primarily via '/' prefix, not Tab cycling.
  */
-const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings"];
+export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "content"];
 
 /**
  * Shortcut hint glyphs shown next to each tab label.
  * Displayed in a muted, smaller font so power users can see the hotkey at a glance
  * without the glyph competing visually with the tab label (NFR-04 — no hardcoded hex).
+ * Content mode has no dedicated shortcut — it is accessed via the '/' prefix (FR-5).
  */
-const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
+export const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
   files:       "⌘P",
   commands:    "⌘⇧P",
   keybindings: "⌘⇧K",
+  content:     "",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
@@ -724,6 +740,76 @@ mark.cb-match {
   display: none;
   width: 100%;
   padding: 2px 0;
+}
+
+/* ── Content mode rows (Step 03) ─────────────────────────────── */
+
+/* File header row: bold title with a separator above each group. */
+.cb-result--content-header {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  border-top: 1px solid var(--border-color);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+/* Remove the top border from the very first header row in the list. */
+.cb-result--content-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+/* Excerpt rows: indented, smaller, muted text. */
+.cb-result--content-excerpt {
+  padding-left: 24px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* The matched substring within an excerpt is highlighted in accent colour. */
+.cb-result--content-excerpt strong {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+/* Line number prefix shown before each excerpt line. */
+.cb-content-excerpt-linenum {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* The line text part of an excerpt row — clipped if too long. */
+.cb-content-excerpt-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "N more matches" non-clickable trailer row for files with >3 matches. */
+.cb-result--content-more {
+  padding: 2px 24px 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  cursor: default;
+  user-select: none;
+}
+
+/* General content mode notice rows (empty state, errors, loading). */
+.cb-content-notice {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Warning variant: cap notice and skipped-files notice. */
+.cb-content-notice--warning {
+  color: var(--accent-color);
+  font-size: 12px;
 }
 `;
 
@@ -2306,6 +2392,13 @@ let _api:         MarkablePluginAPI | null = null;
 // Per-open state.
 let _mode: BarMode = "files";            // current bar mode (AD-CB-01: module var, not DOM)
 let _openGeneration = 0;                 // incremented each openBar(); stale-async guard (EC-28)
+
+/** Incremented each time a new content search is launched. Used to discard stale
+ *  async results (EC-12, EC-13, EC-14). Separate from _openGeneration (AD-GS-03). */
+let _contentSearchGeneration = 0;
+
+/** True while a content search Rust call is in flight. Prevents duplicate launches. */
+let _contentSearchInFlight = false;
 let _allResults: CommandBarResult[] = [];
 let _visibleResults: CommandBarResult[] = [];
 let _selectedId: string | null = null;
@@ -2564,11 +2657,90 @@ function refreshFilesDisplay(): void {
  *
  * @param generation - The generation value captured at openBar() time.
  */
+/**
+ * Asynchronously fetch workspace .md files, then update the Files mode display.
+ *
+ * Path selection (FR-1, FR-2, FR-3):
+ *   1. If a vault is active (`getActiveVault()` is non-null):
+ *      a. If the vault index is already built (`getVaultIndex()` is non-null):
+ *         extract absolute paths synchronously from entries (NFR-4). No Rust call.
+ *      b. If the vault index is still building (null):
+ *         show loading notice; schedule a single 1.5s retry (FR-3, AD-GS-08).
+ *   2. If no vault is active (`getActiveVault()` is null):
+ *      fall back to the previous behaviour: derive workspaceDir from
+ *      __MARKABLE_CURRENT_FILE__ and invoke("list_md_files", { dir }). If
+ *      __MARKABLE_CURRENT_FILE__ is also null, set no-workspace state (FR-2).
+ *
+ * Generation counter (EC-12/EC-28): the generation value is captured at call time
+ * and compared after every await. Stale results are silently discarded.
+ *
+ * EC-17 (corrupt index): entries with a falsy path are silently skipped.
+ *
+ * @param generation - The generation value captured at openBar() time.
+ */
 async function fetchWorkspaceFiles(generation: number): Promise<void> {
+  // Length justified: two-phase fetch (sync tab phase, async vault-index phase) with
+  // multiple early-exit guards; extracting phases would require exposing internal generation state.
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+
+  // ── Vault path (FR-1, FR-3) ──────────────────────────────────────────────
+  if (vm && typeof vm.getActiveVault === "function" && vm.getActiveVault() !== null) {
+    const index = (typeof vm.getVaultIndex === "function") ? vm.getVaultIndex() : null;
+
+    if (index !== null) {
+      // FR-1: synchronous vault-index read (NFR-4 — no async latency).
+      if (_openGeneration !== generation) return; // EC-28: stale guard
+      const entries: Array<{ path: string }> = index.entries ?? [];
+      // EC-17: skip entries with a falsy path (corrupt index guard).
+      const workspaceFiles: string[] = entries
+        .filter((e) => !!e.path)
+        .map((e) => e.path);
+
+      const tabs = getOpenTabs();
+      const openPaths = new Set<string>(tabs.flatMap((t) => (t.filePath ? [t.filePath] : [])));
+      _totalWorkspaceCount = countWorkspaceBeforeCap(workspaceFiles, openPaths);
+
+      _fileModeResults = buildFilesResults({
+        tabs,
+        workspaceFiles,
+        workspaceLoadState: "loaded",
+        openTab: switchToTab,
+        openFile: openFileInTab,
+      });
+      _fileListLoaded = true;
+      _fileListError = false;
+
+      if (_mode === "files" && _isOpen) refreshFilesDisplay();
+      return;
+    }
+
+    // FR-3: vault active but index still building — show loading notice and
+    // schedule a single 1.5s retry rather than continuous polling (AD-GS-08).
+    if (_openGeneration !== generation) return;
+    _fileModeResults = buildFilesResults({
+      tabs: getOpenTabs(),
+      workspaceFiles: [],
+      workspaceLoadState: "loading",
+      openTab: switchToTab,
+      openFile: openFileInTab,
+    });
+    _fileListLoaded = false;
+    _fileListError = false;
+    if (_mode === "files" && _isOpen) refreshFilesDisplay();
+
+    const genAtRetry = generation;
+    setTimeout(() => {
+      if (_openGeneration !== genAtRetry || !_isOpen || _mode !== "files") return;
+      void fetchWorkspaceFiles(genAtRetry);
+    }, 1500);
+    return;
+  }
+
+  // ── Fallback path (FR-2): no vault active ────────────────────────────────
   const currentFile: string | null = (window as any).__MARKABLE_CURRENT_FILE__ ?? null;
 
   if (!currentFile) {
-    // EC-01/EC-02: no open file, so no workspace directory to scan.
+    // EC-2: no open file and no vault — show no-workspace notice.
     if (_openGeneration !== generation) return; // EC-28: stale guard
     _fileListLoaded = true;
     _fileListError = false;
@@ -2582,7 +2754,7 @@ async function fetchWorkspaceFiles(generation: number): Promise<void> {
   // Edge: if the path was just "/file.md", parts becomes ["", "file.md"] → joined = "".
   // The `|| "/"` fallback ensures we never pass an empty string to invoke.
   const parts = currentFile.split("/");
-  parts.pop(); // remove the filename segment
+  parts.pop();
   const workspaceDir = parts.join("/") || "/";
 
   let workspaceFiles: string[] = [];
@@ -2610,8 +2782,6 @@ async function fetchWorkspaceFiles(generation: number): Promise<void> {
   const openPaths = new Set<string>(tabs.flatMap((t) => (t.filePath ? [t.filePath] : [])));
   _totalWorkspaceCount = countWorkspaceBeforeCap(workspaceFiles, openPaths);
 
-  // Build the full FilesResult[] including both tabs and workspace files.
-  // This replaces the phase-1 tabs-only result set with the complete set.
   _fileModeResults = buildFilesResults({
     tabs,
     workspaceFiles,
@@ -2619,14 +2789,301 @@ async function fetchWorkspaceFiles(generation: number): Promise<void> {
     openTab: switchToTab,
     openFile: openFileInTab,
   });
-
   _fileListLoaded = true;
   _fileListError = false;
 
-  // Only refresh if the bar is still open in files mode (EC-28: second guard on
-  // the display path, complementing the generation check above).
-  if (_mode === "files" && _isOpen) {
-    refreshFilesDisplay();
+  if (_mode === "files" && _isOpen) refreshFilesDisplay();
+}
+
+// ---------------------------------------------------------------------------
+// Content mode helpers (Step 03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Called when the user presses Enter in content mode.
+ *
+ * Guards:
+ *   - FR-16: empty/whitespace query → show hint, no Rust call.
+ *   - EC-3:  no active vault → show notice, no Rust call.
+ *   - EC-12: a search is already in flight → no-op (generation counter prevents stale results).
+ *
+ * On success: renders grouped results via renderContentResults().
+ * On error:   renders an inline error notice.
+ */
+async function handleContentSearchEnter(): Promise<void> {
+  // Length justified: sequential async guard chain — generation checks, vault checks,
+  // invoke, stale-result guard; each step has ordering dependencies that resist decomposition.
+  if (!_inputEl || !_resultsEl) return;
+
+  const query = _inputEl.value.trim();
+
+  // FR-16: empty query guard — no Rust call, show a helpful prompt instead.
+  if (!query) {
+    renderContentNotice("Enter a search term");
+    return;
+  }
+
+  // EC-3: no vault open — content search requires a vault for root_paths.
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const activeVault = (vm && typeof vm.getActiveVault === "function")
+    ? vm.getActiveVault()
+    : null;
+  if (!activeVault) {
+    renderContentNotice("No vault open — content search requires a vault");
+    return;
+  }
+
+  // EC-1 (H-2): vault is active but the index is still being built.
+  // The index is not needed for content search itself (root_paths come from the
+  // vault object, not the index), but EC-1 requires a loading notice rather than
+  // invoking the Rust command when the index is null, so users understand that
+  // the vault is initialising. Try again in a moment.
+  const vaultIdx = (typeof vm.getVaultIndex === "function") ? vm.getVaultIndex() : null;
+  if (vaultIdx === null) {
+    renderContentNotice("Vault index is still building — try again in a moment");
+    return;
+  }
+
+  // Extract root paths and exclude patterns from the active vault object.
+  const rootPaths: string[] = activeVault.rootPaths ?? [];
+  const excludePatterns: string[] = activeVault.excludePatterns ?? [];
+
+  // EC-12: prevent duplicate in-flight calls (a second Enter while searching is a no-op).
+  if (_contentSearchInFlight) return;
+
+  // Capture generation before the await so we can detect staleness afterward.
+  _contentSearchGeneration++;
+  const gen = _contentSearchGeneration;
+  _contentSearchInFlight = true;
+
+  // Show loading state immediately while the Rust call is in progress.
+  renderContentLoading();
+
+  let payload: any;
+  try {
+    payload = await (window as any).__TAURI_INTERNALS__.invoke(
+      "search_vault_content",
+      {
+        root_paths: rootPaths,
+        exclude_patterns: excludePatterns,
+        query,
+        max_results: 50,
+      },
+    );
+  } catch (err) {
+    // Only update UI if this generation is still current (EC-13, EC-14).
+    if (_contentSearchGeneration !== gen || !_isOpen || _mode !== "content") {
+      _contentSearchInFlight = false;
+      return;
+    }
+    _contentSearchInFlight = false;
+    renderContentNotice(`Search failed: ${String(err)}`);
+    return;
+  }
+
+  _contentSearchInFlight = false;
+
+  // EC-12 / EC-13 / EC-14: discard stale results (bar closed, vault switched,
+  // or a new search was launched while this one was in flight).
+  if (_contentSearchGeneration !== gen || !_isOpen || _mode !== "content") return;
+
+  renderContentResults(payload, query);
+}
+
+/**
+ * Render a single informational notice row in the content mode results area.
+ * Used for: no-vault state, empty query, error state, no-results state.
+ *
+ * @param message - Text to display in the notice row.
+ */
+function renderContentNotice(message: string): void {
+  if (!_resultsEl) return;
+  _resultsEl.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "cb-content-notice";
+  row.textContent = message;
+  _resultsEl.appendChild(row);
+  _visibleResults = [];
+  _selectedId = null;
+}
+
+/**
+ * Render a loading indicator in the content mode results area.
+ * Replaces any previous results while the Rust search call is in progress.
+ */
+function renderContentLoading(): void {
+  if (!_resultsEl) return;
+  _resultsEl.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "cb-content-notice";
+  row.textContent = "Searching…";
+  _resultsEl.appendChild(row);
+  _visibleResults = [];
+  _selectedId = null;
+}
+
+/**
+ * Render content search results grouped by file.
+ *
+ * @param payload - The ContentSearchPayload from search_vault_content, or null to
+ *                  render the initial empty state (footer hint, no rows).
+ * @param query   - The query string used for match highlighting.
+ *
+ * Layout per FileContentResult (FR-10, AD-GS-05):
+ *   1. Clickable file-header row  (.cb-result.cb-result--content-header)
+ *      Shows the file title; data-id set for click routing (FR-11).
+ *   2. Up to 3 excerpt rows (.cb-result.cb-result--content-excerpt)
+ *      Each shows "line_number: line_text" with the matched substring bolded.
+ *      data-id set so clicks open the same file (FR-11).
+ *   3. "N more matches" non-clickable row (.cb-result--content-more) when
+ *      matches.length > 3.
+ *
+ * Notices prepended when relevant (EC-7, EC-8):
+ *   - capped === true: "Showing matches in the first N files — refine your query to see more"
+ *   - skippedCount > 0: "N files could not be searched"
+ *
+ * EC-6 (no results): "No results for 'query'" shown as a notice row.
+ * EC-5 (empty vault): same as EC-6.
+ */
+export function renderContentResults(payload: any | null, query: string): void {
+  // Length justified: single DOM pass over variable-depth result tree; sub-functions
+  // would require threading _resultsEl through every callsite.
+  if (!_resultsEl) return;
+  _resultsEl.innerHTML = "";
+  _visibleResults = [];
+  _selectedId = null;
+
+  // Null payload means the user just switched into content mode — show empty state.
+  if (payload === null) return;
+
+  const results: any[] = payload.results ?? [];
+  const capped: boolean = payload.capped ?? false;
+  const skippedCount: number = payload.skippedCount ?? 0;
+
+  // EC-7: cap notice — shown when results were truncated at max_results.
+  if (capped) {
+    const capRow = document.createElement("div");
+    capRow.className = "cb-content-notice cb-content-notice--warning";
+    capRow.textContent = `Showing matches in the first ${results.length} files — refine your query to see more`;
+    _resultsEl.appendChild(capRow);
+  }
+
+  // EC-8: skipped files notice — shown when one or more files could not be read.
+  if (skippedCount > 0) {
+    const skipRow = document.createElement("div");
+    skipRow.className = "cb-content-notice cb-content-notice--warning";
+    skipRow.textContent = `${skippedCount} file${skippedCount === 1 ? "" : "s"} could not be searched`;
+    _resultsEl.appendChild(skipRow);
+  }
+
+  // EC-5 / EC-6: no results — show a friendly empty-state message.
+  if (results.length === 0) {
+    const emptyRow = document.createElement("div");
+    emptyRow.className = "cb-content-notice";
+    emptyRow.textContent = `No results for "${query}"`;
+    _resultsEl.appendChild(emptyRow);
+    return;
+  }
+
+  // Render one group per FileContentResult.
+  for (const fileResult of results) {
+    const filePath: string = fileResult.path ?? "";
+    const title: string = fileResult.title || filePath.split("/").pop() || "(untitled)";
+    const matches: any[] = fileResult.matches ?? [];
+
+    // Unique id for this file group. The header and excerpt rows share the same
+    // open-file action but have distinct ids for aria-activedescendant tracking.
+    const fileId = `content-file:${filePath}`;
+
+    // Action shared by the file header and all its excerpt rows (FR-11).
+    // Captures filePath in a closure to avoid the loop variable problem.
+    const fp = filePath;
+    const openAction = (): void => {
+      openFileInTab(fp);
+      closeBar();
+    };
+
+    // 1. File header row — shows the file title, clickable.
+    const headerRow = document.createElement("div");
+    headerRow.className = "cb-result cb-result--content-header";
+    headerRow.dataset.id = fileId;
+    headerRow.setAttribute("role", "option");
+    headerRow.textContent = title;
+    headerRow.addEventListener("click", openAction);
+    _resultsEl.appendChild(headerRow);
+
+    // Register in _visibleResults so arrow-key navigation works.
+    _visibleResults.push({
+      id: fileId,
+      // "recent" is the closest existing category for content results;
+      // content mode ignores the category field in its rendering path.
+      category: "content",
+      label: title,
+      dimmed: false,
+      action: openAction,
+    });
+
+    // 2. Up to 3 excerpt rows with highlighted match substrings.
+    const excerptCount = Math.min(matches.length, 3);
+    for (let i = 0; i < excerptCount; i++) {
+      const match = matches[i];
+      const lineNum: number = match.lineNumber ?? 0;
+      const lineText: string = match.lineText ?? "";
+      const colStart: number = match.columnStart ?? 0;
+      const queryLen = query.length;
+
+      const excerptId = `content-excerpt:${filePath}:${lineNum}`;
+
+      const excerptRow = document.createElement("div");
+      excerptRow.className = "cb-result cb-result--content-excerpt";
+      excerptRow.dataset.id = excerptId;
+      excerptRow.setAttribute("role", "option");
+      excerptRow.addEventListener("click", openAction);
+
+      // Build highlighted line text using DOM nodes to avoid innerHTML XSS risk.
+      // Structure: <span class="linenum">N: </span><span class="text">before<strong>match</strong>after</span>
+      const before = lineText.slice(0, colStart);
+      const matched = lineText.slice(colStart, colStart + queryLen);
+      const after = lineText.slice(colStart + queryLen);
+
+      const lineNumSpan = document.createElement("span");
+      lineNumSpan.className = "cb-content-excerpt-linenum";
+      lineNumSpan.textContent = `${lineNum}: `;
+
+      const textSpan = document.createElement("span");
+      textSpan.className = "cb-content-excerpt-text";
+      textSpan.appendChild(document.createTextNode(before));
+      const strong = document.createElement("strong");
+      strong.textContent = matched;
+      textSpan.appendChild(strong);
+      textSpan.appendChild(document.createTextNode(after));
+
+      excerptRow.appendChild(lineNumSpan);
+      excerptRow.appendChild(textSpan);
+      _resultsEl.appendChild(excerptRow);
+
+      _visibleResults.push({
+        id: excerptId,
+        category: "content",
+        label: lineText,
+        dimmed: false,
+        action: openAction,
+      });
+    }
+
+    // 3. "N more matches" row — non-clickable, no data-id (AD-GS-05).
+    if (matches.length > 3) {
+      const moreRow = document.createElement("div");
+      moreRow.className = "cb-result--content-more";
+      moreRow.textContent = `${matches.length - 3} more match${matches.length - 3 === 1 ? "" : "es"}`;
+      _resultsEl.appendChild(moreRow);
+    }
+  }
+
+  // Set initial keyboard selection to the first result.
+  if (_visibleResults.length > 0 && _inputEl) {
+    _selectedId = _visibleResults[0].id;
+    updateAriaActiveDescendant(_inputEl, _selectedId);
   }
 }
 
@@ -3085,6 +3542,9 @@ function closeBar(): void {
   }
 
   _openGeneration++;   // EC-28: guard stale async fetches (preset loading, workspace scan)
+  // EC-12/EC-13: invalidate any in-flight content search so stale results are discarded.
+  _contentSearchGeneration++;
+  _contentSearchInFlight = false;
   _isOpen = false;
   // FR-01.9: always reset to files mode on close so the next open is predictable.
   _mode = "files";
@@ -3167,6 +3627,24 @@ function onInput(this: HTMLInputElement): void {
       _presets = presets;
       renderPresetRow();
     });
+    return;
+  }
+
+  // FR-6: '/' as the sole character in files mode → switch to content mode.
+  // EC-21: once already in content mode, '/' is a normal search character (no switch).
+  // EC-15: '/' within a longer query (e.g. "design/") does NOT switch modes because
+  //         `raw` would be "design/", not the single character "/".
+  if (_mode === "files" && raw === "/") {
+    setMode("content");
+    this.value = "";
+    // Increment _openGeneration so any stale async fetch (e.g. a pending
+    // fetchWorkspaceFiles from files mode) sees this switch and self-cancels (M-3).
+    _openGeneration++;
+    // Reset any in-flight content search from a previous session.
+    _contentSearchGeneration++;
+    _contentSearchInFlight = false;
+    // Render the initial empty state (null payload = no results yet, footer hint visible).
+    renderContentResults(null, "");
     return;
   }
 
@@ -3263,7 +3741,13 @@ function onOverlayKeydown(e: KeyboardEvent): void {
     case "Enter":
       e.preventDefault();
       e.stopPropagation();
-      activateSelected();
+      // Content mode intercepts Enter to perform a vault-wide content search.
+      // All other modes use activateSelected() to run the highlighted action.
+      if (_mode === "content") {
+        void handleContentSearchEnter();
+      } else {
+        activateSelected();
+      }
       break;
     case "Tab":
       // Focus trap: Tab cycles through results without leaving the overlay.
@@ -3295,7 +3779,9 @@ function onResultClick(e: MouseEvent): void {
   if (!result || result.dimmed) return;
   _selectedId = resultId;
   // In keybindings mode the action enters key-capture — do not close the bar.
-  if (_mode !== "keybindings") closeBar();
+  // In content mode the openAction closure already calls closeBar() explicitly,
+  // so we must not call it here too (double-close guard, AD-GS-05).
+  if (_mode !== "keybindings" && _mode !== "content") closeBar();
   result.action();
 }
 
@@ -3321,6 +3807,16 @@ function onResultHover(e: MouseEvent): void {
     // Files mode uses its own data pipeline — re-run the filter/render so the
     // selection highlight updates correctly without corrupting files-mode DOM.
     filterAndRenderFiles(_inputEl.value.trim());
+  } else if (_mode === "content") {
+    // Content mode renders custom grouped DOM (file header + excerpts). Calling
+    // renderResults() here would wipe that DOM. Instead, only update the selection
+    // highlight in place without re-rendering all rows (AD-GS-05).
+    // NOTE: the `updateAriaActiveDescendant` call that was here previously is
+    // removed (M-2): the unconditional call at the end of this function covers it.
+    const prevSelected = _resultsEl?.querySelector(".cb-result--selected");
+    prevSelected?.classList.remove("cb-result--selected");
+    const newSelected = _resultsEl?.querySelector(`[data-id="${_selectedId}"]`);
+    newSelected?.classList.add("cb-result--selected");
   } else {
     renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
   }
@@ -3571,6 +4067,9 @@ export default {
     _fileListLoaded      = false;
     _fileListError       = false;
     _totalWorkspaceCount = 0;
+    // Reset content search state (Step 03).
+    _contentSearchGeneration++;
+    _contentSearchInFlight = false;
     // Reset key-capture state (Step 04).
     _captureViewEl       = null;
     _capturingFor        = null;

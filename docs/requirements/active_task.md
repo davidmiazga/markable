@@ -1,276 +1,260 @@
 ---
-title: Wiki-link Visual Decorations — Broken Link Highlighting
+title: Global Search — Command Bar Integration
 last-updated: "2026-04-28"
 review-cadence-days: 7
 status: active
 ---
 
-# Wiki-link Visual Decorations — Broken Link Highlighting
+# Global Search — Command Bar Integration
 
 ## Feature Summary
 
-As a user, I want `[[wikilinks]]` whose target file does not exist in the vault index to be visually distinct from valid links, so I can immediately see which links are broken without opening each one.
+As a user, I want the Command Bar's Files mode to search all `.md` files in the active vault (not just the current file's directory), and I want a new content search mode triggered by typing `/` so I can search file contents from a single, familiar entry point.
 
 ---
 
 ## Codebase Context Findings
 
-### Finding 1 — Where wiki-link spans are created
+### Finding 1 — Current Files mode uses `list_md_files` with directory-of-current-file scope
 
-Wiki-link decorations are produced entirely inside
-`src/plugins/backlinks/backlinks.plugin.ts` (the backlinks core plugin, not
-`live-preview.ts`). The key functions are:
+`fetchWorkspaceFiles()` in `command-bar.plugin.ts` (around line 2567) derives a directory from `window.__MARKABLE_CURRENT_FILE__` by stripping the filename, then calls `invoke("list_md_files", { dir: workspaceDir })`. The `list_md_files` Rust command (`src-tauri/src/commands/files.rs`) does a **shallow, non-recursive** scan of a single directory and returns filenames only (not full paths). This is the source of the scoping bug: the scan is limited to one flat directory, not the full vault.
 
-- `computeWikiLinkDecorationRanges()` — pure function; scans document text and
-  returns `WikiLinkDecorationRange[]` (type = `"replace"` or `"mark"`, optional
-  `target` field on mark ranges).
-- `buildWikiLinkDecorations(view)` — converts those ranges to CM6 `Decoration`
-  objects. Mark decorations are emitted with:
-  `class: "cm-live-link cm-wiki-link"` and
-  `attributes: { "data-wiki-target": range.target }`.
-- `buildWikiLinkDecorationExtension()` — wraps the above into a CM6
-  `ViewPlugin` that rebuilds on every update.
+### Finding 2 — `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` is the correct source for vault-wide file paths
 
-The `WikiLinkPlugin` ViewPlugin calls `buildWikiLinkDecorations(view)` in its
-constructor and on every `update()`. It currently has no awareness of the vault
-index and cannot distinguish broken from valid links.
+`vault-manager.ts` exposes `getVaultIndex(): VaultIndex | null` on the `window.__MARKABLE_VAULT_MANAGER__` global (line 623). The `VaultIndex.entries` array contains `VaultIndexEntry` objects each with an `path: string` (absolute path) and `name: string` (filename stem). `VaultIndex.entries` covers ALL `.md` files in ALL root paths of the vault, recursively, respecting `excludePatterns`. This is the correct source for the vault-wide file list. No new Rust command is required for FR-1.
 
-### Finding 2 — How to query vault index existence
+### Finding 3 — The `list_md_files` Rust command must not be changed; the call site must be replaced
 
-`src/lib/vault-manager.ts` exposes `getVaultIndex()` (returns `VaultIndex |
-null`). The `VaultIndex.entries` array contains `VaultIndexEntry` objects where
-`entry.name` is the filename stem without extension (i.e. `"notes"` for
-`notes.md`). This is the canonical lookup key for wiki-link resolution.
+`list_md_files` is used by the backlinks plugin (confirmed via its doc comment: "backlinks feature"). Changing its signature or behavior would risk regressions outside the scope of this feature. The fix is entirely in `fetchWorkspaceFiles()` in `command-bar.plugin.ts`: replace the `invoke("list_md_files", ...)` call path with a `getVaultIndex()` lookup. The Rust command `list_md_files` itself is untouched.
 
-The vault manager is exposed as `window.__MARKABLE_VAULT_MANAGER__` for IIFE
-plugin use (vault-manager.ts line 623). The backlinks plugin already accesses
-it this way in autocomplete and index-building code (e.g. lines 1112–1113).
+### Finding 4 — Files mode: `workspaceFiles` in the builder pipeline expects absolute paths
 
-For O(1) lookup a `Set<string>` of lowercased stems must be built from
-`vaultIndex.entries` and passed to (or rebuilt inside) `buildWikiLinkDecorations`.
-Building the `Set` is O(n) once per decoration rebuild, but individual lookups
-within the loop are O(1).
+`buildFilesResults()` in `files-mode.ts` accepts `workspaceFiles: string[]` as absolute paths (used to build `filePath` on each `FilesResult`, and compared against `openPaths` set of absolute paths in `tabs`). The vault index's `entries[i].path` is already an absolute path. No transformation is needed beyond extracting `.path` from each entry.
 
-### Finding 3 — Vault index change notifications
+### Finding 5 — Files mode fallback when no vault is open
 
-`vault-manager.ts` exposes `onVaultChanged(cb)` and `onIndexUpdated(cb)`. The
-backlinks plugin's `_buildCmExtensions` (lines 2874–2904) uses a CM6
-`EditorView.updateListener` and a 500ms poll timer to detect file changes but
-does NOT subscribe to `onVaultChanged` or `onIndexUpdated`. Adding subscriptions
-would allow the decoration to react to vault switches and file-watcher events
-without waiting for the next editor transaction.
+The existing `fetchWorkspaceFiles()` logic already handles the no-open-file state: sets `_fileListLoaded = true` with no results and shows the "no-workspace" notice. The same notice can be repurposed for "no vault open." When `getVaultIndex()` returns `null` AND `getActiveVault()` returns `null`, the "no-workspace" load state is set (same path, same rendering). If a vault is active but the index is not yet built (null), a brief loading state is appropriate.
 
-### Finding 4 — No-vault mode
+### Finding 6 — The `workspaceLoadState` of `"no-workspace"` is already wired into the renderer
 
-When no vault is active, `getVaultIndex()` returns `null`. In this state the
-backlinks plugin degrades gracefully (autocomplete falls back to directory
-scan). Broken-link highlighting must similarly degrade: when the vault index is
-null, no broken-link decoration is applied — all wiki-links render with the
-standard `cm-live-link cm-wiki-link` class as today.
+`filterAndRenderFiles()` calls `buildFilesResults()` with `workspaceLoadState`, which is consumed in the files mode renderer to show inline notice rows. The existing `"no-workspace"` state produces a notice row — the text of this notice needs to be updated to say something vault-appropriate when no vault is open.
 
-### Finding 5 — Current CSS surface
+### Finding 7 — Content search mode requires a new Rust command `search_vault_content`
 
-`src/styles.css` defines `.cm-live-link` (color: `var(--link-color)`,
-underline, pointer cursor). The backlinks plugin injects a minimal `<style>`
-tag (identified by `data-markable-wiki-link-styles`) that adds only
-`cursor: pointer` to `.cm-wiki-link`. There is no existing broken-link class.
+Content search must read `.md` file contents for substring matching. The existing vault index does NOT store raw file content (confirmed: `VaultIndexEntry` stores `path`, `name`, `modified`, `size`, `title`, `tags`, `outboundLinks` — no content). A new `#[tauri::command] pub async fn search_vault_content` must be added. It is placed in `src-tauri/src/commands/vault.rs` to reuse `should_exclude`, `system_time_to_ms`, and the existing walkdir infrastructure. No new Cargo dependencies are required (`walkdir` and `std::fs` are already present).
 
-The broken-link color should use a new CSS variable — e.g.
-`--link-broken-color` — so themes can override it without touching the plugin.
-A fallback value (e.g. `#cc3333` for light / `#ff6b6b` for dark) must be
-defined in `styles.css`.
+### Finding 8 — The `/` prefix switching mechanism must follow the existing `>` and `#` prefix pattern
 
-### Finding 6 — Target normalization
+The `onInput()` handler in `command-bar.plugin.ts` (line 3129) already handles `>` → commands and `#` → keybindings prefix switching while in files mode. The new `/` → content search prefix must follow exactly the same pattern: check `_mode === "files" && raw === "/"`, call `setMode("content")` (new mode value), clear the input. Backspace from an empty input in content mode must return to files mode (same Backspace-to-files logic at line 3237).
 
-`normalizeTarget(target)` strips `./`, trims whitespace, and appends `.md` if
-the target has no extension. The vault index `entry.name` is the bare stem
-without `.md`. Therefore the lookup must compare the normalized target's stem
-(without extension) against `entry.name`. The comparison must be
-case-insensitive because macOS HFS+ is case-insensitive.
+### Finding 9 — `BarMode` type must gain the `"content"` variant
 
-### Finding 7 — `computeWikiLinkDecorationRanges` is the pure testable core
+`BarMode = "files" | "commands" | "keybindings"` is defined in `command-bar.plugin.ts` (line 66). All mode-keyed constants (`MODE_PLACEHOLDERS`, `MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, `MODE_TAB_SHORTCUTS`, `MODE_CYCLE`) must be extended with a `"content"` entry. The tab strip DOM construction loop must include the content tab.
 
-This function has no access to the vault index because it takes only `text`,
-`activeLines`, and `visibleRanges`. To keep it testable, the vault stem set
-should be passed as an optional fourth parameter rather than reading from
-`window` globals inside the pure function.
+### Finding 10 — Content mode uses Enter-to-search (not live), matching the prior Global Search spec
 
-### Finding 8 — The `WikiLinkDecorationRange` type must be extended
+The vault may contain hundreds of files. Running a Rust file-walk on each keystroke is impractical. Content mode must be Enter-triggered: pressing Enter invokes `search_vault_content`; keystrokes alone do not. This matches FR-2 of the previous Global Search requirements doc (now superseded by this document for UI placement).
 
-`WikiLinkDecorationRange` currently has: `from`, `to`, `type` (`"replace"` |
-`"mark"`), optional `target`. A new optional boolean field `broken` is needed
-on `"mark"` ranges so `buildWikiLinkDecorations` knows which spans to annotate
-with the broken class.
+### Finding 11 — New Rust command must be registered in `mod.rs` and `lib.rs`
 
-### Finding 9 — Decoration rebuild trigger for vault changes
+`src-tauri/src/commands/mod.rs` exports all commands via `pub use vault::...`. The `invoke_handler` in `src-tauri/src/lib.rs` lists every command. Both files must be updated to register `search_vault_content`.
 
-The `WikiLinkPlugin.update()` rebuilds on every CM6 transaction. Vault index
-changes (file added / deleted externally) do not produce a CM6 transaction.
-The fix is to subscribe to `onVaultChanged` and `onIndexUpdated` during
-`onEnable`, and dispatch a no-op `EditorView.scrollIntoView(0)` or a
-custom `StateEffect` when the vault index changes so CM6 forces a re-render
-of the `WikiLinkPlugin`. The subscription must be cleaned up in `onDisable`
-via `offVaultChanged` / `offIndexUpdated`.
+### Finding 12 — The command bar is an IIFE plugin; Tauri calls go through `window.__TAURI_INTERNALS__.invoke`
 
-### Finding 10 — Plugin is an IIFE compiled file
+The command bar plugin cannot use `bridge.ts` directly (IIFE constraint). It uses `(window as any).__TAURI_INTERNALS__.invoke(...)` for Tauri calls — the same pattern as `fetchWorkspaceFiles` does today for `list_md_files`. A typed wrapper must still be added to `bridge.ts` for testability and for any future non-IIFE consumer.
 
-`backlinks.plugin.ts` is the source that compiles to
-`plugins/core/backlinks.plugin.js` at build time. Changes to this file affect
-the compiled IIFE. No other plugin files need changing.
+### Finding 13 — Files mode placeholder text is currently "Open file or tab…"
+
+`MODE_PLACEHOLDERS.files = "Open file or tab…"`. This does not communicate vault scope at all. The placeholder must be updated to make it clear that the entire vault is being searched.
 
 ---
 
 ## Functional Requirements
 
-**FR-1 — Broken link visual indicator**
-When a vault is active and a wiki-link's target stem does not exist in the
-vault index, the link span must receive an additional CSS class
-`cm-wiki-link-broken` alongside the existing `cm-live-link cm-wiki-link`
-classes. This class must apply a visually distinct color (e.g. muted red or
-orange) to distinguish it from valid links.
+### FR-1 — Fix Files mode to use vault index instead of directory scan
 
-**FR-2 — Valid link appearance unchanged**
-When a vault is active and a wiki-link's target stem resolves to a file in
-the vault index, the link span must render identically to today: only
-`cm-live-link cm-wiki-link` classes, no additional class.
+When the command bar opens in files mode and a vault is active, `fetchWorkspaceFiles()` must call `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` and extract `entries.map(e => e.path)` to build the `workspaceFiles` array. The `invoke("list_md_files", ...)` call must NOT be made when a vault is active. The vault index path is preferred because it is recursive and already filtered by `excludePatterns`.
 
-**FR-3 — No-vault graceful degradation**
-When no vault is active (`getVaultIndex()` returns `null`), no broken-link
-decoration is applied. All wiki-links render as standard `cm-live-link
-cm-wiki-link` spans. This matches the existing no-vault behavior.
+### FR-2 — Fallback to `list_md_files` when no vault is open
 
-**FR-4 — Case-insensitive stem comparison**
-Target stem lookup against vault index entries must be case-insensitive
-(lowercase both sides) to match macOS HFS+ case-insensitivity semantics.
+When `getActiveVault()` returns `null` (no vault configured or selected), `fetchWorkspaceFiles()` must fall back to the current behavior: derive `workspaceDir` from `__MARKABLE_CURRENT_FILE__` and invoke `list_md_files`. If `__MARKABLE_CURRENT_FILE__` is also null, set `workspaceLoadState = "no-workspace"` (existing path). The Rust command `list_md_files` is called only in this fallback path.
 
-**FR-5 — Decoration updates on vault index changes**
-When the vault index changes (vault switch, file added, file deleted, file
-renamed), the broken-link highlighting must update within one CM6 render cycle
-after the change is reflected in `getVaultIndex()`. This requires subscribing
-to `onVaultChanged` and `onIndexUpdated` and dispatching an effect that forces
-the `WikiLinkPlugin` to rebuild.
+### FR-3 — Vault index not yet loaded shows loading state
 
-**FR-6 — Active line exclusion preserved**
-Wiki-links on the active cursor line must continue to show raw Markdown syntax
-(existing behavior). The broken-link class must not be applied to links on
-active lines, consistent with the existing `activeLines` filter.
+When `getActiveVault()` is non-null but `getVaultIndex()` returns `null` (index still building on first launch), `fetchWorkspaceFiles()` must set `workspaceLoadState = "loading"` and show the existing loading notice. The function should subscribe to `onVaultChanged` or poll with a short timeout to retry once the index is available. (Implementation detail: a single retry after 1.5s is sufficient; continuous polling is not required.)
 
-**FR-7 — CSS variable for broken link color**
-The broken link color must be defined as `--link-broken-color` in `styles.css`
-with a fallback value, allowing theme overrides. The plugin's injected `<style>`
-tag (identified by `data-markable-wiki-link-styles`) must add the
-`.cm-wiki-link-broken` rule using `var(--link-broken-color)`.
+### FR-4 — Update Files mode placeholder text
 
-**FR-8 — `data-wiki-target` attribute preserved on broken links**
-Broken link spans must still carry `data-wiki-target` so the existing hover
-popover (Step 10 of backlinks.plugin.ts) and click-to-navigate handler (Step 5)
-continue to function. The only change is an additional CSS class.
+`MODE_PLACEHOLDERS.files` must be changed to `"Search vault files…"` (when vault is active) or remain contextual. Because the placeholder is static (not dynamic per-open), the value must unambiguously describe vault-wide scope: `"Search vault files…"`.
 
-**FR-9 — O(1) per-link vault lookup**
-A `Set<string>` of lowercased stems must be built once per `buildWikiLinkDecorations`
-call from `vaultIndex.entries`, and individual link lookups must use `Set.has()`.
-Building the set is O(n) in vault size but is bounded by `maxIndexSize` (default
-500). Per-link lookup is O(1).
+### FR-5 — New content search mode ("content")
+
+A new `"content"` mode value is added to `BarMode`. All mode-keyed constant objects must gain a `"content"` entry:
+- `MODE_PLACEHOLDERS["content"]`: `"Search file contents…"`
+- `MODE_FOOTER_HINTS["content"]`: `"Enter to search  ·  Esc to close"`
+- `MODE_BADGE_LABELS["content"]`: `"Content"`
+- `MODE_TAB_SHORTCUTS["content"]`: `""` (no dedicated shortcut; accessed via `/` prefix only)
+- `MODE_CYCLE`: add `"content"` at the end
+
+### FR-6 — `/` prefix in Files mode switches to content mode
+
+When `_mode === "files"` and the input value equals `"/"`, `onInput()` must call `setMode("content")` and clear the input. This mirrors the `>` and `#` prefix handling at lines 3135–3171.
+
+### FR-7 — Backspace from empty input in content mode returns to files mode
+
+The Backspace-to-files guard (line 3237) already handles `_mode !== "files"`. Because content mode is a new non-files mode, Backspace from an empty input in content mode naturally returns to files mode without any additional code change — the existing guard handles it. This must be verified in tests.
+
+### FR-8 — Content mode shows "Search file contents…" placeholder and "No vault" empty state
+
+When the bar opens in content mode (via the `/` prefix switch):
+- The input placeholder is `"Search file contents…"`.
+- If no vault is active: show the message `"No vault open — content search requires a vault"` in the results area. The input is present but non-functional (submitting Enter does nothing).
+- If a vault is active: show an empty results area with the footer hint `"Enter to search  ·  Esc to close"`.
+
+### FR-9 — Enter in content mode triggers `search_vault_content` Rust command
+
+Pressing Enter while in content mode and the input is non-empty invokes `search_vault_content` via `(window as any).__TAURI_INTERNALS__.invoke(...)`. A loading indicator replaces the results list during the async call. Results replace the loading indicator when the call completes.
+
+### FR-10 — Content search results: file header + up to 3 line excerpts
+
+Each `FileContentResult` returned by `search_vault_content` is rendered as a result group:
+1. A clickable file name header showing the `title` (from the Rust result) — clicking opens the file.
+2. Up to 3 `LineMatch` excerpt rows beneath the header. Each row shows `line_number: line_text` with the matched substring visually highlighted (e.g. bold or accent color).
+3. When a file has more than 3 matches, a non-clickable `"N more matches"` row is appended to the group.
+
+### FR-11 — Clicking any result row in content mode opens the file and closes the bar
+
+Clicking the file header row or any excerpt row in content mode calls `window.__MARKABLE_TAB_MANAGER__.openFile(absolutePath)` (or activates the existing tab if already open) and then calls `closeBar()`. This is the same action pattern as the Files mode `openFile` closure.
+
+### FR-12 — Escape or clearing `/` prefix returns to files mode
+
+Pressing Escape in content mode closes the bar entirely (same as all other modes — existing `onOverlayKeydown` handles Escape regardless of mode). Clearing the input so it is empty and pressing Backspace returns to files mode (FR-7).
+
+### FR-13 — New Rust command `search_vault_content`
+
+A new async Tauri command must be added to `src-tauri/src/commands/vault.rs`:
+
+```
+pub async fn search_vault_content(
+    root_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+    query: String,
+    max_results: u32,
+) -> Result<ContentSearchPayload, String>
+```
+
+`ContentSearchPayload` has fields: `results: Vec<FileContentResult>`, `capped: bool`, `skipped_count: u32`.
+`FileContentResult` has: `path: String`, `title: String`, `matches: Vec<LineMatch>`.
+`LineMatch` has: `line_number: u32`, `line_text: String`, `column_start: u32`.
+
+The command walks `root_paths` using `WalkDir`, respects `should_exclude`, reads each `.md` file via `std::fs::read_to_string` (skipping on error, incrementing `skipped_count`), scans lines for case-insensitive substring matches, and stops adding new files once `results.len() == max_results` (`capped = true`). It reuses all existing vault.rs helpers: `should_exclude`, `extract_h1`, `parse_front_matter`.
+
+### FR-14 — `search_vault_content` registered in `mod.rs` and `lib.rs`
+
+`src-tauri/src/commands/mod.rs` must add `pub use vault::search_vault_content;`. `src-tauri/src/lib.rs` must add `search_vault_content` to the `tauri::generate_handler![]` array.
+
+### FR-15 — Typed bridge wrapper in `bridge.ts`
+
+A typed `searchVaultContent(params)` async function must be added to `src/lib/bridge.ts` returning `FileResult<ContentSearchPayload>`. The IIFE plugin does not use this wrapper, but it must exist for testability.
+
+### FR-16 — Empty query guard in content mode
+
+If the user presses Enter in content mode with an empty or whitespace-only query, no Rust call is made. A hint `"Enter a search term"` is displayed in the results area.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-01 — No vault active**
-`getVaultIndex()` returns `null`. Expected: all wiki-links render as valid
-(standard `cm-live-link cm-wiki-link`). No broken-link class applied.
+**EC-1 — Vault active but index is null (still building)**
+`getActiveVault()` is non-null, `getVaultIndex()` is null. Expected: Files mode shows "loading" notice. Content mode shows "loading" notice when Enter is pressed. No crash.
 
-**EC-02 — Vault active but index is empty (`entries: []`)**
-The stem set is empty; every wiki-link is classified as broken. This is correct
-behavior: an empty vault has no files. (The user may want to create those files.)
+**EC-2 — No vault open (Files mode fallback)**
+`getActiveVault()` returns null. Expected: Files mode falls back to `list_md_files` on current file's directory. If `__MARKABLE_CURRENT_FILE__` is also null, the "no-workspace" notice is shown.
 
-**EC-03 — Empty wiki-link `[[]]`**
-`computeWikiLinkDecorationRanges` already skips `[[]]` (EC-9 in the existing
-spec). No mark range is produced, so no broken-link check is needed.
+**EC-3 — No vault open (content mode)**
+`getActiveVault()` returns null. Expected: the results area shows `"No vault open — content search requires a vault"`. Enter does nothing. No Rust call.
 
-**EC-04 — Piped wiki-link with broken target `[[missing|Display Text]]`**
-`WikiLinkDecorationRange.target` carries `"missing"` (the raw target before
-the pipe). After normalization the stem is `"missing"`. If `"missing"` is not
-in the vault index, the span covering `"Display Text"` receives
-`cm-wiki-link-broken`. The display text itself is unchanged.
+**EC-4 — Vault with 0 `.md` files (Files mode)**
+`getVaultIndex().entries` is empty. Expected: Files mode shows open tabs only (no workspace files section). No error.
 
-**EC-05 — Piped wiki-link with valid target `[[exists|Custom Label]]`**
-Target normalizes to `"exists"`. Stem `"exists"` is in the vault index. Span
-renders without `cm-wiki-link-broken`.
+**EC-5 — Vault with 0 `.md` files (content mode)**
+`search_vault_content` walks the vault and finds no `.md` files. Expected: `results: []`, `capped: false`. UI shows `"No results for 'query'"`. No error.
 
-**EC-06 — Target with subdirectory path `[[subdir/notes]]`**
-`normalizeTarget` appends `.md` → `"subdir/notes.md"`. The stem for lookup is
-`"notes"` (filename part only, without `.md`). The vault index `entry.name` is
-`"notes"` (stem without extension). Lookup must extract the filename portion
-from the normalized target before comparing against `entry.name`.
+**EC-6 — Content mode: query matches nothing**
+`search_vault_content` returns `results: []`. Expected: UI shows `"No results for 'query'"`.
 
-**EC-07 — Case mismatch `[[Notes]]` vs vault entry `"notes"`**
-Both sides lowercased → match. No broken-link class applied.
+**EC-7 — Content mode: results cap reached**
+`capped: true` in the payload. Expected: a notice `"Showing matches in the first N files — refine your query to see more"` is prepended to the results list.
 
-**EC-08 — File deleted from vault while editor is open**
-The file-watcher emits `VaultFileChangedEvent { eventType: "deleted" }`. The
-`onIndexUpdated` subscription dispatches an effect to the CM6 editor. On the
-next render, `buildWikiLinkDecorations` rebuilds with the updated index stem
-set. The wiki-link targeting the deleted file now shows `cm-wiki-link-broken`.
+**EC-8 — Content mode: file unreadable during search**
+`std::fs::read_to_string` fails for a file. Expected: file is skipped, `skipped_count` incremented. If `skipped_count > 0`, a notice `"N files could not be searched"` is shown in the overlay.
 
-**EC-09 — File created in vault that resolves a previously broken link**
-Same mechanism as EC-08 but `eventType: "created"`. The link transitions from
-`cm-wiki-link-broken` to the standard `cm-live-link cm-wiki-link` appearance
-on the next render.
+**EC-9 — Content mode: binary data in a `.md` file**
+`read_to_string` returns `Err` for invalid UTF-8. Expected: same as EC-8 — file skipped, counted.
 
-**EC-10 — Vault switch while the document contains wiki-links**
-`onVaultChanged` fires. The subscription dispatches an effect. The new vault's
-index is used for the next render. Links that existed in the old vault but not
-the new one become broken (and vice versa).
+**EC-10 — Content mode: file larger than 1 MB**
+The Rust command applies a per-file cap of 1 MB (reads only the first 1,048,576 bytes). Lines beyond the cap are not searched. The truncation is invisible to the user. This prevents memory spikes on giant files.
 
-**EC-11 — Wiki-link inside fenced code block**
-`computeWikiLinkDecorationRanges` already excludes these via
-`isInsideFencedCode`. No decoration is produced; no broken-link check is needed.
+**EC-11 — Content mode: query contains regex special characters**
+The Rust command uses substring matching (`to_lowercase().contains()`), not regex. Characters like `[`, `*`, `.`, `(` are treated as literals. No panic.
 
-**EC-12 — Wiki-link target with `.md` extension explicitly written `[[file.md]]`**
-`normalizeTarget("file.md")` → `"file.md"` (extension present, no appending).
-The stem for lookup is `"file"` (strip `.md`). Must match `entry.name = "file"`.
+**EC-12 — Content mode: Enter pressed while previous search is in-flight**
+A second Enter press while a `search_vault_content` invoke is pending must not launch a duplicate call. A generation/guard pattern (increment `_contentSearchGeneration` per call; discard results if stale) prevents duplicate renders.
 
-**EC-13 — Vault index capped (`capped: true`)**
-The index contains at most `maxIndexSize` entries. A wiki-link targeting a file
-beyond the cap will be classified as broken even if the file exists on disk.
-This is the accepted trade-off documented in `vault-types.ts`. No special
-handling is needed; the behavior matches the cap semantics already in place.
+**EC-13 — Plugin disabled while content search is in-flight**
+`onDisable` removes the DOM. When the async result arrives, the generation check silently discards it. No JS error from accessing removed DOM nodes.
 
-**EC-14 — Plugin disabled while vault is active**
-`onDisable` must call `offVaultChanged` and `offIndexUpdated` to unsubscribe
-the decoration-refresh callbacks, preventing dangling listeners that dispatch
-effects to a detached view.
+**EC-14 — Vault switch while content search is in-flight**
+`onVaultChanged` fires while `search_vault_content` is pending. Expected: the in-flight result is discarded via the generation counter. The overlay resets to the new vault's ready state.
+
+**EC-15 — `/` typed inside a non-empty query in files mode**
+The prefix switch only triggers when the ENTIRE input is the single character `/`. If the user types `design/` or `foo/`, no mode switch occurs. Fuzzy filtering continues normally.
+
+**EC-16 — Content mode opened via `/` prefix; bar closed and reopened**
+`closeBar()` resets `_mode = "files"` (line 3089). Re-opening the bar always starts in files mode. The `/` prefix must be re-typed to enter content mode. This is intentional and consistent with how `>` and `#` work.
+
+**EC-17 — `getVaultIndex()` returns entries with no `path` field (corrupt index)**
+A defensive guard must check that each entry has a truthy `path` before adding to `workspaceFiles`. Entries with empty or null paths are silently skipped.
+
+**EC-18 — Very large vault (500+ files) in Files mode**
+`getVaultIndex().entries` may have up to 500 entries (vault cap). All 500 absolute paths are passed to `buildFilesResults()` as `workspaceFiles`. The existing `FILES_CAP = 200` display cap already handles limiting the rendered list to 200 rows. No additional cap logic needed.
+
+**EC-19 — Content search result file is already open as a tab**
+Clicking a result row calls `window.__MARKABLE_TAB_MANAGER__.openFile(path)`. This function already handles the "file is already open" case by activating the existing tab. No special handling needed in the content mode renderer.
+
+**EC-20 — Multi-root vault (2+ root paths) in content mode**
+`search_vault_content` walks all root paths. Results from all roots are merged into a single flat `results` array. The TypeScript renderer displays them in the order returned (most matches first if Rust sorts by match count).
+
+**EC-21 — `/` prefix while already in content mode**
+Once in content mode, typing `/` is a normal search character (not a prefix switch). Only triggers when `_mode === "files"`.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1 — No regression to existing wiki-link behavior**
-All existing behavior of `computeWikiLinkDecorationRanges`,
-`buildWikiLinkDecorations`, click navigation, hover popover, and autocomplete
-must be preserved. The `broken` flag is additive.
+**NFR-1 — No new Cargo dependencies**
+`search_vault_content` must be implemented using only existing crates: `walkdir`, `std::fs`, `std::str`. No `regex`, `tantivy`, or ripgrep crate.
 
-**NFR-2 — O(1) per-link lookup**
-See FR-9. The stem set must be constructed outside the per-link loop.
+**NFR-2 — Content search is Enter-triggered, not live-as-you-type**
+No Rust call is made on keydown. Only Enter triggers the invocation. This prevents thrashing on large vaults.
 
-**NFR-3 — No new Rust commands**
-Vault index querying is entirely in TypeScript via `getVaultIndex()`. No
-changes to `src-tauri/`.
+**NFR-3 — Content search must complete within 3 seconds for a 500-file vault**
+On a modern MacBook Pro (M-series), searching 500 small-to-medium `.md` files (average 10 KB each) with a simple substring scan must complete within 3 seconds. The 1 MB per-file cap (EC-10) enforces an upper bound on per-file read time.
 
-**NFR-4 — No new settings fields**
-`MarkableSettings` must not be extended. No user toggle for broken-link
-highlighting is required at this time.
+**NFR-4 — Files mode vault lookup is synchronous (no additional async latency)**
+Replacing `invoke("list_md_files", ...)` with `getVaultIndex().entries.map(e => e.path)` is a synchronous in-memory read. The Files mode open-to-results latency must not increase when a vault is active.
 
-**NFR-5 — Pure function remains testable**
-`computeWikiLinkDecorationRanges` must accept an optional `stemSet:
-Set<string>` fourth parameter. When absent (undefined), the function behaves
-as today (no broken classification). Existing unit tests must pass unchanged;
-new tests exercise the `stemSet` parameter.
+**NFR-5 — All mode-keyed constants must remain exhaustive**
+`MODE_PLACEHOLDERS`, `MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, `MODE_TAB_SHORTCUTS` are `Record<BarMode, string>`. Adding `"content"` to `BarMode` must be accompanied by adding a `"content"` key to every one of these objects. TypeScript's type system will enforce this if the types are declared as `Record<BarMode, string>`.
 
-**NFR-6 — CSS variable scoped to root**
-`--link-broken-color` must be defined on `:root` in `styles.css` so both light
-and dark theme overrides can target it.
+**NFR-6 — CSS for content mode results uses existing CSS variables**
+Any new CSS classes for content mode result rows (excerpt rows, file header rows, "N more" rows) must use `var(--bg-primary)`, `var(--border-color)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--accent-color)` etc. No hardcoded hex or font names.
+
+**NFR-7 — Per-file 1 MB read cap in Rust**
+Files larger than 1 MB are read only up to the first 1,048,576 bytes before line scanning begins. This is implemented in `search_vault_content` before the line iteration loop.
+
+**NFR-8 — Bridge wrapper uses `FileResult` discriminated union**
+`bridge.ts`'s `searchVaultContent()` wrapper returns `FileResult<ContentSearchPayload>` (never throws).
 
 ---
 
@@ -278,35 +262,36 @@ and dark theme overrides can target it.
 
 | File | Change |
 |------|--------|
-| `src/plugins/backlinks/backlinks.plugin.ts` | Add `broken?: boolean` to `WikiLinkDecorationRange`; add `stemSet` param to `computeWikiLinkDecorationRanges`; add `cm-wiki-link-broken` class in `buildWikiLinkDecorations`; add `--link-broken-color` CSS rule in `injectWikiLinkStyles`; subscribe to `onVaultChanged` / `onIndexUpdated` in `_buildCmExtensions`; unsubscribe in `onDisable` |
-| `src/styles.css` | Add `--link-broken-color` CSS variable on `:root` with light-mode default; add dark-mode override if a dark theme selector exists |
-| `tests/backlinks/` (new or existing test files) | Add unit tests for `computeWikiLinkDecorationRanges` with `stemSet`; cover EC-01 through EC-07, EC-11, EC-12 |
+| `src/plugins/command-bar/command-bar.plugin.ts` | (1) Add `"content"` to `BarMode`; (2) extend all mode-keyed constants; (3) update `fetchWorkspaceFiles` to use vault index; (4) add `/` prefix handler in `onInput`; (5) add content mode Enter handler; (6) add content mode result renderer; (7) update Files mode placeholder |
+| `src/plugins/command-bar/files-mode.ts` | Update `FILES_SECTION_LABELS` if a new label is needed; update `FilesModeBuilderDeps.workspaceLoadState` if a new "no-vault" state is added |
+| `src-tauri/src/commands/vault.rs` | Add `FileContentResult`, `LineMatch`, `ContentSearchPayload` structs; add `search_vault_content` async command |
+| `src-tauri/src/commands/mod.rs` | Add `pub use vault::search_vault_content;` |
+| `src-tauri/src/lib.rs` | Add `search_vault_content` to `tauri::generate_handler![]` |
+| `src/lib/bridge.ts` | Add `searchVaultContent(params)` typed wrapper returning `FileResult<ContentSearchPayload>` |
 
-Files that must NOT change:
+### Files that must NOT change
 
 | File | Reason |
 |------|--------|
-| `src/editor/live-preview.ts` | Wiki-links are not decorated here; no change needed |
-| `src/editor/extensions.ts` | No new compartment or extension required |
-| `src/lib/vault-manager.ts` | Public API is sufficient; no new exports needed |
-| `src/lib/vault-types.ts` | No new types required |
-| `src-tauri/` (all Rust) | No backend changes needed |
+| `src-tauri/src/commands/files.rs` | `list_md_files` is unchanged; the fallback path still calls it |
+| `src/lib/vault-manager.ts` | Existing public API is sufficient; no new exports needed |
+| `src/lib/vault-types.ts` | No new vault types required |
+| `src-tauri/src/lib.rs` (window size section) | Window size invariant must not regress — the only change is adding a command to the handler list |
+| `src/lib/settings.ts` | No new settings fields |
 
 ---
 
 ## Out of Scope
 
-- **Broken link creation shortcut** — clicking a broken link to create the
-  missing file. Deferred.
-- **Broken link count badge** in the sidebar backlinks panel. Deferred.
-- **Non-vault mode broken detection** (e.g. resolving relative paths against the
-  current file's directory when no vault is active). Deferred.
-- **User preference to disable broken-link highlighting**. Deferred.
-- **Animating the transition** when a link changes state (broken ↔ valid).
-  Deferred.
-- **`[[target#heading]]` anchor syntax** — anchor portion is stripped by the
-  existing regex before the stem check, so this works transparently. No
-  separate feature work needed, but explicit test coverage is out of scope.
+- **Regex query mode** — substring matching only.
+- **Live-as-you-type content search** — Enter-triggered only.
+- **Scrolling to the exact matched line** — the user is navigated to the file, not the line.
+- **Search-and-replace across vault** — separate feature.
+- **Searching non-`.md` files** — only Markdown.
+- **Saved search history** — no persistence.
+- **Dedicated keyboard shortcut for content mode** — accessed only via `/` prefix; no global keybinding.
+- **Highlighting matched text inside the editor** after navigation — deferred.
+- **The prior Global Search plugin** (`src/plugins/global-search/global-search.plugin.ts`) — this spec supersedes and replaces the previous `active_task.md` which described a standalone overlay plugin. That plugin is NOT built; content search lives inside the Command Bar.
 
 ---
 
@@ -314,6 +299,6 @@ Files that must NOT change:
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 14 items in Edge Case Inventory (EC-01 through EC-14)
+- Edge cases to verify in tests: 21 items in Edge Case Inventory (EC-1 through EC-21)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

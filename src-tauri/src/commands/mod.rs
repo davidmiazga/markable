@@ -44,6 +44,7 @@ pub use vault::{
     get_vault_index,
     list_vault_files,
     save_vault_index,
+    search_vault_content,
     switch_vault,
     unwatch_vault,
     update_vault,

@@ -109,6 +109,16 @@ import {
   renderKeybindingResults,
 } from "../../../src/plugins/command-bar/command-bar.plugin";
 
+// ── Step 04 (Global Search): content-mode and mode-constant imports ───────────
+import {
+  renderContentResults,
+  MODE_PLACEHOLDERS,
+  MODE_FOOTER_HINTS,
+  MODE_BADGE_LABELS,
+  MODE_TAB_SHORTCUTS,
+  MODE_CYCLE,
+} from "../../../src/plugins/command-bar/command-bar.plugin";
+
 // ── Types (copied from plugin internals for test-readability) ─────────────────
 
 interface CommandBarResult {
@@ -1084,13 +1094,15 @@ describe("Step 01 — Mode Infrastructure", () => {
 
   // ── MODE_PLACEHOLDERS and MODE_FOOTER_HINTS via DOM ──────────────────────
 
-  it("MODE_PLACEHOLDERS: files mode input placeholder is 'Open file or tab…'", async () => {
+  it("MODE_PLACEHOLDERS: files mode input placeholder is 'Search vault files…' (FR-4)", async () => {
+    // FR-4 changed the files-mode placeholder from "Open file or tab…" to
+    // "Search vault files…" to communicate vault-wide scope to the user.
     const api = makeMockApi();
     await commandBarPlugin.onEnable(api as any);
 
     setMode("files");
     const input = document.querySelector<HTMLInputElement>(".cb-input");
-    expect(input!.placeholder).toBe("Open file or tab…");
+    expect(input!.placeholder).toBe("Search vault files…");
 
     commandBarPlugin.onDisable(api as any);
   });
@@ -1142,16 +1154,17 @@ describe("Step 01 — Mode Infrastructure", () => {
 
   // ── buildOverlayDOM structural checks ────────────────────────────────────
 
-  it("buildOverlayDOM returns element containing .cb-tab-strip with three tab buttons", () => {
-    // The mode badge pill was replaced by a tab strip with one button per mode.
+  it("buildOverlayDOM returns element containing .cb-tab-strip with four tab buttons (AD-GS-07)", () => {
+    // The tab strip now has four tabs: commands, files, keybindings, content.
+    // The content tab was added in step 03 (Global Search integration, AD-GS-07).
     const overlay = buildOverlayDOM();
     const strip = overlay.querySelector<HTMLElement>(".cb-tab-strip");
     expect(strip).not.toBeNull();
     expect(strip!.getAttribute("role")).toBe("tablist");
     const tabs = strip!.querySelectorAll<HTMLButtonElement>(".cb-tab");
-    expect(tabs.length).toBe(3);
+    expect(tabs.length).toBe(4);
     const modes = Array.from(tabs).map((t) => t.dataset.mode);
-    expect(modes).toEqual(["commands", "files", "keybindings"]);
+    expect(modes).toEqual(["commands", "files", "keybindings", "content"]);
   });
 
   it("buildOverlayDOM returns element containing .cb-footer", () => {
@@ -2833,5 +2846,977 @@ describe("Step 06 — EC Coverage Gaps", () => {
       );
       warnSpy.mockRestore();
     });
+  });
+});
+
+// =============================================================================
+// GROUP B — fetchWorkspaceFiles vault scope fix (step_04_tests.md §B)
+// =============================================================================
+
+describe("fetchWorkspaceFiles — vault scope fix", () => {
+  // Vault manager mock, reset before each test.
+  let vaultManagerMock: {
+    getActiveVault: ReturnType<typeof vi.fn>;
+    getVaultIndex: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vaultManagerMock = {
+      getActiveVault: vi.fn(),
+      getVaultIndex: vi.fn(),
+    };
+    (window as any).__MARKABLE_VAULT_MANAGER__ = vaultManagerMock;
+    // Stub tab manager so getOpenTabs() doesn't crash.
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [],
+      switchToTab: vi.fn(),
+      openFile: vi.fn(),
+    };
+  });
+
+  afterEach(() => {
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+    delete (window as any).__TAURI_INTERNALS__;
+  });
+
+  // ── B-1: EC-1a — vault active, index already built ────────────────────────
+
+  it("B-1 (EC-1a): vault active + index built → files from entries, list_md_files NOT called", async () => {
+    // Arrange: active vault with a pre-built index containing 2 valid entries
+    // and 1 corrupt entry (empty path) that must be filtered out (EC-17).
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    vaultManagerMock.getVaultIndex.mockReturnValue({
+      entries: [
+        { path: "/vault/a.md" },
+        { path: "/vault/b.md" },
+        { path: "" },          // EC-17: corrupt entry — must be filtered out
+      ],
+    });
+    // Stub __TAURI_INTERNALS__ with a spy — it must NOT be called on the vault path.
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    // Act: open the bar in files mode and let the synchronous vault path run.
+    open("files");
+    // Flush the async function's microtask queue (vault path has no awaits, so
+    // a single Promise.resolve() tick is sufficient).
+    await Promise.resolve();
+
+    // Assert: no list_md_files call was made (vault index was used instead).
+    expect(invokeSpy).not.toHaveBeenCalledWith("list_md_files", expect.anything());
+
+    // Assert: the results list contains rows for the two valid vault files.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const fileRows = resultsList.querySelectorAll("[data-id^='file:/vault/']");
+    expect(fileRows.length).toBe(2);
+
+    // Assert: no row with an empty/null path (corrupt entry was filtered).
+    const emptyRows = resultsList.querySelectorAll("[data-id='file:']");
+    expect(emptyRows.length).toBe(0);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-2: EC-1b — vault active, index null (still building) ───────────────
+
+  it("B-2 (EC-1b): vault active + index null → loading state shown, list_md_files NOT called", async () => {
+    // Arrange: vault is active but index is still being built.
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    vaultManagerMock.getVaultIndex.mockReturnValue(null);
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    // Act.
+    open("files");
+    await Promise.resolve();
+
+    // Assert: list_md_files was NOT invoked (vault path is taken, not fallback).
+    expect(invokeSpy).not.toHaveBeenCalledWith("list_md_files", expect.anything());
+
+    // Assert: results area shows a loading notice.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const loadingRow = resultsList.querySelector(".cb-loading");
+    expect(loadingRow).not.toBeNull();
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-3: EC-2 fallback — no vault, current file set ─────────────────────
+
+  it("B-3 (EC-2 fallback): no vault + current file set → list_md_files called", async () => {
+    // Arrange: no active vault, fallback to directory derived from current file.
+    vaultManagerMock.getActiveVault.mockReturnValue(null);
+    (window as any).__MARKABLE_CURRENT_FILE__ = "/Users/alice/notes/readme.md";
+
+    const invokeFiles = vi.fn().mockResolvedValue(["/Users/alice/notes/b.md"]);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeFiles };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    // Act.
+    open("files");
+    // Wait for the async invoke to resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Assert: list_md_files was invoked with the directory derived from current file.
+    expect(invokeFiles).toHaveBeenCalledWith("list_md_files", { dir: "/Users/alice/notes" });
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-4: EC-2 fallback — no vault, no current file ───────────────────────
+
+  it("B-4 (EC-2 fallback): no vault + no current file → no-workspace notice, invoke NOT called", async () => {
+    // Arrange: no vault and no current file — nothing to scan.
+    vaultManagerMock.getActiveVault.mockReturnValue(null);
+    // Ensure __MARKABLE_CURRENT_FILE__ is absent.
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    // Act.
+    open("files");
+    await Promise.resolve();
+
+    // Assert: no Tauri invoke was triggered.
+    expect(invokeSpy).not.toHaveBeenCalled();
+
+    // Assert: results area shows a no-workspace notice.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const noticeRow = resultsList.querySelector(".cb-notice");
+    expect(noticeRow).not.toBeNull();
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-5: EC-17 — corrupt index entries filtered ───────────────────────────
+
+  it("B-5 (EC-17): entries with falsy path are silently filtered out", async () => {
+    // Arrange: index has null path, empty path, and one valid path.
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    vaultManagerMock.getVaultIndex.mockReturnValue({
+      entries: [
+        { path: null },
+        { path: "" },
+        { path: "/vault/ok.md" },
+      ],
+    });
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    open("files");
+    await Promise.resolve();
+
+    // Assert: only the valid path appears in results.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const rows = resultsList.querySelectorAll("[data-id^='file:/vault/ok.md']");
+    expect(rows.length).toBe(1);
+
+    // No row with a null or empty data-id.
+    const badRows = resultsList.querySelectorAll("[data-id='file:null'], [data-id='file:']");
+    expect(badRows.length).toBe(0);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-6: EC-18 — 500-entry vault ─────────────────────────────────────────
+
+  it("B-6 (EC-18): 500-entry vault index passes all 500 paths to buildFilesResults", async () => {
+    // Arrange: 500 valid entries — fetchWorkspaceFiles must pass all 500 to
+    // buildFilesResults before the FILES_CAP (200) is applied inside that function.
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    vaultManagerMock.getVaultIndex.mockReturnValue({
+      entries: Array.from({ length: 500 }, (_, i) => ({ path: `/vault/note${i}.md` })),
+    });
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    open("files");
+    await Promise.resolve();
+
+    // Assert: the FILES_CAP applies inside buildFilesResults, so results list
+    // shows exactly FILES_CAP (200) workspace-file rows (not more, not 0).
+    const resultsList = document.getElementById("cb-results-list")!;
+    const fileRows = resultsList.querySelectorAll("[data-id^='file:/vault/note']");
+    expect(fileRows.length).toBe(FILES_CAP);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-7: NFR-4 — synchronous vault path has no setTimeout/setInterval ────
+
+  it("B-7 (NFR-4): vault active + index built path does not schedule any setTimeout", async () => {
+    // When the vault index is already built, fetchWorkspaceFiles reads it
+    // synchronously with no setTimeout or async latency in the critical path
+    // (NFR-4: <80ms to interactive). We verify this by spying on setTimeout and
+    // confirming it is not called when taking the vault+index path.
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    vaultManagerMock.getVaultIndex.mockReturnValue({
+      entries: [{ path: "/vault/a.md" }],
+    });
+
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+
+    open("files");
+    await Promise.resolve();
+
+    // Assert: no setTimeout was called during the vault-index path.
+    // (The focusInput setTimeout in openBar fires once; the vault scan must not
+    // add any of its own.)
+    // We only care about calls FROM fetchWorkspaceFiles — the focus setTimeout is
+    // expected from openBar itself and is not counted here. The vault path should
+    // add ZERO extra setTimeouts beyond the focus call.
+    // Strategy: count calls. openBar adds exactly 1 (focus). Vault path adds 0.
+    const callCount = setTimeoutSpy.mock.calls.length;
+    expect(callCount).toBeLessThanOrEqual(1); // only the focus setTimeout from openBar
+
+    setTimeoutSpy.mockRestore();
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── B-8: H-3 / EC-4 — vault with empty entries shows open tabs only ──────
+
+  it("B-8 (H-3/EC-4): vault with entries:[] → Files mode shows open-tab rows only, no crash", async () => {
+    // EC-4 requires: a vault with zero indexed entries does not crash the bar and
+    // does not produce phantom workspace-file rows. Only open tabs are shown.
+    vaultManagerMock.getActiveVault.mockReturnValue({ id: "v1", rootPaths: ["/vault"] });
+    // Index is built but completely empty (no .md files in vault).
+    vaultManagerMock.getVaultIndex.mockReturnValue({ entries: [] });
+
+    // Arrange: one open tab so the result area is not completely blank.
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [
+        { id: "tab-1", filePath: "/vault/open-tab.md", title: "Open Tab", isModified: false },
+      ],
+      switchToTab: vi.fn(),
+      openFile: vi.fn(),
+    };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+
+    // Should not throw.
+    expect(() => open("files")).not.toThrow();
+    await Promise.resolve();
+
+    const resultsList = document.getElementById("cb-results-list")!;
+
+    // Assert: no error state in the DOM.
+    const errorRows = resultsList.querySelectorAll(".cb-error");
+    expect(errorRows.length).toBe(0);
+
+    // Assert: no workspace-file rows (entries was empty, so no vault-sourced files).
+    // Tab rows use data-id="tab:<id>" (not "file:..."), so we check for tab-1.
+    // The one open tab must appear in the results.
+    const tabRows = resultsList.querySelectorAll("[data-id^='tab:tab-1']");
+    expect(tabRows.length).toBe(1);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+});
+
+// =============================================================================
+// GROUP C — Content Mode (step_04_tests.md §C)
+// =============================================================================
+
+describe("content mode", () => {
+  // Vault manager mock shared by tests that need a vault.
+  let vaultManagerMock: {
+    getActiveVault: ReturnType<typeof vi.fn>;
+    getVaultIndex: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vaultManagerMock = {
+      getActiveVault: vi.fn(),
+      getVaultIndex: vi.fn(),
+    };
+    // Most content-mode tests need an active vault with a built (non-null) index
+    // so that Enter in content mode reaches the invoke call rather than the
+    // H-2 "still building" guard. Tests that specifically test the null-index
+    // path (C-7b) must override getVaultIndex in their own body.
+    vaultManagerMock.getActiveVault.mockReturnValue({
+      id: "v1",
+      rootPaths: ["/vault"],
+      excludePatterns: [],
+    });
+    vaultManagerMock.getVaultIndex.mockReturnValue({ entries: [] });
+    (window as any).__MARKABLE_VAULT_MANAGER__ = vaultManagerMock;
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [],
+      switchToTab: vi.fn(),
+      openFile: vi.fn(),
+    };
+  });
+
+  afterEach(() => {
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+    delete (window as any).__MARKABLE_CURRENT_FILE__;
+    delete (window as any).__TAURI_INTERNALS__;
+  });
+
+  // ── C-1: BarMode type includes "content" ─────────────────────────────────
+
+  it("C-1 (FR-5): BarMode type includes 'content' and MODE_CYCLE has it at position 3", () => {
+    // Type-level check: the import compiles without error because "content" is a
+    // valid BarMode. The runtime check verifies MODE_CYCLE ordering (AD-GS-07).
+    const _m: BarMode = "content"; // compile-time — if this breaks, BarMode changed
+    expect(_m).toBe("content");
+    expect(MODE_CYCLE).toEqual(["commands", "files", "keybindings", "content"]);
+  });
+
+  // ── C-2: FR-6 — "/" in files mode switches to content mode ───────────────
+
+  it("C-2 (FR-6): typing '/' in files mode switches to content mode and clears input", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // Simulate typing "/" as the sole character in the input.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Assert: mode switches to content.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("content");
+    // Assert: input is cleared after the switch.
+    expect(input.value).toBe("");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-3: EC-15 — "/" in non-empty query does NOT switch mode ─────────────
+
+  it("C-3 (EC-15): typing 'design/' in files mode does NOT switch to content mode", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // "design/" is a multi-character input — the "/" is NOT the sole character.
+    input.value = "design/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Mode must remain files.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-4: EC-21 — "/" in content mode is a normal character ───────────────
+
+  it("C-4 (EC-21): typing '/' while already in content mode does NOT switch mode", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+
+    // First switch to content mode via the "/" prefix.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("content");
+
+    // Now type "/" again while already in content mode.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Mode must remain content — "/" is treated as a normal search character.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("content");
+    // Input is NOT cleared (it stays as "/").
+    expect(input.value).toBe("/");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-5: FR-7 — Backspace from empty content mode returns to files mode ──
+
+  it("C-5 (FR-7): Backspace on empty input in content mode returns to files mode", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("content");
+
+    // Backspace with empty input.
+    input.value = "";
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+
+    // Assert: mode returns to files.
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-6: FR-16 — Enter with empty query shows notice ─────────────────────
+
+  it("C-6 (FR-16): Enter with empty query shows 'Enter a search term' notice, no invoke", async () => {
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Enter with empty query (input was cleared by the "/" switch).
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Assert: notice shown.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("Enter a search term");
+
+    // Assert: invoke was NOT called with search_vault_content.
+    expect(invokeSpy).not.toHaveBeenCalledWith("search_vault_content", expect.anything());
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-7: EC-3 — no vault shows no-vault notice ────────────────────────────
+
+  it("C-7 (EC-3): Enter with no active vault shows no-vault notice, no invoke", async () => {
+    // Override: no active vault for this test.
+    vaultManagerMock.getActiveVault.mockReturnValue(null);
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode and type a query.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "foo";
+
+    // Press Enter.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Assert: no-vault notice shown.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("No vault open");
+
+    // Assert: invoke was NOT called.
+    expect(invokeSpy).not.toHaveBeenCalledWith("search_vault_content", expect.anything());
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-8: EC-12 — second Enter while search in-flight is a no-op ──────────
+
+  it("C-8 (EC-12): second Enter while a search is already in-flight is a no-op (invoke called once)", async () => {
+    // Arrange: invoke returns a promise that never resolves (simulates long search).
+    // eslint-disable-next-line prefer-const
+    let _resolveSearch!: () => void;
+    const neverResolves = new Promise<void>((res) => { _resolveSearch = res; });
+    const invokeSpy = vi.fn().mockReturnValue(neverResolves);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode and enter a query.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "foo";
+
+    // First Enter: launches the search.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Second Enter while first is still in-flight.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Assert: invoke was called exactly once.
+    expect(invokeSpy).toHaveBeenCalledTimes(1);
+
+    // Cleanup: resolve the hanging promise so there are no dangling microtasks.
+    _resolveSearch();
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-9: FR-10 — results rendered as file groups with excerpts ────────────
+
+  it("C-9 (FR-10): renderContentResults renders file header, 3 excerpts, and '1 more match' row", async () => {
+    // Arrange: a payload with one file that has 4 matches (only 3 shown, +1 more).
+    const mockPayload = {
+      results: [{
+        path: "/vault/notes.md",
+        title: "My Notes",
+        matches: [
+          { lineNumber: 3,  lineText: "This is a test note",  columnStart: 10 },
+          { lineNumber: 7,  lineText: "Another test line",    columnStart: 8 },
+          { lineNumber: 12, lineText: "Third test line",      columnStart: 6 },
+          { lineNumber: 20, lineText: "Fourth test line",     columnStart: 7 },
+        ],
+      }],
+      capped: false,
+      skippedCount: 0,
+    };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    // renderContentResults uses _resultsEl which is set in onEnable.
+    renderContentResults(mockPayload, "test");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+
+    // Assert: one header row with the file title.
+    const headerRow = resultsList.querySelector(".cb-result--content-header");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow!.textContent).toContain("My Notes");
+
+    // Assert: exactly 3 excerpt rows (not 4 — the cap applies).
+    const excerptRows = resultsList.querySelectorAll(".cb-result--content-excerpt");
+    expect(excerptRows.length).toBe(3);
+
+    // Assert: one "N more matches" row for the 4th match.
+    const moreRow = resultsList.querySelector(".cb-result--content-more");
+    expect(moreRow).not.toBeNull();
+    expect(moreRow!.textContent).toContain("1 more match");
+
+    // Assert: excerpt rows contain <strong> highlighting for the matched query.
+    const firstExcerpt = excerptRows[0];
+    const strong = firstExcerpt.querySelector("strong");
+    expect(strong).not.toBeNull();
+    expect(strong!.textContent?.toLowerCase()).toContain("test");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-10: EC-6 — no results shows "No results for 'query'" ───────────────
+
+  it("C-10 (EC-6): renderContentResults with empty results shows no-results notice", async () => {
+    const mockPayload = { results: [], capped: false, skippedCount: 0 };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    renderContentResults(mockPayload, "missingterm");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("No results for");
+    expect(notice!.textContent).toContain("missingterm");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-11: EC-7 — capped = true shows cap notice ──────────────────────────
+
+  it("C-11 (EC-7): renderContentResults with capped = true shows cap warning notice", async () => {
+    // Arrange: 3 results, capped flag set.
+    const mockPayload = {
+      results: [
+        { path: "/a.md", title: "A", matches: [{ lineNumber: 1, lineText: "foo", columnStart: 0 }] },
+        { path: "/b.md", title: "B", matches: [{ lineNumber: 1, lineText: "foo", columnStart: 0 }] },
+        { path: "/c.md", title: "C", matches: [{ lineNumber: 1, lineText: "foo", columnStart: 0 }] },
+      ],
+      capped: true,
+      skippedCount: 0,
+    };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    renderContentResults(mockPayload, "foo");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const capNotice = resultsList.querySelector(".cb-content-notice--warning");
+    expect(capNotice).not.toBeNull();
+    // Notice must mention the number of files (3).
+    expect(capNotice!.textContent).toContain("3");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-12: EC-8 — skippedCount > 0 shows skip notice ─────────────────────
+
+  it("C-12 (EC-8): renderContentResults with skippedCount > 0 shows skip warning notice", async () => {
+    const mockPayload = { results: [], capped: false, skippedCount: 3 };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    renderContentResults(mockPayload, "foo");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const skipNotice = resultsList.querySelector(".cb-content-notice--warning");
+    expect(skipNotice).not.toBeNull();
+    expect(skipNotice!.textContent).toContain("3");
+    expect(skipNotice!.textContent?.toLowerCase()).toContain("could not be searched");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-13: EC-5 — empty vault produces same result as EC-6 ────────────────
+
+  it("C-13 (EC-5): empty vault (0 .md files) — Rust returns empty results, no-results notice shown", async () => {
+    // Semantically identical to C-10: empty results array regardless of cause.
+    const mockPayload = { results: [], capped: false, skippedCount: 0 };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    renderContentResults(mockPayload, "foo");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("No results for");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-14: EC-11 — regex special characters in query do not crash renderer ─
+
+  it("C-14 (EC-11): renderContentResults does not crash when query contains regex special chars", async () => {
+    // The renderer uses plain substring slicing (not regex), so special regex
+    // characters in the query must not cause errors.
+    const mockPayload = { results: [], capped: false, skippedCount: 0 };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+
+    // Should not throw.
+    expect(() => renderContentResults(mockPayload, "foo[bar]*")).not.toThrow();
+
+    // The no-results notice must display the literal query string.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("foo[bar]*");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-15: EC-13 — plugin disabled while search in-flight → no crash ──────
+
+  it("C-15 (EC-13): plugin disabled while content search is in-flight does not throw", async () => {
+    // Arrange: invoke returns a promise we control.
+    let resolveSearch: ((val: any) => void) = () => {};
+    const pendingSearch = new Promise((res) => { resolveSearch = res; });
+    const invokeSpy = vi.fn().mockReturnValue(pendingSearch);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Enter content mode and start a search.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "foo";
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Disable the plugin (removes DOM, nulls module refs) while search is in-flight.
+    // This must not throw.
+    expect(() => commandBarPlugin.onDisable(api as any)).not.toThrow();
+
+    // Resolve the search after DOM removal. The generation/DOM guards must fire cleanly.
+    resolveSearch({ results: [], capped: false, skippedCount: 0 });
+    await Promise.resolve();
+
+    // If we get here without errors, the test passes.
+    expect(true).toBe(true);
+  });
+
+  // ── C-16: EC-14 — closeBar() while in-flight causes result to be discarded ─
+
+  it("C-16 (EC-14): closing bar while search in-flight discards stale results", async () => {
+    // Arrange: invoke returns a controllable promise.
+    let resolveSearch: ((val: any) => void) = () => {};
+    const pendingSearch = new Promise((res) => { resolveSearch = res; });
+    const invokeSpy = vi.fn().mockReturnValue(pendingSearch);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Enter content mode and start a search.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "foo";
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Close the bar before the search resolves. closeBar() increments
+    // _contentSearchGeneration, making the pending result stale.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    // Resolve the stale search with file results.
+    resolveSearch({
+      results: [{ path: "/vault/a.md", title: "A", matches: [{ lineNumber: 1, lineText: "foo", columnStart: 0 }] }],
+      capped: false,
+      skippedCount: 0,
+    });
+    await Promise.resolve();
+
+    // Re-open the bar. The stale results must NOT appear in the DOM.
+    open("files");
+
+    // In files mode there should be no content-header rows from the stale search.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const staleRows = resultsList.querySelectorAll(".cb-result--content-header");
+    expect(staleRows.length).toBe(0);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-17: FR-11 — clicking file header row opens file and closes bar ──────
+
+  it("C-17 (FR-11): clicking a content file-header row opens the file and closes the bar", async () => {
+    const openFileSpy = vi.fn();
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [],
+      openFile: openFileSpy,
+    };
+
+    const mockPayload = {
+      results: [{
+        path: "/vault/notes.md",
+        title: "My Notes",
+        matches: [{ lineNumber: 1, lineText: "foo", columnStart: 0 }],
+      }],
+      capped: false,
+      skippedCount: 0,
+    };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    // Render content results directly (no actual Enter needed).
+    renderContentResults(mockPayload, "foo");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const headerRow = resultsList.querySelector<HTMLElement>(".cb-result--content-header")!;
+
+    // Simulate click on the file header.
+    headerRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // Assert: the file was opened.
+    expect(openFileSpy).toHaveBeenCalledWith("/vault/notes.md");
+
+    // Assert: the bar was closed (overlay has cb-hidden class).
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    expect(overlay.classList.contains("cb-hidden")).toBe(true);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-18: FR-11 — clicking excerpt row also opens file ───────────────────
+
+  it("C-18 (FR-11): clicking a content excerpt row opens the same file and closes bar", async () => {
+    const openFileSpy = vi.fn();
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      getAllTabs: () => [],
+      openFile: openFileSpy,
+    };
+
+    const mockPayload = {
+      results: [{
+        path: "/vault/notes.md",
+        title: "My Notes",
+        matches: [
+          { lineNumber: 1, lineText: "foo first match",  columnStart: 0 },
+          { lineNumber: 5, lineText: "foo second match", columnStart: 0 },
+        ],
+      }],
+      capped: false,
+      skippedCount: 0,
+    };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    renderContentResults(mockPayload, "foo");
+
+    const resultsList = document.getElementById("cb-results-list")!;
+    const excerptRows = resultsList.querySelectorAll<HTMLElement>(".cb-result--content-excerpt");
+    expect(excerptRows.length).toBe(2);
+
+    // Click the first excerpt.
+    excerptRows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // Assert: same file opened.
+    expect(openFileSpy).toHaveBeenCalledWith("/vault/notes.md");
+
+    // Assert: bar closed.
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+    expect(overlay.classList.contains("cb-hidden")).toBe(true);
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-19: EC-16 — closeBar() resets content mode state ───────────────────
+
+  it("C-19 (EC-16): closeBar() while in content mode resets _mode to files", async () => {
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("content");
+
+    // Close via Escape.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    // Bar must be hidden.
+    expect(overlay.classList.contains("cb-hidden")).toBe(true);
+
+    // Re-open with no argument — mode must have been reset to "files".
+    open();
+    expect(document.querySelector(".cb-tab--active")!.getAttribute("data-mode")).toBe("files");
+
+    commandBarPlugin.onDisable(api as any);
+  });
+
+  // ── C-20: AD-GS-07 — MODE_CYCLE includes "content" at position 3 ─────────
+
+  it("C-20 (AD-GS-07): MODE_CYCLE is ['commands', 'files', 'keybindings', 'content']", () => {
+    // Structural test: verifies the exported constant has the exact cycle order
+    // specified in AD-GS-07. Content at position 3 signals it is accessed
+    // primarily via the '/' prefix rather than Tab-cycling (no dedicated shortcut).
+    expect(MODE_CYCLE).toEqual(["commands", "files", "keybindings", "content"]);
+  });
+
+  // ── C-21: NFR-5 — all Record<BarMode, string> constants include "content" ─
+
+  it("C-21 (NFR-5): all BarMode record constants include the 'content' key with correct values", () => {
+    // Structural test: importing the constants and checking the "content" key
+    // verifies that the Record<BarMode, string> type is exhaustively satisfied.
+    expect(MODE_PLACEHOLDERS.content).toBe("Search file contents…");
+    expect(MODE_FOOTER_HINTS.content).toBe("Enter to search  ·  Esc to close");
+    expect(MODE_BADGE_LABELS.content).toBe("Content");
+    expect(MODE_TAB_SHORTCUTS.content).toBe("");
+  });
+
+  // ── C-7b: H-2 — vault active but index null → Enter shows building notice ─
+
+  it("C-7b (H-2/EC-1): vault active but index null → Enter in content mode shows building notice, invoke NOT called", async () => {
+    // EC-1 requires: when vault is active but index is still building (null),
+    // pressing Enter in content mode shows a building notice rather than invoking Rust.
+    // This prevents spurious search calls before the vault is ready.
+    vaultManagerMock.getActiveVault.mockReturnValue({
+      id: "v1",
+      rootPaths: ["/vault"],
+      excludePatterns: [],
+    });
+    // Index is null — still building.
+    vaultManagerMock.getVaultIndex.mockReturnValue(null);
+
+    const invokeSpy = vi.fn();
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeSpy };
+
+    const api = makeMockApi();
+    await commandBarPlugin.onEnable(api as any);
+    const open = (window as any).__MARKABLE_COMMAND_BAR_OPEN__ as (mode?: BarMode) => void;
+    open("files");
+
+    const input = document.querySelector<HTMLInputElement>(".cb-input")!;
+    const overlay = document.getElementById("markable-command-bar-overlay")!;
+
+    // Switch to content mode and type a query.
+    input.value = "/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "foo";
+
+    // Press Enter while index is null.
+    overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    // Assert: building notice is shown.
+    const resultsList = document.getElementById("cb-results-list")!;
+    const notice = resultsList.querySelector(".cb-content-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("still building");
+
+    // Assert: search_vault_content was NOT invoked.
+    expect(invokeSpy).not.toHaveBeenCalledWith("search_vault_content", expect.anything());
+
+    commandBarPlugin.onDisable(api as any);
   });
 });
