@@ -3771,7 +3771,11 @@ describe("content mode", () => {
     expect(MODE_PLACEHOLDERS.content).toBe("Search file contents…");
     expect(MODE_FOOTER_HINTS.content).toBe("Enter to search  ·  Esc to close");
     expect(MODE_BADGE_LABELS.content).toBe("Content");
-    expect(MODE_TAB_SHORTCUTS.content).toBe("⌘⇧G");
+    expect(MODE_TAB_SHORTCUTS.content).toBe("⌘4");
+    // Verify all four tab shortcuts follow the ⌘1–⌘4 convention.
+    expect(MODE_TAB_SHORTCUTS.commands).toBe("⌘1");
+    expect(MODE_TAB_SHORTCUTS.files).toBe("⌘2");
+    expect(MODE_TAB_SHORTCUTS.keybindings).toBe("⌘3");
   });
 
   // ── C-7b: H-2 — vault active but index null → Enter shows building notice ─

@@ -263,10 +263,10 @@ export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "conte
  * Content mode shortcut is Cmd-Shift-G (⌘⇧G); also accessible via '/' prefix (FR-5).
  */
 export const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
-  files:       "⌘P",
-  commands:    "⌘⇧P",
-  keybindings: "⌘⇧K",
-  content:     "⌘⇧G",
+  commands:    "⌘1",
+  files:       "⌘2",
+  keybindings: "⌘3",
+  content:     "⌘4",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
@@ -3720,6 +3720,18 @@ function onOverlayKeydown(e: KeyboardEvent): void {
     setMode("files");
     filterAndRender("");
     return;
+  }
+
+  // Cmd-1/2/3/4: switch to the tab at that position (only active inside the bar).
+  if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+    const tabIndex = ["1", "2", "3", "4"].indexOf(e.key);
+    if (tabIndex !== -1) {
+      e.preventDefault();
+      e.stopPropagation();
+      const targetMode = MODE_CYCLE[tabIndex];
+      if (targetMode && targetMode !== _mode) switchMode(targetMode);
+      return;
+    }
   }
 
   switch (e.key) {
