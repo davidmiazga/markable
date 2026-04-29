@@ -337,3 +337,13 @@ Wire `onEnable`/`onDisable` sequences. Add to `PLUGINS` array in `build-plugins.
 - **TypeScript**: `npx tsc --noEmit` exits clean.
 - **Tests**: 2923/2923 pass (39 skipped); hover-popover.test.ts 31/31.
 - **Status**: Approved for Merge
+
+## Review Sign-off (Pass 4 — Broken-Link Highlighting, Second-Pass Re-review)
+
+- **Date**: 2026-04-28
+- **Findings summary**: 0 Critical, 0 High, 0 Medium, 0 Low — all six prior findings resolved
+- **Requirements traceability**: All items in `docs/requirements/active_task.md` (FR-1 through FR-9, NFR-1 through NFR-6, EC-01 through EC-14) verified against implementation.
+- **Edge case coverage**: All 14 Edge Case Inventory items covered by passing tests in `tests/plugins/backlinks/wikilink-broken.test.ts` (28 tests, 28 passed).
+- **TypeScript**: `npx tsc --noEmit` exits clean.
+- **Tests**: 3003/3003 pass (39 skipped).
+- **Status**: Approved for Merge
