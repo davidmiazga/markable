@@ -48,17 +48,18 @@
 - **Drag & drop `.md`/`.txt` files to open** — Feature already existed in `main.ts` (`onDragDropEvent` handler). Extracted handler to `src/tabs/drag-drop.ts` (`createDragDropHandler` factory) for testability. 23 new Vitest tests covering EC-01–EC-07, EC-10, EC-12–EC-13, NFR-6: event type guard (enter/over/leave ignored), empty-paths guard, extension filter (.pdf/.png/.docx/.MD all rejected, .txt/.md accepted, case-sensitive), mixed payload, dedup passthrough, sequential ordering, `refreshRecentFilesMenu` called after all opens. TypeScript clean. 2026-04-28
 - **Wiki-link visual decorations — broken link highlighting** — `[[wikilinks]]` whose target stem is absent from the vault index receive `cm-wiki-link-broken` class (red wavy underline via `--link-broken-color` CSS variable). `stemForLookup()` normalises targets: strips `#heading` anchors, explicit `.md` suffix, subdirectory prefix, lowercases. `forceRebuildEffect` `StateEffect` dispatched from `onVaultChanged`/`onIndexUpdated` subscriptions keeps decorations live when files are added/deleted. No-vault mode degrades gracefully (no decorations, no crash). Reviewer-caught anchor false-positive (`[[notes#heading]]` always broken) fixed. 28 new Vitest tests; code-reviewer approved 2026-04-28
 - **Global search — Command Bar integration** — Two improvements in one: (1) Cmd-P "files mode" now searches the full vault index instead of the current file's directory, giving correct vault-wide file results; (2) New "content" mode (`⌘⇧G` or `/` prefix in Files mode) performs full-text search across all vault `.md` files via new Rust `search_vault_content` command. Results grouped by file with up to 3 line excerpts and "N more" notice. `column_start` uses character offsets (not byte offsets) so excerpt highlighting is correct for non-ASCII content. Reviewer-caught bugs fixed: char vs byte offset mismatch, missing index-still-building guard, empty vault entries case, camelCase invoke args. Post-review: command bar mode tabs simplified to `⌘1`–`⌘4` (context-scoped, only active when bar is open — no conflicts with global shortcuts). 3037 Vitest tests + 148 Rust tests; code-reviewer approved 2026-04-29
+- **Vault meta system: tag browser (⌘5) + YAML vocabulary validation** — `{VaultName}_meta/` folder convention for user-defined field vocabularies. `⌘5` opens Tags mode in the command bar: front-matter and inline `#hashtag` tags collected into Defined / Uncategorised sections with file-count grouping, in-memory fuzzy filter, and "Add to meta" button that writes `{VaultName}_tags.md`. YAML pane chips show an outline warning when a value is not in the defined vocabulary (null vocab = no warnings). Meta folder excluded from vault index, search, and backlinks throughout via `is_meta_folder_component` guard in both `build_vault_index` and `list_vault_files`. `window.__MARKABLE_META__` global mirrors vault-manager pattern; hot-reload on file-watcher events. Reviewer-caught bugs fixed (two rounds): `openFileFromTagBrowser` used an unrecognized action (fixed to `__MARKABLE_TAB_MANAGER__.openFileInTab`), `handleAddToMeta` missing `ensure_directory` call before `write_file` (fails on first-time vault), WalkDir comment misleading, `buildTagRow` length-justification text inaccurate. 3101 Vitest tests + 162 Rust tests; code-reviewer approved 2026-04-28
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-04-29.**
+**Session ended 2026-04-28.**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **63 files, 3037 passing, 39 skipped**. Rust: 148 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
+- Test suite: **66 files, 3101 passing, 39 skipped**. Rust: 162 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
 
 #### How to resume
@@ -72,7 +73,6 @@ These align with the project direction (`memory/project_direction.md`): File Bro
 
 | Feature | Effort | Notes |
 |---------|--------|-------|
-| **Tag browser** — sidebar panel listing all `#tags` used across the vault | Medium | Rust tag-scan command; click a tag to search files containing it |
 | **Pinned tabs** — `pin()` / `unpin()` on TabManager; pinned tabs resist Cmd-W | Low | Tab context menu item already in place for "Pin Tab" |
 
 ---
