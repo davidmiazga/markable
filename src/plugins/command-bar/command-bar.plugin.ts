@@ -260,13 +260,13 @@ export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "conte
  * Shortcut hint glyphs shown next to each tab label.
  * Displayed in a muted, smaller font so power users can see the hotkey at a glance
  * without the glyph competing visually with the tab label (NFR-04 — no hardcoded hex).
- * Content mode has no dedicated shortcut — it is accessed via the '/' prefix (FR-5).
+ * Content mode shortcut is Cmd-Shift-G (⌘⇧G); also accessible via '/' prefix (FR-5).
  */
 export const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
   files:       "⌘P",
   commands:    "⌘⇧P",
   keybindings: "⌘⇧K",
-  content:     "",
+  content:     "⌘⇧G",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
