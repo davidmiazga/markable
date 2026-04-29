@@ -17,6 +17,7 @@
   --code-bg: hsla(210, 13%, 72%, 0.2);
   --code-text: hsl(213, 13%, 16%);
   --link-color: hsl(212, 95%, 40%);
+  --link-broken-color: hsl(0, 72%, 45%);  /* muted red for broken wiki-links */
   --heading-color: hsl(213, 13%, 16%);
   --blockquote-color: hsl(212, 10%, 38%);
   --blockquote-border: hsl(210, 18%, 84%);
@@ -88,6 +89,7 @@
   --code-bg: rgba(110, 118, 129, 0.25);
   --code-text: hsl(216, 28%, 93%);
   --link-color: hsl(212, 92%, 45%);
+  --link-broken-color: hsl(0, 90%, 65%);  /* lighter red for dark backgrounds */
   --heading-color: var(--text-primary);
   --blockquote-color: hsl(216, 28%, 65%);
   --blockquote-border: hsl(216, 28%, 30%);

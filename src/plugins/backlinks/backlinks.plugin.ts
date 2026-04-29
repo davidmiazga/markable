@@ -425,6 +425,13 @@ export interface WikiLinkDecorationRange {
    * the pipe). Used to set the `data-wiki-target` DOM attribute (FR-7).
    */
   target?: string;
+  /**
+   * True when the target stem is not present in the vault index.
+   * Only set on `type === "mark"` ranges when a `stemSet` is supplied to
+   * `computeWikiLinkDecorationRanges`. Undefined (falsy) means either
+   * "valid" or "no vault active" (EC-01, NFR-5).
+   */
+  broken?: boolean;
 }
 
 /**
@@ -447,6 +454,47 @@ function lineNumberAtPos(text: string, pos: number): number {
     }
   }
   return line;
+}
+
+/**
+ * Extract the bare lowercase stem from a raw wiki-link target for vault
+ * index lookup (AD-2 in 00_index.md).
+ *
+ * Algorithm (must match VaultIndexEntry.name which is the filename stem):
+ *   1. normalizeTarget(t)             e.g. "subdir/notes.md"
+ *   2. Strip ".md" suffix             "subdir/notes"
+ *   3. Take filename portion after    "notes"
+ *      the last "/"
+ *   4. Lowercase                      "notes"
+ *
+ * Case-insensitive to match macOS HFS+ semantics (FR-4, EC-07).
+ * Module-private — not exported so the public API surface stays minimal.
+ *
+ * @param rawTarget - The un-normalized wiki-link target (before the pipe).
+ * @returns Lowercase stem suitable for Set.has() lookup.
+ */
+function stemForLookup(rawTarget: string): string {
+  const normalized = normalizeTarget(rawTarget);
+  /*
+   * Strip the "#heading" anchor suffix before any further processing.
+   * A link like [[notes#introduction]] targets "notes", not "notes#introduction".
+   * normalizeTarget does not strip anchors (it only normalizes the path), so we
+   * must handle it here. Without this step, [[notes#introduction]] would always
+   * register as broken even when notes.md exists (Finding 1 / code review).
+   */
+  const withoutAnchor = normalized.includes("#")
+    ? normalized.slice(0, normalized.indexOf("#"))
+    : normalized;
+  /*
+   * Strip the ".md" suffix if present. normalizeTarget may have appended it,
+   * or the user may have written [[file.md]] explicitly (EC-12).
+   */
+  const withoutExt = withoutAnchor.endsWith(".md")
+    ? withoutAnchor.slice(0, -3)
+    : withoutAnchor;
+  /* Take the filename portion after the last "/" to handle subdirectory paths (EC-06). */
+  const slashIdx = withoutExt.lastIndexOf("/");
+  return (slashIdx === -1 ? withoutExt : withoutExt.slice(slashIdx + 1)).toLowerCase();
 }
 
 /**
@@ -480,13 +528,21 @@ function lineNumberAtPos(text: string, pos: number): number {
  * @param visibleRanges - Array of `{from, to}` character ranges that are
  *                        currently visible in the viewport. Only wiki-links
  *                        within these ranges are processed (NFR-3).
+ * @param stemSet       - Optional set of lowercased vault stems. When provided,
+ *                        mark ranges whose target stem is absent from this set
+ *                        have their `broken` field set to `true`. When absent
+ *                        (no vault active), no broken classification is applied
+ *                        and all links render as valid (EC-01, NFR-5).
  * @returns Sorted array of decoration range descriptors.
  */
 export function computeWikiLinkDecorationRanges(
   text: string,
   activeLines: Set<number>,
-  visibleRanges: { from: number; to: number }[]
+  visibleRanges: { from: number; to: number }[],
+  stemSet?: Set<string>
 ): WikiLinkDecorationRange[] {
+  // Length justified: two parallel branches (piped vs. simple) require identical
+  // broken-link logic; decomposition would require 6+ parameters.
   const results: WikiLinkDecorationRange[] = [];
 
   for (const { from: rangeFrom, to: rangeTo } of visibleRanges) {
@@ -541,7 +597,22 @@ export function computeWikiLinkDecorationRanges(
          * the attribute must be the target, not the display text).
          */
         if (pipeEnd < closeStart) {
-          results.push({ from: pipeEnd, to: closeStart, type: "mark", target: match.target });
+          const markRange: WikiLinkDecorationRange = {
+            from: pipeEnd,
+            to: closeStart,
+            type: "mark",
+            target: match.target,
+          };
+          /*
+           * When a stemSet is provided, classify the link as broken if the
+           * normalized target stem is absent from the vault index (FR-1, AD-2).
+           * When stemSet is undefined (no vault), leave `broken` unset so the
+           * link renders as valid (EC-01, FR-3).
+           */
+          if (stemSet !== undefined) {
+            markRange.broken = !stemSet.has(stemForLookup(match.target));
+          }
+          results.push(markRange);
         }
       } else {
         /*
@@ -551,7 +622,21 @@ export function computeWikiLinkDecorationRanges(
          * Carry `match.target` for the `data-wiki-target` DOM attribute (FR-7.1).
          */
         if (openEnd < closeStart) {
-          results.push({ from: openEnd, to: closeStart, type: "mark", target: match.target });
+          const markRange: WikiLinkDecorationRange = {
+            from: openEnd,
+            to: closeStart,
+            type: "mark",
+            target: match.target,
+          };
+          /*
+           * Same broken-link classification as the piped branch above.
+           * Both branches use identical logic; the only input difference is
+           * which span is being marked (display text vs. target text).
+           */
+          if (stemSet !== undefined) {
+            markRange.broken = !stemSet.has(stemForLookup(match.target));
+          }
+          results.push(markRange);
         }
       }
 
@@ -578,6 +663,10 @@ export function computeWikiLinkDecorationRanges(
  * @returns A sorted, non-overlapping `DecorationSet`.
  */
 export function buildWikiLinkDecorations(view: any): any {
+  // Length justified: stem-set construction, active-line computation, and
+  // CM6 Decoration assembly must all happen in one pass to avoid redundant
+  // doc.toString() calls; extracting each step would require passing a large
+  // shared context object between helpers.
   const { Decoration } = (window as any).__CM_VIEW__ as any;
   const state = view.state;
 
@@ -598,11 +687,27 @@ export function buildWikiLinkDecorations(view: any): any {
   /* Get full document text for the pure function */
   const docText = state.doc.toString();
 
-  /* Compute the pure decoration ranges */
+  /*
+   * Build vault stem set for broken-link detection (FR-9, AD-1).
+   * O(n) in vault size; individual lookups in the decoration loop are O(1).
+   * When no vault is active, stemSet is undefined and no broken-link
+   * classification is applied (EC-01, FR-3).
+   */
+  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vaultIndex = vaultManager?.getVaultIndex?.() ?? null;
+  let stemSet: Set<string> | undefined;
+  if (vaultIndex !== null) {
+    stemSet = new Set(
+      (vaultIndex.entries as { name: string }[]).map((e) => e.name.toLowerCase())
+    );
+  }
+
+  /* Compute the pure decoration ranges, passing stemSet for broken detection */
   const decoRanges = computeWikiLinkDecorationRanges(
     docText,
     activeLines,
-    view.visibleRanges
+    view.visibleRanges,
+    stemSet
   );
 
   /* Convert to CM6 Decoration objects */
@@ -617,13 +722,20 @@ export function buildWikiLinkDecorations(view: any): any {
        * Mark decoration: style the visible link text.
        * When `range.target` is present, add a `data-wiki-target` attribute
        * to the span so the hover handler can read the target without
-       * re-parsing the text content of the span (FR-7.3, FR-7.1).
+       * re-parsing the text content of the span (FR-7.3, FR-7.1, FR-8, AD-6).
        * The conditional guard prevents a TypeScript error from the optional
        * field; in practice every "mark" range has a target.
+       *
+       * Broken links receive an additional `cm-wiki-link-broken` class (FR-1).
+       * The data-wiki-target attribute is identical for broken and valid links
+       * so click-to-navigate and hover popover are unaffected (FR-8, AD-6).
        */
+      const linkClass = range.broken
+        ? "cm-live-link cm-wiki-link cm-wiki-link-broken"
+        : "cm-live-link cm-wiki-link";
       decorations.push(
         Decoration.mark({
-          class: "cm-live-link cm-wiki-link",
+          class: linkClass,
           attributes: range.target !== undefined
             ? { "data-wiki-target": range.target }
             : {},
@@ -706,11 +818,19 @@ export function injectWikiLinkStyles(): void {
   const style = document.createElement("style");
   style.setAttribute("data-markable-wiki-link-styles", "true");
   style.textContent = `
-/* Wiki-link decoration styles (Step 4).
+/* Wiki-link decoration styles.
  * The .cm-live-link class provides base link styling (color, underline).
- * The .cm-wiki-link class enables click targeting by the click handler. */
+ * The .cm-wiki-link class enables click targeting by the click handler.
+ * The .cm-wiki-link-broken class marks links whose target does not exist
+ * in the vault index. Color is controlled by --link-broken-color in
+ * styles.css so themes can override it (FR-7, AD-5). */
 .cm-wiki-link {
   cursor: pointer;
+}
+.cm-wiki-link-broken {
+  color: var(--link-broken-color);
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
 }
 `;
   document.head.appendChild(style);
@@ -1966,6 +2086,67 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 // @ts-ignore TS6133: assigned for future use / documentation purposes
 let _view: any = null;
 
+/**
+ * A no-op StateEffect used to force a CM6 decoration rebuild when the
+ * vault index changes outside of a document transaction (FR-5, AD-3).
+ *
+ * StateEffect lives in @codemirror/state, exposed as window.__CM_STATE__.
+ * The null guard handles test environments where the global is absent.
+ * Defined once at module scope so both the subscribe and dispatch sites
+ * reference the same effect type.
+ */
+const { StateEffect } = (window as any).__CM_STATE__ as any ?? {};
+/*
+ * Type argument omitted: when StateEffect is `any`, TypeScript forbids generic
+ * call syntax on untyped functions (TS2347). The effect payload is `void` in
+ * practice but this is not enforced at the TypeScript level — `any` is sufficient
+ * because the dispatch site also uses `any`.
+ */
+const forceRebuildEffect: any = StateEffect?.define() ?? null;
+
+/**
+ * Subscription callbacks for vault-change events, held so they can be
+ * unsubscribed by exact reference in onDisable (EC-14, AD-4).
+ *
+ * Both are set together in _buildCmExtensions when vaultManager is available,
+ * and both are nulled in onDisable after unsubscribing.
+ */
+let _onVaultChangedForDecorations: ((v: any) => void) | null = null;
+let _onIndexUpdatedForDecorations: ((e: any) => void) | null = null;
+
+/**
+ * Test-only accessor for the vault decoration callbacks.
+ *
+ * Returns the exact same function references that `_buildCmExtensions`
+ * registered with the vault manager. Tests can use these to:
+ *   1. Prove the returned callbacks ARE the references registered with the mock
+ *      vault manager (identity check against what onVaultChanged / onIndexUpdated
+ *      received).
+ *   2. Invoke them directly and assert no crash + correct behavior when _view is null.
+ *
+ * This export is intentionally named with a `__test_only_` prefix to signal
+ * that it must never be called in production code. It is the narrowest possible
+ * seam that lets tests exercise the real wiring without requiring a full CM6
+ * EditorView (which cannot be instantiated in jsdom).
+ *
+ * Finding 2 fix: EC-08, EC-09, EC-10 tests must call this after simulating
+ * plugin enable so they exercise the actual registered callbacks, not
+ * inline lambdas constructed in the test itself.
+ *
+ * @returns Object with `onVaultChanged` and `onIndexUpdated` callback references,
+ *          or null for each if `_buildCmExtensions` has not yet been called
+ *          (or if vault manager was unavailable at enable time).
+ */
+export function __test_only_getDecorationCallbacks(): {
+  onVaultChanged: ((v: any) => void) | null;
+  onIndexUpdated: ((e: any) => void) | null;
+} {
+  return {
+    onVaultChanged: _onVaultChangedForDecorations,
+    onIndexUpdated: _onIndexUpdatedForDecorations,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Step 10: Wiki-Link Hover Popover — CSS
 // ---------------------------------------------------------------------------
@@ -2820,6 +3001,10 @@ function _wireHoverListeners(): void {
  * @param api    - The `MarkablePluginAPI` instance passed to `onEnable`.
  */
 function _buildCmExtensions(api: MarkablePluginAPI): void {
+  // Length justified: registers 6 tightly coupled extension points (decoration,
+  // click handler, autocomplete, update listener, poll timer, vault subscriptions)
+  // that all share _view, _enabled, and api; extracting each would require passing
+  // all shared mutable references as parameters, reducing readability with no gain.
   const cmView = (window as any).__CM_VIEW__;
   const extensions: any[] = [];
 
@@ -2930,6 +3115,46 @@ function _buildCmExtensions(api: MarkablePluginAPI): void {
     }
   }, 500);
 
+  /*
+   * 6. Subscribe to vault index changes so broken-link decorations refresh
+   *    when files are created, deleted, or when the vault is switched
+   *    (FR-5, EC-08, EC-09, EC-10).
+   *
+   *    Both callbacks dispatch a forceRebuildEffect to _view. This triggers
+   *    a CM6 update cycle that calls WikiLinkPlugin.update(), which calls
+   *    buildWikiLinkDecorations with the freshly updated vault index.
+   *
+   *    forceRebuildEffect may be null in test environments where __CM_STATE__
+   *    is unavailable; the dispatch is skipped in that case (AD-3).
+   *
+   *    The _enabled guard matches the pattern used by the existing
+   *    updateListener and poll timer to prevent stale effects from a
+   *    disabled plugin.
+   */
+  const vaultMgrForSub = (window as any).__MARKABLE_VAULT_MANAGER__;
+  if (vaultMgrForSub) {
+    _onVaultChangedForDecorations = (_vault: any) => {
+      if (!_enabled) return;
+      // If _view is null (vault event fired before first CM6 transaction), the
+      // rebuild is silently deferred to the next user-triggered transaction.
+      if (forceRebuildEffect && _view) {
+        _view.dispatch({ effects: forceRebuildEffect.of(undefined) });
+      }
+    };
+
+    _onIndexUpdatedForDecorations = (_event: any) => {
+      if (!_enabled) return;
+      // If _view is null (vault event fired before first CM6 transaction), the
+      // rebuild is silently deferred to the next user-triggered transaction.
+      if (forceRebuildEffect && _view) {
+        _view.dispatch({ effects: forceRebuildEffect.of(undefined) });
+      }
+    };
+
+    vaultMgrForSub.onVaultChanged(_onVaultChangedForDecorations);
+    vaultMgrForSub.onIndexUpdated(_onIndexUpdatedForDecorations);
+  }
+
   api.addExtensions(extensions);
 }
 
@@ -3038,6 +3263,11 @@ const plugin = {
   },
 
   onDisable(api: MarkablePluginAPI): void {
+    // Length justified: the disable sequence must mirror the exact reverse of
+    // onEnable across 10 steps (timers, CM6 extensions, sidebar, CSS, click handlers,
+    // vault subscriptions, hover popover, and module-level state reset); splitting
+    // across helpers would obscure the invariant that every onEnable registration
+    // has a corresponding cleanup here.
     _enabled = false;
 
     /* Step 1: Cancel all pending timers and reset index state */
@@ -3062,6 +3292,25 @@ const plugin = {
       clearInterval(_pollTimer);
       _pollTimer = null;
     }
+
+    /* Step 5b: Unsubscribe vault-change decoration callbacks (EC-14, AD-4).
+     * The null-check before each off* call is defensive — in theory both are
+     * set together in _buildCmExtensions, but this guards partial-enable failures.
+     * Variables are nulled after the off* calls to match the pattern used by
+     * _wikiLinkClickHandler above. */
+    const vaultMgrForCleanup = (window as any).__MARKABLE_VAULT_MANAGER__;
+    // If vaultMgrForCleanup is null (vault manager already torn down), the callbacks
+    // remain in its internal Set but are effectively inert because _enabled is false.
+    if (vaultMgrForCleanup) {
+      if (_onVaultChangedForDecorations) {
+        vaultMgrForCleanup.offVaultChanged(_onVaultChangedForDecorations);
+      }
+      if (_onIndexUpdatedForDecorations) {
+        vaultMgrForCleanup.offIndexUpdated(_onIndexUpdatedForDecorations);
+      }
+    }
+    _onVaultChangedForDecorations = null;
+    _onIndexUpdatedForDecorations = null;
 
     // ── Step 10: Hover popover cleanup (FR-8.2) ──────────────────────────────
 
@@ -3112,6 +3361,10 @@ const plugin = {
     _backlinksListEl = null;
     _onScanningStateChanged = null;
     _onIndexRebuilt = null;
+    /* Belt-and-suspenders: these were already nulled in Step 5b, but the
+     * canonical reset block must be complete (AD-4). */
+    _onVaultChangedForDecorations = null;
+    _onIndexUpdatedForDecorations = null;
   },
 };
 
