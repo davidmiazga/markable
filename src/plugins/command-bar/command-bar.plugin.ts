@@ -2864,10 +2864,10 @@ async function handleContentSearchEnter(): Promise<void> {
     payload = await (window as any).__TAURI_INTERNALS__.invoke(
       "search_vault_content",
       {
-        root_paths: rootPaths,
-        exclude_patterns: excludePatterns,
+        rootPaths,
+        excludePatterns,
         query,
-        max_results: 50,
+        maxResults: 50,
       },
     );
   } catch (err) {

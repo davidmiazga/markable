@@ -77,10 +77,9 @@ describe("searchVaultContent() bridge wrapper", () => {
 
   // ── A-2: parameter mapping ────────────────────────────────────────────────
 
-  it("A-2: invoke is called with snake_case parameter keys (Tauri convention)", async () => {
-    // Tauri's `generate_handler!` macro reads argument names from the Rust function
-    // signature directly (not from serde renames), so the invoke call must use
-    // snake_case: root_paths, exclude_patterns, max_results (not camelCase).
+  it("A-2: invoke is called with camelCase parameter keys (Tauri v2 convention)", async () => {
+    // Tauri v2's invoke() automatically converts camelCase keys to snake_case
+    // for the Rust handler, so the TypeScript side must use camelCase.
     mockInvoke.mockResolvedValueOnce(emptyPayload);
 
     await searchVaultContent({
@@ -91,10 +90,10 @@ describe("searchVaultContent() bridge wrapper", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("search_vault_content", {
-      root_paths: ["/v"],
-      exclude_patterns: ["node_modules"],
+      rootPaths: ["/v"],
+      excludePatterns: ["node_modules"],
       query: "bar",
-      max_results: 20,
+      maxResults: 20,
     });
   });
 

@@ -508,8 +508,9 @@ function handleAction(action: string): void {
     // this is a safe no-op (EC-19).
     //
     // Modal command bar (Step 01): three action ids map to three modes:
-    //   command-bar-open          → Commands mode (legacy Cmd-Shift-P; preserved)
-    //   command-bar-open-files    → Files mode     (Cmd-P)
+    //   command-bar-open             → Commands mode   (legacy Cmd-Shift-P; preserved)
+    //   command-bar-open-files       → Files mode      (Cmd-P)
+    //   command-bar-open-content     → Content mode    (Cmd-Shift-F)
     //   command-bar-open-keybindings → Keybindings mode (Cmd-Shift-K)
     case "command-bar-open": {
       const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
@@ -519,6 +520,11 @@ function handleAction(action: string): void {
     case "command-bar-open-files": {
       const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
       if (typeof openCB === "function") openCB("files");
+      break;
+    }
+    case "command-bar-open-content": {
+      const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+      if (typeof openCB === "function") openCB("content");
       break;
     }
     case "command-bar-open-keybindings": {

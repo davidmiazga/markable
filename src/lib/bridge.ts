@@ -486,10 +486,10 @@ export async function searchVaultContent(params: {
 }): Promise<FileResult<ContentSearchPayload>> {
   try {
     const payload = await invoke<ContentSearchPayload>("search_vault_content", {
-      root_paths: params.rootPaths,
-      exclude_patterns: params.excludePatterns,
+      rootPaths: params.rootPaths,
+      excludePatterns: params.excludePatterns,
       query: params.query,
-      max_results: params.maxResults,
+      maxResults: params.maxResults,
     });
     return { ok: true, value: payload };
   } catch (error) {
