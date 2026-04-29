@@ -503,3 +503,50 @@ export async function searchVaultContent(params: {
     };
   }
 }
+
+/**
+ * One tag and all vault file paths that use it (front matter or inline #hashtag).
+ * Mirrors the Rust `TagEntry` struct returned by `scan_vault_tags`.
+ */
+export interface TagEntry {
+  tag: string;
+  /** Absolute paths of every .md file that uses this tag. */
+  filePaths: string[];
+  count: number;
+}
+
+/**
+ * Scan the vault for all tags (front matter + inline #hashtags).
+ *
+ * This is the typed bridge wrapper for the `scan_vault_tags` Tauri command.
+ * The IIFE command-bar plugin calls the command directly via
+ * `__TAURI_INTERNALS__.invoke` (IIFE constraint).
+ *
+ * @param params.rootPaths - Absolute paths of vault root directories to scan.
+ * @param params.excludePatterns - Glob patterns for directories/files to skip.
+ * @param params.vaultName - Vault name (used to locate and exclude the meta folder).
+ * @returns FileResult<TagEntry[]> sorted by count desc — never throws.
+ */
+export async function scanVaultTags(params: {
+  rootPaths: string[];
+  excludePatterns: string[];
+  vaultName: string;
+}): Promise<FileResult<TagEntry[]>> {
+  try {
+    const entries = await invoke<TagEntry[]>("scan_vault_tags", {
+      rootPaths: params.rootPaths,
+      excludePatterns: params.excludePatterns,
+      vaultName: params.vaultName,
+    });
+    return { ok: true, value: entries };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "scan_vault_tags",
+      } satisfies TauriCommandError,
+    };
+  }
+}

@@ -34,8 +34,8 @@ pub use commands::{
     ensure_directory,
     list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
     build_vault_index, create_vault, delete_vault, get_vault_index, list_vault_files,
-    save_vault_index, search_vault_content, switch_vault, unwatch_vault, update_vault,
-    validate_vault_paths, watch_vault,
+    save_vault_index, scan_vault_tags, search_vault_content, switch_vault, unwatch_vault,
+    update_vault, validate_vault_paths, watch_vault,
     create_file, rename_file, delete_file, delete_directory, move_file, create_directory,
     update_wiki_links, reveal_in_finder,
     WatcherRegistry,
@@ -460,6 +460,7 @@ pub fn run() {
             create_directory,
             update_wiki_links,
             reveal_in_finder,
+            scan_vault_tags,
             search_vault_content
         ])
         .on_window_event(|window, event| {

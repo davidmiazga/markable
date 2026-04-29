@@ -1166,6 +1166,191 @@ pub async fn search_vault_content(
     })
 }
 
+// ─── Tag scanning ─────────────────────────────────────────────────────────────
+
+/// One tag and the set of vault file paths that use it.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct TagEntry {
+    pub tag: String,
+    /// Absolute paths of every file in the vault that uses this tag
+    /// (front matter OR inline #hashtag).
+    #[serde(rename = "filePaths")]
+    pub file_paths: Vec<String>,
+    pub count: usize,
+}
+
+/// Scan `root_paths` for all tags used across the vault.
+///
+/// Collects tags from two sources per file:
+/// - YAML front matter `tags:` field (same parser as `build_vault_index`)
+/// - Inline `#hashtag` mentions in document body text (new)
+///
+/// The meta folder (`{vault_name}_meta/`) is excluded from the scan so
+/// vocabulary definition files are not treated as content.
+/// Results are sorted by usage count descending, then alphabetically.
+#[tauri::command]
+pub fn scan_vault_tags(
+    root_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+    vault_name: String,
+) -> Result<Vec<TagEntry>, String> {
+    use std::collections::HashMap;
+
+    let safe_name = sanitise_vault_name(&vault_name);
+    let meta_component = format!("{}_meta", safe_name);
+    let mut tag_files: HashMap<String, Vec<String>> = HashMap::new();
+
+    for root_str in &root_paths {
+        let root = Path::new(root_str);
+        if !root.exists() {
+            continue;
+        }
+
+        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+
+            let rel = path.strip_prefix(root).unwrap_or(path);
+
+            // Skip the vault meta folder (same guard as build_vault_index).
+            if is_meta_folder_component(rel, &meta_component) {
+                continue;
+            }
+
+            if should_exclude(rel, &exclude_patterns) {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let path_str = path.to_string_lossy().to_string();
+
+            // Source 1: front matter tags (re-uses existing parser).
+            let fm = parse_front_matter(&content);
+            for tag in fm.tags {
+                tag_files.entry(tag).or_default().push(path_str.clone());
+            }
+
+            // Source 2: inline #hashtags from body text.
+            for hashtag in extract_inline_hashtags(&content) {
+                let paths = tag_files.entry(hashtag).or_default();
+                if !paths.contains(&path_str) {
+                    paths.push(path_str.clone());
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<TagEntry> = tag_files
+        .into_iter()
+        .map(|(tag, paths)| TagEntry {
+            count: paths.len(),
+            file_paths: paths,
+            tag,
+        })
+        .collect();
+
+    result.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
+
+    Ok(result)
+}
+
+/// Extract inline `#hashtag` mentions from document text.
+///
+/// Skips YAML front matter and fenced code blocks. Does not extract Markdown
+/// headings (`# Title` — `#` followed by a space) or URL fragments (`#anchor`
+/// inside link syntax where `#` is preceded by `[` or `(`).
+fn extract_inline_hashtags(content: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    let mut in_front_matter = false;
+    let mut in_code_block = false;
+    let mut first_line = true;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Detect and skip YAML front matter block.
+        if first_line {
+            first_line = false;
+            if trimmed == "---" {
+                in_front_matter = true;
+                continue;
+            }
+        }
+
+        if in_front_matter {
+            if trimmed == "---" || trimmed == "..." {
+                in_front_matter = false;
+            }
+            continue;
+        }
+
+        // Track fenced code blocks.
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        // Extract #hashtags from this line.
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] != '#' {
+                i += 1;
+                continue;
+            }
+            let prev = if i > 0 { chars[i - 1] } else { ' ' };
+            // Skip URL fragments: # preceded by [ or (
+            if prev == '[' || prev == '(' {
+                i += 1;
+                continue;
+            }
+            // Hashtag: # followed directly by a letter.
+            // Headings use `# space`, sub-headings `## space` — these have a
+            // space or another `#` after `#`, so `is_alphabetic()` excludes them.
+            if i + 1 < chars.len() && chars[i + 1].is_alphabetic() {
+                let start = i + 1;
+                let mut end = start;
+                while end < chars.len()
+                    && (chars[end].is_alphanumeric()
+                        || chars[end] == '-'
+                        || chars[end] == '_'
+                        || chars[end] == '/')
+                {
+                    end += 1;
+                }
+                let tag: String = chars[start..end].iter().collect();
+                if !tag.is_empty() && !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    tags
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2082,5 +2267,125 @@ mod content_search_tests {
             result.results.len(), 1,
             "FINDME must be found in the lossily-decoded file"
         );
+    }
+}
+
+#[cfg(test)]
+mod tag_scan_tests {
+    use super::*;
+    use std::fs;
+
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) {
+        fs::write(dir.join(name), content).unwrap();
+    }
+
+    // ── extract_inline_hashtags ───────────────────────────────────────────────
+
+    #[test]
+    fn hashtag_basic() {
+        let tags = extract_inline_hashtags("Hello #world and #rust-lang today");
+        assert_eq!(tags, vec!["world", "rust-lang"]);
+    }
+
+    #[test]
+    fn hashtag_skips_front_matter() {
+        let content = "---\ntags:\n  - fm-tag\n---\nBody has #body-tag";
+        let tags = extract_inline_hashtags(content);
+        assert_eq!(tags, vec!["body-tag"]);
+    }
+
+    #[test]
+    fn hashtag_skips_code_block() {
+        let content = "Some text\n```\n#inside-code\n```\nAfter #outside";
+        let tags = extract_inline_hashtags(content);
+        assert_eq!(tags, vec!["outside"]);
+    }
+
+    #[test]
+    fn hashtag_ignores_headings() {
+        // `# Heading` has space after #, so it is NOT a hashtag.
+        let tags = extract_inline_hashtags("# My Heading\n## Sub\nNormal #tag text");
+        assert_eq!(tags, vec!["tag"]);
+    }
+
+    #[test]
+    fn hashtag_ignores_url_fragment() {
+        // [label](#anchor) → should NOT extract "anchor"
+        let tags = extract_inline_hashtags("[link](#section) and #real-tag");
+        assert_eq!(tags, vec!["real-tag"]);
+    }
+
+    #[test]
+    fn hashtag_deduplicates_within_file() {
+        let tags = extract_inline_hashtags("Use #rust and more #rust ideas");
+        assert_eq!(tags, vec!["rust"]);
+    }
+
+    // ── scan_vault_tags ───────────────────────────────────────────────────────
+
+    #[test]
+    fn scan_collects_front_matter_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            dir.path(),
+            "note.md",
+            "---\ntags:\n  - project\n  - work\n---\nBody text",
+        );
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
+        assert!(tags.contains(&"project"), "should find front matter tag 'project'");
+        assert!(tags.contains(&"work"), "should find front matter tag 'work'");
+    }
+
+    #[test]
+    fn scan_collects_inline_hashtags() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "note.md", "No front matter\n\nHere is #inline-tag");
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
+        assert!(tags.contains(&"inline-tag"));
+    }
+
+    #[test]
+    fn scan_excludes_meta_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta_dir = dir.path().join("test_vault_meta");
+        fs::create_dir_all(&meta_dir).unwrap();
+        write_file(dir.path(), "note.md", "---\ntags:\n  - real-tag\n---");
+        write_file(&meta_dir, "test_vault_tags.md", "---\ntags:\n  - meta-only\n---");
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
+        assert!(tags.contains(&"real-tag"), "real-tag must be found");
+        assert!(!tags.contains(&"meta-only"), "meta-only must not leak from meta folder");
+    }
+
+    #[test]
+    fn scan_sorted_by_count_desc() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "a.md", "---\ntags:\n  - popular\n---");
+        write_file(dir.path(), "b.md", "---\ntags:\n  - popular\n  - rare\n---");
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        assert_eq!(result[0].tag, "popular", "highest-count tag must be first");
+        assert_eq!(result[0].count, 2);
     }
 }

@@ -904,6 +904,67 @@ mark.cb-match {
   color: var(--text-secondary);
   font-style: italic;
 }
+
+/* Conflict rows */
+.cb-tag-conflict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.cb-tag-conflict-label {
+  flex: 1;
+  color: var(--text-secondary);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-tag-conflict-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.cb-tag-conflict-btn:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--bg-primary);
+}
+
+/* Add-all button inline in section header */
+.cb-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cb-tag-add-all-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: normal;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cb-tag-add-all-btn:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--bg-primary);
+}
 `;
 
 // ---------------------------------------------------------------------------
@@ -2492,6 +2553,16 @@ let _contentSearchGeneration = 0;
 
 /** True while a content search Rust call is in flight. Prevents duplicate launches. */
 let _contentSearchInFlight = false;
+
+/** Cached results from the last `scan_vault_tags` Rust call. Null = not yet scanned.
+ *  Cleared when the active vault changes so stale data is never shown. */
+let _scannedTags: Array<{ tag: string; filePaths: string[]; count: number }> | null = null;
+
+/** Vault ID of the vault that produced _scannedTags. Used to detect vault switches. */
+let _scannedVaultId: string | null = null;
+
+/** True while a scan_vault_tags call is in flight. */
+let _tagsLoading = false;
 let _allResults: CommandBarResult[] = [];
 let _visibleResults: CommandBarResult[] = [];
 let _selectedId: string | null = null;
@@ -3201,6 +3272,94 @@ interface TagRow {
   defined: boolean;
 }
 
+/** A group of similar-looking tags that may be duplicates or variants. */
+interface SimilarGroup {
+  tags: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Tag scan — async Tauri call to collect tags from all vault files
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger an async `scan_vault_tags` Rust call for the active vault.
+ * Results are stored in `_scannedTags` and `_scannedVaultId`; the tags
+ * mode is re-rendered on completion.
+ *
+ * No-op when: no Tauri, no active vault, or a scan is already in flight.
+ */
+function loadScannedTags(): void {
+  const tauri = (window as any).__TAURI_INTERNALS__;
+  if (!tauri?.invoke) return;
+
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vault = vm?.getActiveVault?.();
+  if (!vault) return;
+
+  if (_tagsLoading) return;
+
+  _tagsLoading = true;
+
+  tauri
+    .invoke("scan_vault_tags", {
+      rootPaths: vault.rootPaths ?? [],
+      excludePatterns: vault.excludePatterns ?? [],
+      vaultName: vault.name ?? "",
+    })
+    .then((entries: Array<{ tag: string; filePaths: string[]; count: number }>) => {
+      _scannedTags = entries;
+      _scannedVaultId = vault.id;
+    })
+    .catch((err: unknown) => {
+      console.warn("[loadScannedTags] scan_vault_tags failed:", err);
+      _scannedTags = [];
+      _scannedVaultId = vault.id;
+    })
+    .finally(() => {
+      _tagsLoading = false;
+      if (_mode === "tags" && _inputEl) {
+        renderTagsMode(_inputEl.value.trim());
+      }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Similarity detection — groups plural/singular tag variants for conflict UI
+// ---------------------------------------------------------------------------
+
+/** Returns true when two tag strings are likely variants of each other. */
+function areSimilarTags(a: string, b: string): boolean {
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  if (al === bl) return true;
+  // Simple plural/singular rules covering the most common English cases.
+  if (al + "s" === bl || al === bl + "s") return true;
+  if (al + "es" === bl || al === bl + "es") return true;
+  return false;
+}
+
+/**
+ * Group tags that appear to be variants of each other (plural/singular).
+ * Only groups with 2+ members are returned — lone tags are not conflicts.
+ */
+function findSimilarGroups(allTags: string[]): SimilarGroup[] {
+  const groups: Set<string>[] = [];
+  for (const tag of allTags) {
+    let merged = false;
+    for (const group of groups) {
+      if ([...group].some((g) => areSimilarTags(g, tag))) {
+        group.add(tag);
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) groups.push(new Set([tag]));
+  }
+  return groups
+    .filter((g) => g.size > 1)
+    .map((g) => ({ tags: [...g].sort() }));
+}
+
 /**
  * Build two sorted arrays of TagRow: defined and uncategorised.
  *
@@ -3217,9 +3376,6 @@ interface TagRow {
  * @remarks Exported for unit tests only — do not call from other production code.
  */
 export function buildTagRows(query: string): { defined: TagRow[]; uncategorised: TagRow[] } {
-  // Read shared globals — both are set via (window as any) at runtime, so we
-  // use 'any' here rather than Window["__MARKABLE_META__"] / ["__MARKABLE_VAULT_MANAGER__"]
-  // to avoid requiring a typed Window augmentation for __MARKABLE_VAULT_MANAGER__.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meta: any = (window as any).__MARKABLE_META__;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3231,36 +3387,44 @@ export function buildTagRows(query: string): { defined: TagRow[]; uncategorised:
   }
 
   const definedVocab: string[] = meta?.tags ?? [];
-  const index = vm?.getVaultIndex?.() ?? null;
 
-  // Build a map: tag → list of { path, title } from vault index.
-  // Used to compute file counts for both sections and to populate expanded views.
+  // Build tag → file list map.
+  // Priority: _scannedTags (fresh full-disk scan including inline #hashtags).
+  // Fallback: vault index entries (covers YAML front matter only, may be stale).
   const tagFileMap = new Map<string, Array<{ path: string; title: string }>>();
 
-  if (index) {
-    for (const entry of index.entries) {
-      for (const tag of entry.tags) {
-        if (!tagFileMap.has(tag)) tagFileMap.set(tag, []);
-        tagFileMap.get(tag)!.push({ path: entry.path, title: entry.title || entry.name });
+  if (_scannedTags) {
+    for (const entry of _scannedTags) {
+      tagFileMap.set(
+        entry.tag,
+        entry.filePaths.map((p) => ({
+          path: p,
+          title: p.split("/").pop()?.replace(/\.md$/i, "") ?? p,
+        }))
+      );
+    }
+  } else {
+    // Fallback to vault index while scan is in progress (EC-17).
+    const index = vm?.getVaultIndex?.() ?? null;
+    if (index) {
+      for (const entry of index.entries) {
+        for (const tag of (entry.tags as string[])) {
+          if (!tagFileMap.has(tag)) tagFileMap.set(tag, []);
+          tagFileMap.get(tag)!.push({ path: entry.path, title: entry.title || entry.name });
+        }
       }
     }
   }
 
   const lowerQuery = query.toLowerCase();
 
-  // Defined tags: from meta vocabulary, filtered by query, sorted alphabetically.
+  // Defined section: tags present in the meta vocabulary.
   const defined: TagRow[] = definedVocab
     .filter((tag) => !lowerQuery || tag.toLowerCase().includes(lowerQuery))
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-    .map((tag) => ({
-      tag,
-      // File count may be 0 when the index is not yet loaded (EC-17).
-      files: tagFileMap.get(tag) ?? [],
-      defined: true,
-    }));
+    .map((tag) => ({ tag, files: tagFileMap.get(tag) ?? [], defined: true }));
 
-  // Uncategorised: tags present in vault index but NOT in meta vocabulary.
-  // The definedSet enables O(1) membership checks.
+  // Uncategorised: discovered tags that are NOT in the meta vocabulary.
   const definedSet = new Set(definedVocab);
   const uncategorised: TagRow[] = [];
   for (const [tag, files] of tagFileMap) {
@@ -3296,41 +3460,53 @@ function renderTagsMode(query: string): void {
   if (!_resultsEl) return;
   _resultsEl.innerHTML = "";
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
 
   // EC-1: no vault open — show "No vault open" state.
   if (!vm?.getActiveVault?.()) {
-    _resultsEl.appendChild(
-      buildTagsNotice("No vault open — open a vault to browse tags")
-    );
+    _resultsEl.appendChild(buildTagsNotice("No vault open — open a vault to browse tags"));
     return;
   }
 
-  const index = vm.getVaultIndex?.() ?? null;
+  // Trigger scan if not yet loaded or vault has changed.
+  const vault = vm.getActiveVault();
+  if ((_scannedTags === null || _scannedVaultId !== vault?.id) && !_tagsLoading) {
+    loadScannedTags();
+  }
+
+  // Show loading spinner while first scan is in flight.
+  if (_tagsLoading && _scannedTags === null) {
+    _resultsEl.appendChild(buildTagsNotice("Scanning vault for tags…"));
+    return;
+  }
+
   const { defined, uncategorised } = buildTagRows(query);
 
-  // EC-15 / FR-7: both sections empty and no filter text — show "no tags" state.
-  if (defined.length === 0 && uncategorised.length === 0 && !query) {
-    _resultsEl.appendChild(
-      buildTagsNotice("No tags found. Add tags: to a note's front matter to get started")
-    );
+  // Both sections empty.
+  if (defined.length === 0 && uncategorised.length === 0) {
+    if (query) {
+      _resultsEl.appendChild(buildTagsNotice(`No tags match "${query}"`));
+    } else if (_tagsLoading) {
+      _resultsEl.appendChild(buildTagsNotice("Scanning vault for tags…"));
+    } else {
+      _resultsEl.appendChild(
+        buildTagsNotice("No tags found — add tags: to a note's front matter or use #hashtags")
+      );
+    }
     return;
   }
 
-  // FR-7: filter text matches nothing.
-  if (defined.length === 0 && uncategorised.length === 0 && query) {
-    _resultsEl.appendChild(buildTagsNotice(`No tags match "${query}"`));
-    return;
-  }
-
-  // EC-17: index still loading — show advisory notice above defined tags.
-  // Only shown when there are defined tags to display (otherwise the no-tags state fires).
-  if (index === null && defined.length > 0) {
-    const notice = buildTagsNotice(
-      "Index still loading — file counts may be incomplete"
-    );
-    notice.classList.add("cb-content-notice--warning");
-    _resultsEl.appendChild(notice);
+  // Section: POSSIBLE CONFLICTS (plural/singular variants — shown only when no query filter).
+  if (!query) {
+    const allDiscoveredTags = [...defined.map((r) => r.tag), ...uncategorised.map((r) => r.tag)];
+    const conflicts = findSimilarGroups(allDiscoveredTags);
+    if (conflicts.length > 0) {
+      _resultsEl.appendChild(buildTagsSectionHeader("POSSIBLE CONFLICTS"));
+      for (const group of conflicts) {
+        _resultsEl.appendChild(buildConflictRow(group));
+      }
+    }
   }
 
   // Section: DEFINED TAGS.
@@ -3341,9 +3517,21 @@ function renderTagsMode(query: string): void {
     }
   }
 
-  // Section: UNCATEGORISED (omit entirely when empty — FR-6).
+  // Section: UNCATEGORISED — with "Add all" action button when vocab is empty.
   if (uncategorised.length > 0) {
-    _resultsEl.appendChild(buildTagsSectionHeader("UNCATEGORISED"));
+    const hdr = buildTagsSectionHeader("UNCATEGORISED");
+    if (!query && uncategorised.length > 0) {
+      const addAllBtn = document.createElement("button");
+      addAllBtn.className = "cb-tag-add-all-btn";
+      addAllBtn.textContent = `Add all ${uncategorised.length} to vocabulary`;
+      addAllBtn.title = `Write all ${uncategorised.length} tags to the vault vocabulary file`;
+      addAllBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void handleAddAllToMeta(uncategorised.map((r) => r.tag));
+      });
+      hdr.appendChild(addAllBtn);
+    }
+    _resultsEl.appendChild(hdr);
     for (const row of uncategorised) {
       _resultsEl.appendChild(buildTagRow(row));
     }
@@ -3374,6 +3562,34 @@ function buildTagsSectionHeader(label: string): HTMLElement {
   el.className = "cb-section-header";
   el.textContent = label;
   return el;
+}
+
+/**
+ * Build a conflict row showing two or more similar tags with "Use X" buttons.
+ * Clicking "Use X" adds that tag to the vocabulary.
+ */
+function buildConflictRow(group: SimilarGroup): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "cb-tag-conflict-row";
+
+  const label = document.createElement("span");
+  label.className = "cb-tag-conflict-label";
+  label.textContent = group.tags.join("  ↔  ");
+  row.appendChild(label);
+
+  for (const tag of group.tags) {
+    const btn = document.createElement("button");
+    btn.className = "cb-tag-conflict-btn";
+    btn.textContent = `Use "${tag}"`;
+    btn.title = `Add "${tag}" to the vocabulary as the canonical form`;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void handleAddToMeta(tag);
+    });
+    row.appendChild(btn);
+  }
+
+  return row;
 }
 
 /**
@@ -3592,6 +3808,61 @@ async function handleAddToMeta(tag: string): Promise<void> {
   }
 
   // Re-render so the tag moves from Uncategorised to Defined section.
+  if (_inputEl) renderTagsMode(_inputEl.value.trim());
+}
+
+/**
+ * Add every tag in `tags` to the vault vocabulary file in a single write.
+ * Tags already in the vocabulary are skipped. On failure, in-memory state
+ * is left unchanged (same EC-14 guarantee as handleAddToMeta).
+ */
+async function handleAddAllToMeta(tags: string[]): Promise<void> {
+  const tauri = (window as any).__TAURI_INTERNALS__;
+  if (!tauri?.invoke) return;
+
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vault = vm?.getActiveVault?.();
+  if (!vault) return;
+
+  const meta: any = (window as any).__MARKABLE_META__;
+  const currentTags: string[] = meta?.tags ?? [];
+  const currentSet = new Set(currentTags);
+  const newTags = tags.filter((t) => !currentSet.has(t));
+  if (newTags.length === 0) return;
+
+  // eslint-disable-next-line no-control-regex
+  const safeName: string = vault.name.replace(/[/:\x00]/g, "_");
+  const root: string = vault.rootPaths[0];
+  const metaDirPath = `${root}/${safeName}_meta`;
+  const metaFilePath = `${metaDirPath}/${safeName}_tags.md`;
+
+  try {
+    await tauri.invoke("ensure_directory", { path: metaDirPath });
+  } catch (err) {
+    console.warn("[handleAddAllToMeta] ensure_directory failed:", err);
+    return;
+  }
+
+  let existingContent = "# Tags\n";
+  try {
+    const readResult = await tauri.invoke("read_file", { path: metaFilePath });
+    if (typeof readResult === "string") existingContent = readResult;
+  } catch { /* file doesn't exist yet */ }
+
+  const newContent =
+    existingContent.trimEnd() + "\n" + newTags.map((t) => `- ${t}`).join("\n") + "\n";
+
+  try {
+    await tauri.invoke("write_file", { path: metaFilePath, content: newContent });
+  } catch (err) {
+    console.warn("[handleAddAllToMeta] write_file failed:", err);
+    return;
+  }
+
+  if ((window as any).__MARKABLE_META__) {
+    (window as any).__MARKABLE_META__.tags = [...currentTags, ...newTags];
+  }
+
   if (_inputEl) renderTagsMode(_inputEl.value.trim());
 }
 
@@ -4613,6 +4884,9 @@ export default {
     _contentSearchInFlight = false;
     // Reset tags mode state (Step Vault Meta).
     _expandedTags.clear();
+    _scannedTags    = null;
+    _scannedVaultId = null;
+    _tagsLoading    = false;
     // Reset key-capture state (Step 04).
     _captureViewEl       = null;
     _capturingFor        = null;
