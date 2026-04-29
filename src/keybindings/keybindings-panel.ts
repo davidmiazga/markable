@@ -69,7 +69,7 @@ export const COMMANDS: CommandDef[] = [
   // command-bar-open-files replaces file-print's Cmd-P binding.
   // command-bar-open-keybindings uses the new Cmd-Shift-K chord.
   { id: "command-bar-open-files",       label: "Open Files",               defaultKey: "Cmd-P",           section: "View" },
-  { id: "command-bar-open-content",     label: "Search File Contents",     defaultKey: "",                section: "View" },
+  { id: "command-bar-open-content",     label: "Search File Contents",     defaultKey: "Cmd-Shift-G",     section: "View" },
   { id: "command-bar-open-keybindings", label: "Open Keybindings",         defaultKey: "Cmd-Shift-K",     section: "View" },
   { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },
   { id: "app-keybindings",     label: "Keyboard Shortcuts",   defaultKey: "Cmd-Alt-Shift-K", section: "View" },
