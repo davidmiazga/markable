@@ -71,6 +71,11 @@ export const COMMANDS: CommandDef[] = [
   { id: "command-bar-open-files",       label: "Open Files",               defaultKey: "Cmd-P",           section: "View" },
   { id: "command-bar-open-content",     label: "Search File Contents",     defaultKey: "Cmd-Shift-G",     section: "View" },
   { id: "command-bar-open-keybindings", label: "Open Keybindings",         defaultKey: "Cmd-Shift-K",     section: "View" },
+  // Vault Meta System — Tag Browser. No global default key: ⌘5 is already
+  // bound to "Switch to Tab 5" (tab-5). The ⌘5 shown in the command bar tab
+  // strip is a context-scoped display hint (MODE_TAB_SHORTCUTS), active only
+  // while the bar is open, and does not go through the global keybinding router.
+  { id: "command-bar-open-tags",        label: "Tag Browser",              defaultKey: "",                section: "View" },
   { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },
   { id: "app-keybindings",     label: "Keyboard Shortcuts",   defaultKey: "Cmd-Alt-Shift-K", section: "View" },
   { id: "app-plugins",         label: "Plugins Panel",        defaultKey: "Cmd-Alt-P",       section: "View" },

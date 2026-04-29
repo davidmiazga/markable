@@ -1083,6 +1083,16 @@ const YAML_PANE_CSS = `
   font-size: 11px;
   color: var(--text-primary, #333);
 }
+.yaml-pane-chip--warning {
+  border-color: var(--accent-color);
+  background: transparent;
+  color: var(--text-primary);
+  /* Subtle warning indicator using the accent colour: both border and outline
+     use the accent variable only — no hex fallbacks (NFR-3). All Markable
+     themes must define --accent-color and --text-primary; fallbacks would
+     hide missing theme variable errors. */
+  outline: 1px solid var(--accent-color);
+}
 .yaml-pane-chip-remove {
   border: none;
   background: none;
@@ -1708,16 +1718,64 @@ export function renderFieldControl(field: EnrichedField, container: HTMLElement)
 // ---------------------------------------------------------------------------
 
 /**
+ * Return the meta vocabulary for `fieldKey` from window.__MARKABLE_META__,
+ * or null when no vocabulary is defined or the vocabulary is empty.
+ *
+ * Null return value means "no vocabulary configured for this field" —
+ * suppresses warning chips entirely (FR-11).
+ *
+ * This function is a self-contained copy of the same logic in meta-manager.ts.
+ * The IIFE cannot import ES modules, so the logic is duplicated here intentionally
+ * (AD-2: IIFE plugins access shared state only via window globals).
+ *
+ * Reads window.__MARKABLE_META__ synchronously — no I/O (NFR-7).
+ *
+ * @param fieldKey - YAML field name (e.g. "tags", "author").
+ * @returns Vocabulary string array or null.
+ *
+ * @remarks Exported for unit tests only.
+ */
+export function getVocabularyForField(fieldKey: string): string[] | null {
+  const meta: any = (window as any).__MARKABLE_META__;
+  if (!meta) return null;
+
+  if (fieldKey === "tags") {
+    // FR-11: return null (not []) when tags vocabulary is empty — suppresses warnings.
+    return meta.tags && meta.tags.length > 0 ? meta.tags : null;
+  }
+
+  const vocab = meta.fields?.[fieldKey];
+  // FR-11: same empty-check for non-tags fields.
+  return vocab && vocab.length > 0 ? vocab : null;
+}
+
+/**
  * Creates a single chip element (text + remove button) for the chip widget.
  *
- * @param val          - The chip's text value.
+ * Adds a `.yaml-pane-chip--warning` modifier when the chip value is not in
+ * the meta vocabulary for this field (FR-9, FR-10). The warning is suppressed
+ * when no vocabulary is defined (FR-11, EC-12).
+ *
+ * @param val           - The chip's text value.
  * @param currentValues - The full array of current values (used for remove).
- * @param fieldKey     - The parent field key (forwarded to commitArrayEdit).
+ * @param fieldKey      - The parent field key (forwarded to commitArrayEdit).
  * @returns The chip <span> element ready to append.
+ *
+ * @remarks Exported for unit tests only.
  */
-function buildChipElement(val: string, currentValues: string[], fieldKey: string): HTMLElement {
+export function buildChipElement(val: string, currentValues: string[], fieldKey: string): HTMLElement {
   const chip = document.createElement("span");
   chip.className = "yaml-pane-chip";
+
+  // FR-9/FR-10: check meta vocabulary for this field synchronously.
+  // getVocabularyForField returns null when no vocabulary is defined (FR-11
+  // suppression) — in that case we skip the warning entirely (EC-12).
+  const vocab = getVocabularyForField(fieldKey);
+  if (vocab !== null && !vocab.includes(val)) {
+    // Case-sensitive exact-match comparison (EC-8, EC-9).
+    chip.classList.add("yaml-pane-chip--warning");
+    chip.title = `"${val}" is not in the ${fieldKey} vocabulary`;
+  }
 
   const chipText = document.createElement("span");
   chipText.textContent = val;
@@ -1728,7 +1786,7 @@ function buildChipElement(val: string, currentValues: string[], fieldKey: string
   removeBtn.textContent = "×";
   removeBtn.title = `Remove "${val}"`;
   removeBtn.addEventListener("click", () => {
-    // Filter by identity (case-sensitive) to remove the first matching item
+    // Filter by identity (case-sensitive) to remove the first matching item.
     const newArray = currentValues.filter(v => v !== val);
     commitArrayEdit(fieldKey, newArray);
   });

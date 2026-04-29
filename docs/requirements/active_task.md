@@ -1,260 +1,486 @@
 ---
-title: Global Search — Command Bar Integration
+title: Vault Meta System — Tag Browser + YAML Validation
 last-updated: "2026-04-28"
 review-cadence-days: 7
 status: active
 ---
 
-# Global Search — Command Bar Integration
+# Vault Meta System — Tag Browser + YAML Validation
 
 ## Feature Summary
 
-As a user, I want the Command Bar's Files mode to search all `.md` files in the active vault (not just the current file's directory), and I want a new content search mode triggered by typing `/` so I can search file contents from a single, familiar entry point.
+As a user, I want to define a controlled vocabulary of tags for my vault in a
+simple Markdown file, browse those tags and which notes use them in a new
+Command Bar mode (⌘5), and see a warning indicator in the YAML pane whenever a
+field value is not in the corresponding meta vocabulary — so I can keep my
+notes consistently tagged and discoverable.
 
 ---
 
 ## Codebase Context Findings
 
-### Finding 1 — Current Files mode uses `list_md_files` with directory-of-current-file scope
+### Finding 1 — Meta folder and file naming convention (design decision, already locked)
 
-`fetchWorkspaceFiles()` in `command-bar.plugin.ts` (around line 2567) derives a directory from `window.__MARKABLE_CURRENT_FILE__` by stripping the filename, then calls `invoke("list_md_files", { dir: workspaceDir })`. The `list_md_files` Rust command (`src-tauri/src/commands/files.rs`) does a **shallow, non-recursive** scan of a single directory and returns filenames only (not full paths). This is the source of the scoping bug: the scan is limited to one flat directory, not the full vault.
+The meta folder lives at `{vaultRootPath}/{VaultName}_meta/` (e.g. for vault
+"Work Notes" at `/Users/dave/Notes`, the folder is
+`/Users/dave/Notes/Work Notes_meta/`). Each meta file follows
+`{VaultName}_{fieldname}.md` (e.g. `Work Notes_tags.md`). The vault name used
+for path construction comes from `VaultEntry.name` (a string stored in
+settings and exposed via `window.__MARKABLE_VAULT_MANAGER__.getActiveVault()`).
+The vault's first `rootPaths[0]` is the base directory for the meta folder.
 
-### Finding 2 — `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` is the correct source for vault-wide file paths
+### Finding 2 — Meta file format (design decision, already locked)
 
-`vault-manager.ts` exposes `getVaultIndex(): VaultIndex | null` on the `window.__MARKABLE_VAULT_MANAGER__` global (line 623). The `VaultIndex.entries` array contains `VaultIndexEntry` objects each with an `path: string` (absolute path) and `name: string` (filename stem). `VaultIndex.entries` covers ALL `.md` files in ALL root paths of the vault, recursively, respecting `excludePatterns`. This is the correct source for the vault-wide file list. No new Rust command is required for FR-1.
+The meta file format is a plain Markdown bullet list with an optional H1
+heading:
 
-### Finding 3 — The `list_md_files` Rust command must not be changed; the call site must be replaced
+```markdown
+# Tags
+- productivity
+- work
+- personal
+```
 
-`list_md_files` is used by the backlinks plugin (confirmed via its doc comment: "backlinks feature"). Changing its signature or behavior would risk regressions outside the scope of this feature. The fix is entirely in `fetchWorkspaceFiles()` in `command-bar.plugin.ts`: replace the `invoke("list_md_files", ...)` call path with a `getVaultIndex()` lookup. The Rust command `list_md_files` itself is untouched.
+The heading line is optional and is ignored during parsing. Only lines that
+begin with `- ` (dash space) are treated as vocabulary entries. Leading and
+trailing whitespace on each entry is trimmed. Empty entries after trimming are
+discarded.
 
-### Finding 4 — Files mode: `workspaceFiles` in the builder pipeline expects absolute paths
+### Finding 3 — VaultIndexEntry already carries tags from front matter
 
-`buildFilesResults()` in `files-mode.ts` accepts `workspaceFiles: string[]` as absolute paths (used to build `filePath` on each `FilesResult`, and compared against `openPaths` set of absolute paths in `tabs`). The vault index's `entries[i].path` is already an absolute path. No transformation is needed beyond extracting `.path` from each entry.
+`VaultIndexEntry` in `vault-types.ts` has `tags: string[]` (line 84). These
+are populated by `parse_front_matter()` in `vault.rs` (lines 261-342), which
+handles both inline `tags: [a, b]` and block-sequence forms. The vault index
+therefore already has all the data needed for the "which files use each tag"
+view. No new per-file scanning is required for the tag browser.
 
-### Finding 5 — Files mode fallback when no vault is open
+### Finding 4 — Meta files must be excluded from the vault index
 
-The existing `fetchWorkspaceFiles()` logic already handles the no-open-file state: sets `_fileListLoaded = true` with no results and shows the "no-workspace" notice. The same notice can be repurposed for "no vault open." When `getVaultIndex()` returns `null` AND `getActiveVault()` returns `null`, the "no-workspace" load state is set (same path, same rendering). If a vault is active but the index is not yet built (null), a brief loading state is appropriate.
+`build_vault_index` in `vault.rs` walks all `.md` files under `rootPaths`.
+Files inside `{VaultName}_meta/` are not currently excluded. Because meta
+files are configuration/vocabulary files (not notes), they must be filtered
+out of the index so they do not appear in file search, backlinks, or wiki-link
+completion. The exclusion must be applied in `should_exclude()` (or in the
+walk loop) by checking whether any path component matches the
+`{VaultName}_meta` pattern. This requires the vault name to be passed to the
+`build_vault_index` command, which currently does not receive it.
 
-### Finding 6 — The `workspaceLoadState` of `"no-workspace"` is already wired into the renderer
+### Finding 5 — Command Bar BarMode union and tab strip pattern
 
-`filterAndRenderFiles()` calls `buildFilesResults()` with `workspaceLoadState`, which is consumed in the files mode renderer to show inline notice rows. The existing `"no-workspace"` state produces a notice row — the text of this notice needs to be updated to say something vault-appropriate when no vault is open.
+`BarMode = "files" | "commands" | "keybindings" | "content"` is defined at
+line 67 of `command-bar.plugin.ts`. All mode-keyed constants (`MODE_PLACEHOLDERS`,
+`MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, `MODE_TAB_SHORTCUTS`, `MODE_CYCLE`)
+are `Record<BarMode, string>` — adding a new mode value requires updating every
+one of these objects. `MODE_CYCLE` defines the tab-strip cycling order; the
+content mode was appended at the end. The tags mode must follow the same
+pattern, appended after content in `MODE_CYCLE`.
 
-### Finding 7 — Content search mode requires a new Rust command `search_vault_content`
+Current shortcuts: `commands` = ⌘1, `files` = ⌘2, `keybindings` = ⌘3,
+`content` = ⌘4. The tags mode is assigned ⌘5.
 
-Content search must read `.md` file contents for substring matching. The existing vault index does NOT store raw file content (confirmed: `VaultIndexEntry` stores `path`, `name`, `modified`, `size`, `title`, `tags`, `outboundLinks` — no content). A new `#[tauri::command] pub async fn search_vault_content` must be added. It is placed in `src-tauri/src/commands/vault.rs` to reuse `should_exclude`, `system_time_to_ms`, and the existing walkdir infrastructure. No new Cargo dependencies are required (`walkdir` and `std::fs` are already present).
+### Finding 6 — Content mode established the pattern for a non-file-list mode
 
-### Finding 8 — The `/` prefix switching mechanism must follow the existing `>` and `#` prefix pattern
+The existing content mode renders search results (not a flat list of
+`CommandBarResult` items) using a custom DOM path inside the bar. The tags mode
+similarly needs a custom render path: it shows tags as grouped sections rather
+than the standard `cb-result` row list. The implementation must add a new
+rendering branch inside the bar's `renderResults()` (or equivalent dispatcher)
+analogous to how content mode bypasses the standard result pipeline.
 
-The `onInput()` handler in `command-bar.plugin.ts` (line 3129) already handles `>` → commands and `#` → keybindings prefix switching while in files mode. The new `/` → content search prefix must follow exactly the same pattern: check `_mode === "files" && raw === "/"`, call `setMode("content")` (new mode value), clear the input. Backspace from an empty input in content mode must return to files mode (same Backspace-to-files logic at line 3237).
+### Finding 7 — YAML pane validation: current schema mechanism uses a JSON schema file
 
-### Finding 9 — `BarMode` type must gain the `"content"` variant
+The YAML pane (`yaml-pane.plugin.ts`) has a configurable `schemaPath`
+(absolute path to a `.json` file) that provides `SchemaFieldDef` per field key.
+The `SchemaFieldDef` type supports `type: "select" | "multiselect"` with a
+`values: string[]` controlled vocabulary. Currently, the pane renders chips for
+array/multiselect fields, and the chip input does not validate against any list.
+The meta system adds a second validation source: for the `tags` field (and any
+other field that has a corresponding meta file), values not in the meta
+vocabulary are flagged. This is a separate, lower-priority warning distinct from
+the schema's structural type-checking.
 
-`BarMode = "files" | "commands" | "keybindings"` is defined in `command-bar.plugin.ts` (line 66). All mode-keyed constants (`MODE_PLACEHOLDERS`, `MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, `MODE_TAB_SHORTCUTS`, `MODE_CYCLE`) must be extended with a `"content"` entry. The tab strip DOM construction loop must include the content tab.
+### Finding 8 — YAML pane chip widget is the injection point for tag validation warnings
 
-### Finding 10 — Content mode uses Enter-to-search (not live), matching the prior Global Search spec
+`renderChipWidget` (not shown in the read range, but referenced in `renderFieldControl`)
+renders array/tag values as chip pills inside `.yaml-pane-chips-container`. The
+warning indicator for a value not in the meta vocabulary is most naturally placed
+as a style variant on the chip itself (e.g. a `.yaml-pane-chip--warning` modifier
+with an amber border/background), plus an optional tooltip. The pane already has
+a `.yaml-pane-chip-error` CSS class (line 1106) for use after chip entry; a
+similar `.yaml-pane-chip--warning` class is needed for meta-vocabulary mismatches.
 
-The vault may contain hundreds of files. Running a Rust file-walk on each keystroke is impractical. Content mode must be Enter-triggered: pressing Enter invokes `search_vault_content`; keystrokes alone do not. This matches FR-2 of the previous Global Search requirements doc (now superseded by this document for UI placement).
+### Finding 9 — The YAML pane is an IIFE plugin; meta data must be surfaced via a window global
 
-### Finding 11 — New Rust command must be registered in `mod.rs` and `lib.rs`
+Like the command bar, the YAML pane cannot import ES modules. It accesses vault
+data via `window.__MARKABLE_VAULT_MANAGER__`. The meta vocabulary must be either
+(a) read lazily by the YAML pane itself via `__TAURI_INTERNALS__.invoke` when
+it needs to validate, or (b) pre-loaded into a new window global
+`window.__MARKABLE_META__` by `main.ts`. Option (b) is preferred because it
+keeps the pane decoupled from the meta read logic and allows the tag browser
+(also an IIFE) to share the same loaded vocabulary. The meta global must be
+refreshed when the vault changes (subscribed via `onVaultChanged`).
 
-`src-tauri/src/commands/mod.rs` exports all commands via `pub use vault::...`. The `invoke_handler` in `src-tauri/src/lib.rs` lists every command. Both files must be updated to register `search_vault_content`.
+### Finding 10 — New Rust command needed: `read_meta_file`
 
-### Finding 12 — The command bar is an IIFE plugin; Tauri calls go through `window.__TAURI_INTERNALS__.invoke`
+Reading the meta file and parsing its bullet list must go through the Rust
+backend (IIFE plugins cannot use the Node/Tauri filesystem API directly without
+going through `__TAURI_INTERNALS__.invoke`). A new command
+`read_meta_file(vault_root: String, vault_name: String, field_name: String)`
+returning `Vec<String>` (the parsed vocabulary entries) is the cleanest
+interface. It constructs the meta folder path, reads the file, parses bullet
+items, and returns them. `read_file` already exists in `src-tauri/src/commands/files.rs`;
+`read_meta_file` is a thin wrapper that adds path construction and bullet parsing.
 
-The command bar plugin cannot use `bridge.ts` directly (IIFE constraint). It uses `(window as any).__TAURI_INTERNALS__.invoke(...)` for Tauri calls — the same pattern as `fetchWorkspaceFiles` does today for `list_md_files`. A typed wrapper must still be added to `bridge.ts` for testability and for any future non-IIFE consumer.
+Alternatively, `main.ts` can call `read_file` directly via the existing bridge
+and parse bullets in TypeScript. This avoids a new Rust command and is
+sufficient since path construction is simple string concatenation. **The
+TypeScript parse-in-main approach is preferred** to minimise new Rust surface
+area, unless the Rust approach is needed for performance or security reasons.
+Given the file is small and parsing is trivial, TypeScript is adequate.
 
-### Finding 13 — Files mode placeholder text is currently "Open file or tab…"
+### Finding 11 — bridge.ts searchVaultContent is the model for new bridge functions
 
-`MODE_PLACEHOLDERS.files = "Open file or tab…"`. This does not communicate vault scope at all. The placeholder must be updated to make it clear that the entire vault is being searched.
+`bridge.ts`'s `searchVaultContent()` (line 481) wraps `invoke()` with a
+`FileResult<T>` discriminated union. Any new bridge function that reads meta
+files must follow the same pattern: never throws, returns `{ ok: true, value }`
+or `{ ok: false, error }`.
+
+### Finding 12 — Vault name character safety for filesystem paths
+
+`VaultEntry.name` is validated to be 1-100 characters but is not restricted to
+filesystem-safe characters. A vault named `"Work: Notes"` produces a meta folder
+path with a colon, which is invalid on macOS HFS+ and APFS. Path construction
+must sanitise the vault name by replacing characters that are invalid in macOS
+directory names (colon, slash, null byte) with an underscore or similar safe
+substitute before constructing the meta path. The vault name used in meta path
+construction is the sanitised version; it does not change the vault's display
+name.
+
+### Finding 13 — `build_vault_index` does not currently receive vault name
+
+The `buildAndCacheIndex()` call in `vault-manager.ts` (line 140) passes
+`vaultId`, `rootPaths`, `excludePatterns`, and `maxCount` to the Rust command.
+It does NOT pass `vaultName`. To filter out meta folder files, the Rust command
+either needs the vault name (to construct `{name}_meta`) or a computed meta
+folder path. The simplest approach is to pass `vault_name: String` as an
+additional parameter to `build_vault_index` and construct the exclusion inside
+the Rust walk loop. This is a non-breaking change to the Rust command signature
+(adds one parameter) but requires updating `buildAndCacheIndex()` in
+`vault-manager.ts`.
 
 ---
 
 ## Functional Requirements
 
-### FR-1 — Fix Files mode to use vault index instead of directory scan
+### FR-1 — Meta folder creation (on demand)
 
-When the command bar opens in files mode and a vault is active, `fetchWorkspaceFiles()` must call `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex()` and extract `entries.map(e => e.path)` to build the `workspaceFiles` array. The `invoke("list_md_files", ...)` call must NOT be made when a vault is active. The vault index path is preferred because it is recursive and already filtered by `excludePatterns`.
+When no `{VaultName}_meta/` folder exists at the vault root and the user
+performs an action that requires a meta file (e.g. opens the Tag Browser for the
+first time, or clicks a "Create meta file" prompt), the application must create
+the folder and an empty `{VaultName}_tags.md` file containing only the `# Tags`
+heading. Creation must use the existing `write_file` Tauri command with the
+atomic temp-file-swap pattern. No folder is created on vault open or index
+build; creation is deferred until first use.
 
-### FR-2 — Fallback to `list_md_files` when no vault is open
+### FR-2 — Meta vocabulary loading
 
-When `getActiveVault()` returns `null` (no vault configured or selected), `fetchWorkspaceFiles()` must fall back to the current behavior: derive `workspaceDir` from `__MARKABLE_CURRENT_FILE__` and invoke `list_md_files`. If `__MARKABLE_CURRENT_FILE__` is also null, set `workspaceLoadState = "no-workspace"` (existing path). The Rust command `list_md_files` is called only in this fallback path.
+On vault activation (and on vault change), `main.ts` must attempt to read the
+tags meta file (`{vaultRoot}/{VaultName}_meta/{VaultName}_tags.md`) via
+`bridge.ts`'s `readFile()`. If the file exists, parse it: split on newlines,
+keep lines that start with `- ` after trim, strip the `- ` prefix, trim each
+entry, discard empty results. Store the result as a `string[]` in
+`window.__MARKABLE_META__.tags`. If the file does not exist or cannot be read,
+store an empty array. The meta global is replaced (not merged) on each vault
+switch.
 
-### FR-3 — Vault index not yet loaded shows loading state
+### FR-3 — Meta vocabulary structure (`window.__MARKABLE_META__`)
 
-When `getActiveVault()` is non-null but `getVaultIndex()` returns `null` (index still building on first launch), `fetchWorkspaceFiles()` must set `workspaceLoadState = "loading"` and show the existing loading notice. The function should subscribe to `onVaultChanged` or poll with a short timeout to retry once the index is available. (Implementation detail: a single retry after 1.5s is sufficient; continuous polling is not required.)
+`window.__MARKABLE_META__` must be set by `main.ts` to an object of the
+following shape:
 
-### FR-4 — Update Files mode placeholder text
-
-`MODE_PLACEHOLDERS.files` must be changed to `"Search vault files…"` (when vault is active) or remain contextual. Because the placeholder is static (not dynamic per-open), the value must unambiguously describe vault-wide scope: `"Search vault files…"`.
-
-### FR-5 — New content search mode ("content")
-
-A new `"content"` mode value is added to `BarMode`. All mode-keyed constant objects must gain a `"content"` entry:
-- `MODE_PLACEHOLDERS["content"]`: `"Search file contents…"`
-- `MODE_FOOTER_HINTS["content"]`: `"Enter to search  ·  Esc to close"`
-- `MODE_BADGE_LABELS["content"]`: `"Content"`
-- `MODE_TAB_SHORTCUTS["content"]`: `""` (no dedicated shortcut; accessed via `/` prefix only)
-- `MODE_CYCLE`: add `"content"` at the end
-
-### FR-6 — `/` prefix in Files mode switches to content mode
-
-When `_mode === "files"` and the input value equals `"/"`, `onInput()` must call `setMode("content")` and clear the input. This mirrors the `>` and `#` prefix handling at lines 3135–3171.
-
-### FR-7 — Backspace from empty input in content mode returns to files mode
-
-The Backspace-to-files guard (line 3237) already handles `_mode !== "files"`. Because content mode is a new non-files mode, Backspace from an empty input in content mode naturally returns to files mode without any additional code change — the existing guard handles it. This must be verified in tests.
-
-### FR-8 — Content mode shows "Search file contents…" placeholder and "No vault" empty state
-
-When the bar opens in content mode (via the `/` prefix switch):
-- The input placeholder is `"Search file contents…"`.
-- If no vault is active: show the message `"No vault open — content search requires a vault"` in the results area. The input is present but non-functional (submitting Enter does nothing).
-- If a vault is active: show an empty results area with the footer hint `"Enter to search  ·  Esc to close"`.
-
-### FR-9 — Enter in content mode triggers `search_vault_content` Rust command
-
-Pressing Enter while in content mode and the input is non-empty invokes `search_vault_content` via `(window as any).__TAURI_INTERNALS__.invoke(...)`. A loading indicator replaces the results list during the async call. Results replace the loading indicator when the call completes.
-
-### FR-10 — Content search results: file header + up to 3 line excerpts
-
-Each `FileContentResult` returned by `search_vault_content` is rendered as a result group:
-1. A clickable file name header showing the `title` (from the Rust result) — clicking opens the file.
-2. Up to 3 `LineMatch` excerpt rows beneath the header. Each row shows `line_number: line_text` with the matched substring visually highlighted (e.g. bold or accent color).
-3. When a file has more than 3 matches, a non-clickable `"N more matches"` row is appended to the group.
-
-### FR-11 — Clicking any result row in content mode opens the file and closes the bar
-
-Clicking the file header row or any excerpt row in content mode calls `window.__MARKABLE_TAB_MANAGER__.openFile(absolutePath)` (or activates the existing tab if already open) and then calls `closeBar()`. This is the same action pattern as the Files mode `openFile` closure.
-
-### FR-12 — Escape or clearing `/` prefix returns to files mode
-
-Pressing Escape in content mode closes the bar entirely (same as all other modes — existing `onOverlayKeydown` handles Escape regardless of mode). Clearing the input so it is empty and pressing Backspace returns to files mode (FR-7).
-
-### FR-13 — New Rust command `search_vault_content`
-
-A new async Tauri command must be added to `src-tauri/src/commands/vault.rs`:
-
-```
-pub async fn search_vault_content(
-    root_paths: Vec<String>,
-    exclude_patterns: Vec<String>,
-    query: String,
-    max_results: u32,
-) -> Result<ContentSearchPayload, String>
+```typescript
+interface MetaStore {
+  /** Tag vocabulary from the tags meta file. Empty when no file exists. */
+  tags: string[];
+  /** Field-name → vocabulary mapping for any non-tags meta files. */
+  fields: Record<string, string[]>;
+  /** Vault id this meta data belongs to. Used for stale-check. */
+  vaultId: string | null;
+}
 ```
 
-`ContentSearchPayload` has fields: `results: Vec<FileContentResult>`, `capped: bool`, `skipped_count: u32`.
-`FileContentResult` has: `path: String`, `title: String`, `matches: Vec<LineMatch>`.
-`LineMatch` has: `line_number: u32`, `line_text: String`, `column_start: u32`.
+The `fields` map is populated by reading any meta file whose name matches
+`{VaultName}_{fieldname}.md`. On first release, only `tags` is explicitly
+handled; all other field meta files are loaded into `fields` by scanning the
+meta folder for files matching the naming pattern.
 
-The command walks `root_paths` using `WalkDir`, respects `should_exclude`, reads each `.md` file via `std::fs::read_to_string` (skipping on error, incrementing `skipped_count`), scans lines for case-insensitive substring matches, and stops adding new files once `results.len() == max_results` (`capped = true`). It reuses all existing vault.rs helpers: `should_exclude`, `extract_h1`, `parse_front_matter`.
+### FR-4 — Meta files excluded from vault index
 
-### FR-14 — `search_vault_content` registered in `mod.rs` and `lib.rs`
+`build_vault_index` must not include files inside `{VaultName}_meta/` in the
+`entries` array. The exclusion is applied by passing `vault_name: String` to
+the Rust command and filtering out any file whose path contains a component
+equal to `{vault_name}_meta` (using the sanitised vault name). `vault-manager.ts`
+must pass `vault.name` to the updated command invocation.
 
-`src-tauri/src/commands/mod.rs` must add `pub use vault::search_vault_content;`. `src-tauri/src/lib.rs` must add `search_vault_content` to the `tauri::generate_handler![]` array.
+### FR-5 — Tag Browser: new ⌘5 mode in Command Bar
 
-### FR-15 — Typed bridge wrapper in `bridge.ts`
+A new `"tags"` value is added to `BarMode`. All mode-keyed constants gain a
+`"tags"` entry:
 
-A typed `searchVaultContent(params)` async function must be added to `src/lib/bridge.ts` returning `FileResult<ContentSearchPayload>`. The IIFE plugin does not use this wrapper, but it must exist for testability.
+- `MODE_PLACEHOLDERS["tags"]`: `"Filter tags…"`
+- `MODE_FOOTER_HINTS["tags"]`: `"Enter to open files  ·  Esc to close"`
+- `MODE_BADGE_LABELS["tags"]`: `"Tags"`
+- `MODE_TAB_SHORTCUTS["tags"]`: `"⌘5"`
+- `MODE_CYCLE`: append `"tags"` after `"content"` so cycling goes
+  `commands → files → keybindings → content → tags → commands`
 
-### FR-16 — Empty query guard in content mode
+The ⌘5 global keyboard shortcut must open the Command Bar in tags mode
+(analogous to the ⌘1–⌘4 shortcuts). The shortcut is registered in the
+keybindings system.
 
-If the user presses Enter in content mode with an empty or whitespace-only query, no Rust call is made. A hint `"Enter a search term"` is displayed in the results area.
+### FR-6 — Tag Browser: layout
+
+The tags mode result area renders as two sections, separated by a section
+header each:
+
+1. **Defined tags** (section header: `"DEFINED TAGS"`): all tags present in
+   `window.__MARKABLE_META__.tags`, sorted alphabetically. Each row shows the
+   tag name and a count badge (`N files`). Clicking a row expands it inline to
+   show the list of file titles that use the tag; clicking a file title opens
+   the file and closes the bar.
+
+2. **Uncategorised** (section header: `"UNCATEGORISED"`): tags found in
+   `window.__MARKABLE_VAULT_MANAGER__.getVaultIndex().entries` (by scanning
+   `entry.tags`) that are NOT present in `window.__MARKABLE_META__.tags`. Same
+   row format (tag name + `N files` count). Clicking expands to show files.
+
+The filter input at the top of the bar filters both sections simultaneously by
+tag name substring (case-insensitive). When the filter is empty, all tags are
+shown. The `"UNCATEGORISED"` section is omitted entirely when there are no
+uncategorised tags.
+
+### FR-7 — Tag Browser: empty states
+
+- No vault open: show `"No vault open — open a vault to browse tags"`. The
+  input is non-functional.
+- Vault open, no meta file and no tags in any file: show `"No tags found.
+  Add tags: to a note's front matter to get started"`.
+- Vault open, meta file exists but is empty and no tags in files: same as above.
+- Filter input has text that matches nothing: show `"No tags match 'query'"`.
+
+### FR-8 — Tag Browser: "Add to meta" action on uncategorised tags
+
+Each row in the Uncategorised section has an "Add to meta" button (visible on
+hover). Clicking it appends the tag as a new bullet to the tags meta file
+(creating the file/folder if needed per FR-1) and immediately moves the row
+from the Uncategorised section to the Defined section without closing the bar.
+The meta vocabulary in `window.__MARKABLE_META__.tags` is updated in-memory
+and the meta file is written via `writeFile`.
+
+### FR-9 — YAML pane: tag validation warning indicators
+
+When the active document's YAML front matter contains a `tags` field whose
+value is an array, and `window.__MARKABLE_META__.tags` is non-empty, the YAML
+pane chip renderer must compare each chip value against the meta vocabulary. A
+chip value that is NOT in the meta vocabulary is rendered with a
+`.yaml-pane-chip--warning` CSS modifier (amber-bordered chip). A tooltip on the
+chip (via `title` attribute) reads `"'value' is not in the tags vocabulary"`.
+
+This check is performed on every `rebuildPanelDOM()` call. It requires no async
+operation: the meta vocabulary is already in-memory via
+`window.__MARKABLE_META__.tags`.
+
+### FR-10 — YAML pane: validation for non-tags meta fields
+
+If any field other than `tags` has a corresponding meta vocabulary in
+`window.__MARKABLE_META__.fields[fieldKey]`, and that vocabulary is non-empty,
+the same warning chip logic (FR-9) applies to that field's array values. This
+allows future meta files (e.g. `Work Notes_author.md`) to provide vocabulary
+validation automatically without code changes.
+
+### FR-11 — YAML pane: "not in vocabulary" warning only when vocabulary is non-empty
+
+The vocabulary warning is suppressed entirely when
+`window.__MARKABLE_META__.tags` is empty (or `fields[key]` is empty/absent).
+An empty vocabulary means "no vocabulary defined" — it does not mean "all values
+are invalid". This prevents spurious warnings before the user has set up any
+meta file.
+
+### FR-12 — Meta file hot reload
+
+When a meta file is modified on disk (the vault file watcher emits a
+`VaultFileChangedEvent` for a path inside `{VaultName}_meta/`), `main.ts` must
+re-read the affected meta file and update `window.__MARKABLE_META__`. The YAML
+pane must re-render on next `updateListener` tick (which happens automatically
+since `rebuildPanelDOM` reads the global synchronously). The tag browser must
+re-render on the next open.
+
+### FR-13 — Sanitised vault name in path construction
+
+All code constructing `{VaultName}_meta/` paths must sanitise the vault name
+with a function that replaces `/`, `:`, and null bytes with `_`. The sanitised
+name is used only for path construction; the display name is unchanged.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1 — Vault active but index is null (still building)**
-`getActiveVault()` is non-null, `getVaultIndex()` is null. Expected: Files mode shows "loading" notice. Content mode shows "loading" notice when Enter is pressed. No crash.
+**EC-1 — No vault open**
+`getActiveVault()` returns null. Tag browser shows "No vault open" message.
+YAML pane validation is suppressed (no meta vocabulary available). No crash,
+no Tauri calls attempted.
 
-**EC-2 — No vault open (Files mode fallback)**
-`getActiveVault()` returns null. Expected: Files mode falls back to `list_md_files` on current file's directory. If `__MARKABLE_CURRENT_FILE__` is also null, the "no-workspace" notice is shown.
+**EC-2 — Meta folder does not exist yet**
+`readFile()` on the tags meta file returns `{ ok: false }`. Expected:
+`window.__MARKABLE_META__.tags = []`. Validation warnings suppressed (FR-11).
+Tag browser shows only the Uncategorised section (derived from vault index
+tags). No "Add to meta" causes folder+file creation (FR-1).
 
-**EC-3 — No vault open (content mode)**
-`getActiveVault()` returns null. Expected: the results area shows `"No vault open — content search requires a vault"`. Enter does nothing. No Rust call.
+**EC-3 — Meta file exists but is empty (no bullet items)**
+File contains only `# Tags` or is completely empty. Parsing yields zero
+vocabulary entries. Expected: same behaviour as EC-2 — empty vocabulary,
+no validation warnings.
 
-**EC-4 — Vault with 0 `.md` files (Files mode)**
-`getVaultIndex().entries` is empty. Expected: Files mode shows open tabs only (no workspace files section). No error.
+**EC-4 — Meta file contains duplicate entries**
+`- productivity` appears twice. Deduplication must occur at parse time so the
+vocabulary array and UI tag counts are not doubled. Expected: the parsed
+vocabulary contains each unique entry once.
 
-**EC-5 — Vault with 0 `.md` files (content mode)**
-`search_vault_content` walks the vault and finds no `.md` files. Expected: `results: []`, `capped: false`. UI shows `"No results for 'query'"`. No error.
+**EC-5 — Tag in file not in meta vocabulary**
+`entry.tags` for a vault file contains `"research"`, but
+`window.__MARKABLE_META__.tags` does not. Expected: "research" appears in the
+Uncategorised section of the tag browser; chip for "research" in the YAML pane
+gets the `.yaml-pane-chip--warning` modifier.
 
-**EC-6 — Content mode: query matches nothing**
-`search_vault_content` returns `results: []`. Expected: UI shows `"No results for 'query'"`.
+**EC-6 — Vault rename (meta folder name changes)**
+`updateVault()` changes `VaultEntry.name` from "Work Notes" to "Projects". The
+old `Work Notes_meta/` folder is not automatically renamed. Expected:
+after the rename, `main.ts` attempts to read `Projects_meta/` and finds
+nothing; `window.__MARKABLE_META__.tags = []`. The old folder persists on disk
+but is unreachable via the new name. The user must rename the folder manually.
+The UI shows no crash; validation warnings are suppressed.
 
-**EC-7 — Content mode: results cap reached**
-`capped: true` in the payload. Expected: a notice `"Showing matches in the first N files — refine your query to see more"` is prepended to the results list.
+**EC-7 — Multiple vaults configured; user switches vaults**
+`window.__MARKABLE_META__` is rebuilt on `onVaultChanged`. Each vault has its
+own `{name}_meta/` folder. After switching, the in-memory meta reflects only
+the new vault. The YAML pane re-renders on its next `updateListener` call.
+The tag browser reflects the new vault's tags. No cross-vault contamination.
 
-**EC-8 — Content mode: file unreadable during search**
-`std::fs::read_to_string` fails for a file. Expected: file is skipped, `skipped_count` incremented. If `skipped_count > 0`, a notice `"N files could not be searched"` is shown in the overlay.
+**EC-8 — Tags with special characters (spaces, hyphens, unicode)**
+Tag values like `"project management"`, `"c++"`, or `"日本語"` must round-trip
+through the meta file format without corruption. Bullet parsing uses simple
+string trimming; it does not escape or interpret any characters. The chip
+renderer displays the raw string. The vocabulary comparison is case-sensitive
+exact-match.
 
-**EC-9 — Content mode: binary data in a `.md` file**
-`read_to_string` returns `Err` for invalid UTF-8. Expected: same as EC-8 — file skipped, counted.
+**EC-9 — Tags with YAML-special characters in front matter**
+A tag value like `"yes"` or `"true"` in a YAML `tags:` array is parsed by
+js-yaml as the string `"yes"` (CORE_SCHEMA is used, which does not coerce).
+The comparison against the meta vocabulary must use the same string. No
+coercion mismatch.
 
-**EC-10 — Content mode: file larger than 1 MB**
-The Rust command applies a per-file cap of 1 MB (reads only the first 1,048,576 bytes). Lines beyond the cap are not searched. The truncation is invisible to the user. This prevents memory spikes on giant files.
+**EC-10 — Very large meta file (hundreds of tags)**
+The meta file is a plain text file; reading and parsing hundreds of bullet
+items is fast. No UI cap is enforced on vocabulary size. The tag browser
+renders all defined tags. Filtering is applied client-side.
 
-**EC-11 — Content mode: query contains regex special characters**
-The Rust command uses substring matching (`to_lowercase().contains()`), not regex. Characters like `[`, `*`, `.`, `(` are treated as literals. No panic.
+**EC-11 — Meta folder contains non-field files**
+Files not matching `{VaultName}_{fieldname}.md` are ignored when scanning the
+meta folder. A file named `README.md` inside the meta folder does not produce
+a vocabulary entry.
 
-**EC-12 — Content mode: Enter pressed while previous search is in-flight**
-A second Enter press while a `search_vault_content` invoke is pending must not launch a duplicate call. A generation/guard pattern (increment `_contentSearchGeneration` per call; discard results if stale) prevents duplicate renders.
+**EC-12 — Meta file for a field not in current document**
+`Work Notes_author.md` exists and defines an `author` vocabulary, but the
+current document has no `author:` field. Expected: no warning shown (no chips
+to warn about). The vocabulary is loaded into `window.__MARKABLE_META__.fields`
+regardless; it is simply not consulted.
 
-**EC-13 — Plugin disabled while content search is in-flight**
-`onDisable` removes the DOM. When the async result arrives, the generation check silently discards it. No JS error from accessing removed DOM nodes.
+**EC-13 — YAML pane open when vault switches mid-session**
+`onVaultChanged` fires. `window.__MARKABLE_META__` is rebuilt. On the next
+`updateListener` call from CodeMirror, `rebuildPanelDOM()` reads the updated
+meta and re-renders with no stale warnings.
 
-**EC-14 — Vault switch while content search is in-flight**
-`onVaultChanged` fires while `search_vault_content` is pending. Expected: the in-flight result is discarded via the generation counter. The overlay resets to the new vault's ready state.
+**EC-14 — Meta file write fails (disk full, permissions)**
+`writeFile()` returns `{ ok: false }`. Expected: the in-memory
+`window.__MARKABLE_META__.tags` is NOT updated (the optimistic update is
+rolled back or the write is attempted before the in-memory update). An error
+toast or console.warn is emitted. The tag browser row reverts to the
+Uncategorised section.
 
-**EC-15 — `/` typed inside a non-empty query in files mode**
-The prefix switch only triggers when the ENTIRE input is the single character `/`. If the user types `design/` or `foo/`, no mode switch occurs. Fuzzy filtering continues normally.
+**EC-15 — Tag browser opened with no tags in vault index and no meta file**
+Both `window.__MARKABLE_META__.tags` and all `entry.tags` in the vault index
+are empty. Expected: the "No tags found" empty state is shown (FR-7). No
+crash.
 
-**EC-16 — Content mode opened via `/` prefix; bar closed and reopened**
-`closeBar()` resets `_mode = "files"` (line 3089). Re-opening the bar always starts in files mode. The `/` prefix must be re-typed to enter content mode. This is intentional and consistent with how `>` and `#` work.
+**EC-16 — Tag browser filter input clears between opens**
+The bar closes on item activation or Escape. On re-open in tags mode, the
+filter input is blank and all tags are shown. Consistent with files and content
+modes.
 
-**EC-17 — `getVaultIndex()` returns entries with no `path` field (corrupt index)**
-A defensive guard must check that each entry has a truthy `path` before adding to `workspaceFiles`. Entries with empty or null paths are silently skipped.
+**EC-17 — Vault index not yet built when tag browser opens**
+`getVaultIndex()` returns null. Expected: the Uncategorised section cannot be
+computed; only Defined tags (from the already-loaded meta vocabulary) are
+shown, with a `0` file count. A "Index still loading" notice may be appended.
 
-**EC-18 — Very large vault (500+ files) in Files mode**
-`getVaultIndex().entries` may have up to 500 entries (vault cap). All 500 absolute paths are passed to `buildFilesResults()` as `workspaceFiles`. The existing `FILES_CAP = 200` display cap already handles limiting the rendered list to 200 rows. No additional cap logic needed.
+**EC-18 — Vault name contains filesystem-unsafe characters**
+`VaultEntry.name = "Work: Notes/2024"`. The sanitise function converts this to
+`"Work_ Notes_2024"` for path construction. The meta folder path becomes
+`/vault/root/Work_ Notes_2024_meta/`. Display name is unchanged. The
+sanitised path is used consistently in all reads and writes.
 
-**EC-19 — Content search result file is already open as a tab**
-Clicking a result row calls `window.__MARKABLE_TAB_MANAGER__.openFile(path)`. This function already handles the "file is already open" case by activating the existing tab. No special handling needed in the content mode renderer.
+**EC-19 — ⌘5 pressed when no vault is open**
+Tag browser opens in the "No vault open" empty state. No Tauri calls are made.
+The input is disabled. Escape or ⌘5 again closes the bar.
 
-**EC-20 — Multi-root vault (2+ root paths) in content mode**
-`search_vault_content` walks all root paths. Results from all roots are merged into a single flat `results` array. The TypeScript renderer displays them in the order returned (most matches first if Rust sorts by match count).
-
-**EC-21 — `/` prefix while already in content mode**
-Once in content mode, typing `/` is a normal search character (not a prefix switch). Only triggers when `_mode === "files"`.
+**EC-20 — Concurrent meta file write from two sources**
+The file watcher (EC-12) and an "Add to meta" action fire within milliseconds
+of each other. Because `writeFile()` uses the atomic temp-file-swap pattern on
+the Rust side, the last write wins. The in-memory vocabulary is rebuilt from
+the final file content on the watcher event.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1 — No new Cargo dependencies**
-`search_vault_content` must be implemented using only existing crates: `walkdir`, `std::fs`, `std::str`. No `regex`, `tantivy`, or ripgrep crate.
+**NFR-1 — Meta vocabulary load is non-blocking on vault open**
+Reading the meta file must not block the vault index load. `main.ts` fires both
+operations concurrently (Promise.all or fire-and-forget for meta). Vault UI
+must not be gated on meta load completion.
 
-**NFR-2 — Content search is Enter-triggered, not live-as-you-type**
-No Rust call is made on keydown. Only Enter triggers the invocation. This prevents thrashing on large vaults.
+**NFR-2 — Tag browser renders within 100 ms for up to 500 distinct tags**
+The tag browser assembles its data from two in-memory sources
+(`window.__MARKABLE_META__.tags` and `getVaultIndex().entries`). No Rust call
+is made on open. All DOM construction must complete within 100 ms on an
+M-series Mac for ≤500 tags.
 
-**NFR-3 — Content search must complete within 3 seconds for a 500-file vault**
-On a modern MacBook Pro (M-series), searching 500 small-to-medium `.md` files (average 10 KB each) with a simple substring scan must complete within 3 seconds. The 1 MB per-file cap (EC-10) enforces an upper bound on per-file read time.
+**NFR-3 — CSS uses only existing CSS variables**
+All new CSS classes (`.yaml-pane-chip--warning`, tag browser rows, count
+badges) must use `var(--accent-color)`, `var(--border-color)`,
+`var(--text-primary)`, `var(--text-secondary)`, `var(--bg-primary)`, and
+`var(--bg-secondary)`. No hardcoded hex colours or pixel sizes that conflict
+with themes.
 
-**NFR-4 — Files mode vault lookup is synchronous (no additional async latency)**
-Replacing `invoke("list_md_files", ...)` with `getVaultIndex().entries.map(e => e.path)` is a synchronous in-memory read. The Files mode open-to-results latency must not increase when a vault is active.
+**NFR-4 — No new Cargo dependencies**
+Meta file reading uses the existing `read_file` Tauri command and TypeScript
+parsing. If a Rust command is added, it must use only crates already in
+`Cargo.toml`. No new crates.
 
-**NFR-5 — All mode-keyed constants must remain exhaustive**
-`MODE_PLACEHOLDERS`, `MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, `MODE_TAB_SHORTCUTS` are `Record<BarMode, string>`. Adding `"content"` to `BarMode` must be accompanied by adding a `"content"` key to every one of these objects. TypeScript's type system will enforce this if the types are declared as `Record<BarMode, string>`.
+**NFR-5 — All BarMode record constants remain exhaustive**
+`MODE_PLACEHOLDERS`, `MODE_FOOTER_HINTS`, `MODE_BADGE_LABELS`, and
+`MODE_TAB_SHORTCUTS` are typed as `Record<BarMode, string>`. Adding `"tags"`
+to `BarMode` will produce TypeScript compile errors on any record not updated.
+All four constants must be extended.
 
-**NFR-6 — CSS for content mode results uses existing CSS variables**
-Any new CSS classes for content mode result rows (excerpt rows, file header rows, "N more" rows) must use `var(--bg-primary)`, `var(--border-color)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--accent-color)` etc. No hardcoded hex or font names.
+**NFR-6 — Meta folder excluded from vault index (no bleed into search)**
+Files inside `{VaultName}_meta/` must never appear in file search results,
+backlinks, or wiki-link completions. This is enforced at index-build time via
+the exclusion filter in `build_vault_index`.
 
-**NFR-7 — Per-file 1 MB read cap in Rust**
-Files larger than 1 MB are read only up to the first 1,048,576 bytes before line scanning begins. This is implemented in `search_vault_content` before the line iteration loop.
-
-**NFR-8 — Bridge wrapper uses `FileResult` discriminated union**
-`bridge.ts`'s `searchVaultContent()` wrapper returns `FileResult<ContentSearchPayload>` (never throws).
+**NFR-7 — Validation warnings are synchronous (no async in the render path)**
+`rebuildPanelDOM()` is called on every CodeMirror state change. Adding an
+async operation inside it would cause flickering and race conditions. The
+vocabulary comparison must be a synchronous read of `window.__MARKABLE_META__`
+with no I/O.
 
 ---
 
@@ -262,36 +488,51 @@ Files larger than 1 MB are read only up to the first 1,048,576 bytes before line
 
 | File | Change |
 |------|--------|
-| `src/plugins/command-bar/command-bar.plugin.ts` | (1) Add `"content"` to `BarMode`; (2) extend all mode-keyed constants; (3) update `fetchWorkspaceFiles` to use vault index; (4) add `/` prefix handler in `onInput`; (5) add content mode Enter handler; (6) add content mode result renderer; (7) update Files mode placeholder |
-| `src/plugins/command-bar/files-mode.ts` | Update `FILES_SECTION_LABELS` if a new label is needed; update `FilesModeBuilderDeps.workspaceLoadState` if a new "no-vault" state is added |
-| `src-tauri/src/commands/vault.rs` | Add `FileContentResult`, `LineMatch`, `ContentSearchPayload` structs; add `search_vault_content` async command |
-| `src-tauri/src/commands/mod.rs` | Add `pub use vault::search_vault_content;` |
-| `src-tauri/src/lib.rs` | Add `search_vault_content` to `tauri::generate_handler![]` |
-| `src/lib/bridge.ts` | Add `searchVaultContent(params)` typed wrapper returning `FileResult<ContentSearchPayload>` |
+| `src/plugins/command-bar/command-bar.plugin.ts` | (1) Add `"tags"` to `BarMode`; (2) extend all mode-keyed constants with `"tags"`; (3) add ⌘5 shortcut handler; (4) add tags mode render path |
+| `src/plugins/yaml-pane/yaml-pane.plugin.ts` | (1) Read `window.__MARKABLE_META__` in chip renderer; (2) add `.yaml-pane-chip--warning` CSS class and modifier logic; (3) extend per-field validation to non-tags fields via `fields` map |
+| `src/lib/vault-manager.ts` | Pass `vault.name` to `build_vault_index` invocation in `buildAndCacheIndex()` |
+| `src-tauri/src/commands/vault.rs` | Accept `vault_name: String` in `build_vault_index`; exclude `{vault_name}_meta` directory components during the walk |
+| `src/main.ts` | (1) Set and update `window.__MARKABLE_META__` on vault change; (2) subscribe to `onVaultChanged` to reload meta; (3) subscribe to `onIndexUpdated` for meta folder file changes |
+| `src/lib/bridge.ts` | No new commands required if TypeScript parses the meta file. If a `read_meta_file` command is added to Rust, add a typed wrapper here. |
+
+### New files to create
+
+| File | Purpose |
+|------|---------|
+| `src/lib/meta-manager.ts` | Pure functions: `sanitiseVaultName()`, `metaFolderPath()`, `metaFilePath()`, `parseMetaBulletList()`, `buildMetaStore()`. Shared between `main.ts` and tests. Exported as ES module (not IIFE). |
 
 ### Files that must NOT change
 
 | File | Reason |
 |------|--------|
-| `src-tauri/src/commands/files.rs` | `list_md_files` is unchanged; the fallback path still calls it |
-| `src/lib/vault-manager.ts` | Existing public API is sufficient; no new exports needed |
-| `src/lib/vault-types.ts` | No new vault types required |
-| `src-tauri/src/lib.rs` (window size section) | Window size invariant must not regress — the only change is adding a command to the handler list |
-| `src/lib/settings.ts` | No new settings fields |
+| `src-tauri/src/commands/files.rs` | `read_file` and `write_file` are used as-is; no changes needed |
+| `src/lib/vault-types.ts` | No new vault types required; `VaultIndexEntry.tags` is already present |
+| `src/lib/settings.ts` | No new settings fields; meta path is derived at runtime from vault name |
+| `src-tauri/src/lib.rs` (window size section) | Window size invariant must not regress; only change is adding `vault_name` parameter threading if `build_vault_index` is updated |
 
 ---
 
 ## Out of Scope
 
-- **Regex query mode** — substring matching only.
-- **Live-as-you-type content search** — Enter-triggered only.
-- **Scrolling to the exact matched line** — the user is navigated to the file, not the line.
-- **Search-and-replace across vault** — separate feature.
-- **Searching non-`.md` files** — only Markdown.
-- **Saved search history** — no persistence.
-- **Dedicated keyboard shortcut for content mode** — accessed only via `/` prefix; no global keybinding.
-- **Highlighting matched text inside the editor** after navigation — deferred.
-- **The prior Global Search plugin** (`src/plugins/global-search/global-search.plugin.ts`) — this spec supersedes and replaces the previous `active_task.md` which described a standalone overlay plugin. That plugin is NOT built; content search lives inside the Command Bar.
+- **Editing the meta vocabulary from within the tag browser** — the meta file
+  is a plain Markdown file the user edits directly. The "Add to meta" action
+  (FR-8) is the only write path from the UI.
+- **Renaming or merging tags across vault files** — deferred.
+- **Non-tags field validation with non-array YAML types** — validation warnings
+  apply only to array-valued fields (chips). String fields with a meta
+  vocabulary are deferred.
+- **Tag autocomplete in the editor** — deferred to a future feature.
+- **Multiple root paths for meta folder selection** — the meta folder always
+  lives at `rootPaths[0]`; multi-root vaults use only the first root.
+- **Case-insensitive vocabulary comparison** — the comparison is exact
+  case-sensitive match. If the user defines `Productivity` in the meta file
+  and uses `productivity` in a note, both appear (one defined, one
+  uncategorised).
+- **Cloud sync or sharing of the meta folder** — out of scope; the folder is
+  local.
+- **Schema JSON validation for meta fields** — the meta bullet list format and
+  the existing `schemaPath` JSON mechanism are two independent systems. They
+  are not merged in this release.
 
 ---
 
@@ -299,6 +540,6 @@ Files larger than 1 MB are read only up to the first 1,048,576 bytes before line
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 21 items in Edge Case Inventory (EC-1 through EC-21)
+- Edge cases to verify in tests: 20 items in Edge Case Inventory (EC-1 through EC-20)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

@@ -47,6 +47,7 @@ import {
 import { switchListStyle, listStyleIndicator, createListStyleIndicator } from "./editor/list-style-switch";
 import { ensureStatusBar, getStatusBarVisible, setStatusBarVisible } from "./plugins/status-bar/status-bar";
 import {
+  readFile,
   readResourceFile,
   openFileDialog,
   openFolderDialog,
@@ -90,6 +91,12 @@ import { tabManager } from "./tabs";
 import { createDragDropHandler } from "./tabs/drag-drop";
 import { openExportDialog, printDocument } from "./lib/export";
 import * as vaultManager from "./lib/vault-manager";
+import {
+  buildMetaStore,
+  emptyMetaStore,
+  isMetaFolderEvent,
+} from "./lib/meta-manager";
+import type { MetaStore } from "./lib/meta-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -532,6 +539,11 @@ function handleAction(action: string): void {
       if (typeof openCB === "function") openCB("keybindings");
       break;
     }
+    case "command-bar-open-tags": {
+      const openCB = (window as any).__MARKABLE_COMMAND_BAR_OPEN__;
+      if (typeof openCB === "function") openCB("tags");
+      break;
+    }
     case "edit-select-none":
       if (editor) {
         // Collapse selection to remove highlight, then enter view mode
@@ -779,6 +791,32 @@ function handleAction(action: string): void {
 }
 
 /**
+ * Load (or reload) the meta vocabulary store for the active vault and expose
+ * it as window.__MARKABLE_META__.
+ *
+ * Non-blocking: called fire-and-forget from vault activation paths (NFR-1).
+ * On any failure: sets an empty store so the global is always a valid MetaStore
+ * (EC-1, EC-2). Never throws — errors are logged as warnings only.
+ *
+ * @param vault - The active VaultEntry, or null when no vault is active.
+ */
+async function initMeta(vault: Parameters<typeof buildMetaStore>[0] | null): Promise<void> {
+  if (!vault) {
+    // EC-1: no vault open — clear vocabulary so plugins see an empty store.
+    (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] = emptyMetaStore();
+    return;
+  }
+  try {
+    const store: MetaStore = await buildMetaStore(vault, readFile);
+    (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] = store;
+  } catch (err) {
+    // Defensive: buildMetaStore is designed to never reject, but we guard anyway.
+    console.warn("[initMeta] Failed to load meta store:", err);
+    (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] = emptyMetaStore();
+  }
+}
+
+/**
  * Initialize the application
  */
 async function initApp() {
@@ -929,6 +967,11 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_IS_OPEN__"] = false;
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_OPEN__"] = null;
 
+  // ── Meta system global — set before plugins load so IIFE reads are safe ────
+  // emptyMetaStore() ensures the global is always a valid MetaStore shape even
+  // before initMeta() resolves (AD-2, EC-1).
+  (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] = emptyMetaStore();
+
   // ── Vault manager initialisation ────────────────────────────────────────────
   // Non-blocking: vault init runs in the background so the window becomes
   // visible before potentially slow index building begins. The File Browser
@@ -937,6 +980,32 @@ async function initApp() {
   vaultManager.init().catch((err) =>
     console.warn("[init] vaultManager.init failed (non-fatal):", err)
   );
+
+  // __MARKABLE_META__ is populated by the onVaultChanged subscription below.
+  // The initMeta call that previously appeared here was a no-op: vaultManager.init()
+  // is non-blocking so getActiveVault() still returns null at this point, and
+  // initMeta(null) = emptyMetaStore() which is already set at line above (L-3).
+
+  // Reload meta vocabulary whenever the user switches vaults (EC-7, FR-2).
+  // The MetaStore is replaced atomically (AD-3) — no cross-vault contamination.
+  vaultManager.onVaultChanged((vault) => {
+    initMeta(vault).catch((err) =>
+      console.warn("[onVaultChanged] initMeta failed:", err)
+    );
+  });
+
+  // Hot-reload meta when a file inside the meta folder changes on disk (FR-12).
+  // The vault file watcher emits a VaultFileChangedEvent; isMetaFolderEvent
+  // filters to only the relevant paths before triggering a reload.
+  vaultManager.onIndexUpdated((event) => {
+    const vault = vaultManager.getActiveVault();
+    if (!vault) return;
+    if (isMetaFolderEvent(event.path, vault)) {
+      initMeta(vault).catch((err) =>
+        console.warn("[onIndexUpdated] meta hot-reload failed:", err)
+      );
+    }
+  });
 
   // Load all plugins (core + user) from disk. Must run after setEditorView()
   // so any plugin calling api.addExtensions() in onEnable has a live view.

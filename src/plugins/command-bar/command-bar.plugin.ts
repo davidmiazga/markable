@@ -64,7 +64,7 @@ export { renderHighlightedLabel };
  * Mode state is stored as a module-level variable (_mode) — never derived from
  * DOM attributes — to keep transitions O(1) and avoid layout reads (AD-CB-01).
  */
-export type BarMode = "files" | "commands" | "keybindings" | "content";
+export type BarMode = "files" | "commands" | "keybindings" | "content" | "tags";
 
 /**
  * The result categories shown in the Command Bar.
@@ -227,6 +227,7 @@ export const MODE_PLACEHOLDERS: Record<BarMode, string> = {
   commands:    "Type a command or search headings…",
   keybindings: "Search actions to assign shortcut…",
   content:     "Search file contents…",
+  tags:        "Filter tags…",
 };
 
 /**
@@ -238,6 +239,7 @@ export const MODE_FOOTER_HINTS: Record<BarMode, string> = {
   commands:    "Enter to run  ·  Esc to close",
   keybindings: "Enter to assign shortcut  ·  Esc to close",
   content:     "Enter to search  ·  Esc to close",
+  tags:        "Enter to open files  ·  Esc to close",
 };
 
 /**
@@ -248,13 +250,14 @@ export const MODE_BADGE_LABELS: Record<BarMode, string> = {
   commands:    "Commands",
   keybindings: "Keybindings",
   content:     "Content",
+  tags:        "Tags",
 };
 
 /**
  * Cycle order for tab strip clicks (FR-08.3, AD-GS-07).
  * Content is appended at the end — accessed primarily via '/' prefix, not Tab cycling.
  */
-export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "content"];
+export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "content", "tags"];
 
 /**
  * Shortcut hint glyphs shown next to each tab label.
@@ -267,6 +270,7 @@ export const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
   files:       "⌘2",
   keybindings: "⌘3",
   content:     "⌘4",
+  tags:        "⌘5",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
@@ -810,6 +814,95 @@ mark.cb-match {
 .cb-content-notice--warning {
   color: var(--accent-color);
   font-size: 12px;
+}
+
+/* ── Tag Browser ────────────────────────────────────── */
+
+.cb-tag-row {
+  padding: 0;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cb-tag-row-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+}
+
+.cb-tag-row-header:hover {
+  background: var(--bg-secondary);
+}
+
+.cb-tag-row-chevron {
+  font-size: 10px;
+  width: 10px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.cb-tag-row-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.cb-tag-row-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* "Add to meta" button — visible only on hover of the row */
+.cb-tag-add-btn {
+  display: none;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--accent-color);
+  color: var(--accent-color);
+  background: transparent;
+  cursor: pointer;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.cb-tag-row-header:hover .cb-tag-add-btn {
+  display: inline-block;
+}
+
+.cb-tag-add-btn:hover {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+}
+
+/* Expanded file list */
+.cb-tag-files {
+  padding: 0 12px 6px 28px;
+}
+
+.cb-tag-file-row {
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-tag-file-row:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.cb-tag-files--empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 `;
 
@@ -2546,6 +2639,11 @@ function switchMode(targetMode: BarMode): void {
     filterAndRenderFiles("");
     const capturedGeneration = _openGeneration;
     void fetchWorkspaceFiles(capturedGeneration);
+  } else if (targetMode === "tags") {
+    // Tags mode bypasses _allResults; render directly from window globals (AD-6).
+    _expandedTags.clear(); // EC-16: collapse all rows when switching to tags mode
+    _allResults = [];
+    renderTagsMode("");
   } else {
     // Switching INTO commands or keybindings mode: rebuild _allResults.
     // Files mode sets _allResults = [] (unused); commands/keybindings require a fresh build.
@@ -3087,6 +3185,416 @@ export function renderContentResults(payload: any | null, query: string): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tags mode — data helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape of a tag row used internally by renderTagsMode.
+ */
+interface TagRow {
+  /** The tag string value. */
+  tag: string;
+  /** Files from vault index that carry this tag. */
+  files: Array<{ path: string; title: string }>;
+  /** True for tags defined in window.__MARKABLE_META__.tags. */
+  defined: boolean;
+}
+
+/**
+ * Build two sorted arrays of TagRow: defined and uncategorised.
+ *
+ * Reads data entirely from in-memory globals — no Tauri calls (NFR-2).
+ * Both sections are filtered by case-insensitive substring match on tag names.
+ *
+ * - Defined: tags in __MARKABLE_META__.tags, sorted alphabetically.
+ * - Uncategorised: tags in vault index entries but absent from meta vocabulary.
+ *
+ * @param query - Case-insensitive substring filter applied to tag names.
+ *                Pass `""` to show all tags.
+ * @returns Object with `defined` and `uncategorised` TagRow arrays.
+ *
+ * @remarks Exported for unit tests only — do not call from other production code.
+ */
+export function buildTagRows(query: string): { defined: TagRow[]; uncategorised: TagRow[] } {
+  // Read shared globals — both are set via (window as any) at runtime, so we
+  // use 'any' here rather than Window["__MARKABLE_META__"] / ["__MARKABLE_VAULT_MANAGER__"]
+  // to avoid requiring a typed Window augmentation for __MARKABLE_VAULT_MANAGER__.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meta: any = (window as any).__MARKABLE_META__;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+
+  // EC-1: no vault open → both sections are empty.
+  if (!vm?.getActiveVault?.()) {
+    return { defined: [], uncategorised: [] };
+  }
+
+  const definedVocab: string[] = meta?.tags ?? [];
+  const index = vm?.getVaultIndex?.() ?? null;
+
+  // Build a map: tag → list of { path, title } from vault index.
+  // Used to compute file counts for both sections and to populate expanded views.
+  const tagFileMap = new Map<string, Array<{ path: string; title: string }>>();
+
+  if (index) {
+    for (const entry of index.entries) {
+      for (const tag of entry.tags) {
+        if (!tagFileMap.has(tag)) tagFileMap.set(tag, []);
+        tagFileMap.get(tag)!.push({ path: entry.path, title: entry.title || entry.name });
+      }
+    }
+  }
+
+  const lowerQuery = query.toLowerCase();
+
+  // Defined tags: from meta vocabulary, filtered by query, sorted alphabetically.
+  const defined: TagRow[] = definedVocab
+    .filter((tag) => !lowerQuery || tag.toLowerCase().includes(lowerQuery))
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+    .map((tag) => ({
+      tag,
+      // File count may be 0 when the index is not yet loaded (EC-17).
+      files: tagFileMap.get(tag) ?? [],
+      defined: true,
+    }));
+
+  // Uncategorised: tags present in vault index but NOT in meta vocabulary.
+  // The definedSet enables O(1) membership checks.
+  const definedSet = new Set(definedVocab);
+  const uncategorised: TagRow[] = [];
+  for (const [tag, files] of tagFileMap) {
+    if (!definedSet.has(tag) && (!lowerQuery || tag.toLowerCase().includes(lowerQuery))) {
+      uncategorised.push({ tag, files, defined: false });
+    }
+  }
+  uncategorised.sort((a, b) => a.tag.toLowerCase().localeCompare(b.tag.toLowerCase()));
+
+  return { defined, uncategorised };
+}
+
+// ---------------------------------------------------------------------------
+// Tags mode — renderer
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks which tag rows are currently expanded (inline file list visible).
+ * Reset when bar opens or closes (EC-16).
+ */
+let _expandedTags = new Set<string>();
+
+/**
+ * Render the tags mode result area.
+ *
+ * Called by filterAndRender() when _mode === "tags".
+ * Shows two sections: "DEFINED TAGS" and "UNCATEGORISED".
+ * Handles all four empty states (FR-7).
+ *
+ * @param query - Current input value (substring filter, case-insensitive).
+ */
+function renderTagsMode(query: string): void {
+  if (!_resultsEl) return;
+  _resultsEl.innerHTML = "";
+
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+
+  // EC-1: no vault open — show "No vault open" state.
+  if (!vm?.getActiveVault?.()) {
+    _resultsEl.appendChild(
+      buildTagsNotice("No vault open — open a vault to browse tags")
+    );
+    return;
+  }
+
+  const index = vm.getVaultIndex?.() ?? null;
+  const { defined, uncategorised } = buildTagRows(query);
+
+  // EC-15 / FR-7: both sections empty and no filter text — show "no tags" state.
+  if (defined.length === 0 && uncategorised.length === 0 && !query) {
+    _resultsEl.appendChild(
+      buildTagsNotice("No tags found. Add tags: to a note's front matter to get started")
+    );
+    return;
+  }
+
+  // FR-7: filter text matches nothing.
+  if (defined.length === 0 && uncategorised.length === 0 && query) {
+    _resultsEl.appendChild(buildTagsNotice(`No tags match "${query}"`));
+    return;
+  }
+
+  // EC-17: index still loading — show advisory notice above defined tags.
+  // Only shown when there are defined tags to display (otherwise the no-tags state fires).
+  if (index === null && defined.length > 0) {
+    const notice = buildTagsNotice(
+      "Index still loading — file counts may be incomplete"
+    );
+    notice.classList.add("cb-content-notice--warning");
+    _resultsEl.appendChild(notice);
+  }
+
+  // Section: DEFINED TAGS.
+  if (defined.length > 0) {
+    _resultsEl.appendChild(buildTagsSectionHeader("DEFINED TAGS"));
+    for (const row of defined) {
+      _resultsEl.appendChild(buildTagRow(row));
+    }
+  }
+
+  // Section: UNCATEGORISED (omit entirely when empty — FR-6).
+  if (uncategorised.length > 0) {
+    _resultsEl.appendChild(buildTagsSectionHeader("UNCATEGORISED"));
+    for (const row of uncategorised) {
+      _resultsEl.appendChild(buildTagRow(row));
+    }
+  }
+}
+
+/**
+ * Build a text-only notice element for empty states and informational messages.
+ *
+ * @param message - The text to display.
+ * @returns The notice div element.
+ */
+function buildTagsNotice(message: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "cb-content-notice";
+  el.textContent = message;
+  return el;
+}
+
+/**
+ * Build a section header element ("DEFINED TAGS" / "UNCATEGORISED").
+ *
+ * @param label - Header text (displayed in uppercase).
+ * @returns The section header div element.
+ */
+function buildTagsSectionHeader(label: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "cb-section-header";
+  el.textContent = label;
+  return el;
+}
+
+/**
+ * Build a tag row element for the tag browser.
+ *
+ * Clicking the header toggles inline expansion of the file list.
+ * Uncategorised rows show an "Add to meta" button on hover (FR-8).
+ * Clicking a file title opens the file and closes the bar.
+ *
+ * @param row - TagRow data (tag name, file list, defined flag).
+ * @returns The tag row container div element.
+ */
+function buildTagRow(row: TagRow): HTMLElement {
+  // Length justified: single-responsibility DOM builder for one tag row; the
+  // header and file-list sections share a closure over `row` and `_expandedTags`
+  // — splitting into sub-functions would require passing these as parameters
+  // with no readability gain.
+  const isExpanded = _expandedTags.has(row.tag);
+
+  const container = document.createElement("div");
+  container.className = "cb-tag-row" + (isExpanded ? " cb-tag-row--expanded" : "");
+  container.setAttribute("data-tag", row.tag);
+
+  // ── Header line ────────────────────────────────────────────────────────────
+  const header = document.createElement("div");
+  header.className = "cb-tag-row-header";
+
+  // Chevron icon indicates expand/collapse state.
+  const chevron = document.createElement("span");
+  chevron.className = "cb-tag-row-chevron";
+  chevron.textContent = isExpanded ? "▾" : "▸";
+  chevron.setAttribute("aria-hidden", "true");
+
+  const tagName = document.createElement("span");
+  tagName.className = "cb-tag-row-name";
+  tagName.textContent = row.tag;
+
+  const count = document.createElement("span");
+  count.className = "cb-tag-row-count";
+  count.textContent = `${row.files.length} file${row.files.length === 1 ? "" : "s"}`;
+
+  header.appendChild(chevron);
+  header.appendChild(tagName);
+  header.appendChild(count);
+
+  // "Add to meta" button — only on uncategorised rows (FR-8).
+  // Visible on row header hover via CSS; hidden by default.
+  if (!row.defined) {
+    const addBtn = document.createElement("button");
+    addBtn.className = "cb-tag-add-btn";
+    addBtn.textContent = "Add to meta";
+    addBtn.title = `Add "${row.tag}" to the tags vocabulary`;
+    addBtn.addEventListener("click", (e) => {
+      // Prevent the click from also toggling the row expansion.
+      e.stopPropagation();
+      void handleAddToMeta(row.tag);
+    });
+    header.appendChild(addBtn);
+  }
+
+  container.appendChild(header);
+
+  // ── File list (expanded state) ─────────────────────────────────────────────
+  if (isExpanded && row.files.length > 0) {
+    const fileList = document.createElement("div");
+    fileList.className = "cb-tag-files";
+    for (const file of row.files) {
+      const fileRow = document.createElement("div");
+      fileRow.className = "cb-tag-file-row";
+      fileRow.textContent = file.title;
+      fileRow.title = file.path;
+      fileRow.setAttribute("role", "button");
+      fileRow.setAttribute("tabindex", "0");
+      fileRow.addEventListener("click", () => {
+        openFileFromTagBrowser(file.path);
+      });
+      fileRow.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openFileFromTagBrowser(file.path);
+        }
+      });
+      fileList.appendChild(fileRow);
+    }
+    container.appendChild(fileList);
+  } else if (isExpanded && row.files.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "cb-tag-files cb-tag-files--empty";
+    empty.textContent = "No files with this tag";
+    container.appendChild(empty);
+  }
+
+  // Toggle expansion on header click.
+  header.addEventListener("click", () => {
+    if (_expandedTags.has(row.tag)) {
+      _expandedTags.delete(row.tag);
+    } else {
+      _expandedTags.add(row.tag);
+    }
+    // Re-render the tags view to reflect the new expansion state.
+    if (_inputEl) renderTagsMode(_inputEl.value.trim());
+  });
+
+  return container;
+}
+
+/**
+ * Open a file from the tag browser and close the Command Bar.
+ *
+ * Delegates to window.__MARKABLE_HANDLE_ACTION__ which is the same dispatch
+ * path used by the file browser and content search result activation.
+ *
+ * @param filePath - Absolute path to the file to open.
+ */
+function openFileFromTagBrowser(filePath: string): void {
+  closeBar();
+  const tm: any = (window as any).__MARKABLE_TAB_MANAGER__;
+  if (tm && typeof tm.openFileInTab === "function") {
+    void tm.openFileInTab(filePath);
+  }
+}
+
+/**
+ * Append `tag` to the vault tags meta file and update the in-memory meta store.
+ *
+ * Write-then-update pattern (AD-7):
+ *  1. Read the current meta file content (or start fresh if absent — FR-1).
+ *  2. Append the new bullet item.
+ *  3. Call write_file via __TAURI_INTERNALS__.
+ *  4. On failure: log warning and leave in-memory state unchanged (EC-14).
+ *  5. On success: update window.__MARKABLE_META__.tags, re-render the tag browser.
+ *
+ * The IIFE cannot import ES modules, so path construction is inlined using the
+ * same sanitise logic as meta-manager.ts (duplicated intentionally — see AD-2).
+ *
+ * @param tag - The tag value to add to the vocabulary.
+ */
+async function handleAddToMeta(tag: string): Promise<void> {
+  // Guard: __TAURI_INTERNALS__ is unavailable in test environments and when
+  // the plugin is loaded outside a Tauri WebView (e.g. Vitest). Bail early
+  // rather than throwing a cryptic TypeError deep in the function (M-2).
+  if (!(window as any).__TAURI_INTERNALS__?.invoke) {
+    console.warn("[handleAddToMeta] __TAURI_INTERNALS__ unavailable");
+    return;
+  }
+
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vault = vm?.getActiveVault?.();
+  if (!vault) return;
+
+  const meta: any = (window as any).__MARKABLE_META__;
+
+  // Inline sanitise: mirrors sanitiseVaultName() from meta-manager.ts (AD-5).
+  // The IIFE cannot import ES modules, so this one-liner is duplicated intentionally.
+  // eslint-disable-next-line no-control-regex
+  const safeName: string = vault.name.replace(/[/:\x00]/g, "_");
+  const root: string = vault.rootPaths[0];
+  const metaFilePath = `${root}/${safeName}_meta/${safeName}_tags.md`;
+
+  // Read existing content (or use initial heading if file doesn't exist yet).
+  let existingContent = "# Tags\n";
+  try {
+    const readResult = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+      "read_file", { path: metaFilePath }
+    );
+    if (typeof readResult === "string") {
+      existingContent = readResult;
+    }
+  } catch {
+    // File does not exist yet — start with the initial heading (FR-1).
+  }
+
+  // Defensive: tag should not already be in meta (race condition guard).
+  const currentTags: string[] = meta?.tags ?? [];
+  if (currentTags.includes(tag)) {
+    // Tag already in vocabulary (race condition). Re-render to reflect current state.
+    if (_inputEl) renderTagsMode(_inputEl.value.trim());
+    return;
+  }
+
+  const newContent = existingContent.trimEnd() + "\n- " + tag + "\n";
+  const metaDirPath = `${root}/${safeName}_meta`;
+
+  // Ensure the meta folder exists before writing (FR-1: on-demand creation).
+  // write_file rejects missing parent directories, so ensure_directory must run first.
+  try {
+    await (window as any).__TAURI_INTERNALS__.invoke("ensure_directory", {
+      path: metaDirPath,
+    });
+  } catch (err) {
+    console.warn("[handleAddToMeta] ensure_directory failed:", err);
+    return;
+  }
+
+  // Write the updated meta file. On failure, do NOT update in-memory state (EC-14).
+  let writeOk = false;
+  try {
+    await (window as any).__TAURI_INTERNALS__.invoke("write_file", {
+      path: metaFilePath,
+      content: newContent,
+    });
+    writeOk = true;
+  } catch (err) {
+    console.warn("[handleAddToMeta] write_file failed:", err);
+  }
+
+  if (!writeOk) {
+    // EC-14: do NOT update in-memory state; tag stays in Uncategorised section.
+    return;
+  }
+
+  // Success: update in-memory meta store so the tag moves to Defined immediately
+  // without waiting for the file watcher hot-reload (AD-7).
+  if ((window as any).__MARKABLE_META__) {
+    (window as any).__MARKABLE_META__.tags = [...currentTags, tag];
+  }
+
+  // Re-render so the tag moves from Uncategorised to Defined section.
+  if (_inputEl) renderTagsMode(_inputEl.value.trim());
+}
+
 /**
  * Filter _fileModeResults against the current query and render via renderFilesResults().
  * Called by filterAndRender() when _mode === "files".
@@ -3316,6 +3824,13 @@ function filterAndRender(query: string): void {
     return;
   }
 
+  // Tags mode has its own custom render path — bypasses the _allResults pipeline
+  // because it reads directly from window globals rather than a pre-built list (AD-6).
+  if (_mode === "tags") {
+    renderTagsMode(query);
+    return;
+  }
+
   // ── Commands / Keybindings mode pipeline ────────────────────────────────
   // Keybindings mode uses renderKeybindingResults (typed for KeybindingResult);
   // commands mode uses renderResults (typed for CommandBarResult).
@@ -3406,6 +3921,11 @@ function openBar(mode?: BarMode): void {
         filterAndRenderFiles("");
         const capturedGeneration = _openGeneration;
         void fetchWorkspaceFiles(capturedGeneration);
+      } else if (targetMode === "tags") {
+        // Switching INTO tags mode: clear expanded state, bypass _allResults pipeline.
+        _expandedTags.clear(); // EC-16: collapse all rows when switching to tags mode
+        _allResults = [];
+        renderTagsMode("");
       } else {
         // Switching INTO commands/keybindings mode: rebuild _allResults.
         // Files mode uses a separate pipeline (_fileModeResults); commands/keybindings
@@ -3471,6 +3991,13 @@ function openBar(mode?: BarMode): void {
     // and silently drop stale results (EC-28).
     const capturedGeneration = _openGeneration;
     void fetchWorkspaceFiles(capturedGeneration);
+  } else if (targetMode === "tags") {
+    // ── Tags mode: synchronous render from window globals (NFR-2) ─────────────
+    // No _allResults pipeline needed — renderTagsMode reads __MARKABLE_META__ and
+    // __MARKABLE_VAULT_MANAGER__ synchronously on every call (AD-6).
+    _expandedTags.clear(); // EC-16: start with all rows collapsed on fresh open
+    _allResults = [];
+    renderTagsMode("");
   } else {
     // ── Commands / Keybindings mode: synchronous build ────────────────────────
     // Rebuild results fresh on every open (reflects current plugin/keybinding state).
@@ -3548,6 +4075,8 @@ function closeBar(): void {
   _isOpen = false;
   // FR-01.9: always reset to files mode on close so the next open is predictable.
   _mode = "files";
+  // EC-16: clear expanded tag rows so re-opening tags mode starts fully collapsed.
+  _expandedTags.clear();
   closeCommandBar(_overlayEl, _inputEl);
   _selectedId = null;
   _visibleResults = [];
@@ -3722,9 +4251,9 @@ function onOverlayKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd-1/2/3/4: switch to the tab at that position (only active inside the bar).
+  // Cmd-1/2/3/4/5: switch to the tab at that position (only active inside the bar).
   if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
-    const tabIndex = ["1", "2", "3", "4"].indexOf(e.key);
+    const tabIndex = ["1", "2", "3", "4", "5"].indexOf(e.key);
     if (tabIndex !== -1) {
       e.preventDefault();
       e.stopPropagation();
@@ -4082,6 +4611,8 @@ export default {
     // Reset content search state (Step 03).
     _contentSearchGeneration++;
     _contentSearchInFlight = false;
+    // Reset tags mode state (Step Vault Meta).
+    _expandedTags.clear();
     // Reset key-capture state (Step 04).
     _captureViewEl       = null;
     _capturingFor        = null;

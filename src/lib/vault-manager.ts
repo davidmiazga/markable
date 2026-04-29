@@ -151,6 +151,8 @@ async function buildAndCacheIndex(vault: VaultEntry): Promise<VaultIndex> {
     rootPaths: vault.rootPaths,
     excludePatterns: vault.excludePatterns,
     maxCount: vault.maxIndexSize,
+    // Pass vault name so the Rust command can exclude {name}_meta/ from the walk (FR-4).
+    vaultName: vault.name,
   });
 
   const index: VaultIndex = {

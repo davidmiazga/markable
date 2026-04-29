@@ -201,6 +201,31 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     true
 }
 
+/// Replace filesystem-unsafe characters in a vault name with `_`.
+///
+/// Matches the TypeScript `sanitiseVaultName()` in meta-manager.ts exactly.
+/// Affected characters: `/` (path separator), `:` (HFS+ reserved), null byte `\0`.
+/// Used to construct the meta folder component for exclusion during index build.
+fn sanitise_vault_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if matches!(c, '/' | ':' | '\0') { '_' } else { c })
+        .collect()
+}
+
+/// Return true if any vault-relative path component equals `meta_folder_component`.
+///
+/// `meta_folder_component` is the pre-computed string `"{sanitised_name}_meta"`.
+/// This exact-component match (not substring) prevents false positives for
+/// directory names like `Work Notes_meta_backup` (EC-11 pattern).
+///
+/// Called inside `build_vault_index` walk loop to filter out meta folder files
+/// (FR-4 / NFR-6).
+fn is_meta_folder_component(rel_path: &Path, meta_folder_component: &str) -> bool {
+    rel_path.components().any(|c| {
+        c.as_os_str().to_string_lossy().as_ref() == meta_folder_component
+    })
+}
+
 /// Return true if any component of `rel_path` (relative to the vault root)
 /// matches any exclude pattern or starts with `.` (hidden).
 ///
@@ -596,6 +621,7 @@ pub fn switch_vault(_id: String) -> Result<(), String> {
 ///
 /// Stops adding entries once `entries.len() == max_count` (capped=true). Hidden
 /// files and directories, and paths matching `exclude_patterns`, are skipped.
+/// Files inside `{sanitised_vault_name}_meta/` are excluded (FR-4 / NFR-6).
 /// Files that cannot be read are counted in `skipped_count`.
 #[tauri::command]
 pub async fn build_vault_index(
@@ -603,6 +629,7 @@ pub async fn build_vault_index(
     root_paths: Vec<String>,
     exclude_patterns: Vec<String>,
     max_count: u32,
+    vault_name: String,
 ) -> Result<VaultIndexPayload, String> {
     let max = max_count as usize;
     let mut entries: Vec<VaultIndexEntry> = Vec::new();
@@ -610,6 +637,11 @@ pub async fn build_vault_index(
     let mut total_files_found: u32 = 0;
     let mut skipped_count: u32 = 0;
     let mut capped = false;
+
+    // Pre-compute the meta folder component name once (e.g. "Work Notes_meta").
+    // This avoids recomputing it on every file during the walk (FR-4).
+    let sanitised_name = sanitise_vault_name(&vault_name);
+    let meta_component = format!("{}_meta", sanitised_name);
 
     let built_at = system_time_to_ms(SystemTime::now());
 
@@ -641,6 +673,12 @@ pub async fn build_vault_index(
             // under the user's control and must not trigger the hidden-dir filter).
             let rel = path.strip_prefix(root_path).unwrap_or(path);
             if should_exclude(rel, &exclude_patterns) {
+                continue;
+            }
+
+            // FR-4 / NFR-6: exclude all files inside the vault meta folder so they
+            // never appear in search results, backlinks, or wiki-link completions.
+            if is_meta_folder_component(rel, &meta_component) {
                 continue;
             }
 
@@ -772,6 +810,10 @@ pub fn delete_vault(app: tauri::AppHandle, id: String) -> Result<(), String> {
 /// (no content parsing). Respects `exclude_patterns` and `max_count`.
 /// Used for incremental staleness checking.
 ///
+/// `vault_name` is required (H-1): the same `is_meta_folder_component` guard
+/// used in `build_vault_index` is applied here so that meta folder files are
+/// never included in staleness checks or other callers of this command.
+///
 /// Declared `async` for consistency with other I/O commands (`build_vault_index`,
 /// `get_vault_index`, `save_vault_index`) that touch the filesystem (NEW-4 fix).
 #[tauri::command]
@@ -779,9 +821,15 @@ pub async fn list_vault_files(
     root_paths: Vec<String>,
     exclude_patterns: Vec<String>,
     max_count: u32,
+    vault_name: String,
 ) -> Result<Vec<FileEntry>, String> {
     let max = max_count as usize;
     let mut results: Vec<FileEntry> = Vec::new();
+
+    // Pre-compute the meta folder component once, mirroring build_vault_index
+    // (H-1: list_vault_files must exclude the meta folder for the same reason).
+    let sanitised_name = sanitise_vault_name(&vault_name);
+    let meta_component = format!("{}_meta", sanitised_name);
 
     for root in &root_paths {
         let root_path = Path::new(root);
@@ -805,7 +853,24 @@ pub async fn list_vault_files(
 
             let path = entry.path();
             let rel = path.strip_prefix(root_path).unwrap_or(path);
+
             if should_exclude(rel, &exclude_patterns) {
+                continue;
+            }
+
+            // H-1: skip all entries inside the vault meta folder so it never
+            // appears in staleness checks or file-browser listing.
+            if entry.file_type().is_dir() && is_meta_folder_component(rel, &meta_component) {
+                // Skip the directory entry itself. WalkDir does not prune traversal
+                // on `continue` (only filter_entry() does), so file entries inside
+                // the meta folder are caught by the second check below.
+                continue;
+            }
+            // Also skip non-directory entries that live inside the meta folder
+            // (the directory skip above does not prune WalkDir traversal here
+            // because we are not using into_iter().filter_entry(); we must check
+            // every entry individually).
+            if is_meta_folder_component(rel, &meta_component) {
                 continue;
             }
 
@@ -1411,6 +1476,7 @@ mod tests {
             vec![dir.path().to_string_lossy().to_string()],
             vec![],
             500,
+            "Test Vault".to_string(),
         )
         .await
         .unwrap();
@@ -1438,6 +1504,7 @@ mod tests {
             vec![dir.path().to_string_lossy().to_string()],
             vec![],
             3,
+            "Cap Vault".to_string(),
         )
         .await
         .unwrap();
@@ -1460,6 +1527,7 @@ mod tests {
             vec![dir.path().to_string_lossy().to_string()],
             vec![],
             500,
+            "Hidden Vault".to_string(),
         )
         .await
         .unwrap();
@@ -1481,6 +1549,7 @@ mod tests {
             vec![dir.path().to_string_lossy().to_string()],
             vec!["node_modules".to_string()],
             500,
+            "Pattern Vault".to_string(),
         )
         .await
         .unwrap();
@@ -1497,6 +1566,7 @@ mod tests {
             vec![dir.path().to_string_lossy().to_string()],
             vec![],
             500,
+            "Empty Vault".to_string(),
         )
         .await
         .unwrap();
@@ -1504,6 +1574,178 @@ mod tests {
         assert_eq!(result.entries.len(), 0);
         assert_eq!(result.total_files_found, 0);
         assert!(!result.capped);
+    }
+
+    // ── Meta system tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sanitise_vault_name_replaces_colon() {
+        assert_eq!(sanitise_vault_name("Work: Notes"), "Work_ Notes");
+    }
+
+    #[test]
+    fn sanitise_vault_name_replaces_slash() {
+        assert_eq!(sanitise_vault_name("Notes/2024"), "Notes_2024");
+    }
+
+    #[test]
+    fn sanitise_vault_name_replaces_null_byte() {
+        assert_eq!(sanitise_vault_name("Note\x00s"), "Note_s");
+    }
+
+    #[test]
+    fn sanitise_vault_name_no_change_for_safe_name() {
+        assert_eq!(sanitise_vault_name("Work Notes"), "Work Notes");
+    }
+
+    #[test]
+    fn sanitise_vault_name_handles_unicode() {
+        // EC-18: unicode characters are safe filesystem characters; not replaced.
+        assert_eq!(sanitise_vault_name("日本語"), "日本語");
+    }
+
+    #[test]
+    fn sanitise_vault_name_replaces_multiple_unsafe_chars() {
+        // EC-18: "Work: Notes/2024" → "Work_ Notes_2024"
+        assert_eq!(sanitise_vault_name("Work: Notes/2024"), "Work_ Notes_2024");
+    }
+
+    #[test]
+    fn is_meta_folder_component_detects_meta_dir() {
+        let path = Path::new("Work Notes_meta/Work Notes_tags.md");
+        assert!(is_meta_folder_component(path, "Work Notes_meta"));
+    }
+
+    #[test]
+    fn is_meta_folder_component_detects_meta_dir_nested() {
+        // File nested two levels inside the meta folder.
+        let path = Path::new("Work Notes_meta/subdir/file.md");
+        assert!(is_meta_folder_component(path, "Work Notes_meta"));
+    }
+
+    #[test]
+    fn is_meta_folder_component_does_not_match_regular_dir() {
+        let path = Path::new("notes/Work Notes_tags.md");
+        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+    }
+
+    #[test]
+    fn is_meta_folder_component_does_not_match_partial_name() {
+        // A folder named "Work Notes_meta_old" must NOT match — exact component only.
+        let path = Path::new("Work Notes_meta_old/file.md");
+        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+    }
+
+    // ── list_vault_files ──────────────────────────────────────────────────────
+
+    /// H-1: list_vault_files with a vault that has a `{name}_meta/` folder must
+    /// not include any files from inside that folder in its results.
+    #[tokio::test]
+    async fn list_vault_files_excludes_meta_folder() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+
+        // Regular note — must be included.
+        fs::write(dir.path().join("visible.md"), "# Visible\n").unwrap();
+
+        // Meta folder and a file inside it — must be excluded.
+        let meta_dir = dir.path().join("Test Vault_meta");
+        fs::create_dir(&meta_dir).unwrap();
+        fs::write(meta_dir.join("Test Vault_tags.md"), "# Tags\n- alpha\n").unwrap();
+
+        let result = list_vault_files(
+            vec![root],
+            vec![],
+            500,
+            "Test Vault".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Only visible.md (and possibly the meta dir entry itself) should appear.
+        // No file whose path contains the meta folder name must appear.
+        let has_meta_file = result.iter().any(|e| e.path.contains("Test Vault_meta"));
+        assert!(
+            !has_meta_file,
+            "list_vault_files must not return files inside the meta folder (H-1)"
+        );
+
+        let has_visible = result.iter().any(|e| e.name == "visible.md");
+        assert!(has_visible, "visible.md must be included in results");
+    }
+
+    #[test]
+    fn is_meta_folder_component_does_not_match_parent_dir_with_similar_name() {
+        // EC-11: a non-meta file whose path contains the meta folder name as a
+        // substring of a *different* component should not be excluded.
+        let path = Path::new("notes/Work Notes_meta_backup/file.md");
+        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+    }
+
+    // ── Integration: build_vault_index excludes meta folder ───────────────────
+
+    #[tokio::test]
+    async fn build_vault_index_excludes_meta_folder_files() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+
+        // Regular note — should be indexed.
+        let note_path = dir.path().join("my-note.md");
+        fs::write(&note_path, "# My Note\n").unwrap();
+
+        // Meta folder file — must NOT be indexed (FR-4, NFR-6).
+        let meta_dir = dir.path().join("Test Vault_meta");
+        fs::create_dir(&meta_dir).unwrap();
+        let meta_file = meta_dir.join("Test Vault_tags.md");
+        fs::write(&meta_file, "# Tags\n- alpha\n").unwrap();
+
+        let result = build_vault_index(
+            "vault-1".to_string(),
+            vec![root],
+            vec![],
+            100,
+            "Test Vault".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Only my-note.md should appear.
+        assert_eq!(result.entries.len(), 1, "meta folder files must be excluded");
+        assert!(result.entries[0].path.ends_with("my-note.md"));
+    }
+
+    #[tokio::test]
+    async fn build_vault_index_does_not_exclude_similarly_named_dirs() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+
+        // File in a dir that has a similar but non-exact name — must NOT be excluded.
+        let similar_dir = dir.path().join("Test Vault_meta_backup");
+        fs::create_dir(&similar_dir).unwrap();
+        let file = similar_dir.join("note.md");
+        fs::write(&file, "# Note\n").unwrap();
+
+        let result = build_vault_index(
+            "vault-1".to_string(),
+            vec![root],
+            vec![],
+            100,
+            "Test Vault".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // The file in "Test Vault_meta_backup" must be indexed (not the exact meta dir).
+        assert_eq!(result.entries.len(), 1);
     }
 }
 
