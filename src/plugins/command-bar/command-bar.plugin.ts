@@ -2563,6 +2563,9 @@ let _scannedVaultId: string | null = null;
 
 /** True while a scan_vault_tags call is in flight. */
 let _tagsLoading = false;
+
+/** Error message from the last failed scan_vault_tags call; null when last scan succeeded. */
+let _tagScanError: string | null = null;
 let _allResults: CommandBarResult[] = [];
 let _visibleResults: CommandBarResult[] = [];
 let _selectedId: string | null = null;
@@ -3299,6 +3302,7 @@ function loadScannedTags(): void {
   if (_tagsLoading) return;
 
   _tagsLoading = true;
+  _tagScanError = null;
 
   tauri
     .invoke("scan_vault_tags", {
@@ -3309,11 +3313,15 @@ function loadScannedTags(): void {
     .then((entries: Array<{ tag: string; filePaths: string[]; count: number }>) => {
       _scannedTags = entries;
       _scannedVaultId = vault.id;
+      _tagScanError = null;
     })
     .catch((err: unknown) => {
-      console.warn("[loadScannedTags] scan_vault_tags failed:", err);
-      _scannedTags = [];
+      const msg = String(err);
+      console.warn("[loadScannedTags] scan_vault_tags failed:", msg);
+      // Store a sentinel so the error is shown in the UI rather than "No tags found".
+      _scannedTags = null;
       _scannedVaultId = vault.id;
+      _tagScanError = msg;
     })
     .finally(() => {
       _tagsLoading = false;
@@ -3473,6 +3481,23 @@ function renderTagsMode(query: string): void {
   const vault = vm.getActiveVault();
   if ((_scannedTags === null || _scannedVaultId !== vault?.id) && !_tagsLoading) {
     loadScannedTags();
+  }
+
+  // Show error if last scan failed (command not found, permission error, etc.).
+  if (_tagScanError !== null && _scannedTags === null && !_tagsLoading) {
+    const notice = buildTagsNotice(`Tag scan failed: ${_tagScanError}`);
+    notice.classList.add("cb-content-notice--warning");
+    _resultsEl.appendChild(notice);
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "cb-tag-add-all-btn";
+    retryBtn.style.margin = "8px 12px";
+    retryBtn.textContent = "Retry scan";
+    retryBtn.addEventListener("click", () => {
+      _scannedVaultId = null; // force re-scan
+      renderTagsMode(_inputEl?.value.trim() ?? "");
+    });
+    _resultsEl.appendChild(retryBtn);
+    return;
   }
 
   // Show loading spinner while first scan is in flight.
@@ -4887,6 +4912,7 @@ export default {
     _scannedTags    = null;
     _scannedVaultId = null;
     _tagsLoading    = false;
+    _tagScanError   = null;
     // Reset key-capture state (Step 04).
     _captureViewEl       = null;
     _capturingFor        = null;
