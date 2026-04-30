@@ -1165,7 +1165,7 @@ describe("Step 01 — Mode Infrastructure", () => {
     const tabs = strip!.querySelectorAll<HTMLButtonElement>(".cb-tab");
     expect(tabs.length).toBe(5);
     const modes = Array.from(tabs).map((t) => t.dataset.mode);
-    expect(modes).toEqual(["commands", "files", "keybindings", "content", "tags"]);
+    expect(modes).toEqual(["commands", "files", "content", "tags", "keybindings"]);
   });
 
   it("buildOverlayDOM returns element containing .cb-footer", () => {
@@ -3184,13 +3184,13 @@ describe("content mode", () => {
 
   // ── C-1: BarMode type includes "content" ─────────────────────────────────
 
-  it("C-1 (FR-5): BarMode type includes 'content' and MODE_CYCLE has it at position 3", () => {
+  it("C-1 (FR-5): BarMode type includes 'content' and MODE_CYCLE has it at position 2", () => {
     // Type-level check: the import compiles without error because "content" is a
-    // valid BarMode. The runtime check verifies MODE_CYCLE ordering (AD-GS-07).
-    // Tags mode was added in the Vault Meta step; content remains at position 3.
+    // valid BarMode. The runtime check verifies MODE_CYCLE ordering.
+    // Order: Commands(⌘1) · Files(⌘2) · Content(⌘3) · Tags(⌘4) · Keybindings(⌘5)
     const _m: BarMode = "content"; // compile-time — if this breaks, BarMode changed
     expect(_m).toBe("content");
-    expect(MODE_CYCLE).toEqual(["commands", "files", "keybindings", "content", "tags"]);
+    expect(MODE_CYCLE).toEqual(["commands", "files", "content", "tags", "keybindings"]);
   });
 
   // ── C-2: FR-6 — "/" in files mode switches to content mode ───────────────
@@ -3758,11 +3758,10 @@ describe("content mode", () => {
 
   // ── C-20: AD-GS-07 — MODE_CYCLE includes "content" at position 3 ─────────
 
-  it("C-20 (AD-GS-07): MODE_CYCLE is ['commands', 'files', 'keybindings', 'content', 'tags']", () => {
+  it("C-20 (AD-GS-07): MODE_CYCLE is ['commands', 'files', 'content', 'tags', 'keybindings']", () => {
     // Structural test: verifies the exported constant has the exact cycle order.
-    // Content at position 3 is accessed primarily via the '/' prefix (AD-GS-07).
-    // Tags at position 4 is accessed via ⌘5 (Vault Meta Tag Browser step).
-    expect(MODE_CYCLE).toEqual(["commands", "files", "keybindings", "content", "tags"]);
+    // ⌘1 Commands · ⌘2 Files · ⌘3 Content · ⌘4 Tags · ⌘5 Keybindings
+    expect(MODE_CYCLE).toEqual(["commands", "files", "content", "tags", "keybindings"]);
   });
 
   // ── C-21: NFR-5 — all Record<BarMode, string> constants include "content" ─
@@ -3773,11 +3772,12 @@ describe("content mode", () => {
     expect(MODE_PLACEHOLDERS.content).toBe("Search file contents…");
     expect(MODE_FOOTER_HINTS.content).toBe("Enter to search  ·  Esc to close");
     expect(MODE_BADGE_LABELS.content).toBe("Content");
-    expect(MODE_TAB_SHORTCUTS.content).toBe("⌘4");
-    // Verify all four tab shortcuts follow the ⌘1–⌘4 convention.
+    expect(MODE_TAB_SHORTCUTS.content).toBe("⌘3");
+    // Verify all five tab shortcuts follow the ⌘1–⌘5 convention.
     expect(MODE_TAB_SHORTCUTS.commands).toBe("⌘1");
     expect(MODE_TAB_SHORTCUTS.files).toBe("⌘2");
-    expect(MODE_TAB_SHORTCUTS.keybindings).toBe("⌘3");
+    expect(MODE_TAB_SHORTCUTS.tags).toBe("⌘4");
+    expect(MODE_TAB_SHORTCUTS.keybindings).toBe("⌘5");
   });
 
   // ── C-7b: H-2 — vault active but index null → Enter shows building notice ─

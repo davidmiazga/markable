@@ -255,22 +255,21 @@ export const MODE_BADGE_LABELS: Record<BarMode, string> = {
 
 /**
  * Cycle order for tab strip clicks (FR-08.3, AD-GS-07).
- * Content is appended at the end — accessed primarily via '/' prefix, not Tab cycling.
+ * ⌘1 Commands · ⌘2 Files · ⌘3 Content · ⌘4 Tags · ⌘5 Keybindings
  */
-export const MODE_CYCLE: BarMode[] = ["commands", "files", "keybindings", "content", "tags"];
+export const MODE_CYCLE: BarMode[] = ["commands", "files", "content", "tags", "keybindings"];
 
 /**
  * Shortcut hint glyphs shown next to each tab label.
  * Displayed in a muted, smaller font so power users can see the hotkey at a glance
  * without the glyph competing visually with the tab label (NFR-04 — no hardcoded hex).
- * Content mode shortcut is Cmd-Shift-G (⌘⇧G); also accessible via '/' prefix (FR-5).
  */
 export const MODE_TAB_SHORTCUTS: Record<BarMode, string> = {
   commands:    "⌘1",
   files:       "⌘2",
-  keybindings: "⌘3",
-  content:     "⌘4",
-  tags:        "⌘5",
+  content:     "⌘3",
+  tags:        "⌘4",
+  keybindings: "⌘5",
 };
 
 /** Id of the CSS style tag injected by injectCSS(). */
@@ -3464,9 +3463,32 @@ let _expandedTags = new Set<string>();
  *
  * @param query - Current input value (substring filter, case-insensitive).
  */
+
+/**
+ * Build a lightweight CommandBarResult stub for a tag header row.
+ * The action toggles expansion; the bar stays open (activateSelected guards this).
+ */
+function makeTagResult(id: string, tag: string, _query: string): CommandBarResult {
+  return {
+    id,
+    category: "commands",
+    label: tag,
+    dimmed: false,
+    action: () => {
+      if (_expandedTags.has(tag)) {
+        _expandedTags.delete(tag);
+      } else {
+        _expandedTags.add(tag);
+      }
+      renderTagsMode(_inputEl?.value.trim() ?? "");
+    },
+  };
+}
+
 function renderTagsMode(query: string): void {
   if (!_resultsEl) return;
   _resultsEl.innerHTML = "";
+  _visibleResults = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
@@ -3534,12 +3556,30 @@ function renderTagsMode(query: string): void {
     }
   }
 
+  // Helper: register a tag row + its expanded file rows into _visibleResults.
+  const registerTagRow = (row: TagRow) => {
+    const rowId = `tag-row:${row.tag}`;
+    _visibleResults.push(makeTagResult(rowId, row.tag, query));
+    _resultsEl!.appendChild(buildTagRow(row, _selectedId === rowId));
+    // When expanded, file rows are visible and should be arrow-key navigable.
+    if (_expandedTags.has(row.tag)) {
+      for (const file of row.files) {
+        const fileId = `tag-file:${file.path}`;
+        _visibleResults.push({
+          id: fileId,
+          category: "commands",
+          label: file.title,
+          dimmed: false,
+          action: () => openFileFromTagBrowser(file.path),
+        });
+      }
+    }
+  };
+
   // Section: DEFINED TAGS.
   if (defined.length > 0) {
     _resultsEl.appendChild(buildTagsSectionHeader("DEFINED TAGS"));
-    for (const row of defined) {
-      _resultsEl.appendChild(buildTagRow(row));
-    }
+    for (const row of defined) registerTagRow(row);
   }
 
   // Section: UNCATEGORISED — with "Add all" action button when vocab is empty.
@@ -3557,9 +3597,12 @@ function renderTagsMode(query: string): void {
       hdr.appendChild(addAllBtn);
     }
     _resultsEl.appendChild(hdr);
-    for (const row of uncategorised) {
-      _resultsEl.appendChild(buildTagRow(row));
-    }
+    for (const row of uncategorised) registerTagRow(row);
+  }
+
+  // If _selectedId is no longer in the visible set (e.g. query filtered it out), clear it.
+  if (_selectedId && !_visibleResults.some((r) => r.id === _selectedId)) {
+    _selectedId = null;
   }
 }
 
@@ -3627,7 +3670,7 @@ function buildConflictRow(group: SimilarGroup): HTMLElement {
  * @param row - TagRow data (tag name, file list, defined flag).
  * @returns The tag row container div element.
  */
-function buildTagRow(row: TagRow): HTMLElement {
+function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
   // Length justified: single-responsibility DOM builder for one tag row; the
   // header and file-list sections share a closure over `row` and `_expandedTags`
   // — splitting into sub-functions would require passing these as parameters
@@ -3640,7 +3683,8 @@ function buildTagRow(row: TagRow): HTMLElement {
 
   // ── Header line ────────────────────────────────────────────────────────────
   const header = document.createElement("div");
-  header.className = "cb-tag-row-header";
+  header.className = "cb-tag-row-header" + (isSelected ? " cb-result--selected" : "");
+  header.setAttribute("data-id", `tag-row:${row.tag}`);
 
   // Chevron icon indicates expand/collapse state.
   const chevron = document.createElement("span");
@@ -3682,20 +3726,16 @@ function buildTagRow(row: TagRow): HTMLElement {
     const fileList = document.createElement("div");
     fileList.className = "cb-tag-files";
     for (const file of row.files) {
+      const fileId = `tag-file:${file.path}`;
       const fileRow = document.createElement("div");
-      fileRow.className = "cb-tag-file-row";
+      fileRow.className = "cb-tag-file-row" + (_selectedId === fileId ? " cb-result--selected" : "");
+      fileRow.setAttribute("data-id", fileId);
       fileRow.textContent = file.title;
       fileRow.title = file.path;
       fileRow.setAttribute("role", "button");
       fileRow.setAttribute("tabindex", "0");
       fileRow.addEventListener("click", () => {
         openFileFromTagBrowser(file.path);
-      });
-      fileRow.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openFileFromTagBrowser(file.path);
-        }
       });
       fileList.appendChild(fileRow);
     }
@@ -4059,6 +4099,12 @@ function moveSelection(delta: 1 | -1): void {
   // Dispatch to the appropriate renderer based on the current mode.
   if (_mode === "keybindings") {
     renderKeybindingResults(_resultsEl, _visibleResults as unknown as KeybindingResult[], _inputEl.value, _selectedId);
+  } else if (_mode === "tags") {
+    // Tags mode manages its own DOM tree — just swap the selection class rather
+    // than discarding and rebuilding the entire expand/collapse structure.
+    _resultsEl.querySelectorAll<HTMLElement>("[data-id]").forEach((el) => {
+      el.classList.toggle("cb-result--selected", el.dataset.id === _selectedId);
+    });
   } else {
     renderResults(_resultsEl, _visibleResults, _inputEl.value, _selectedId);
   }
@@ -4391,7 +4437,8 @@ function activateSelected(): void {
   if (!result || result.dimmed) return;
 
   // In keybindings mode the action enters key-capture — do not close the bar.
-  if (_mode !== "keybindings") closeBar();
+  // In tags mode the action toggles row expansion — do not close the bar.
+  if (_mode !== "keybindings" && _mode !== "tags") closeBar();
   result.action();
 }
 

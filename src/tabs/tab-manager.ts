@@ -290,11 +290,22 @@ export class TabManager {
    *   - openNewTab() or openFileInTab() adds a tab and activates it
    */
   private _applyActiveTab(): void {
-    // Zero-tab guard: last tab was closed. Restore the editor view so the next
-    // file opened from the file browser is not obscured by the media viewer.
+    // Zero-tab guard: last tab was closed. Show a blank screen.
     if (this.tabs.length === 0) {
       this.editorContainer?.classList.remove("has-media-tab");
       if (this.mediaViewerEl) this.mediaViewerEl.innerHTML = "";
+      // Clear the editor and lock it — blank, non-editable empty state.
+      if (this.editorView) {
+        this.editorView.dispatch({
+          changes: { from: 0, to: this.editorView.state.doc.length, insert: "" },
+          effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
+        });
+      }
+      // Clear the title bar and current-file globals.
+      const titleEl = document.getElementById("titlebar-title");
+      if (titleEl) titleEl.textContent = "";
+      (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = null;
+      setLivePreviewFilePath(null);
       return;
     }
 
@@ -326,16 +337,17 @@ export class TabManager {
     (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] =
       tab.filePath;
 
-    // Replace doc text in one transaction. For file-backed tabs, include
-    // setViewMode.of(true) in the same transaction so the explicit effect
-    // takes priority over the selection change — viewModeField checks
-    // explicit effects first and short-circuits, preventing the selection
-    // from exiting preview mode on open (the original pre-tabs behavior).
+    // Replace doc text in one transaction. Re-enable editing (in case the
+    // zero-tab state locked the editor), and for file-backed tabs include
+    // setViewMode.of(true) so preview mode activates in the same transaction.
     // Untitled tabs start in edit mode so the user can type immediately.
     this.editorView.dispatch({
       changes: { from: 0, to: this.editorView.state.doc.length, insert: tab.doc },
       selection: { anchor: 0 },
-      effects: tab.filePath !== null ? setViewMode.of(true) : undefined,
+      effects: [
+        editableCompartment.reconfigure(EditorView.editable.of(true)),
+        ...(tab.filePath !== null ? [setViewMode.of(true)] : []),
+      ],
     });
 
     // Restore the scroll position the user was at when they last left this tab.

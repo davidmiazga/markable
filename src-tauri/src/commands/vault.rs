@@ -266,7 +266,41 @@ const SEARCH_MAX_FILE_BYTES: usize = 1_048_576; // 1 MB
 /// Parsed result of a Markdown file's front matter section.
 struct ParsedFrontMatter {
     title: Option<String>,
+    /// Values from the `tags:` field (plain, no prefix).
     tags: Vec<String>,
+    /// Values from all other browsable string fields, as `"field:value"` pairs.
+    /// Used by `scan_vault_tags` to surface arbitrary YAML fields in the tag browser.
+    field_tags: Vec<String>,
+}
+
+/// Fields that are standard document metadata — not browsable as categorical tags.
+const SKIP_TAG_FIELDS: &[&str] = &[
+    "title", "date", "created", "updated", "modified", "last-updated",
+    "id", "uuid", "url", "permalink", "aliases", "image", "cover",
+    "layout", "template", "weight", "published", "author",
+    "description", "excerpt", "summary",
+];
+
+/// Returns `true` when a YAML string value looks like a categorical tag
+/// (short, not a date, not a number, not a boolean, not a URL).
+fn looks_like_tag_value(value: &str) -> bool {
+    if value.is_empty() || value.len() > 80 {
+        return false;
+    }
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return false;
+    }
+    if value.parse::<f64>().is_ok() {
+        return false;
+    }
+    if matches!(value.to_ascii_lowercase().as_str(), "true" | "false" | "yes" | "no") {
+        return false;
+    }
+    // Looks like a date: all chars are digits, slashes, dashes, colons, or spaces.
+    if value.chars().all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | ':' | ' ')) {
+        return false;
+    }
+    true
 }
 
 /// Parse YAML front matter from `content` using a simple line-by-line state
@@ -297,18 +331,21 @@ fn parse_front_matter(content: &str) -> ParsedFrontMatter {
         return ParsedFrontMatter {
             title: extract_h1(content),
             tags: vec![],
+            field_tags: vec![],
         };
     }
 
     let mut title: Option<String> = None;
     let mut tags: Vec<String> = vec![];
+    let mut field_tags: Vec<String> = vec![];
     let mut in_front_matter = true;
     let mut reading_tags_block = false;
+    let mut current_field: Option<String> = None;
 
     for line in &lines[1..] {
         let trimmed = line.trim();
 
-        if trimmed == "---" {
+        if trimmed == "---" || trimmed == "..." {
             in_front_matter = false;
             break;
         }
@@ -316,44 +353,107 @@ fn parse_front_matter(content: &str) -> ParsedFrontMatter {
             break;
         }
 
-        // title:
-        if let Some(rest) = trimmed.strip_prefix("title:") {
-            let val = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-            if !val.is_empty() {
-                title = Some(val.to_string());
-            }
-            reading_tags_block = false;
-            continue;
-        }
+        // Detect any `key: value` or `key:` line (top-level fields only).
+        // Block sequence continuation lines start with `-` and no colon before it.
+        if let Some(colon_pos) = trimmed.find(':') {
+            let key = trimmed[..colon_pos].trim();
+            // Only process top-level keys: no leading whitespace in raw line.
+            if !line.starts_with(' ') && !line.starts_with('\t') && !key.is_empty() {
+                let rest = trimmed[colon_pos + 1..].trim();
 
-        // tags: [a, b] (inline)
-        if let Some(rest) = trimmed.strip_prefix("tags:") {
-            let rest_trimmed = rest.trim();
-            if rest_trimmed.starts_with('[') && rest_trimmed.ends_with(']') {
-                let inner = &rest_trimmed[1..rest_trimmed.len() - 1];
-                tags = inner
-                    .split(',')
-                    .map(|t| t.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect();
+                // title:
+                if key == "title" {
+                    let val = rest.trim_matches(|c| c == '"' || c == '\'');
+                    if !val.is_empty() {
+                        title = Some(val.to_string());
+                    }
+                    reading_tags_block = false;
+                    current_field = None;
+                    continue;
+                }
+
+                // tags: — special-cased to produce plain tag values (no field prefix).
+                if key == "tags" {
+                    if rest.starts_with('[') && rest.ends_with(']') {
+                        let inner = &rest[1..rest.len() - 1];
+                        tags = inner
+                            .split(',')
+                            .map(|t| t.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                        reading_tags_block = false;
+                    } else if rest.is_empty() {
+                        reading_tags_block = true;
+                        current_field = Some("tags".to_string());
+                        tags = vec![];
+                    } else {
+                        // Single value: `tags: project`
+                        let val = rest.trim_matches(|c| c == '"' || c == '\'');
+                        if !val.is_empty() {
+                            tags.push(val.to_string());
+                        }
+                        reading_tags_block = false;
+                    }
+                    continue;
+                }
+
+                // All other fields: collect simple string values as `field:value` tags.
+                if !SKIP_TAG_FIELDS.contains(&key) {
+                    if rest.is_empty() {
+                        // Possible block sequence for this field — track it.
+                        reading_tags_block = true;
+                        current_field = Some(key.to_string());
+                    } else if !rest.starts_with('[') && !rest.starts_with('{') {
+                        // Inline scalar value.
+                        let val = rest.trim_matches(|c| c == '"' || c == '\'');
+                        if looks_like_tag_value(val) {
+                            field_tags.push(format!("{}:{}", key, val));
+                        }
+                        reading_tags_block = false;
+                        current_field = None;
+                    } else if rest.starts_with('[') && rest.ends_with(']') {
+                        // Inline array for a non-tags field: extract each item.
+                        let inner = &rest[1..rest.len() - 1];
+                        for item in inner.split(',') {
+                            let val = item.trim().trim_matches(|c| c == '"' || c == '\'');
+                            if looks_like_tag_value(val) {
+                                field_tags.push(format!("{}:{}", key, val));
+                            }
+                        }
+                        reading_tags_block = false;
+                        current_field = None;
+                    }
+                    continue;
+                }
+
+                // Skip-field or unhandled — stop any in-progress block.
                 reading_tags_block = false;
-            } else if rest_trimmed.is_empty() {
-                // Block sequence begins on subsequent lines.
-                reading_tags_block = true;
-                tags = vec![];
+                current_field = None;
+                continue;
             }
-            continue;
         }
 
-        // Block sequence items `  - value`
+        // Block sequence item `  - value` belonging to the current field.
         if reading_tags_block {
             if let Some(item) = line.trim_start().strip_prefix("- ") {
-                let tag = item.trim().trim_matches(|c| c == '"' || c == '\'');
-                if !tag.is_empty() {
-                    tags.push(tag.to_string());
+                let val = item.trim().trim_matches(|c| c == '"' || c == '\'');
+                if !val.is_empty() {
+                    match current_field.as_deref() {
+                        Some("tags") | None => {
+                            if !val.is_empty() {
+                                tags.push(val.to_string());
+                            }
+                        }
+                        Some(field) => {
+                            if looks_like_tag_value(val) {
+                                field_tags.push(format!("{}:{}", field, val));
+                            }
+                        }
+                    }
                 }
             } else if !line.trim_start().starts_with('-') {
                 reading_tags_block = false;
+                current_field = None;
             }
         }
     }
@@ -363,7 +463,7 @@ fn parse_front_matter(content: &str) -> ParsedFrontMatter {
         title = extract_h1(content);
     }
 
-    ParsedFrontMatter { title, tags }
+    ParsedFrontMatter { title, tags, field_tags }
 }
 
 /// Scan `content` for the first Markdown H1 heading. Returns None if absent.
@@ -1240,10 +1340,18 @@ pub fn scan_vault_tags(
 
             let path_str = path.to_string_lossy().to_string();
 
-            // Source 1: front matter tags (re-uses existing parser).
+            // Source 1: front matter `tags:` field (plain values, no prefix).
             let fm = parse_front_matter(&content);
             for tag in fm.tags {
                 tag_files.entry(tag).or_default().push(path_str.clone());
+            }
+
+            // Source 1b: all other YAML fields as `field:value` pairs.
+            for field_tag in fm.field_tags {
+                let paths = tag_files.entry(field_tag).or_default();
+                if !paths.contains(&path_str) {
+                    paths.push(path_str.clone());
+                }
             }
 
             // Source 2: inline #hashtags from body text.
@@ -2387,5 +2495,36 @@ mod tag_scan_tests {
         .unwrap();
         assert_eq!(result[0].tag, "popular", "highest-count tag must be first");
         assert_eq!(result[0].count, 2);
+    }
+
+    #[test]
+    fn scan_collects_arbitrary_yaml_field_as_field_value() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "note.md", "---\ntype: draft\ndate: 04/18/26\n---\nBody text");
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
+        assert!(tags.contains(&"type:draft"), "type:draft must appear in tag scan");
+        // date value should be filtered out by looks_like_tag_value
+        assert!(!tags.iter().any(|t| t.starts_with("date:")), "date field must be excluded");
+    }
+
+    #[test]
+    fn scan_field_tags_inline_array() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "note.md", "---\ncategory: [design, ux]\n---\n");
+        let result = scan_vault_tags(
+            vec![dir.path().to_str().unwrap().to_string()],
+            vec![],
+            "test_vault".to_string(),
+        )
+        .unwrap();
+        let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
+        assert!(tags.contains(&"category:design"));
+        assert!(tags.contains(&"category:ux"));
     }
 }

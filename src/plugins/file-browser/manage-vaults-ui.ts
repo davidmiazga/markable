@@ -228,10 +228,14 @@ function buildNameField(vault: VaultEntry | null): {
  * The returned `paths` array is the live mutable list that the save handler
  * reads when the form is submitted.
  *
- * @param vault - Existing vault when editing; null when creating.
+ * @param vault        - Existing vault when editing; null when creating.
+ * @param onPathAdded  - Called after a path is successfully chosen via dialog.
  * @returns The field wrapper, the mutable paths array, and the inline error.
  */
-function buildPathsField(vault: VaultEntry | null): {
+function buildPathsField(
+  vault: VaultEntry | null,
+  onPathAdded?: () => void,
+): {
   field: HTMLElement;
   paths: string[];
   error: HTMLElement;
@@ -291,6 +295,7 @@ function buildPathsField(vault: VaultEntry | null): {
         if (chosen) {
           paths.push(chosen);
           refreshPaths();
+          onPathAdded?.();
         }
       } catch {
         // User cancelled or dialog failed — no-op.
@@ -549,8 +554,12 @@ function renderFormView(container: HTMLElement, vault: VaultEntry | null): void 
   const form = document.createElement("div");
   form.className = "vault-form";
 
+  // Mutable ref so the path-chosen callback can focus saveBtn once it exists.
+  let focusCreate: () => void = () => {};
+
   const { field: nameField, input: nameInput, error: nameError } = buildNameField(vault);
-  const { field: pathsField, paths: currentPaths, error: pathsError } = buildPathsField(vault);
+  const { field: pathsField, paths: currentPaths, error: pathsError } =
+    buildPathsField(vault, () => focusCreate());
   const { field: excludeField, textarea: excludeTextarea } = buildExcludeField(vault);
   const { field: sizeField, input: sizeInput } = buildMaxSizeField(vault);
 
@@ -566,8 +575,13 @@ function renderFormView(container: HTMLElement, vault: VaultEntry | null): void 
   form.appendChild(sizeField);
   container.appendChild(form);
 
-  container.appendChild(buildActions(vault, isEdit, nameInput, nameError,
-    currentPaths, pathsError, overlapWarning, excludeTextarea, sizeInput));
+  const actionsEl = buildActions(vault, isEdit, nameInput, nameError,
+    currentPaths, pathsError, overlapWarning, excludeTextarea, sizeInput);
+  container.appendChild(actionsEl);
+
+  // Wire the focus-create ref once the actions row (and its Create button) exist.
+  const saveBtn = actionsEl.querySelector<HTMLButtonElement>(".btn-primary");
+  if (saveBtn) focusCreate = () => saveBtn.focus();
 }
 
 /**
