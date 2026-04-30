@@ -223,7 +223,7 @@ function buildManageVaultsFooter(): HTMLElement {
   footer.className = "plugin-panel-footer";
 
   const btn = document.createElement("button");
-  btn.className = "plugin-panel-footer-btn";
+  btn.className = "btn btn-tertiary plugin-panel-footer-btn";
   btn.textContent = "Manage Vaults";
   btn.addEventListener("click", () => {
     closePluginsPanel();

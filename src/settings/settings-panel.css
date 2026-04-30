@@ -108,8 +108,10 @@
 }
 
 /* ── Button system ───────────────────────────────────────────────────────────
- * Two variants: primary (filled) and secondary (outline).
- * Both use --link-color as the brand/action color so they adapt to any theme.
+ * Three variants:
+ *   primary   — filled, link color.  The action the user clearly wants.
+ *   secondary — outline, link color. Paired alt/cancel alongside a primary.
+ *   tertiary  — outline, border color, muted text. Standalone utility action.
  * Use via buildButton() in settings-fields.ts or directly as CSS classes.
  * ────────────────────────────────────────────────────────────────────────── */
 
@@ -187,6 +189,23 @@
   background: color-mix(in srgb, var(--error-color, #c0392b) 15%, transparent);
 }
 
+/* Tertiary — neutral ghost for standalone utility actions */
+.btn-tertiary {
+  background: transparent;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.btn-tertiary:hover {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.btn-tertiary:active {
+  background: var(--code-bg);
+  filter: brightness(0.9);
+}
+
 /* Legacy aliases — keep existing callers working */
 .settings-btn {
   padding: 8px 16px;
@@ -210,7 +229,6 @@
 
 .settings-btn-reset {
   width: 100%;
-  color: var(--text-secondary);
 }
 
 /* Maximize checkbox row */

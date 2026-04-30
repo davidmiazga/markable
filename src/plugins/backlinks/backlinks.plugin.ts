@@ -2047,6 +2047,43 @@ export const _testing = {
   setActivePopoverEl(el: HTMLElement | null): void {
     _activePopoverEl = el;
   },
+
+  /**
+   * Call the module-private `resolveCreationPath` function.
+   * Exposed for unit tests only.
+   *
+   * @param rawTarget - Raw wiki-link target string.
+   * @param vaultRoot - Absolute vault root path (no trailing slash).
+   * @returns Absolute path for the new file (always ends in ".md").
+   */
+  resolveCreationPath(rawTarget: string, vaultRoot: string): string {
+    return resolveCreationPath(rawTarget, vaultRoot);
+  },
+
+  /**
+   * Call the module-private `createBrokenLinkPopoverElement` function.
+   * Exposed for unit tests only.
+   *
+   * @param displayStem       - Note title shown in the title row.
+   * @param vaultRelativePath - Vault-relative path shown in the path row.
+   * @returns Unattached popover element for the broken-link variant.
+   */
+  createBrokenLinkPopoverElement(
+    displayStem: string,
+    vaultRelativePath: string
+  ): HTMLElement {
+    return createBrokenLinkPopoverElement(displayStem, vaultRelativePath);
+  },
+
+  /**
+   * Call the module-private `_showInlinePopoverError` function.
+   * Exposed for unit tests only.
+   *
+   * @param message - Human-readable error string to display in the popover.
+   */
+  showInlinePopoverError(message: string): void {
+    _showInlinePopoverError(message);
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -2223,6 +2260,24 @@ const WIKI_POPOVER_CSS = `
   display: -webkit-box;
   -webkit-line-clamp: 7;
   -webkit-box-orient: vertical;
+}
+
+.wl-popover-create-btn {
+  margin-top: 8px;
+}
+
+.wl-popover-error-msg {
+  margin-top: 8px;
+  font-size: 11px;
+  /*
+   * HIGH-2: --color-error is not defined anywhere in the codebase, making
+   * the hardcoded fallback #c0392b permanently active (violates NFR-5).
+   * --link-broken-color IS defined (it drives the red wavy underline on
+   * broken wiki-links) and is semantically correct for this error state.
+   */
+  color: var(--link-broken-color);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 `;
 
@@ -2561,7 +2616,7 @@ export function positionPopover(
    * `style.left` assignment above already holds the correct final value.
    * Only `style.top` needs to be updated when flipping above the span.
    */
-  const estimatedHeight = 240; // matches CSS max-height
+  const estimatedHeight = 280; // increased for broken-link "Create note" button row
   if (top + estimatedHeight > window.innerHeight - margin) {
     top = rect.top - estimatedHeight - gap;
     if (top < margin) top = margin;
@@ -2618,6 +2673,224 @@ export function createPopoverElement(
   popoverEl.appendChild(excerptEl);
 
   return popoverEl;
+}
+
+// ---------------------------------------------------------------------------
+// Step 10: Wiki-Link Hover Popover — Broken-Link Creation Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the absolute filesystem path where a new note should be created.
+ *
+ * Rules (FR-2):
+ *  - No path prefix (e.g. "new idea")     → "{vaultRoot}/new idea.md"
+ *  - Path prefix (e.g. "folder/note")     → "{vaultRoot}/folder/note.md"
+ *  - Absolute path (leading "/")          → used verbatim, ".md" appended if absent
+ *  - Anchor suffix (e.g. "note#intro")    → anchor stripped before extension
+ *
+ * Preserves the author's capitalisation of the raw target text.
+ * Does NOT lowercase. The vault index lookup is case-insensitive so the
+ * decoration re-classifies the link as valid regardless of case.
+ *
+ * @param rawTarget  - Raw wiki-link target string (from data-wiki-target attribute).
+ * @param vaultRoot  - Absolute path of the vault root directory (no trailing slash).
+ * @returns Absolute path for the new file (always ends in ".md").
+ */
+function resolveCreationPath(rawTarget: string, vaultRoot: string): string {
+  // Strip #anchor suffix before constructing the filename (EC-15).
+  const withoutAnchor = rawTarget.includes("#")
+    ? rawTarget.slice(0, rawTarget.indexOf("#"))
+    : rawTarget;
+
+  // Ensure the path ends with ".md".
+  const withExt = withoutAnchor.endsWith(".md")
+    ? withoutAnchor
+    : withoutAnchor + ".md";
+
+  // Absolute path: return as-is (unusual but must not crash).
+  if (withExt.startsWith("/")) {
+    return withExt;
+  }
+
+  // Relative (with or without path prefix): always vault-root-relative (FR-2).
+  return vaultRoot + "/" + withExt;
+}
+
+/**
+ * Build the "Create note" variant popover element for a broken wiki-link.
+ *
+ * Analogous to `createPopoverElement` but shows the stem title, the resolved
+ * creation path, and a "Create note" button instead of a file excerpt.
+ *
+ * The returned element is NOT yet attached to the document. The caller
+ * is responsible for appending it, setting `_activePopoverEl`, and
+ * positioning it via `positionPopover`.
+ *
+ * @param displayStem       - The note title derived from the target (after
+ *                            stripping path prefix and anchor). Used as the
+ *                            title row text.
+ * @param vaultRelativePath - Vault-root-relative path where the file will be
+ *                            created (e.g. "folder/My Note.md"). Shown as the
+ *                            subtitle row so the user knows where the file lands.
+ * @returns A new `<div>` element with `data-markable-wiki-popover` attribute,
+ *          title, path, and a button row appended.
+ */
+function createBrokenLinkPopoverElement(
+  displayStem: string,
+  vaultRelativePath: string
+): HTMLElement {
+  const popoverEl = document.createElement("div");
+  popoverEl.setAttribute("data-markable-wiki-popover", "true");
+
+  const titleEl = document.createElement("div");
+  titleEl.className = "wl-popover-title";
+  titleEl.textContent = displayStem;
+
+  const pathEl = document.createElement("div");
+  pathEl.className = "wl-popover-path";
+  pathEl.textContent = vaultRelativePath;
+
+  const btnEl = document.createElement("button");
+  btnEl.className = "wl-popover-create-btn btn btn-primary";
+  btnEl.textContent = "Create note";
+  // type="button" prevents accidental form submission in any ancestor form.
+  btnEl.setAttribute("type", "button");
+
+  popoverEl.appendChild(titleEl);
+  popoverEl.appendChild(pathEl);
+  popoverEl.appendChild(btnEl);
+
+  return popoverEl;
+}
+
+/**
+ * Replace the "Create note" button in the active popover with an inline
+ * error message.
+ *
+ * Called when `ensure_directory` or `write_file` fails (FR-5). The popover
+ * remains open so the user can read the error. If no active popover exists
+ * (already dismissed) this is a no-op.
+ *
+ * @param message - Human-readable error string.
+ */
+function _showInlinePopoverError(message: string): void {
+  if (!_activePopoverEl) return;
+
+  const btn = _activePopoverEl.querySelector(".wl-popover-create-btn");
+  if (btn) {
+    const errEl = document.createElement("div");
+    errEl.className = "wl-popover-error-msg";
+    errEl.textContent = message;
+    btn.replaceWith(errEl);
+  }
+}
+
+/**
+ * Handle the "Create note" button click.
+ *
+ * Called from an event listener wired by `showWikiPopover` when the user
+ * clicks the button in the broken-link popover. Exported for test access.
+ *
+ * Steps:
+ *  1. Version guard — abort if the popover was dismissed while the click
+ *     event was in the browser queue (EC-11, NFR-4).
+ *  2. Null-guard the window globals (EC-2).
+ *  3. Call `ensure_directory` for the parent directory of the target path.
+ *     On error: show an inline error message inside the popover and return.
+ *  4. Call `write_file` with the initial content `# {displayStem}\n` (FR-3).
+ *     On error: show an inline error message inside the popover and return.
+ *  5. Fire-and-forget `reloadVaultIndex()` (FR-4 step 1).
+ *  6. Fire-and-forget `openFileInTab(absolutePath)` (FR-4 step 2).
+ *  7. Call `dismissWikiPopover()` (FR-4 step 3).
+ *
+ * @param absolutePath    - Resolved absolute path for the new file.
+ * @param displayStem     - Display title used as the H1 heading in the new file.
+ * @param capturedVersion - The `_hoverFetchVersion` value captured when the
+ *                          button was rendered. Used for EC-11 race safety.
+ */
+export async function handleCreateNoteClick(
+  absolutePath: string,
+  displayStem: string,
+  capturedVersion: number
+): Promise<void> {
+  // EC-11: abort if the popover was dismissed while this click was queued.
+  if (capturedVersion !== _hoverFetchVersion) return;
+
+  // EC-2: null-guard globals before use.
+  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const tabManager = (window as any).__MARKABLE_TAB_MANAGER__;
+
+  if (!vaultManager) {
+    console.warn(
+      "[backlinks] handleCreateNoteClick: __MARKABLE_VAULT_MANAGER__ missing"
+    );
+    return;
+  }
+
+  // Step 3: ensure parent directory exists (EC-8).
+  const parentDir = absolutePath.slice(0, absolutePath.lastIndexOf("/"));
+  if (parentDir) {
+    try {
+      await (window as any).__TAURI_INTERNALS__.invoke("ensure_directory", {
+        path: parentDir,
+      });
+    } catch (err) {
+      _showInlinePopoverError(`Could not create folder: ${err}`);
+      return;
+    }
+  }
+
+  // EC-11: re-check version after the first await.
+  if (capturedVersion !== _hoverFetchVersion) return;
+
+  // Step 4: write the new file atomically.
+  const initialContent = `# ${displayStem}\n`;
+  try {
+    await (window as any).__TAURI_INTERNALS__.invoke("write_file", {
+      path: absolutePath,
+      content: initialContent,
+    });
+  } catch (err) {
+    _showInlinePopoverError(`Could not create note: ${err}`);
+    return;
+  }
+
+  // EC-11: re-check version after the second await.
+  if (capturedVersion !== _hoverFetchVersion) return;
+
+  // Step 5: rebuild vault index (non-fatal, fire-and-forget).
+  /*
+   * HIGH-1: `try { void asyncFn() } catch` does NOT catch async rejections —
+   * the promise escapes the try block before it rejects.  Use .catch() instead
+   * so async errors are always handled regardless of microtask timing.
+   */
+  vaultManager.reloadVaultIndex?.()?.catch((err: unknown) => {
+    console.error(
+      "[backlinks] handleCreateNoteClick: reloadVaultIndex failed:",
+      err
+    );
+  });
+
+  // Step 6: open the new file in a tab (non-fatal, fire-and-forget).
+  if (!tabManager || typeof tabManager.openFileInTab !== "function") {
+    console.warn(
+      "[backlinks] handleCreateNoteClick: __MARKABLE_TAB_MANAGER__ missing or invalid"
+    );
+  } else {
+    /*
+     * HIGH-1: same async-rejection reason as reloadVaultIndex above.
+     * Use .catch() to ensure promise rejections are always surfaced.
+     */
+    tabManager.openFileInTab(absolutePath)?.catch((err: unknown) => {
+      console.error(
+        "[backlinks] handleCreateNoteClick: openFileInTab failed:",
+        err
+      );
+    });
+  }
+
+  // Step 7: dismiss the popover.
+  dismissWikiPopover();
 }
 
 // ---------------------------------------------------------------------------
@@ -2684,25 +2957,111 @@ export async function showWikiPopover(
   spanEl: HTMLElement,
   target: string
 ): Promise<void> {
-  /* Guard: plugin must be enabled (async callback safety). */
+  /* Guard: plugin must be enabled. */
   if (!_enabled) return;
+
+  /*
+   * Increment the fetch version BEFORE any branch so that dismissWikiPopover
+   * increments correctly for both broken and valid paths (NFR-4, EC-11).
+   * The local copy is compared against `_hoverFetchVersion` after each await
+   * to detect stale results from a superseded hover.
+   */
+  _hoverFetchVersion++;
+  const myVersion = _hoverFetchVersion;
+
+  // ── Broken-link path ──────────────────────────────────────────────────────
+
+  if (spanEl.classList.contains("cm-wiki-link-broken")) {
+    /*
+     * EC-1: no vault active — suppress the broken-link popover entirely.
+     * getActiveVault() is null when no vault folder has been opened.
+     * We read the vault root from the first entry in rootPaths (the canonical
+     * path the index was built from).
+     */
+    const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const vaultRoot: string | undefined =
+      vaultManager?.getActiveVault?.()?.rootPaths?.[0];
+
+    if (!vaultRoot) return;
+
+    /* Resolve the absolute creation path (FR-2). */
+    const absolutePath = resolveCreationPath(target, vaultRoot);
+
+    /* Derive the vault-relative path for the subtitle row. */
+    const vaultRelPath = absolutePath.startsWith(vaultRoot + "/")
+      ? absolutePath.slice(vaultRoot.length + 1)
+      : absolutePath;
+
+    /*
+     * Derive the display stem: strip path prefix and anchor from the raw
+     * target, preserving capitalisation (FR-3 title row).
+     */
+    const withoutAnchor = target.includes("#")
+      ? target.slice(0, target.indexOf("#"))
+      : target;
+    const slashIdx = withoutAnchor.lastIndexOf("/");
+    const displayStem =
+      slashIdx === -1 ? withoutAnchor : withoutAnchor.slice(slashIdx + 1);
+
+    /* Dismiss any previously visible popover (FR-4.4). */
+    dismissWikiPopover();
+
+    /*
+     * CRITICAL: capture clickVersion AFTER dismissWikiPopover() because
+     * dismissWikiPopover() increments _hoverFetchVersion.  Capturing before
+     * the dismiss would give clickVersion = N while _hoverFetchVersion = N+1,
+     * which would make the guard in handleCreateNoteClick always fire and
+     * permanently break the Create note button (EC-11).
+     */
+    const clickVersion = _hoverFetchVersion;
+
+    /* Build and attach the broken-link popover DOM. */
+    const brokenPopoverEl = createBrokenLinkPopoverElement(
+      displayStem,
+      vaultRelPath
+    );
+    document.body.appendChild(brokenPopoverEl);
+    _activePopoverEl = brokenPopoverEl;
+
+    /*
+     * Wire the button click to the creation handler.
+     * `clickVersion` is captured AFTER dismiss so it matches the current
+     * _hoverFetchVersion, allowing the guard inside handleCreateNoteClick
+     * to correctly detect only superseded (stale) invocations (EC-11).
+     */
+    const btn = brokenPopoverEl.querySelector(
+      ".wl-popover-create-btn"
+    ) as HTMLButtonElement | null;
+    if (btn) {
+      btn.addEventListener("click", () => {
+        void handleCreateNoteClick(absolutePath, displayStem, clickVersion);
+      });
+    }
+
+    /* Position and fade in (same pattern as valid-link popover). */
+    positionPopover(spanEl, brokenPopoverEl);
+    brokenPopoverEl.style.opacity = "0";
+    brokenPopoverEl.style.display = "block";
+    void brokenPopoverEl.offsetHeight; // force layout so WebKit transition works
+    brokenPopoverEl.style.transition = "opacity 100ms ease, transform 100ms ease";
+    brokenPopoverEl.style.opacity = "1";
+    brokenPopoverEl.style.transform = "translate(0, 0)";
+
+    return; // broken-link branch ends here
+  }
+
+  // ── Valid-link path (existing code, unchanged) ────────────────────────────
 
   /*
    * EC-07: an untitled (unsaved) document has no file path.
    * Without a current file we cannot resolve the wiki-link target.
+   * This guard only applies to the valid-link path — the broken-link path
+   * only needs the vault root, not the current file (EC-12).
    */
   const currentFile = (window as any).__MARKABLE_CURRENT_FILE__ as
     | string
     | null;
   if (!currentFile) return;
-
-  /*
-   * Race safety: increment the shared version counter and capture a local
-   * copy. If `_hoverFetchVersion` changes before the fetch resolves, the
-   * local copy will no longer match and the result will be discarded.
-   */
-  _hoverFetchVersion++;
-  const myVersion = _hoverFetchVersion;
 
   /* Resolve the absolute path from the current file's directory. */
   const resolvedPath = resolveWikiLinkPath(currentFile, target);

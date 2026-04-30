@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-04-28
+**Last Updated:** 2026-04-30
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -49,17 +49,23 @@
 - **Wiki-link visual decorations — broken link highlighting** — `[[wikilinks]]` whose target stem is absent from the vault index receive `cm-wiki-link-broken` class (red wavy underline via `--link-broken-color` CSS variable). `stemForLookup()` normalises targets: strips `#heading` anchors, explicit `.md` suffix, subdirectory prefix, lowercases. `forceRebuildEffect` `StateEffect` dispatched from `onVaultChanged`/`onIndexUpdated` subscriptions keeps decorations live when files are added/deleted. No-vault mode degrades gracefully (no decorations, no crash). Reviewer-caught anchor false-positive (`[[notes#heading]]` always broken) fixed. 28 new Vitest tests; code-reviewer approved 2026-04-28
 - **Global search — Command Bar integration** — Two improvements in one: (1) Cmd-P "files mode" now searches the full vault index instead of the current file's directory, giving correct vault-wide file results; (2) New "content" mode (`⌘⇧G` or `/` prefix in Files mode) performs full-text search across all vault `.md` files via new Rust `search_vault_content` command. Results grouped by file with up to 3 line excerpts and "N more" notice. `column_start` uses character offsets (not byte offsets) so excerpt highlighting is correct for non-ASCII content. Reviewer-caught bugs fixed: char vs byte offset mismatch, missing index-still-building guard, empty vault entries case, camelCase invoke args. Post-review: command bar mode tabs simplified to `⌘1`–`⌘4` (context-scoped, only active when bar is open — no conflicts with global shortcuts). 3037 Vitest tests + 148 Rust tests; code-reviewer approved 2026-04-29
 - **Vault meta system: tag browser (⌘5) + YAML vocabulary validation** — `{VaultName}_meta/` folder convention for user-defined field vocabularies. `⌘5` opens Tags mode in the command bar: front-matter and inline `#hashtag` tags collected into Defined / Uncategorised sections with file-count grouping, in-memory fuzzy filter, and "Add to meta" button that writes `{VaultName}_tags.md`. YAML pane chips show an outline warning when a value is not in the defined vocabulary (null vocab = no warnings). Meta folder excluded from vault index, search, and backlinks throughout via `is_meta_folder_component` guard in both `build_vault_index` and `list_vault_files`. `window.__MARKABLE_META__` global mirrors vault-manager pattern; hot-reload on file-watcher events. Reviewer-caught bugs fixed (two rounds): `openFileFromTagBrowser` used an unrecognized action (fixed to `__MARKABLE_TAB_MANAGER__.openFileInTab`), `handleAddToMeta` missing `ensure_directory` call before `write_file` (fails on first-time vault), WalkDir comment misleading, `buildTagRow` length-justification text inaccurate. 3101 Vitest tests + 162 Rust tests; code-reviewer approved 2026-04-28
+- **Universal YAML field scanning in tag browser** — `parse_front_matter` extended with `field_tags: Vec<String>` to surface ANY front-matter field (not just `tags:`) as `field:value` pairs in the tag browser (e.g. `type: draft` → `type:draft`). `SKIP_TAG_FIELDS` constant excludes standard metadata fields (title, date, id, url, etc.). `looks_like_tag_value()` heuristic filters dates, numbers, booleans, URLs, and long strings. `scan_vault_tags` extended to push `fm.field_tags` into the result map. 2 new Rust tests; 172 Rust tests total. 2026-04-30
+- **Command bar mode reordering** — Tab order changed to Commands (⌘1) · Files (⌘2) · Content (⌘3) · Tags (⌘4) · Keybindings (⌘5). `MODE_CYCLE` and `MODE_TAB_SHORTCUTS` updated; 4 test assertions updated. 2026-04-30
+- **Arrow key navigation in tag browser** — `renderTagsMode` now populates `_visibleResults` for all tag header rows. `buildTagRow` accepts `isSelected` and sets `data-id` + `cb-result--selected` on the header. `moveSelection` has a tags-mode branch (lightweight CSS class swap, no full re-render). `activateSelected` keeps the bar open in tags mode (Enter toggles expansion). Expanded file rows are also registered in `_visibleResults` with `data-id`, so ↓ navigates into them and Enter opens the file. 3101 Vitest tests. 2026-04-30
+- **Close last tab → blank non-editable screen** — `_applyActiveTab` 0-tab branch now dispatches an empty doc AND `editableCompartment.reconfigure(EditorView.editable.of(false))` to the editor, clears the title bar, and nulls `__MARKABLE_CURRENT_FILE__` / `setLivePreviewFilePath`. Normal tab activation re-enables editing in the same dispatch transaction. No window.close() when a vault is active. 2026-04-30
+- **Create Vault keyboard flow** — After the folder selection dialog closes and a path is added, focus automatically moves to the Create/Save button. `buildPathsField` accepts an `onPathAdded` callback; `renderFormView` wires a mutable closure ref to `saveBtn.focus()` after the actions row is built. Full keyboard flow: Tab to "+ Add Root Path" → Enter opens dialog → select folder → Enter submits → focus on Create → Enter submits. 2026-04-30
+- **Create note from broken wikilink** — Hovering a `cm-wiki-link-broken` span for 180 ms now shows a "Create note" popover variant (stem title, vault-relative path, button) instead of failing silently. Clicking the button calls `ensure_directory` + `write_file` (atomic), then `reloadVaultIndex` (decoration refresh via existing `forceRebuildEffect`) + `openFileInTab` + `dismissWikiPopover`. `clickVersion` captured after `dismissWikiPopover()` to fix a critical race where the button was permanently non-functional (guard always fired). CSS uses `--link-broken-color` for error state. 33 new Vitest tests; code-reviewer approved 2026-04-30.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-04-28.**
+**Session ended 2026-04-30.**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **66 files, 3101 passing, 39 skipped**. Rust: 162 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
+- Test suite: **67 files, 3134 passing, 39 skipped**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
 
 #### How to resume
@@ -69,11 +75,21 @@ None.
 4. Always run the **full agent pipeline**: requirements-analyst → software-architect → lead-developer → code-reviewer. Never skip phases.
 
 #### Suggested next features (PKM / File Browser focus)
-These align with the project direction (`memory/project_direction.md`): File Browser is the gateway to PKM.
+These align with the project direction: File Browser is the gateway to PKM.
 
 | Feature | Effort | Notes |
 |---------|--------|-------|
-| **Pinned tabs** — `pin()` / `unpin()` on TabManager; pinned tabs resist Cmd-W | Low | Tab context menu item already in place for "Pin Tab" |
+| **Create file / folder from file browser tree** | Low–Med | Critical gap — in-tree create; needed for PKM usability |
+| **Rename / delete from file browser tree** | Low–Med | In-tree right-click; backlink-update banner already handles renames |
+| **Pinned tabs** | Low | `pin()`/`unpin()` on TabManager; tab context menu hook already in place |
+| ~~**Create note from broken wikilink**~~ | ~~Low~~ | ~~Done 2026-04-30~~ |
+| **Outline panel (document headings)** | Low–Med | Sidebar H1–H6 tree; click to jump |
+| **Multi-file Find & Replace** | Med | Single-file done; `search_vault_content` Rust cmd already exists |
+| **Quick capture / inbox note** | Med | Global shortcut → scratch-pad → inbox folder |
+| **Drag files within vault tree** | Med | Move file between folders; triggers existing backlink-update banner |
+| **Starred / bookmarked files** | Low–Med | Pin files to "Starred" section at top of file browser |
+| **AI YAML injection** | High | Reads note, suggests + writes front-matter; requires AI API integration |
+| **DMG build + code signing** | Med | Deferred from Phase 1; `CI=true` workaround documented in `docs/build-notes/` |
 
 ---
 

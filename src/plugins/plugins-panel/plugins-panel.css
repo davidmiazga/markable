@@ -325,17 +325,4 @@
 }
 .plugin-panel-footer-btn {
   width: 100%;
-  padding: 7px 12px;
-  background: none;
-  border: 1px solid var(--border-color, rgba(128,128,128,.25));
-  border-radius: 6px;
-  font-family: var(--ui-font);
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.plugin-panel-footer-btn:hover {
-  background: var(--hover-bg, rgba(128,128,128,.08));
-  color: var(--text-primary);
 }

@@ -162,17 +162,16 @@ export function buildTextRow(
  * Variants:
  *   "primary"   — filled with --link-color background, white text.
  *   "secondary" — transparent background, --link-color border + text (outline).
- *
- * Both variants have hover, active, focus-visible, and disabled states defined
- * in settings-panel.css via .btn, .btn-primary, .btn-secondary.
+ *   "tertiary"  — transparent background, --border-color border, muted text.
+ *   "danger"    — transparent background, --error-color border + text.
  *
  * @param label    Button label text.
- * @param variant  "primary" | "secondary"
+ * @param variant  "primary" | "secondary" | "tertiary" | "danger"
  * @param onClick  Click handler.
  */
 export function buildButton(
   label: string,
-  variant: "primary" | "secondary" | "danger",
+  variant: "primary" | "secondary" | "tertiary" | "danger",
   onClick: () => void,
 ): HTMLButtonElement {
   const btn = document.createElement("button");

@@ -93,7 +93,7 @@ export function createSettingsPanel(): void {
             <div class="settings-content-width-row">
               <input type="text" class="settings-input settings-input-wide" id="settings-content-width-input"
                 placeholder="900px" />
-              <button class="settings-btn settings-btn-secondary settings-btn-inline" id="settings-content-width-reset">Reset</button>
+              <button class="btn btn-tertiary settings-btn-inline" id="settings-content-width-reset">Reset</button>
             </div>
             <p class="settings-description settings-description-tight">Supports px (e.g. 900px) or % (e.g. 80%). Default: 900px.</p>
           </div>
@@ -124,7 +124,7 @@ export function createSettingsPanel(): void {
         <div class="settings-section">
           <label class="settings-label">Recent Files</label>
           <p class="settings-description" id="settings-recent-count"></p>
-          <button class="settings-btn settings-btn-secondary" id="settings-clear-recent">
+          <button class="btn btn-tertiary" id="settings-clear-recent">
             Clear Recent Files
           </button>
         </div>
@@ -154,7 +154,7 @@ export function createSettingsPanel(): void {
         </div>
       </div>
       <div class="settings-footer">
-        <button class="settings-btn settings-btn-reset" id="settings-reset-defaults">
+        <button class="btn btn-tertiary settings-btn-reset" id="settings-reset-defaults">
           Reset All
         </button>
       </div>
