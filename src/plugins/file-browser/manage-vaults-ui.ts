@@ -582,6 +582,9 @@ function renderFormView(container: HTMLElement, vault: VaultEntry | null): void 
   // Wire the focus-create ref once the actions row (and its Create button) exist.
   const saveBtn = actionsEl.querySelector<HTMLButtonElement>(".btn-primary");
   if (saveBtn) focusCreate = () => saveBtn.focus();
+
+  // Auto-focus the name field so the user can start typing immediately.
+  requestAnimationFrame(() => nameInput.focus());
 }
 
 /**
