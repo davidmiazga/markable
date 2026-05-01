@@ -1554,44 +1554,54 @@ describe("delete file via context menu", () => {
   });
 });
 
-// ── HIGH-1: deleteDirectory tests (EC-20) ─────────────────────────────────────
+// ── HIGH-1: deleteDirectory tests (EC-10, EC-20) ──────────────────────────────
 
 describe("deleteDirectory", () => {
   /**
-   * Sets up a vault index where at least one file lives inside /notes/sub/,
-   * and provides a `closeFile` spy on the tab manager.
+   * Sets up a vault index and provides `closeFileByPath` / `getTabs` spies on
+   * the tab manager. The new implementation uses getTabs() to snapshot open
+   * tabs (not the vault index), then calls closeFileByPath per matched tab.
+   *
+   * `closeFileByPath` returns true (proceed) by default so tests that focus on
+   * the happy path are not affected by the abort logic.
    */
-  function setupForDeleteDir() {
+  function setupForDeleteDir(tabPaths: string[] = ["/notes/sub/child.md"]) {
     const vault = makeVault();
     const index = makeVaultIndex(["/notes/sub/child.md", "/notes/other.md"]);
     setupVaultManager(vault, index);
 
-    const closeFileSpy = vi.fn().mockResolvedValue(undefined);
+    const closeFileByPathSpy = vi.fn().mockResolvedValue(true);
+    const getTabsSpy = vi.fn().mockReturnValue(
+      tabPaths.map((p) => ({ filePath: p })),
+    );
     (window as any).__MARKABLE_TAB_MANAGER__ = {
       openFileInTab: vi.fn().mockResolvedValue(true),
-      closeFile: closeFileSpy,
+      closeFileByPath: closeFileByPathSpy,
+      getTabs: getTabsSpy,
     };
 
-    return { closeFileSpy };
+    return { closeFileByPathSpy, getTabsSpy };
   }
 
   it("happy path: confirm accepted → delete_directory invoked and tabs closed", async () => {
     /*
      * When the user confirms, deleteDirectory should:
-     *   1. Call closeFile for each file under the directory (EC-20).
-     *   2. Invoke delete_directory on the Rust side.
+     *   1. Snapshot open tabs via getTabs().
+     *   2. Call closeFileByPath for each open tab inside the directory.
+     *   3. Invoke delete_directory on the Rust side.
      */
-    const { closeFileSpy } = setupForDeleteDir();
+    const { closeFileByPathSpy } = setupForDeleteDir(["/notes/sub/child.md"]);
 
     const invokeMock = vi.fn().mockResolvedValue(undefined);
     (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
 
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
-    await deleteDirectory("/notes/sub");
+    const container = makeContainer();
+    await deleteDirectory("/notes/sub", container);
 
-    /* Tab manager's closeFile must be called for the file inside the dir. */
-    expect(closeFileSpy).toHaveBeenCalledWith("/notes/sub/child.md");
+    /* closeFileByPath must be called for the open tab inside the dir. */
+    expect(closeFileByPathSpy).toHaveBeenCalledWith("/notes/sub/child.md");
 
     /* delete_directory Tauri command must be invoked. */
     expect(invokeMock).toHaveBeenCalledWith("delete_directory", {
@@ -1603,45 +1613,49 @@ describe("deleteDirectory", () => {
 
   it("confirm rejected → delete_directory NOT called", async () => {
     /*
-     * When the user cancels the confirmation dialog, neither closeFile nor
-     * delete_directory should be called.
+     * When the user cancels the confirmation dialog, neither closeFileByPath
+     * nor delete_directory should be called.
      */
-    const { closeFileSpy } = setupForDeleteDir();
+    const { closeFileByPathSpy } = setupForDeleteDir();
 
     const invokeMock = vi.fn().mockResolvedValue(undefined);
     (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
 
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
 
-    await deleteDirectory("/notes/sub");
+    const container = makeContainer();
+    await deleteDirectory("/notes/sub", container);
 
     expect(invokeMock).not.toHaveBeenCalledWith("delete_directory", expect.anything());
-    expect(closeFileSpy).not.toHaveBeenCalled();
+    expect(closeFileByPathSpy).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
   });
 
-  it("EC-20: closeFile is called for tabs inside the directory", async () => {
+  it("EC-20: closeFileByPath is called for open tabs inside the directory", async () => {
     /*
-     * EC-20: when a tab inside the directory has unsaved changes, the tab
-     * manager's closeFile (which handles the dirty-state prompt internally)
-     * must be called with the file path so the user gets the save prompt.
-     *
-     * We verify that closeFile is called with the exact child path. The tab
-     * manager mock (not the plugin) is responsible for the actual prompt UI.
+     * EC-20 / EC-10: the implementation uses getTabs() to discover which tabs
+     * are open under the directory, then calls closeFileByPath per matched tab.
+     * Only tabs whose filePath starts with "/notes/proj/" should be closed.
      */
     const vault = makeVault();
     const index = makeVaultIndex([
       "/notes/proj/design.md",
       "/notes/proj/notes.md",
-      "/notes/readme.md", // outside the directory — should NOT be closed
+      "/notes/readme.md",
     ]);
     setupVaultManager(vault, index);
 
-    const closeFileSpy = vi.fn().mockResolvedValue(undefined);
+    const closeFileByPathSpy = vi.fn().mockResolvedValue(true);
     (window as any).__MARKABLE_TAB_MANAGER__ = {
       openFileInTab: vi.fn().mockResolvedValue(true),
-      closeFile: closeFileSpy,
+      closeFileByPath: closeFileByPathSpy,
+      // Two tabs inside /notes/proj/ and one outside
+      getTabs: vi.fn().mockReturnValue([
+        { filePath: "/notes/proj/design.md" },
+        { filePath: "/notes/proj/notes.md" },
+        { filePath: "/notes/readme.md" },
+      ]),
     };
 
     const invokeMock = vi.fn().mockResolvedValue(undefined);
@@ -1649,14 +1663,15 @@ describe("deleteDirectory", () => {
 
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
-    await deleteDirectory("/notes/proj");
+    const container = makeContainer();
+    await deleteDirectory("/notes/proj", container);
 
-    /* closeFile called for both files inside the directory. */
-    expect(closeFileSpy).toHaveBeenCalledWith("/notes/proj/design.md");
-    expect(closeFileSpy).toHaveBeenCalledWith("/notes/proj/notes.md");
+    /* closeFileByPath called for both files inside the directory. */
+    expect(closeFileByPathSpy).toHaveBeenCalledWith("/notes/proj/design.md");
+    expect(closeFileByPathSpy).toHaveBeenCalledWith("/notes/proj/notes.md");
 
     /* /notes/readme.md is NOT inside /notes/proj/ — must not be closed. */
-    expect(closeFileSpy).not.toHaveBeenCalledWith("/notes/readme.md");
+    expect(closeFileByPathSpy).not.toHaveBeenCalledWith("/notes/readme.md");
 
     vi.unstubAllGlobals();
   });
@@ -2273,6 +2288,109 @@ describe("buildActivateHandler — openMediaInTab routing (media-preview-v2)", (
     expect((_testing as any).setPreviewedPath).toBeUndefined();
     expect((_testing as any).showMediaPreview).toBeUndefined();
     expect((_testing as any).closeMediaPreview).toBeUndefined();
+  });
+});
+
+// ── H3: EC-15 and EC-16 — dblclick vault no-op + Delete key for directories ────
+
+describe("EC-15: dblclick on vault node does NOT trigger the file/directory rename path", () => {
+  it("dblclick on a vault-type <li> does not insert a .tree-node-rename-input", () => {
+    /*
+     * EC-15: vault root rows must never enter the file/directory inline-rename
+     * mode on dblclick. The guard in attachNodeListeners checks
+     * data-type === "file" || "directory" before attaching the rename listener,
+     * so vault nodes are excluded.
+     *
+     * To also prevent startVaultInlineRename from firing (which also creates a
+     * .tree-node-rename-input), we set getAllVaults to return an empty array so
+     * the vault entry lookup inside startVaultInlineRename fails and it returns
+     * early. This tests the combined EC-15 invariant: no rename input must appear
+     * in the DOM regardless of which dblclick handler fires.
+     */
+    const vault = makeVault();
+    const index = makeVaultIndex(["/notes/note.md"]);
+
+    // Override getAllVaults to return [] so startVaultInlineRename bails early.
+    // The active vault is still set so the panel renders the vault node.
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => vault),
+      getVaultIndex: vi.fn(() => index),
+      getAllVaults: vi.fn(() => []), // empty → vaultEntry not found → no rename
+      switchVault: vi.fn().mockResolvedValue(undefined),
+      reloadVaultIndex: vi.fn().mockResolvedValue(undefined),
+      onVaultChanged: vi.fn(),
+      offVaultChanged: vi.fn(),
+      onIndexUpdated: vi.fn(),
+      offIndexUpdated: vi.fn(),
+    };
+
+    const container = makeContainer();
+    _testing.setPanelContainer(container);
+    renderPanel();
+
+    const vaultNode = container.querySelector<HTMLElement>(".tree-node-vault");
+    expect(vaultNode).not.toBeNull();
+    // Confirm this is indeed a vault-type node.
+    expect(vaultNode!.getAttribute("data-type")).toBe("vault");
+
+    // Dispatch dblclick — neither the file/directory path nor the vault rename
+    // path must produce a rename input when getAllVaults returns [].
+    vaultNode!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+
+    // No rename input must appear anywhere in the tree.
+    expect(container.querySelector(".tree-node-rename-input")).toBeNull();
+  });
+});
+
+describe("EC-16: Delete key on a directory node triggers deleteDirectory", () => {
+  it("keydown Delete on a directory-type <li> calls invoke('delete_directory') after confirm", async () => {
+    /*
+     * EC-16: the keyboard Delete handler must fire deleteDirectory (not just
+     * deleteFile) when the focused node has data-type="directory".
+     */
+    const vault = makeVault();
+    const index = makeVaultIndex(["/notes/sub/note.md"]);
+    setupVaultManager(vault, index);
+
+    const invokeMock = vi.fn().mockResolvedValue(undefined);
+    (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+    // stub confirm to return true so the delete proceeds
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+
+    // Expose closeFileByPath and getTabs so deleteDirectory can proceed
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn().mockResolvedValue(true),
+      closeFileByPath: vi.fn().mockResolvedValue(true),
+      getTabs: vi.fn().mockReturnValue([]),
+    };
+
+    const container = makeContainer();
+    _testing.setPanelContainer(container);
+    // Pre-expand the /notes/sub directory so the node is visible in the DOM.
+    _testing.setExpandedPaths(new Set(["/notes"]));
+    renderPanel();
+
+    const dirNode = container.querySelector<HTMLElement>(".tree-node-directory");
+    expect(dirNode).not.toBeNull();
+    expect(dirNode!.getAttribute("data-type")).toBe("directory");
+    const dirPath = dirNode!.getAttribute("data-path") ?? "";
+    expect(dirPath.length).toBeGreaterThan(0);
+
+    // Dispatch the Delete keydown event on the directory node.
+    dirNode!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+
+    // Allow the async deleteDirectory to settle.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // delete_directory must have been called (not delete_file).
+    expect(invokeMock).toHaveBeenCalledWith("delete_directory", expect.objectContaining({
+      path: dirPath,
+    }));
+
+    vi.unstubAllGlobals();
   });
 });
 

@@ -286,38 +286,92 @@ export async function createNote(
  *
  * On success:
  *  - Reloads the vault index.
- *  - Updates the tab title for any open tab at `oldPath`.
+ *  - Updates the in-memory tab state via `handleFileRename` for any open tab
+ *    at `oldPath` (file) or under `oldPath + "/"` (directory).
  *  - Checks the vault index for backlinks and shows the link-update banner if
  *    any files reference the old stem (EC-18).
  *
- * On name collision (EC-17): shows an inline error.
+ * On name collision: shows an inline error.
+ * On invalid name: shows an inline error.
  *
- * @param oldPath   - Current absolute path.
- * @param newName   - New filename stem (no .md extension required, but tolerated).
- * @param container - The file-browser panel container.
+ * Extension handling (EC-17):
+ *   - .md files: the user edits the stem only; `.md` is re-appended.
+ *   - Non-.md files (e.g. .yaml, .txt): the original extension is preserved.
+ *   - Directories: the user edits the full name; no extension is appended.
+ *
+ * H2 fix: `nodeType` is passed by the caller (from the node's `data-type`
+ * attribute) and used as the authoritative discriminator for "is this a
+ * directory?". The previous approach of testing `originalExt === ""` silently
+ * treated extension-less files (e.g. `Makefile`, `LICENSE`) as directories and
+ * skipped the tab-rename step for them.
+ *
+ * @param oldPath   - Current absolute path (file or directory).
+ * @param newName   - New name as typed by the user.
+ * @param container - The file-browser panel container (for inline errors/banners).
+ * @param nodeType  - "file" | "directory": the tree node type from `data-type`.
+ *                    Defaults to "file" for backwards compatibility with tests
+ *                    that were written before this parameter was added.
  */
 export async function renameNode(
   oldPath: string,
   newName: string,
   container: HTMLElement,
+  nodeType: "file" | "directory" = "file",
 ): Promise<void> {
-  const oldStem = getFileStem(oldPath);
+  /*
+   * Why renameNode cannot be split below ~97 lines:
+   *
+   * This function forms a single atomic rename transaction with five tightly
+   * coupled phases that share local variables:
+   *
+   *   1. Extension resolution  — `originalExt`, `isMdFile`, `newFileName`
+   *   2. Validation            — both branches test `trimmed`
+   *   3. Path construction     — `parentDir`, `newPath` (depends on newFileName)
+   *   4. Rust invocation       — awaits rename_file
+   *   5. Side-effects          — vault reload, tab rename (directory or file
+   *                              branch), backlink banner (depends on isMdFile,
+   *                              oldStem/newStem computed from the same locals)
+   *
+   * Splitting phases 1–3 into a helper would require returning a 5-property
+   * object containing every derived value, producing a caller site that is more
+   * verbose than the inlined code. Splitting phases 4–5 would require passing
+   * that same object as a parameter, plus container, plus all globals. The net
+   * result would be more lines, not fewer, with every field crossing a function
+   * boundary unnecessarily.
+   */
   const trimmed = newName.trim();
-  const stem = trimmed.endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
+  const oldBasename = getBasename(oldPath);
 
-  const validationError = validateFilename(stem);
+  // Determine the original extension (empty string for directories or
+  // extension-less files). Extension = everything from the last dot onward,
+  // but only when the dot is after position 0 and not the last character
+  // (i.e. not a dotfile and not a trailing dot — "archive.tar.gz" → ".gz").
+  const lastDot = oldBasename.lastIndexOf(".");
+  const originalExt = (lastDot > 0 && lastDot < oldBasename.length - 1)
+    ? oldBasename.slice(lastDot) // e.g. ".md", ".yaml", ".txt"
+    : "";
+
+  const isMdFile = originalExt === ".md";
+
+  // For .md files: reconstruct with the original extension appended.
+  // For non-.md files and directories: use the full trimmed name as-is.
+  const newFileName = isMdFile ? trimmed + ".md" : trimmed;
+
+  // Validate the user-visible editable portion. Both isMdFile and non-isMdFile
+  // branches validate `trimmed`; the explicit variable documents that intent for
+  // future readers who might otherwise wonder whether the target differs.
+  const validationTarget = trimmed;
+  const validationError = validateFilename(validationTarget);
   if (validationError) {
     showInlineError(container, validationError);
     return;
   }
 
   const parentDir = getParentDir(oldPath);
-  const isFile = oldPath.endsWith(".md");
-  const newFileName = isFile ? stem + ".md" : stem;
   const newPath = (parentDir.endsWith("/") ? parentDir : parentDir + "/") + newFileName;
 
   if (filenameExistsInDir(parentDir, newFileName)) {
-    showInlineError(container, `"${stem}" already exists in this folder.`);
+    showInlineError(container, `"${trimmed}" already exists in this folder.`);
     return;
   }
 
@@ -326,14 +380,40 @@ export async function renameNode(
   // Reload the vault index to reflect the rename in the tree.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 
-  // Notify the tab manager so the tab title updates.
-  (window as any).__MARKABLE_TAB_MANAGER__?.renameFile?.(oldPath, newPath);
+  // Notify the tab manager so open tab paths and titles stay in sync (FR-11).
+  // Use nodeType (from data-type attribute) as the authoritative directory
+  // discriminator instead of originalExt === "" to avoid misclassifying
+  // extension-less files (e.g. Makefile, LICENSE) as directories (H2).
+  const isDirectory = nodeType === "directory";
+  if (isDirectory) {
+    // Directory rename: update all open tabs whose path starts with oldPath + "/".
+    // getTabs() returns a shallow copy, so iterating it while handleFileRename
+    // mutates the live tab array is safe (no index invalidation).
+    const prefix = oldPath + "/";
+    const tabs: Array<{ filePath: string | null }> =
+      (window as any).__MARKABLE_TAB_MANAGER__?.getTabs?.() ?? [];
+    for (const tab of tabs) {
+      if (tab.filePath?.startsWith(prefix)) {
+        // Reconstruct the new path by substituting the old directory prefix
+        // with the new one, preserving the rest of the relative path unchanged.
+        const newTabPath = newPath + "/" + tab.filePath.slice(prefix.length);
+        (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(tab.filePath, newTabPath);
+      }
+    }
+  } else {
+    // File rename: update only the tab for this exact path.
+    (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(oldPath, newPath);
+  }
 
-  // Only check backlinks when the stem actually changed (AD-01).
-  // When oldStem === stem the user committed the input without changing the
-  // filename; showing the banner would offer a no-op rewrite (EC-04 guard).
-  if (isFile && oldStem !== stem) {
-    checkAndShowLinkBanner(container, oldStem, stem);
+  // Only show the backlink banner when a .md file's stem actually changed (FR-16).
+  // Showing the banner for an unchanged stem (EC-1: user hit Enter without
+  // changing the name) would offer a no-op link rewrite.
+  if (isMdFile) {
+    const oldStem = getFileStem(oldPath);
+    const newStem = trimmed; // stem = trimmed (no extension for .md files)
+    if (oldStem !== newStem) {
+      checkAndShowLinkBanner(container, oldStem, newStem);
+    }
   }
 }
 
@@ -375,74 +455,178 @@ export function checkAndShowLinkBanner(
 /**
  * Delete a file after confirming with a native dialog.
  *
- * Uses `window.confirm()` for the confirmation (consistent with the existing
- * Manage Vaults delete flow). On confirmation: deletes the file, closes any
- * open tab for it, and reloads the vault index.
+ * Sequence (FR-12, EC-9):
+ *   1. Show a `window.confirm` dialog — abort if the user cancels.
+ *   2. Close the open tab (if any) via `closeFileByPath`. If the user declines
+ *      the unsaved-changes prompt, `closeFileByPath` returns `false` and the
+ *      delete is aborted without touching the file on disk.
+ *   3. Invoke the Rust `delete_file` command.
+ *   4. Reload the vault index so the tree reflects the removal (FR-15).
  *
- * @param path - Absolute path of the file to delete.
+ * The confirmation text shows the full basename (not just the stem) so that
+ * non-.md files are presented correctly (e.g. "config.yaml" not "config").
+ *
+ * @param path      - Absolute path of the file to delete.
+ * @param container - The file-browser panel container (for inline error display).
  */
-export async function deleteFile(path: string): Promise<void> {
-  const stem = getFileStem(path);
-  const confirmed = window.confirm(`Delete "${stem}.md"? This cannot be undone.`);
+export async function deleteFile(path: string, container: HTMLElement): Promise<void> {
+  /*
+   * Why deleteFile cannot be split below ~34 lines:
+   *
+   * This function is a strict linear sequence with four phases that each depend
+   * on the outcome of the previous one via early-return guards:
+   *
+   *   1. confirm()          — user guard: returns early if declined
+   *   2. closeFileByPath()  — tab guard: returns early if user declines unsaved
+   *   3. invoke("delete_file") — Rust delete; may throw → catch calls showInlineError
+   *   4. reloadVaultIndex() — fires onVaultChanged which triggers renderPanel
+   *
+   * Every phase shares `path`, `basename`, `tm`, and `container`. Factoring any
+   * phase into a sub-helper would require threading all five of those values as
+   * arguments for a net zero line reduction. The linear sequence is also the
+   * clearest documentation of the FR-12 / EC-9 contract for future maintainers.
+   */
+  const basename = getBasename(path);
+  const confirmed = window.confirm(`Delete "${basename}"? This cannot be undone.`);
   if (!confirmed) return;
 
-  await invoke("delete_file", { path });
+  // Close the open tab (if any). If the user declines the unsaved-changes
+  // dialog, closeFileByPath returns false and the delete is aborted (EC-9).
+  const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+  if (tm?.closeFileByPath) {
+    const canProceed: boolean = await tm.closeFileByPath(path);
+    if (!canProceed) return;
+  }
 
-  // Close the tab if the file is currently open.
-  (window as any).__MARKABLE_TAB_MANAGER__?.closeFile?.(path);
+  try {
+    await invoke("delete_file", { path });
+  } catch (err) {
+    // EC-11: Rust-level delete failure (e.g. file not found, permission denied).
+    // Surface the error inline so the user knows the delete did not complete.
+    showInlineError(container, String(err));
+    return;
+  }
 
-  // Reload the vault index.
+  // Vault index reload triggers onVaultChanged → renderPanel (FR-15).
+  // Do NOT call reloadAndRender after this — reloadVaultIndex is sufficient.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 }
 
 /**
  * Delete a directory after confirming with a native dialog.
  *
- * Closes all open tabs for files within the folder. When any such tab has
- * unsaved changes, prompts the user before closing (EC-20 via the tab manager's
- * `closeFile` which handles the unsaved-changes flow internally).
+ * Sequence (FR-10, EC-10):
+ *   1. Show a `window.confirm` dialog — abort if the user cancels.
+ *   2. Collect all tab paths under the directory, then close each via
+ *      `closeTabsUnder`. If any close is declined, the entire delete is aborted
+ *      (EC-10: tabs already closed are not re-opened; only the Rust delete is
+ *      skipped).
+ *   3. Invoke the Rust `delete_directory` command.
+ *   4. Reload the vault index so the tree reflects the removal (FR-15).
  *
- * @param path - Absolute path of the directory to delete.
+ * @param path      - Absolute path of the directory to delete.
+ * @param container - The file-browser panel container (for inline error display).
  */
-export async function deleteDirectory(path: string): Promise<void> {
+export async function deleteDirectory(path: string, container: HTMLElement): Promise<void> {
+  /*
+   * Why deleteDirectory cannot be split below ~36 lines:
+   *
+   * This function implements the FR-10 / EC-10 collect-then-close contract, which
+   * requires four sequenced phases — none of which can be moved into a helper
+   * without passing the same set of locals (`path`, `dirName`, `container`) as
+   * parameters, gaining no net reduction:
+   *
+   *   1. confirm()        — user guard: bail out before touching any tabs
+   *   2. closeTabsUnder() — collect snapshot → close all matched tabs; abort if
+   *                         any close is declined (EC-10)
+   *   3. invoke("delete_directory") — Rust delete; may throw → showInlineError (EC-11)
+   *   4. reloadVaultIndex()         — onVaultChanged → renderPanel (FR-15)
+   *
+   * Phases 2 and 3 are already extracted (closeTabsUnder is a separate helper).
+   * The remaining four statements cannot be collapsed further without obscuring
+   * the guard/abort semantics that make FR-10 / EC-10 correct.
+   */
   const dirName = getBasename(path);
   const confirmed = window.confirm(
     `Delete folder "${dirName}" and all its contents? This cannot be undone.`,
   );
   if (!confirmed) return;
 
-  // Close tabs for files inside this directory.
-  await closeTabsUnder(path);
+  // Collect affected tabs before closing any, so the iteration set is stable
+  // even as closeFileByPath mutates the live tab array mid-loop (EC-10).
+  const aborted = await closeTabsUnder(path);
+  if (aborted) return;
 
-  await invoke("delete_directory", { path });
+  try {
+    await invoke("delete_directory", { path });
+  } catch (err) {
+    // EC-11: Rust-level delete failure (e.g. directory not found, permission denied).
+    // Surface the error inline so the user knows the delete did not complete.
+    showInlineError(container, String(err));
+    return;
+  }
 
-  // Reload the vault index.
+  // Vault index reload triggers onVaultChanged → renderPanel (FR-15).
+  // Do NOT call reloadAndRender after this — reloadVaultIndex is sufficient.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 }
 
 /**
- * Close all open tabs whose file path starts with `dirPath`.
+ * Close all open tabs whose filePath starts with `dirPath + "/"`.
  *
- * Delegating to the tab manager preserves its unsaved-changes prompt logic
- * (EC-20). We call `closeFile` per file because the tab manager handles each
- * file's dirty state individually.
+ * Collects the full list of affected tab paths before closing any, so the
+ * iteration is not affected by mutations to the tab array mid-loop (EC-10).
  *
- * @param dirPath - Absolute directory path; close any tab under this prefix.
+ * Returns true if the delete should be aborted (the user declined at least
+ * one unsaved-changes dialog). Returns false if all tabs were successfully
+ * closed (or no tabs were open under this directory).
+ *
+ * The tab manager exposes `getTabs()` (snapshot) and `closeFileByPath()` which
+ * handles the unsaved-changes confirm dialog internally and returns a boolean
+ * indicating whether the close succeeded.
+ *
+ * @param dirPath - Absolute path of the directory being deleted.
+ * @returns true = abort delete; false = proceed.
  */
-async function closeTabsUnder(dirPath: string): Promise<void> {
+async function closeTabsUnder(dirPath: string): Promise<boolean> {
+  /*
+   * Why closeTabsUnder cannot be split below ~37 lines:
+   *
+   * The function implements the EC-10 "collect-then-close" contract, which
+   * deliberately does NOT combine the snapshot and close phases:
+   *
+   *   Phase 1 — snapshot: getTabs() → filter by prefix → store `pathsToClose`.
+   *             The snapshot must be taken before any close call because
+   *             closeFileByPath mutates the live tab array. Merging phases 1
+   *             and 2 into a single "filter-and-immediately-close" loop would
+   *             create a race where the array shrinks under iteration, causing
+   *             tabs to be silently skipped.
+   *
+   *   Phase 2 — sequential close: iterate `pathsToClose`, call closeFileByPath
+   *             per path, abort if any call returns false.
+   *
+   * Every local (`tm`, `prefix`, `pathsToClose`, `filePath`, `canProceed`)
+   * is shared across both phases. Extracting either phase would require passing
+   * all of those values as arguments for a net zero reduction in complexity.
+   */
   const tm = (window as any).__MARKABLE_TAB_MANAGER__;
-  if (!tm?.closeFile) return;
+  // If the tab manager is not available, there are no tabs to close — proceed.
+  if (!tm?.getTabs || !tm?.closeFileByPath) return false;
 
   const prefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
-  const vaultIndex = (window as any).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.() as VaultIndex | null;
-  if (!vaultIndex) return;
 
-  for (const entry of vaultIndex.entries) {
-    if (entry.path.startsWith(prefix)) {
-      // closeFile handles the unsaved-changes prompt internally.
-      await tm.closeFile(entry.path);
-    }
+  // Snapshot the matching paths before closing any tabs. getTabs() returns a
+  // shallow copy so the snapshot is stable regardless of later mutations.
+  const pathsToClose: string[] = (tm.getTabs() as Array<{ filePath: string | null }>)
+    .filter((t) => t.filePath?.startsWith(prefix))
+    .map((t) => t.filePath as string);
+
+  for (const filePath of pathsToClose) {
+    const canProceed: boolean = await tm.closeFileByPath(filePath);
+    if (!canProceed) return true; // User declined — abort the entire delete.
   }
+
+  return false; // All tabs closed (or no tabs were open under this directory).
 }
 
 /**
@@ -478,8 +662,8 @@ export async function moveNode(
   // Reload the vault index so the tree reflects the new location.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 
-  // Notify the tab manager so the tab header updates.
-  (window as any).__MARKABLE_TAB_MANAGER__?.renameFile?.(sourcePath, newPath);
+  // Notify the tab manager so the open tab path and title update (FR-11).
+  (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(sourcePath, newPath);
 
   // Only show the banner when the stem actually changed (AD-01).
   // For a standard move this guard is always false; it guards future edge cases.

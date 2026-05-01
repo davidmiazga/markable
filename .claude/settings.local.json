@@ -135,7 +135,10 @@
       "Bash(~/.cargo/bin/cargo test *)",
       "Bash(sed -n '969,980p' /Users/daveslaptop/work-LocalArea/markable-2.0/src/tabs/tab-manager.ts)",
       "Bash(sed -n '873,880p' /Users/daveslaptop/work-LocalArea/markable-2.0/src/tabs/tab-manager.ts)",
-      "Bash(echo \"Exit: $?\")"
+      "Bash(echo \"Exit: $?\")",
+      "Bash(git -C /Users/daveslaptop/work-LocalArea/markable-2.0 diff src/plugins/backlinks/backlinks.plugin.ts)",
+      "Bash(git -C /Users/daveslaptop/work-LocalArea/markable-2.0 diff HEAD src/plugins/backlinks/backlinks.plugin.ts)",
+      "Bash(git *)"
     ]
   }
 }

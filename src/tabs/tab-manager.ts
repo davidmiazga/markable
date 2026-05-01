@@ -1043,6 +1043,80 @@ export class TabManager {
     this.activateTab(this.tabs[idx].id);
   }
 
+  /**
+   * Update the filePath and title of any open tab that matches `oldPath`.
+   *
+   * Called after a successful file or directory rename so that in-memory tab
+   * state stays consistent with the on-disk path. The tab's dirty state is
+   * intentionally preserved — a dirty tab's content is canonical until the
+   * user saves, and the next Cmd-S will write to the new path (EC-6).
+   *
+   * For directory renames the caller must invoke this method once per affected
+   * tab (i.e. each tab whose filePath started with the old directory prefix).
+   *
+   * @param oldPath  Absolute path before the rename.
+   * @param newPath  Absolute path after the rename.
+   */
+  handleFileRename(oldPath: string, newPath: string): void {
+    // Mutate this.tabs directly (not the copy from getTabs()) because we need
+    // in-place updates to the live tab records (spec: implementation note 2).
+    for (const tab of this.tabs) {
+      if (tab.filePath !== oldPath) continue;
+
+      // Update the tab's canonical path and derived display title.
+      tab.filePath = newPath;
+      tab.title = this._titleFromPath(newPath);
+
+      // When this tab is also the currently active tab, sync the globals that
+      // downstream plugins (live-preview, image-toolbar, etc.) rely on.
+      if (this.tabs[this.activeIndex]?.id === tab.id) {
+        setLivePreviewFilePath(newPath);
+        (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = newPath;
+        this._updateTitleBar(tab);
+      }
+    }
+
+    // Notify the renderer so the tab strip reflects the new title.
+    this._notifyRenderer();
+
+    // Persist session asynchronously — fire-and-forget (same pattern as other
+    // mutating operations throughout this class).
+    void this.saveSession();
+  }
+
+  /**
+   * Close the tab for the given file path, handling the unsaved-changes dialog
+   * internally via the existing `closeTab` flow.
+   *
+   * Returns `true` when the tab was successfully closed (or was never open),
+   * meaning the caller may proceed with deleting the file.
+   * Returns `false` when the user declined the unsaved-changes prompt, meaning
+   * the delete must be aborted.
+   *
+   * EC-20: if two async operations race to close the same tab, the second call
+   * finds no tab and returns `true` — correct, safe no-op.
+   *
+   * @param path  Absolute path of the file whose tab should be closed.
+   * @returns     true = proceed with delete; false = abort.
+   */
+  async closeFileByPath(path: string): Promise<boolean> {
+    // Locate the tab by file path.
+    const tab = this.tabs.find((t) => t.filePath === path);
+
+    // EC-20: nothing to close → caller may proceed.
+    if (!tab) return true;
+
+    // Store the id before the async close so we can check whether it survived.
+    const tabId = tab.id;
+
+    // Delegate to closeTab which handles the unsaved-changes confirm dialog.
+    await this.closeTab(tabId);
+
+    // If the tab is still in the array the user cancelled the confirm dialog.
+    const stillOpen = this.tabs.some((t) => t.id === tabId);
+    return !stillOpen;
+  }
+
   // ── Save operations ──────────────────────────────────────────────────────────
 
   /**

@@ -1654,19 +1654,50 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
     handleContextMenu(e, el, vaultId);
   });
 
-  /* F2 keyboard shortcut for inline rename (Step 02b) */
+  /* F2 / Delete keyboard handlers for file and directory nodes (FR-3, FR-8, EC-16) */
   el.addEventListener("keydown", (e: KeyboardEvent) => {
     const type = el.getAttribute("data-type");
     const path = el.getAttribute("data-path") ?? "";
+
+    /* F2: inline rename for file and directory nodes (FR-3) */
     if (e.key === "F2" && (type === "file" || type === "directory")) {
       e.preventDefault();
       startInlineRename(el, path, vaultId);
+      return; // Explicit return prevents fall-through into Delete handling.
     }
-    if (e.key === "Delete" && type === "file") {
-      e.preventDefault();
-      void deleteFile(path).then(() => reloadAndRender(vaultId));
+
+    /* Delete key: delete file or directory (FR-8, EC-16).
+     * reloadAndRender is intentionally absent here — deleteFile and deleteDirectory
+     * both call reloadVaultIndex internally, which triggers renderPanel via the
+     * vault-changed event. A chained reloadAndRender would cause a second redundant
+     * reload (NFR Finding 9 / FR-15). */
+    if (e.key === "Delete") {
+      if (type === "file") {
+        e.preventDefault();
+        // Pass _panelContainer so deleteFile can surface Rust errors inline (M2).
+        void deleteFile(path, _panelContainer ?? document.createElement("div"));
+      } else if (type === "directory") {
+        e.preventDefault();
+        // Pass _panelContainer so deleteDirectory can surface Rust errors inline (M2).
+        void deleteDirectory(path, _panelContainer ?? document.createElement("div"));
+      }
     }
   });
+
+  /* FR-1: Double-click triggers inline rename for file and directory nodes.
+   * Single-click opens the file (handled by buildActivateHandler via click).
+   * dblclick fires as a separate browser event — no timer or click-count guard needed.
+   * EC-15: the guard explicitly excludes vault nodes so vault root rows are not affected. */
+  if (el.getAttribute("data-type") === "file" || el.getAttribute("data-type") === "directory") {
+    el.addEventListener("dblclick", (e: MouseEvent) => {
+      e.preventDefault();
+      // stopPropagation prevents the rename input from being immediately dismissed
+      // by a container-level click handler that may receive the bubbled event.
+      e.stopPropagation();
+      const path = el.getAttribute("data-path") ?? "";
+      startInlineRename(el, path, vaultId);
+    });
+  }
 
   /* Vault-specific interactions: unmount button (step_02) + dblclick rename (step_03) */
   if (el.getAttribute("data-type") === "vault") {
@@ -2051,8 +2082,11 @@ function buildFileContextMenuItems(
     },
     {
       label: "Delete",
+      // reloadAndRender is intentionally absent — deleteFile calls reloadVaultIndex
+      // internally (FR-15). Chaining reloadAndRender would cause a redundant reload.
+      // container is passed so Rust errors are surfaced inline (M2).
       handler: () => {
-        void deleteFile(path).then(() => reloadAndRender(vaultId));
+        void deleteFile(path, container ?? document.createElement("div"));
       },
     },
     { separator: true, label: "", handler: null },
@@ -2112,8 +2146,11 @@ function buildDirContextMenuItems(
     },
     {
       label: "Delete",
+      // reloadAndRender is intentionally absent — deleteDirectory calls reloadVaultIndex
+      // internally (FR-15). Chaining reloadAndRender would cause a redundant reload.
+      // container is passed so Rust errors are surfaced inline (M2).
       handler: () => {
-        void deleteDirectory(path).then(() => reloadAndRender(vaultId));
+        void deleteDirectory(path, container ?? document.createElement("div"));
       },
     },
     { separator: true, label: "", handler: null },
@@ -2282,7 +2319,10 @@ export function startInlineRename(el: HTMLElement, path: string, _vaultId: strin
     if (!container) { cancel(); return; }
 
     try {
-      await renameNode(path, newName, container);
+      // Pass nodeType from data-type attribute so renameNode can discriminate
+      // directories from extension-less files (H2 fix).
+      const nodeType = (el.getAttribute("data-type") ?? "file") as "file" | "directory";
+      await renameNode(path, newName, container, nodeType);
       // renameNode calls reloadVaultIndex which triggers onVaultChanged → renderPanel
     } catch (err) {
       errSpan.textContent = String(err);
@@ -2593,20 +2633,6 @@ function handleFsEvent(payload: { vaultId?: string; eventType?: string; path?: s
     if (!_enabled) return;
     void (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
   }, 300);
-}
-
-// ── Helpers for post-op refresh ───────────────────────────────────────────────
-
-/**
- * Force a vault index reload and re-render the panel.
- *
- * Used as a `.then()` callback after file operations that bypass the
- * onVaultChanged subscription (e.g. deleteFile called from context menu).
- *
- * @param _vaultId - Vault ID (currently unused; kept for future use).
- */
-async function reloadAndRender(_vaultId: string): Promise<void> {
-  await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 }
 
 // ── Plugin lifecycle ──────────────────────────────────────────────────────────
