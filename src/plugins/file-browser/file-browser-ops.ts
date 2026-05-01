@@ -230,13 +230,26 @@ async function handleLinkUpdateClick(
 // ── File operations ───────────────────────────────────────────────────────────
 
 /**
- * Create a new `.md` file at `dirPath/filename.md` with empty content.
+ * Return true when `name` contains a real file extension — a dot after
+ * position 0 that is not the trailing character (e.g. "notes.txt" → true,
+ * "notes" → false, ".hidden" → false, "trailing." → false).
+ */
+export function hasExplicitExtension(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && dot < name.length - 1;
+}
+
+/**
+ * Create a new file at `dirPath/filename` with empty content.
  *
- * Validates the filename first (no illegal chars, no `.md` collision — EC-15,
+ * If the user typed a name with an explicit extension (e.g. `notes.txt`),
+ * that extension is honoured. If no extension is present, `.md` is appended.
+ *
+ * Validates the filename first (no illegal chars, no collision — EC-15,
  * EC-16). On success: reloads the vault index and opens the new file in a tab.
  *
  * @param dirPath   - Absolute path of the parent directory.
- * @param filename  - Stem (no extension) or full name typed by the user.
+ * @param filename  - Name typed by the user (with or without extension).
  * @param container - The file-browser panel container (for error display).
  */
 export async function createNote(
@@ -245,17 +258,18 @@ export async function createNote(
   container: HTMLElement,
 ): Promise<void> {
   const trimmed = filename.trim();
-  const stem = trimmed.endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
-  const fullFilename = stem + ".md";
+  const fullFilename = hasExplicitExtension(trimmed) ? trimmed : trimmed + ".md";
+  const dotIdx = fullFilename.lastIndexOf(".");
+  const displayStem = dotIdx > 0 ? fullFilename.slice(0, dotIdx) : fullFilename;
 
-  const validationError = validateFilename(stem);
+  const validationError = validateFilename(trimmed);
   if (validationError) {
     showInlineError(container, validationError);
     return;
   }
 
   if (filenameExistsInDir(dirPath, fullFilename)) {
-    showInlineError(container, `"${stem}" already exists in this folder.`);
+    showInlineError(container, `"${displayStem}" already exists in this folder.`);
     return;
   }
 
@@ -263,11 +277,8 @@ export async function createNote(
 
   await invoke("create_file", { path: fullPath, content: "" });
 
-  // Reload the vault index so the new file appears in the tree.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
-
-  // Open the new file in a tab so the user can start editing immediately.
-  (window as any).__MARKABLE_TAB_MANAGER__?.openFile?.(fullPath);
+  (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(fullPath);
 }
 
 /**

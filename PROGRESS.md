@@ -56,18 +56,22 @@
 - **Create Vault keyboard flow** — After the folder selection dialog closes and a path is added, focus automatically moves to the Create/Save button. `buildPathsField` accepts an `onPathAdded` callback; `renderFormView` wires a mutable closure ref to `saveBtn.focus()` after the actions row is built. Full keyboard flow: Tab to "+ Add Root Path" → Enter opens dialog → select folder → Enter submits → focus on Create → Enter submits. 2026-04-30
 - **Create note from broken wikilink** — Hovering a `cm-wiki-link-broken` span for 180 ms now shows a "Create note" popover variant (stem title, vault-relative path, button) instead of failing silently. Clicking the button calls `ensure_directory` + `write_file` (atomic), then `reloadVaultIndex` (decoration refresh via existing `forceRebuildEffect`) + `openFileInTab` + `dismissWikiPopover`. `clickVersion` captured after `dismissWikiPopover()` to fix a critical race where the button was permanently non-functional (guard always fired). CSS uses `--link-broken-color` for error state. 33 new Vitest tests; code-reviewer approved 2026-04-30.
 - **Button system — tertiary variant** — Added `.btn-tertiary` to `settings-panel.css` (transparent bg, `--border-color` border, `--text-secondary` text, brightens on hover). `buildButton()` variant union extended to include `"tertiary"`. Migrated all existing ad-hoc ghost buttons: Reset All, Clear Recent Files, Reset (content width) in `settings-panel.ts`; Manage Vaults footer in `plugins-panel.ts` (stripped duplicate visual CSS from `plugin-panel-footer-btn`). Migrated Create note popover button from custom styles to `btn btn-primary`. Three-variant system is now: primary (filled) · secondary (accent outline, paired with primary) · tertiary (neutral ghost, standalone utility). 2026-04-30.
+- **Auto-focus first input on panel open** — `renderFormView` in `manage-vaults-ui.ts` calls `requestAnimationFrame(() => nameInput.focus())` after the form is appended so the user can start typing the vault name immediately. Applies to both Create and Edit forms. **Established pattern**: any panel/modal with a primary text input should do the same — `requestAnimationFrame(() => firstInput.focus())` at the end of the render function. 2026-04-30.
+- **Build process fix — plugin IIFE must be rebuilt after source changes** — `src/plugins/**/*.ts` source changes do NOT automatically update the running plugin; `npm run build:plugins && npm run sync:plugins` must be run to regenerate `src-tauri/plugins/core/*.js` and sync to the app data directory. Discovered when the Create note button still showed old styling after TypeScript was updated. 2026-04-30.
+- **Create file / folder from file browser tree** — Fixed 2 bugs and 5 gaps in the file-browser create flow. Bug fixes: `createNote` called `openFile` (non-existent) instead of `openFileInTab`; `showInlineCreateInput`/`showInlineFolderCreateInput` used `_treeEl.prepend()` placing input at tree top instead of after the target dir node. Gap fills: `hasExplicitExtension` helper honours explicit extensions (e.g. `notes.txt` stays `notes.txt`, not `notes.txt.md`); "New Folder" added to file node context menu; `buildInlineInputNode` folder branch now auto-expands parent dir (`_expandedPaths.add` + `scheduleSettingsSave`); "New File" + "New Folder" added to vault root context menu; empty-tree-space `contextmenu` listener added to `buildTreeUl` card element. `_testing` exports extended. 22 new Vitest tests (suites A–G); all 3156 tests passing; TypeScript clean. 2026-04-30.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-04-30.**
+**Session ended 2026-04-30 (updated).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
 - Test suite: **67 files, 3134 passing, 39 skipped**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
+- **Build reminder**: after any plugin TypeScript change, run `npm run build:plugins && npm run sync:plugins`.
 
 #### How to resume
 1. Read `PROGRESS.md` (this file) for full feature history.

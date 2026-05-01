@@ -1,391 +1,437 @@
 ---
-title: Create Note from Broken Wiki-Link
+title: Create File / Folder from File Browser Tree
 last-updated: "2026-04-30"
 review-cadence-days: 90
 status: archive
 ---
 
-> **COMPLETED 2026-04-30.** Implemented and code-reviewer approved. See PROGRESS.md.
-
-# Create Note from Broken Wiki-Link
+# Create File / Folder from File Browser Tree
 
 ## Feature Summary
 
-As a user writing in Markable with a vault open, I want to hover over a red
-broken wiki-link (`[[stem]]` whose target does not exist in the vault) and click
-a "Create note" button in the hover popover, so that the missing file is created
-at the correct vault path and immediately opened in a new tab — letting me
-capture ideas by typing `[[new idea]]` first and creating the note on demand.
+As a user with a vault open in the file browser, I want to create new files and
+folders directly from the tree panel — via a "+" button at the tree bottom, a
+right-click context menu on any node, or right-clicking empty tree space — so
+that I can build and organise my vault without leaving the editor.
 
 ---
 
 ## Codebase Context Findings
 
-### Finding 1 — All wiki-link and hover-popover logic lives in `backlinks.plugin.ts`
+### Finding 1 — The skeleton already exists; this is a fix-and-complete task
 
-Despite the context brief referring to separate files
-`wiki-link-decorations.ts` and `wiki-link-hover.ts`, those files do not exist in
-the repository. The entire implementation — decoration, click navigation, hover
-popover, backlinks panel, and plugin lifecycle — is contained in
-`src/plugins/backlinks/backlinks.plugin.ts` (roughly 3 000 lines). This is a
-compiled IIFE plugin that is evaluated at runtime by the plugin manager.
+The majority of the feature is already implemented across two files:
 
-The relevant sections by step label:
-- **Step 4** (`buildWikiLinkDecorations`, `computeWikiLinkDecorationRanges`): marks
-  broken links with `class="cm-live-link cm-wiki-link cm-wiki-link-broken"` and
-  `data-wiki-target` attribute. Broken flag set when target stem absent from
-  vault `stemSet`.
-- **Step 5** (`handleWikiLinkClick`, `buildClickHandler`): click-to-navigate; resolves
-  path via `resolveWikiLinkPath` then calls `tabManager.openFileInTab()`.
-- **Step 10** (`showWikiPopover`, `dismissWikiPopover`, `createPopoverElement`,
-  `positionPopover`, `buildHoverHandler`): 180 ms delayed popover with title,
-  vault-relative path label, and body excerpt. Popover is built for valid links
-  only today — it reads the file, and if `result.ok === false` (file not found),
-  silently returns without rendering (`EC-01` in Step 10 comments).
+- `src/plugins/file-browser/file-browser.plugin.ts` — contains
+  `showInlineCreateInput`, `showInlineFolderCreateInput`, `buildInlineInputNode`,
+  `buildAddRow` (the "+ Add…" button), and context-menu items "New Note" /
+  "New Folder" wired to both the file and directory node menus.
+- `src/plugins/file-browser/file-browser-ops.ts` — contains `createNote`
+  (validate → duplicate-check → `create_file` invoke → `reloadVaultIndex` →
+  open tab), `validateFilename`, `filenameExistsInDir`, `showInlineError`.
 
-### Finding 2 — Broken link has `data-wiki-target` set but triggers no popover today
+The Rust backend already exposes `create_file` (atomic temp-file-swap, fails if
+path exists) and `create_directory` (wraps `create_dir_all`, idempotent on
+existing) in `src-tauri/src/commands/file_ops.rs`. No new Rust commands are
+needed.
 
-In `showWikiPopover()`, the code calls `resolveWikiLinkPath(currentFile, target)`
-then `invokeReadFile(resolvedPath)`. If the read fails (`!result.ok`), the
-function returns immediately with a `console.debug` log (line ~2722). So broken
-links currently produce no popover at all. The hover handler does NOT check
-whether the span has the `cm-wiki-link-broken` class before starting the 180 ms
-timer — the timer fires for all `.cm-wiki-link` spans regardless. The "Create
-note" button must therefore be injected into the code path that runs when the
-file read fails.
+### Finding 2 — Bug: wrong tab-manager method name in `createNote`
 
-### Finding 3 — `writeFile` and `ensureDirectory` are already in `bridge.ts`
+`createNote` (line 270 of `file-browser-ops.ts`) calls
+`__MARKABLE_TAB_MANAGER__?.openFile?.(fullPath)`. The tab manager exposes
+`openFileInTab(path)` (registered on `window.__MARKABLE_TAB_MANAGER__` at
+`src/main.ts` line 899). The method `openFile` does not exist on the tab
+manager — the optional chain silently swallows the miss and the new file is
+never opened in a tab after creation.
 
-`bridge.ts` exports `writeFile(path, content): Promise<FileResult<void>>` (atomic
-temp-file-swap, line 79) and `ensureDirectory(path): Promise<void>` (line 243,
-wraps `ensure_directory` Rust command). Both are available to IIFE plugins only
-via `window.__TAURI_INTERNALS__.invoke` — they cannot import ES modules directly.
-The "Create note" flow must call both Tauri commands via
-`__TAURI_INTERNALS__.invoke('write_file', …)` and
-`__TAURI_INTERNALS__.invoke('ensure_directory', …)`.
+The correct call is:
+`(window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(fullPath)`.
 
-### Finding 4 — Vault root path and index access
+### Finding 3 — Bug: inline create input always inserts at tree top, not inside target directory
 
-`window.__MARKABLE_VAULT_MANAGER__.getActiveVault()` returns the `VaultEntry`
-object. `VaultEntry.rootPaths[0]` is the vault root. The `VaultIndexEntry.name`
-field is the lowercase stem (no extension) used for broken-link detection. After
-note creation the stem must appear in the vault index so the decoration re-renders
-as a valid link. `window.__MARKABLE_VAULT_MANAGER__.reloadVaultIndex()` is the
-correct call (triggers a full rebuild + `emitVaultChanged`), which causes the
-backlinks plugin's `_onVaultChangedForDecorations` callback to dispatch
-`forceRebuildEffect` and refresh all decorations.
+Both `showInlineCreateInput` and `showInlineFolderCreateInput` call
+`_treeEl.prepend(li)`. This places the input at the absolute top of the flat
+`<ul>` list regardless of which directory was right-clicked. The `dirPath`
+parameter is correctly threaded through to `createNote` / `create_directory`,
+so the file is created in the right place on disk, but the input appears at
+the wrong position in the UI. The input should be inserted immediately after
+the `<li>` element for the target directory (or at the top if the trigger was
+the vault root or the "+ Add…" row).
 
-### Finding 5 — Path resolution for wikilinks with path prefixes
+### Finding 4 — Gap: `filenameExistsInDir` only checks `.md` entries, not folders
 
-`resolveWikiLinkPath(currentFile, target)` already handles path prefixes in
-targets. For `[[folder/note]]`, it produces
-`{directory-of-current-file}/folder/note.md`. However, for the "Create note"
-feature the resolution must be vault-root-relative when the target contains a
-slash, not current-file-directory-relative. This is a deliberate design decision
-that needs to be locked down (see Functional Requirements FR-2).
+`filenameExistsInDir` iterates `vaultIndex.entries` which contains only the
+indexed `.md` files. Checking for duplicate folder names requires also
+consulting `vaultIndex.nonMdFiles` or — more reliably — checking
+`vaultIndex.entries` for any path whose parent directory segment equals
+`dirPath/name`. The current logic will miss a collision with an existing folder
+of the same name, allowing `create_directory` to be called (which is idempotent
+and succeeds silently), then the inline input is removed with no feedback.
 
-### Finding 6 — `openFileInTab` signature
+For folder creation, the duplicate check should use `create_directory`'s
+idempotent behaviour as the authoritative check. The inline error should be
+shown only when the Rust command returns an error. For file creation, the
+current `filenameExistsInDir` check against `vaultIndex.entries` is accurate
+for `.md` files but races with external creates; the `create_file` Rust command
+is the authoritative check (it returns `Err("File already exists: …")`) and
+should be used as the final guard.
 
-`tabManager.openFileInTab(path: string): Promise<boolean>` is exposed on
-`window.__MARKABLE_TAB_MANAGER__` (set in `main.ts` line 899). It reads the file
-from disk, creates a tab, and switches to it. For a freshly-created note, the
-file exists on disk before this call is made.
+### Finding 5 — Gap: custom file extensions not honoured
 
-### Finding 7 — Existing popover DOM structure
+`createNote` always strips any typed extension and re-appends `.md`:
+```
+const stem = trimmed.endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
+const fullFilename = stem + ".md";
+```
+The stated design intent is: if the user types a name with an extension (e.g.
+`notes.txt`), honour it; if no extension, append `.md`. Currently `notes.txt`
+would create `notes.txt.md`. The logic must be revised: check whether the
+trimmed input contains an extension (any `.` after the first character), and if
+so, use the name as given; otherwise append `.md`. The validation stem for
+`validateFilename` should strip the extension before checking for illegal
+characters.
 
-`createPopoverElement(title, pathLabel, excerpt)` builds a `<div
-data-markable-wiki-popover>` containing `.wl-popover-title`, `.wl-popover-path`,
-and `.wl-popover-excerpt` rows. The returned element is appended to
-`document.body`. A "Create note" button needs a fourth row below the excerpt (or
-replacing title/path when the file does not exist). The element is created fresh
-on every `showWikiPopover` call and removed on `dismissWikiPopover`.
+### Finding 6 — Gap: "New Folder" absent from file node context menu
 
-### Finding 8 — The `reloadVaultIndex` path updates decorations
+`buildFileContextMenuItems` contains "New Note" but no "New Folder" item. The
+directory menu has both. Since right-clicking a file is a common path (the user
+may want a sibling folder), "New Folder" should be added to the file context
+menu, creating the new folder in the file's parent directory.
 
-`reloadVaultIndex()` in `vault-manager.ts` calls `buildAndCacheIndex()` then
-calls `emitVaultChanged(activeVault)`. The backlinks plugin subscribes to
-`onVaultChanged` via `_onVaultChangedForDecorations`; that callback dispatches
-`forceRebuildEffect` to the editor view, which triggers a ViewPlugin update and
-rebuilds the `stemSet`, classifying the newly-created stem as valid. This is the
-correct and existing mechanism — no special decoration invalidation is required.
+### Finding 7 — Gap: post-folder-creation does not auto-expand the parent
 
-### Finding 9 — `normalizeTarget` and `stemForLookup` define the vault-root path logic
+After `create_directory` succeeds in `buildInlineInputNode`, the vault index is
+reloaded and `renderPanel` fires via the `onVaultChanged` subscription. However,
+the newly-created folder is not added to `_expandedPaths`, so the parent
+directory renders as collapsed and the folder is not visible until the user
+manually expands the parent. The parent directory path (the `dirPath` passed to
+the inline input) should be added to `_expandedPaths` before reloading the
+index so the tree opens to show the new folder.
 
-`normalizeTarget(t)` (module-private helper) lowercases and normalises slashes.
-`stemForLookup(rawTarget)` extracts the basename stem. For `[[folder/note]]` the
-lookup stem is `"note"` (just the filename, not the full path). This means two
-notes in different folders with the same stem are treated as ambiguous. The
-"Create note" feature must use the same basename stem logic to determine what
-folder path to create the note in.
+### Finding 8 — Gap: no right-click on empty tree area
 
-### Finding 10 — Banner/toast pattern for error feedback
+Right-clicking on the `.file-tree` `<ul>` element below all nodes (empty space)
+currently has no `contextmenu` handler. The design intent states that a click on
+empty space creates at vault root. A `contextmenu` listener on the `.file-tree`
+(or `.file-tree-card`) that fires when the event target is not a `.tree-node`
+should show a menu with "New File" and "New Folder" pointing to the vault's
+first root path.
 
-The file-browser plugin uses an inline `showInlineError(container, msg)` pattern
-for errors within its panel DOM. `main.ts` and `vault-manager.ts` use
-`console.error` for non-UI errors. For a creation failure inside the popover, a
-short inline error label within the popover is the most coherent UX (consistent
-with popover-contained UI). A separate toast infrastructure does not exist; the
-popover itself is the feedback surface.
+### Finding 9 — Existing inline input appears correctly for vault root via "+ Add…" row
+
+The `buildAddRow` function (lines 1210–1252) correctly reads
+`activeVault.rootPaths[0]` as the `rootPath` and passes it to
+`showInlineCreateInput`. This trigger point functions correctly for vault-root
+creation. The bug (Finding 3) only affects the insert position in the DOM, not
+the path used for creation.
+
+### Finding 10 — `openFileInTab` is the correct method; `openFile` does not exist
+
+`window.__MARKABLE_TAB_MANAGER__` is the `tabManager` singleton from
+`src/tabs/tab-manager.ts`. Its public API (confirmed in `src/main.ts:899` and
+`src/tabs/drag-drop.ts:12`) includes `openFileInTab(path: string):
+Promise<boolean>`. No `openFile` method exists. The optional-chain silence
+pattern (`?.openFile?.()`) means the current code fails silently on every file
+creation.
 
 ---
 
 ## Functional Requirements
 
-### FR-1 — Trigger: "Create note" button in hover popover for broken links
+### FR-1 — Trigger: "+ Add…" row at the bottom of the file-tree card
 
-When the hover popover is triggered on a span with `cm-wiki-link-broken` class
-(i.e., the read in `showWikiPopover` returns `!result.ok`), the popover must
-still be displayed. Instead of title/excerpt content, it shows:
+A `<div class="file-browser-add-row">` is rendered at the bottom of the tree
+card. Clicking it shows a context menu with "New File", "New Folder", and a
+separator followed by "New Vault…". The "New File" and "New Folder" items create
+at the active vault's first root path (`activeVault.rootPaths[0]`). This trigger
+is already implemented; no changes are required beyond the fixes in FR-6 and FR-7.
 
-- Title row: the stem text (e.g. `"New Idea"`, derived from the target after
-  stripping path prefix and capitalising for display purposes — see FR-3 for
-  initial file content).
-- Path row: the resolved creation path, vault-root-relative (e.g.
-  `"folder/new-idea.md"`), so the user sees where the file will land.
-- Excerpt row: omitted (no content yet).
-- Action row: a `<button class="wl-popover-create-btn">Create note</button>`.
+### FR-2 — Trigger: right-click on a directory node
 
-When no vault is active, the broken-link popover is suppressed entirely (same
-as today's behaviour — `getActiveVault()` returns null, no creation path can be
-computed).
+The directory context menu already contains "New Note" and "New Folder". Both
+create inside the right-clicked directory. No new items are needed; the fix in
+FR-3 (correct insert position) applies here.
 
-### FR-2 — Path resolution for new note creation
+### FR-3 — Trigger: right-click on a file node
 
-The target string from `data-wiki-target` is resolved to an absolute creation
-path using the following rule:
+The file context menu already contains "New Note" which creates a sibling note
+in the file's parent directory. A "New Folder" item must be added (below "New
+Note") that creates a sibling folder in the same parent directory (FR-12).
 
-- **No path prefix** (e.g. `[[new idea]]`): create at
-  `{vaultRoot}/{stem}.md`. The stem is taken from `stemForLookup` logic
-  (basename, lowercase, `.md`-stripped). The filename on disk uses the raw
-  (un-lowercased) target text as given, preserving the author's capitalisation
-  (e.g. `[[New Idea]]` creates `{vaultRoot}/New Idea.md`). The vault index stem
-  lookup is case-insensitive (current behaviour) so the decoration will resolve
-  after creation.
-- **Path prefix** (e.g. `[[folder/note]]`): create at
-  `{vaultRoot}/{target}.md` where `{target}` is the raw (un-lowercased) target
-  string. If the path is relative (no leading `/`), it is always resolved
-  relative to the vault root, NOT the current file's directory. This is
-  intentional: wiki-links with path prefixes in Obsidian-style vaults are
-  vault-root-relative.
-- If the target starts with `/` (absolute path), treat it as absolute without
-  prepending vault root (unusual, but must not crash).
+### FR-4 — Trigger: right-click on empty space in the tree
 
-The directory component of the resolved path (if any) is created via
-`ensure_directory` before the file is written.
+A `contextmenu` listener must be added to the `.file-tree-card` element (or the
+`.file-tree` `<ul>`). When the event target is not a `.tree-node` descendant,
+show a context menu with "New File" and "New Folder" that create at the vault's
+first root path. Escape and outside-click dismiss the menu using the existing
+`closeContextMenu()` pattern.
 
-### FR-3 — Initial file content
+### FR-5 — Inline input pattern for file creation
 
-New notes are created with the following content template:
+When "New File" is activated from any trigger:
 
-```
-# {DisplayStem}
-```
+1. A temporary `<li class="tree-node tree-node-file">` is inserted into the
+   tree immediately after the target directory's `<li>` element (or at the top
+   of the `<ul>` for vault-root creation). The input must be inserted after the
+   directory row, not prepended to the top of the entire list.
+2. The `<li>` contains a focused `<input class="tree-node-rename-input">` with
+   placeholder "Note name…" and an empty `<span class="tree-node-inline-error">`.
+3. Real-time validation on `input` events: calls `validateFilename(value.trim())`
+   and displays the error in the inline error span without dismissing the input.
+4. Enter commits (FR-6). Escape or blur (100 ms deferred) cancels — removes the
+   `<li>` without creating anything.
+5. Click inside the input calls `stopPropagation()` so the tree node click
+   handler does not fire.
 
-where `{DisplayStem}` is the target text after stripping any path prefix
-(e.g. `[[folder/New Idea]]` → `New Idea`).
+### FR-6 — File creation commit
 
-Rationale: A bare H1 heading is the lightest possible starting point. It gives
-the file a title that the popover and vault index can discover immediately
-(title extraction priority 2 in `extractPopoverContent`). YAML front matter is
-not required and adds friction for quick capture. Front matter can always be
-inserted by the user or a template plugin after creation.
+When the user presses Enter in the inline file-creation input:
 
-### FR-4 — Post-creation behaviour
+1. Validate the name via `validateFilename`. If invalid, show inline error and
+   do not dismiss.
+2. Determine the final filename: if the trimmed input contains a `.` after the
+   first character (has an explicit extension), use the name as-is; otherwise
+   append `.md`. Examples: `my-note` → `my-note.md`; `script.py` → `script.py`;
+   `my.note` → `my.note.md` if this is ambiguous — use the rule "last segment
+   after final dot" to determine extension presence.
+3. Pre-check the vault index for the filename in the target directory via
+   `filenameExistsInDir`. If a match is found, show inline error "'{name}'
+   already exists in this folder." and do not dismiss. This check is advisory
+   only (races are handled by the Rust layer).
+4. Invoke `create_file` via `window.__TAURI_INTERNALS__.invoke`. If Rust returns
+   an error (e.g. "File already exists"), show inline error and do not dismiss.
+5. On success:
+   a. Remove the temporary `<li>`.
+   b. Call `window.__MARKABLE_VAULT_MANAGER__.reloadVaultIndex()`.
+   c. Call `window.__MARKABLE_TAB_MANAGER__.openFileInTab(fullPath)` to open
+      the new file in a tab. Note: the method is `openFileInTab`, not `openFile`.
 
-After successful file creation:
+### FR-7 — Folder creation commit
 
-1. Call `window.__MARKABLE_VAULT_MANAGER__.reloadVaultIndex()` to rebuild the
-   vault index, which triggers `emitVaultChanged` and causes the decoration
-   plugin to rebuild its `stemSet`. The formerly-broken link decoration re-renders
-   as a valid link (blue underline, no wavy red).
-2. Call `window.__MARKABLE_TAB_MANAGER__.openFileInTab(absolutePath)` to open
-   the new note immediately in a tab. The user is taken to the new file.
-3. Dismiss the popover via `dismissWikiPopover()`.
+When the user presses Enter in the inline folder-creation input:
 
-The index reload and tab open are performed in that order. Both calls are
-fire-and-forget via `void`; errors are caught and logged, not surfaced to the user
-unless the write step itself fails (see FR-5).
+1. Validate the name via `validateFilename`. If invalid, show inline error.
+2. Folder names never receive an appended extension.
+3. Pre-check: a folder collision check against the vault index is not reliable
+   (index only tracks `.md` files). Proceed directly to the Rust command.
+4. Invoke `create_directory` via `window.__TAURI_INTERNALS__.invoke`. The Rust
+   command uses `create_dir_all` and is idempotent — it returns `Ok(())` even
+   if the directory already exists. To detect the "already exists" case, the
+   pre-check must use the filesystem: check whether `dirPath + "/" + name`
+   already exists as a directory in the vault tree (consult `vaultIndex.entries`
+   for any entry whose path starts with the target path prefix, OR use a
+   `stat`-style check via a Rust command if one exists). If an exact collision
+   is detected, show inline error "'name' folder already exists here." and do
+   not dismiss. If Rust returns an error for any other reason, show inline error.
+5. On success:
+   a. Remove the temporary `<li>`.
+   b. Add `dirPath` (the parent) to `_expandedPaths` so the parent is expanded.
+   c. Call `window.__MARKABLE_VAULT_MANAGER__.reloadVaultIndex()`.
+   d. The vault index reload triggers `onVaultChanged` → `renderPanel`, which
+      will now render the new folder as visible because the parent is in
+      `_expandedPaths`.
 
-### FR-5 — Error handling for creation failure
+### FR-8 — Inline input insert position
 
-If any step fails:
+The temporary `<li>` for both file and folder creation must be inserted
+immediately after the `<li>` element for the target directory in the flat
+`<ul>` list. For vault-root creation (triggered from "+ Add…" or the vault root
+node context menu), the `<li>` is prepended to the top of the `<ul>`.
 
-- `ensure_directory` failure: show an inline error message inside the popover
-  (replacing the "Create note" button with text such as
-  `"Could not create folder: {error}"`). The popover remains open so the user
-  can read the error.
-- `write_file` failure: same — show inline error inside the popover.
-- `reloadVaultIndex` failure: logged to console, not surfaced (non-fatal; the
-  tab still opens and the user can reload manually).
-- `openFileInTab` failure: logged to console, not surfaced as a dialog (the
-  file was created; the user can navigate to it from the file browser).
+To find the correct insertion point, locate the `<li>` whose `data-path`
+attribute matches `dirPath` in `_treeEl`, then call `insertAdjacentElement('afterend', li)`.
+If no matching `<li>` is found (vault root trigger), fall back to `_treeEl.prepend(li)`.
 
-### FR-6 — Decoration update after creation
+### FR-9 — No extension appended for folder names
 
-Decoration update is achieved by the `reloadVaultIndex()` → `emitVaultChanged`
-→ `forceRebuildEffect` chain already established in the codebase (Finding 8).
-No additional decoration invalidation mechanism is required. The decoration will
-update within the time it takes `buildAndCacheIndex` to complete (typically
-under 100 ms for small vaults).
+Folder names are used as-is. `validateFilename` is called on the trimmed name
+to reject illegal characters (`:`, `/`, dot-only names, empty names). No `.md`
+or other suffix is appended.
 
-### FR-7 — Button style and placement in the popover
+### FR-10 — Duplicate file name: inline error, input stays open
 
-The "Create note" button is appended as a final row inside the popover element.
-It uses a new CSS class `wl-popover-create-btn` injected alongside the existing
-`WIKI_POPOVER_CSS` string in `injectWikiPopoverStyles()`. The button style must
-use existing CSS variables only:
-- Background: `var(--link-color)` at 15% opacity or `var(--bg-secondary)`.
-- Text colour: `var(--link-color)`.
-- Border: `1px solid var(--link-color)`.
-- Padding: `4px 10px`.
-- Border-radius: `4px`.
-- Font: `var(--ui-font)`, 12px.
-- Cursor: `pointer`.
-- Hover state: background increases to `var(--link-color)` at 25% opacity.
+If a file with the resolved name already exists in `dirPath` (detected either
+by `filenameExistsInDir` or by the Rust `create_file` error), the inline input
+must remain open with the error text displayed inline. The user can edit the
+name and press Enter again to retry. Escape still cancels.
 
-### FR-8 — Popover shown for broken links even when file read fails
+### FR-11 — Post-file-creation: open in tab, cursor at top
 
-Today `showWikiPopover` returns early on `!result.ok`. The implementation must
-be changed so that for broken links (identified by the `cm-wiki-link-broken`
-class on the span element), a popover IS shown (the "Create note" popover
-variant). For valid links that fail to read for other reasons (permissions,
-etc.) the existing early-return behaviour is preserved.
+After successful file creation, `openFileInTab(fullPath)` is called. The tab
+manager opens the file, activates the tab, and places the cursor at the top of
+the document. No additional cursor-placement logic is required in the plugin.
 
-The span element is available as the first argument to `showWikiPopover`. The
-broken state is detected by checking `spanEl.classList.contains('cm-wiki-link-broken')`.
+### FR-12 — "New Folder" added to file node context menu
+
+`buildFileContextMenuItems` must include a "New Folder" item after the "New
+Note" item (before the first separator). Activating it calls
+`showInlineFolderCreateInput(getParentDir(path), container, vaultId)` —
+creating the folder as a sibling of the file.
+
+### FR-13 — Extension handling: honour explicit extension, default to `.md`
+
+The extension rule:
+- Name contains no `.` after position 0, or ends with a `.` (trailing dot):
+  append `.md`. Example: `my-note` → `my-note.md`, `trailingdot.` → treat as
+  stem `trailingdot` → `trailingdot.md`.
+- Name contains a `.` after position 0 and does not end with `.`: use name
+  as-is. Example: `notes.txt` → `notes.txt`, `My File.md` → `My File.md`.
+
+`validateFilename` receives the stem (name minus extension) for character
+validation. The extension (if any) is not validated beyond the overall name
+passing the illegal-character check.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1 — No vault active when "Create note" is clicked**
-`getActiveVault()` returns null. No vault root can be computed. Expected: the
-broken-link popover is suppressed entirely (no popover shown, same as today for
-valid links without a current file). The 180 ms hover timer still fires but
-`showWikiPopover` returns early before rendering. No crash.
+**EC-1 — No active vault when trigger is activated**
+`getActiveVault()` returns null. `buildAddRow`, context menu handlers, and the
+empty-space listener all guard `rootPath`. Expected: if `rootPath` is empty or
+null, the inline input is not shown and no action is taken. No crash.
 
-**EC-2 — `__MARKABLE_TAB_MANAGER__` or `__MARKABLE_VAULT_MANAGER__` not available**
-The window globals may be absent in edge cases (race during startup, test
-environment). Expected: each access is null-guarded with optional chaining.
-Button click is a no-op with a `console.warn` if the global is missing.
+**EC-2 — `_treeEl` is null when trigger fires**
+`showInlineCreateInput` and `showInlineFolderCreateInput` both guard
+`if (!_treeEl) return`. Expected: no-op with no visible feedback. (This can
+occur if the panel has been destroyed but an async event fires late.)
 
-**EC-3 — File already exists at creation path (race condition)**
-Two popover-create actions target the same stem, or the file was created
-externally between the time the index was built and the click. `write_file`
-uses atomic temp-file-swap — writing to an existing path overwrites it. Since
-the initial content is just `# {stem}`, overwriting an empty/small file is
-acceptable. Expected: creation succeeds silently; the file is opened. If the
-file already contained content, the overwrite destroys it — this is acceptable
-given the scenario (broken link means it wasn't in the index at hover time).
+**EC-3 — Target directory `<li>` not found in the tree (insert position)**
+The directory row may be hidden (display:none) when the parent is collapsed, or
+not yet rendered (incremental update lag). Expected: fall back to
+`_treeEl.prepend(li)` — the input appears at the top, which is suboptimal but
+functional. No crash.
 
-**EC-4 — Target stem contains characters invalid on macOS filenames**
-Characters like `:`, `/` in the stem portion (after path prefix stripping). A
-colon in `[[Work: Notes]]` produces a filename `Work: Notes.md`, which is
-invalid on APFS/HFS+. Expected: `write_file` will fail; FR-5 error handling
-surfaces the error inline. Character sanitisation of stems is out of scope (the
-user chose the target text). The inline error message indicates the failure.
+**EC-4 — Duplicate file: both vault-index check and Rust check**
+The `filenameExistsInDir` pre-check is advisory and based on the in-memory
+index. A file created externally between the last index build and the user
+pressing Enter won't be in the index. The Rust `create_file` command is the
+authoritative guard (returns `Err("File already exists: …")`). Both checks must
+surface the error inline without dismissing the input.
 
-**EC-5 — Target is an empty string (`[[]]`)**
-`computeWikiLinkDecorationRanges` skips empty spans (`if (openEnd < closeStart)`)
-so no mark decoration is created for `[[]]`. This edge case cannot be triggered
-from the popover. No action required.
+**EC-5 — User types a name with only dots (e.g. `...`)**
+`validateFilename` already rejects names consisting entirely of dots with the
+message "Name cannot consist entirely of dots." The inline error is shown and
+the input stays open.
 
-**EC-6 — Wiki-link inside a fenced code block**
-`isInsideFencedCode` check already prevents decoration of code-block links
-(existing Step 4 logic). No broken-link popover fires. Not a new concern.
+**EC-6 — User types a name containing `:` or `/`**
+`validateFilename` rejects these with "Name contains an illegal character (:
+or /)." The inline error is shown and the input stays open.
 
-**EC-7 — Wiki-link on the active (cursor) line**
-Active-line links are not decorated (existing behaviour — `activeLines.has(lineNum)`
-skip). The hover handler never fires on undecorated spans. Not a new concern.
+**EC-7 — User presses Escape with a non-empty input**
+Cancel runs immediately: the temporary `<li>` is removed, no file or folder is
+created, no error is shown.
 
-**EC-8 — Path prefix points to a subdirectory that does not exist**
-`[[subfolder/note]]` but `{vaultRoot}/subfolder/` does not exist. Expected:
-`ensure_directory` is called for `{vaultRoot}/subfolder/` before `write_file`.
-`ensure_directory` creates all intermediate directories (wraps
-`std::fs::create_dir_all` on the Rust side). If this fails (permissions), the
-inline error is shown (FR-5).
+**EC-8 — User tabs away (blur) from the inline input**
+Blur fires after 100 ms (deferred so Enter commits first). If the input is still
+in the DOM at 100 ms, cancel runs — the `<li>` is removed. If Enter was pressed
+first, commit runs within the 100 ms window and removes the `<li>` before the
+blur timer fires; the deferred cancel's `document.contains(input)` guard
+returns false and is a no-op.
 
-**EC-9 — Very long target text**
-A `[[note stem that is very long and approaches filesystem limits]]` target may
-exceed macOS's 255-byte filename limit. Expected: `write_file` returns an error.
-FR-5 inline error is shown. No truncation is applied by this feature.
+**EC-9 — Vault index reload fails after file creation**
+`reloadVaultIndex()` rejects. The file exists on disk but the tree will not
+show the new node until the next vault event triggers a reload. Expected:
+the error is caught and logged (`console.error`), not surfaced as a user-facing
+dialog. The tab is still opened via `openFileInTab`. The tree will self-correct
+on the next file-system watcher event (FS watcher fires 300 ms after any
+disk change and triggers its own reload).
 
-**EC-10 — Multiple broken links for the same stem in the document**
-Two spans share target `"missing"`. Both get the `cm-wiki-link-broken` class.
-The user hovers one, clicks "Create note". The file is created and the vault
-index is rebuilt. Expected: both decorations update to valid-link style when the
-ViewPlugin rebuilds after `emitVaultChanged`. Only one file is created (the
-first click wins; subsequent clicks would find the file already exists — EC-3).
+**EC-10 — `openFileInTab` call fails after file creation**
+`openFileInTab` rejects (e.g. file is locked, read error). The file was created
+on disk and the vault index was reloaded. Expected: the error is caught and
+logged. The tree will show the new file. The user can click it to open
+manually. No user-facing error dialog.
 
-**EC-11 — User dismisses the popover during the async `write_file` call**
-`dismissWikiPopover()` increments `_hoverFetchVersion`. The button click handler
-must capture `_hoverFetchVersion` before the async Tauri calls and abort if the
-version changes by the time the calls return. Without this guard, a dismissed
-popover could still trigger `reloadVaultIndex` and `openFileInTab`.
+**EC-11 — User types a filename that is valid but results in a path exceeding macOS 255-byte limit**
+`create_file` returns an OS-level error. FR-6 surfaces the Rust error message
+inline. The input stays open.
 
-**EC-12 — Untitled document (no `__MARKABLE_CURRENT_FILE__`)**
-`currentFile` is null. FR-2 path resolution for non-prefixed links requires a
-vault root (not the current file's directory), so creation is still possible for
-those. However, for path-prefixed links (`[[folder/note]]`), creation is also
-vault-root-relative so `currentFile` is not needed. Expected: creation proceeds
-using `getActiveVault().rootPaths[0]` as the base path. If `getActiveVault()`
-is also null, EC-1 applies.
+**EC-12 — Two inline create inputs simultaneously**
+If the user somehow opens two context menus rapidly and triggers two create
+actions, two `<li>` inputs are prepended/inserted. Both are independent and
+functional. The second commit creates a second file. This is an unusual path
+(context menu closes before a second can open) and is acceptable behaviour.
 
-**EC-13 — `reloadVaultIndex` is slow for large vaults**
-For a vault with 500 files the index rebuild takes up to a few seconds. The
-decoration update is async — the decoration may briefly remain "broken" after
-tab open. Expected: this is acceptable. The tab opens immediately; the
-decoration update follows when the rebuild completes.
+**EC-13 — File creation in a subdirectory that does not yet exist on disk**
+This is not possible from the UI: the tree only shows directories that exist.
+The inline create input is triggered from an existing tree node's path, so the
+parent always exists. `create_file`'s `create_dir_all` for parent creation is
+a safety net for programmatic calls, not a primary UI path.
 
-**EC-14 — Plugin disabled while the async button-click handler is in flight**
-`_enabled` is checked at the start of `showWikiPopover` but the create-note
-button click is a standalone DOM event listener. If the plugin is disabled while
-a create-note action is in progress, the tab open and index reload may still
-fire. Expected: `void` calls for `reloadVaultIndex` and `openFileInTab` are
-fire-and-forget and do not harm the app state even if the plugin is disabled.
+**EC-14 — Folder creation: parent directory not in `_expandedPaths` before reload**
+If `dirPath` is not added to `_expandedPaths` before calling
+`reloadVaultIndex()`, the new folder will be hidden under a collapsed parent
+after re-render. FR-7 step b requires adding `dirPath` to `_expandedPaths`
+before the reload. The `scheduleSettingsSave(vaultId)` should also be called to
+persist the expanded state.
 
-**EC-15 — Target with `#heading` anchor (e.g. `[[note#intro]]`)**
-`stemForLookup` already strips the anchor before the Set lookup. For creation
-the anchor must also be stripped before constructing the filename — a file
-`note#intro.md` is not valid. Expected: the anchor suffix is stripped; the file
-created is `{vaultRoot}/note.md`. The anchor text is discarded (no heading is
-auto-created inside the new file for the anchor target).
+**EC-15 — Non-`.md` file created but not in the vault index**
+The vault index only tracks `.md` files in `entries`. A file like `notes.txt`
+created via FR-6's custom-extension path will appear in `vaultIndex.nonMdFiles`
+(the supplementary list) after the next index reload. The tree renders non-md
+files using the `nonMdFiles` array (confirmed in `renderTreeContent`), so the
+file will appear in the tree. Opening it via `openFileInTab` will invoke the
+media viewer path (`openMediaInTab`) for non-markdown files.
+
+**EC-16 — Empty-space right-click: `target` is the scrollbar or inner padding**
+The `contextmenu` handler on `.file-tree-card` must distinguish "click on empty
+space" from "click on a node". Guard: if `e.target` is or is contained within a
+`.tree-node`, do not show the empty-space menu (let the node's own
+`contextmenu` handler fire). Use `(e.target as Element).closest('.tree-node')`
+as the guard check.
+
+**EC-17 — Right-click on vault root node: missing "New File"/"New Folder" items**
+The vault context menu (`buildVaultContextMenuItems`) currently contains
+"Unmount", "Rename", and "Edit Type". It does not have "New File" or "New
+Folder" items for creating notes at the vault root. These should be added as
+the first two items (before a separator and the existing items) to make the
+vault root consistent with directory nodes.
+
+**EC-18 — `_panelContainer` is null when a context menu item fires**
+If the panel is destroyed between right-click and menu item selection (race),
+`_panelContainer` will be null. Context menu handlers already guard
+`if (!container) return`. This pattern must be maintained in any new handlers.
 
 ---
 
 ## Non-Functional Requirements
 
 **NFR-1 — No new Rust commands**
-The feature uses only existing Tauri commands: `ensure_directory`, `write_file`,
-`build_vault_index` (via `reloadVaultIndex`). No new Cargo dependencies.
+All required Rust commands exist: `create_file`, `create_directory`,
+`rename_file`, `delete_file`. No new Cargo dependencies.
 
-**NFR-2 — IIFE boundary compliance**
-All Tauri calls within the plugin use `window.__TAURI_INTERNALS__.invoke(...)`,
-not ES module imports from `bridge.ts`. This matches the existing pattern in
-`backlinks.plugin.ts`.
+**NFR-2 — IIFE plugin boundary compliance**
+All Tauri calls in the plugin use `window.__TAURI_INTERNALS__.invoke(...)`.
+No ES module imports from `bridge.ts` at runtime.
 
-**NFR-3 — Popover positioning unchanged**
-The `positionPopover` function requires no changes. The broken-link popover uses
-the same fixed-position layout as the preview popover. The added "Create note"
-button row increases the popover's height; the 240 px `estimatedHeight` constant
-used in the flip-above calculation should be increased to 280 px to account for
-the additional button row.
+**NFR-3 — Atomic writes**
+`create_file` uses the temp-file-swap pattern. All file writes are atomic.
 
-**NFR-4 — Race safety for button click**
-The button click handler must use the `_hoverFetchVersion` increment pattern
-(same as `dismissWikiPopover` and `showWikiPopover`) to discard results from
-clicks that are superseded by a dismiss action.
+**NFR-4 — Error display pattern**
+User-visible errors (duplicate name, illegal characters, OS errors) are
+displayed inline in the `.tree-node-inline-error` span adjacent to the input.
+The input remains open so the user can edit and retry. The existing
+`showInlineError` panel-level strip is used only for unexpected async errors
+after the input has been dismissed (e.g. vault reload failure).
 
-**NFR-5 — CSS uses only existing CSS variables**
-The new `wl-popover-create-btn` style must not introduce hardcoded colours.
+**NFR-5 — CSS uses only existing variables and classes**
+No new CSS classes are introduced. The inline create input reuses
+`.tree-node-rename-input` and `.tree-node-inline-error` which are already
+defined in the embedded `FILE_BROWSER_CSS` constant. If new classes are needed
+(e.g. for a folder creation icon), they must use only the existing CSS custom
+properties (`--accent-color`, `--text-primary`, etc.).
 
 **NFR-6 — Window size invariant must not regress**
-No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts` are required by
-this feature. The window size invariant is unaffected.
+No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts` are required.
+The window size invariant is unaffected.
 
 **NFR-7 — No TODO comments in source**
-Any deferred work must be logged in `docs/specs/backlinks/00_index.md`, not
+Deferred work must be logged in `docs/specs/file-browser/00_index.md`, not
 inline in source code.
+
+**NFR-8 — Plugin build step after any source change**
+After any change to `src/plugins/file-browser/` source files:
+`npm run build:plugins && npm run sync:plugins` must be run before testing.
 
 ---
 
@@ -393,45 +439,41 @@ inline in source code.
 
 | File | Change |
 |------|--------|
-| `src/plugins/backlinks/backlinks.plugin.ts` | (1) Modify `showWikiPopover` to detect broken spans and render "Create note" popover variant; (2) add `createBrokenLinkPopoverElement(stem, creationPath)` helper; (3) add `handleCreateNoteClick(target, spanEl)` async handler; (4) extend `WIKI_POPOVER_CSS` with `.wl-popover-create-btn` and `.wl-popover-error-msg` styles; (5) update `estimatedHeight` constant from 240 to 280 |
+| `src/plugins/file-browser/file-browser-ops.ts` | Fix `openFile` → `openFileInTab` bug (Finding 2); revise extension-handling logic to honour custom extensions (FR-13) |
+| `src/plugins/file-browser/file-browser.plugin.ts` | Fix `_treeEl.prepend` → insert-after-target-directory (FR-8); add "New Folder" to file context menu (FR-12); add contextmenu listener on empty tree space (FR-4); add "New File"/"New Folder" to vault root context menu (EC-17); add `_expandedPaths.add(dirPath)` before folder-creation reload (FR-7) |
 
 ### New files to create
 
-None. All changes are contained in the existing backlinks plugin file.
+None. All changes are contained in the two existing plugin files.
 
 ### Files that must NOT change
 
 | File | Reason |
 |------|--------|
-| `src/lib/bridge.ts` | `writeFile` and `ensureDirectory` already exist; no new commands needed |
-| `src/lib/vault-manager.ts` | `reloadVaultIndex` already exists and is exposed on the window global |
+| `src-tauri/src/commands/file_ops.rs` | All required commands exist; no new Rust commands needed |
+| `src/lib/bridge.ts` | No new bridge wrappers required |
+| `src/lib/vault-manager.ts` | `reloadVaultIndex` already exists and works |
 | `src-tauri/src/lib.rs` | Window size invariant — must not be touched |
 | `src/lib/settings.ts` | Window size invariant — must not be touched |
-| `src/editor/extensions.ts` | No changes to extension set required |
 
 ---
 
 ## Out of Scope
 
-- **Keyboard shortcut to trigger note creation** — the button in the popover is
-  the only trigger; no keyboard shortcut is added in this iteration.
-- **Subfolder picker UI** — path placement follows the deterministic rules in
-  FR-2; there is no folder-picker dialog.
-- **Template selection on creation** — the initial content is always `# {stem}`.
-  Template support is deferred to the Templates plugin.
-- **Sanitising target text for filesystem safety** — characters like `:` in the
-  target are passed through; if the OS rejects them the user sees the error (EC-4).
-- **Creating notes for broken links that have no vault active** — suppressed
-  entirely (EC-1).
-- **Anchor-to-heading generation** — `[[note#section]]` creates `note.md` with
-  only `# note`; no `## section` heading is auto-generated (EC-15).
-- **Disambiguation for same-stem files in different folders** — `stemForLookup`
-  uses only the basename; if two files share a stem across different folders the
-  index considers the link resolved by either. Creation uses vault-root placement
-  for unqualified links, which may create a duplicate stem. Disambiguation UI is
-  deferred.
-- **Undo of note creation** — once created the file exists on disk; undo within
-  CodeMirror does not delete files.
+- **Keyboard shortcut for new file/folder** — not in this iteration; the three
+  trigger points ("+", context menu on node, context menu on empty space) are
+  sufficient for the initial PKM story.
+- **Subfolder picker dialog** — placement is determined by the trigger point
+  (which node was right-clicked); no modal folder picker is introduced.
+- **Template selection on creation** — new files are created with empty content;
+  template support is deferred to the Templates plugin.
+- **Undo of file/folder creation** — once created, files exist on disk; undo
+  within CodeMirror does not delete files.
+- **Drag-to-reorder within the tree** — already implemented via drag-and-drop;
+  not a new concern.
+- **Multi-file selection and batch create** — single-file/folder creation only.
+- **Custom icon for the inline create node** — the temporary `<li>` uses the
+  existing `tree-node-file` / `tree-node-directory` class; no new icon is added.
 
 ---
 
@@ -439,6 +481,6 @@ None. All changes are contained in the existing backlinks plugin file.
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 15 items in Edge Case Inventory (EC-1 through EC-15)
+- Edge cases to verify in tests: 18 items in Edge Case Inventory (EC-1 through EC-18)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

@@ -501,22 +501,30 @@ describe("step_03 — vault inline rename", () => {
 // ── step_04: buildVaultContextMenuItems ───────────────────────────────────────
 
 describe("step_04 — buildVaultContextMenuItems()", () => {
-  it("returns exactly 3 non-separator items: Unmount, Rename, Edit Type", () => {
+  it("returns exactly 5 non-separator items: New File, New Folder, Unmount, Rename, Edit Type", () => {
     const mockEl = document.createElement("li");
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
+    };
     const items = _testing.buildVaultContextMenuItems(mockEl, "/path", "vault-A");
 
     const nonSep = items.filter((i) => !i.separator);
-    expect(nonSep).toHaveLength(3);
-    expect(nonSep[0].label).toBe("Unmount");
-    expect(nonSep[1].label).toBe("Rename");
-    expect(nonSep[2].label).toBe("Edit Type");
+    expect(nonSep).toHaveLength(5);
+    expect(nonSep[0].label).toBe("New File");
+    expect(nonSep[1].label).toBe("New Folder");
+    expect(nonSep[2].label).toBe("Unmount");
+    expect(nonSep[3].label).toBe("Rename");
+    expect(nonSep[4].label).toBe("Edit Type");
   });
 
-  it("total item count is 4 (3 actions + 1 separator)", () => {
+  it("total item count is 7 (5 actions + 2 separators)", () => {
     const mockEl = document.createElement("li");
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
+    };
     const items = _testing.buildVaultContextMenuItems(mockEl, "/path", "vault-A");
 
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(7);
   });
 
   it("Unmount handler on inactive vault calls deleteVault without window.confirm", () => {

@@ -937,7 +937,9 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
   /* Label */
   const label = document.createElement("span");
   label.className = "tree-node-label";
-  label.textContent = node.name;
+  label.textContent = node.type === "file" && node.path.toLowerCase().endsWith(".md")
+    ? node.name + ".md"
+    : node.name;
   label.title = node.path;
   li.appendChild(label);
 }
@@ -996,9 +998,10 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
     li.classList.add("tree-node-active");
   }
 
-  /* Source-file dimming: non-folder, non-.md files (images, PDFs, etc.)
-     are editable only in source mode — dim them to 50% to show this. */
-  if (node.type === "file" && !node.path.toLowerCase().endsWith(".md")) {
+  /* Source-file dimming: binary/media assets (images, PDFs, etc.) are
+     view-only — dim them to 50% to signal they open in the media viewer. */
+  const lp = node.path.toLowerCase();
+  if (node.type === "file" && !lp.endsWith(".md") && !lp.endsWith(".txt")) {
     li.classList.add("tree-node-source-file");
   }
 
@@ -1197,6 +1200,20 @@ function buildTreeUl(
 
   card.appendChild(ul);
   card.appendChild(buildAddRow(vaultId));
+
+  card.addEventListener("contextmenu", (e: MouseEvent) => {
+    if ((e.target as Element).closest(".tree-node")) return;
+    e.preventDefault();
+    const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const rootPath: string = vaultManager?.getActiveVault?.()?.rootPaths?.[0] ?? "";
+    const container = _panelContainer;
+    if (!rootPath || !container) return;
+    showContextMenu([
+      { label: "New File", handler: () => showInlineCreateInput(rootPath, container, vaultId) },
+      { label: "New Folder", handler: () => showInlineFolderCreateInput(rootPath, container, vaultId) },
+    ], e.clientX, e.clientY);
+  });
+
   wrapper.appendChild(card);
 }
 
@@ -1408,13 +1425,12 @@ function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => v
     const path = el.getAttribute("data-path") ?? "";
 
     if (type === "file") {
-      if (path.toLowerCase().endsWith(".md")) {
-        /* Markdown file: open in editor tab (unchanged behaviour). */
+      const lpath = path.toLowerCase();
+      if (lpath.endsWith(".md") || lpath.endsWith(".txt")) {
+        /* Text files (.md, .txt): open in editor tab. */
         void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
       } else {
-        // Non-md asset (image, PDF, etc.): open in the content-area media viewer.
-        // Optional chain guards against test environments where the global may
-        // not yet have openMediaInTab registered.
+        /* Non-text assets (images, PDFs, etc.): open in the media viewer. */
         void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
       }
     } else if (type === "vault") {
@@ -2021,6 +2037,13 @@ function buildFileContextMenuItems(
         showInlineCreateInput(parentDir, container, vaultId);
       },
     },
+    {
+      label: "New Folder",
+      handler: () => {
+        if (!container) return;
+        showInlineFolderCreateInput(parentDir, container, vaultId);
+      },
+    },
     { separator: true, label: "", handler: null },
     {
       label: "Rename",
@@ -2126,8 +2149,26 @@ function buildVaultContextMenuItems(
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
   const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
   const activeVault = vm?.getActiveVault?.();
+  const rootPath: string = activeVault?.rootPaths?.[0] ?? "";
 
   return [
+    {
+      label: "New File",
+      handler: () => {
+        const container = _panelContainer;
+        if (!container || !rootPath) return;
+        showInlineCreateInput(rootPath, container, vaultId);
+      },
+    },
+    {
+      label: "New Folder",
+      handler: () => {
+        const container = _panelContainer;
+        if (!container || !rootPath) return;
+        showInlineFolderCreateInput(rootPath, container, vaultId);
+      },
+    },
+    { separator: true, label: "", handler: null },
     {
       label: "Unmount",
       handler: () => {
@@ -2277,10 +2318,13 @@ export function startInlineRename(el: HTMLElement, path: string, _vaultId: strin
  */
 function showInlineCreateInput(dirPath: string, container: HTMLElement, vaultId: string): void {
   if (!_treeEl) return;
-
   const li = buildInlineInputNode(dirPath, container, vaultId, "file");
-  /* Prepend inside the tree so the input appears at the top */
-  _treeEl.prepend(li);
+  const target = _treeEl.querySelector(`[data-path="${CSS.escape(dirPath)}"]`);
+  if (target) {
+    target.insertAdjacentElement("afterend", li);
+  } else {
+    _treeEl.prepend(li);
+  }
 }
 
 /**
@@ -2293,7 +2337,12 @@ function showInlineCreateInput(dirPath: string, container: HTMLElement, vaultId:
 function showInlineFolderCreateInput(dirPath: string, container: HTMLElement, vaultId: string): void {
   if (!_treeEl) return;
   const li = buildInlineInputNode(dirPath, container, vaultId, "directory");
-  _treeEl.prepend(li);
+  const target = _treeEl.querySelector(`[data-path="${CSS.escape(dirPath)}"]`);
+  if (target) {
+    target.insertAdjacentElement("afterend", li);
+  } else {
+    _treeEl.prepend(li);
+  }
 }
 
 /**
@@ -2311,7 +2360,7 @@ function showInlineFolderCreateInput(dirPath: string, container: HTMLElement, va
 function buildInlineInputNode(
   dirPath: string,
   container: HTMLElement,
-  _vaultId: string,
+  vaultId: string,
   kind: "file" | "directory",
 ): HTMLElement {
   const li = document.createElement("li");
@@ -2350,6 +2399,8 @@ function buildInlineInputNode(
       const newDir = (dirPath.endsWith("/") ? dirPath : dirPath + "/") + name;
       try {
         await (window as any).__TAURI_INTERNALS__?.invoke?.("create_directory", { path: newDir });
+        _expandedPaths.add(dirPath);
+        scheduleSettingsSave(vaultId);
         await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
       } catch (err) {
         errSpan.textContent = String(err);
@@ -2876,6 +2927,14 @@ export const _testing = {
   openNewVaultModal,
   /** Expose buildVaultContextMenuItems for testing (step_04). */
   buildVaultContextMenuItems,
+  /** Expose buildFileContextMenuItems for testing. */
+  buildFileContextMenuItems,
+  /** Expose showInlineCreateInput for testing. */
+  showInlineCreateInput,
+  /** Expose showInlineFolderCreateInput for testing. */
+  showInlineFolderCreateInput,
+  /** Expose buildInlineInputNode for testing. */
+  buildInlineInputNode,
   /** Expose buildNodeEl for testing (step_02). */
   buildNodeEl,
   /** Expose attachVaultUnmountListener for testing (step_02). */

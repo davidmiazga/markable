@@ -15,7 +15,11 @@ npm test                   # Run frontend tests (watch mode)
 npm run test:run           # Run frontend tests once (CI/non-watch)
 npm run test:run -- tests/some.test.ts   # Run a single test file
 cargo test                 # Run Rust tests (from src-tauri/)
+npm run build:plugins      # Recompile all plugin IIFEs (src/plugins/**/*.ts → src-tauri/plugins/core/*.js)
+npm run sync:plugins       # Copy compiled plugins to app data directory
 ```
+
+> **Plugin build rule**: changes to `src/plugins/**/*.ts` do NOT hot-reload. Always run `npm run build:plugins && npm run sync:plugins` after editing any plugin source.
 
 ## Architecture
 
