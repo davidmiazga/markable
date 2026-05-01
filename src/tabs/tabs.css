@@ -510,13 +510,13 @@
   overflow: auto;
   align-items: center;
   justify-content: center;
-  background: var(--bg-color);
+  background: var(--bg-primary, #1e1e2e);
   padding: var(--content-padding, 24px);
   box-sizing: border-box;
 }
 
 #editor.has-media-tab .cm-editor {
-  display: none;
+  display: none !important;
 }
 
 #editor.has-media-tab #media-viewer {
