@@ -126,6 +126,9 @@ pub struct VaultIndexPayload {
     /// All non-Markdown files found during the walk (images, PDFs, etc.).
     /// Not capped — the md-only cap does not apply here.
     pub non_md_files: Vec<NonMdFile>,
+    /// All subdirectory paths found during the walk, including empty ones.
+    /// Used by the file-browser tree builder so empty directories are visible.
+    pub directories: Vec<String>,
 }
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
@@ -734,6 +737,7 @@ pub async fn build_vault_index(
     let max = max_count as usize;
     let mut entries: Vec<VaultIndexEntry> = Vec::new();
     let mut non_md_files: Vec<NonMdFile> = Vec::new();
+    let mut directories: Vec<String> = Vec::new();
     let mut total_files_found: u32 = 0;
     let mut skipped_count: u32 = 0;
     let mut capped = false;
@@ -783,6 +787,9 @@ pub async fn build_vault_index(
             }
 
             if !entry.file_type().is_file() {
+                if entry.file_type().is_dir() {
+                    directories.push(path.to_string_lossy().to_string());
+                }
                 continue;
             }
 
@@ -830,6 +837,7 @@ pub async fn build_vault_index(
         skipped_count,
         capped,
         non_md_files,
+        directories,
     })
 }
 

@@ -123,6 +123,8 @@ export interface VaultIndex {
   capped: boolean;
   /** All non-Markdown files found during the walk (images, PDFs, etc.). */
   nonMdFiles?: NonMdFile[];
+  /** All subdirectory paths found during the walk, including empty directories. */
+  directories?: string[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────

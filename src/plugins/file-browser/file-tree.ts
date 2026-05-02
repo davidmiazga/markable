@@ -184,6 +184,7 @@ export function buildTreeFromIndex(
   rootPaths: string[],
   expandedPaths: Set<string>,
   vault: VaultEntry,
+  directories?: string[],
 ): TreeNode[] {
   /*
    * Build a map from absolute path → TreeNode for all directory nodes so we
@@ -204,10 +205,11 @@ export function buildTreeFromIndex(
      * For each entry, walk its relative path segments and create/reuse
      * directory nodes up to the file.
      */
+    const normalRoot = rootPath.endsWith("/") ? rootPath : rootPath + "/";
     const rootEntries = entries.filter((e) => {
-      const normalRoot = rootPath.endsWith("/") ? rootPath : rootPath + "/";
       return e.path.startsWith(normalRoot) || e.path === rootPath;
     });
+    const rootDirs = (directories ?? []).filter((d) => d.startsWith(normalRoot));
 
     /*
      * When a vault has multiple rootPaths, each root gets its own subtree.
@@ -215,8 +217,8 @@ export function buildTreeFromIndex(
      * the tree shallow.
      */
     const container: TreeNode[] = rootPaths.length > 1
-      ? buildSubtree(rootPath, rootEntries, expandedPaths, dirMap, 1)
-      : buildSubtree(rootPath, rootEntries, expandedPaths, dirMap, 0);
+      ? buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 1)
+      : buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 0);
 
     rootChildren.push(...container);
   }
@@ -262,11 +264,38 @@ export function buildTreeFromIndex(
 function buildSubtree(
   rootPath: string,
   entries: VaultIndexEntry[],
+  directories: string[],
   expandedPaths: Set<string>,
   dirMap: Map<string, TreeNode>,
   baseDepth: number,
 ): TreeNode[] {
   const topLevel: TreeNode[] = [];
+
+  // First pass: ensure directory nodes exist for all known subdirectories,
+  // including empty ones not reachable from any file path.
+  for (const dirPath of directories) {
+    const parts = relativeParts(rootPath, dirPath);
+    let parentChildren = topLevel;
+    let currentPath = rootPath;
+    for (let i = 0; i < parts.length; i++) {
+      currentPath = currentPath + "/" + parts[i];
+      const depth = baseDepth + i;
+      if (!dirMap.has(currentPath)) {
+        const dirNode: TreeNode = {
+          type: "directory",
+          path: currentPath,
+          name: parts[i],
+          children: [],
+          expanded: expandedPaths.has(currentPath),
+          depth,
+          iconClass: "folder-icon",
+        };
+        dirMap.set(currentPath, dirNode);
+        parentChildren.push(dirNode);
+      }
+      parentChildren = dirMap.get(currentPath)!.children;
+    }
+  }
 
   for (const entry of entries) {
     const parts = relativeParts(rootPath, entry.path);

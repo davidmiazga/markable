@@ -146,6 +146,7 @@ async function buildAndCacheIndex(vault: VaultEntry): Promise<VaultIndex> {
     skippedCount: number;
     capped: boolean;
     nonMdFiles: VaultIndex["nonMdFiles"];
+    directories: VaultIndex["directories"];
   }>("build_vault_index", {
     vaultId: vault.id,
     rootPaths: vault.rootPaths,
@@ -163,6 +164,7 @@ async function buildAndCacheIndex(vault: VaultEntry): Promise<VaultIndex> {
     skippedCount: payload.skippedCount,
     capped: payload.capped,
     nonMdFiles: payload.nonMdFiles ?? [],
+    directories: payload.directories ?? [],
   };
 
   // Persist to disk. EC-09: failure is logged but does not affect the in-memory

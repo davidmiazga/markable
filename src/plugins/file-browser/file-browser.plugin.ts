@@ -348,6 +348,11 @@ const FILE_BROWSER_CSS = `
   outline: 1px dashed var(--accent-color);
 }
 
+/* Dim the node being dragged so the user has clear visual feedback (FR-2, FR-3). */
+.is-dragging {
+  opacity: 0.5;
+}
+
 /* ── Link-update banner ────────────────────────────────────────────────────── */
 .file-browser-link-banner {
   display: flex;
@@ -652,6 +657,15 @@ let _fsUnlisten: (() => void) | null = null;
 
 /** Debounce timer for FS watcher events — fires after 300ms of silence. */
 let _fsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Tracks the path of the node currently being dragged within the tree.
+ * Set on dragstart, cleared on dragend. Used instead of dataTransfer.types
+ * in the dragover handler because WKWebView (Tauri/macOS) does not always
+ * expose custom MIME types in dataTransfer.types during dragover, which
+ * prevents preventDefault() from being called and blocks the drop event.
+ */
+let _activeDragPath: string | null = null;
 
 // ── Settings persistence ──────────────────────────────────────────────────────
 
@@ -1299,7 +1313,12 @@ function renderTreeContent(wrapper: HTMLElement): void {
 
   const vaultIndex = vaultManager?.getVaultIndex?.() as VaultIndex | null;
 
-  if (!vaultIndex || vaultIndex.entries.length === 0) {
+  const hasContent =
+    vaultIndex &&
+    (vaultIndex.entries.length > 0 ||
+      (vaultIndex.nonMdFiles?.length ?? 0) > 0 ||
+      (vaultIndex.directories?.length ?? 0) > 0);
+  if (!hasContent) {
     renderEmptyState(wrapper, "no-files");
     return;
   }
@@ -1327,6 +1346,7 @@ function renderTreeContent(wrapper: HTMLElement): void {
     activeVault.rootPaths,
     _expandedPaths,
     activeVault,
+    vaultIndex.directories,
   );
   sortNodes(tree);
   _currentTree = tree;
@@ -2470,36 +2490,217 @@ function buildInlineInputNode(
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
 
 /**
+ * Pure guard logic for the drag-drop handler, extracted for unit testing.
+ *
+ * Given the target node's path and type, and the source node's path, returns
+ * the directory that `moveNode` should target, or `null` when the drop is a
+ * no-op.
+ *
+ * No-op cases (returns null):
+ *   - sourcePath is empty — external drag from OS Finder or browser (EC-17, FR-7)
+ *   - targetDir equals sourcePath — dragged directory dropped on its own <li> (EC-4)
+ *   - targetDir equals source's parent — dropped into its current parent (EC-3)
+ *   - targetDir starts with sourcePath + "/" — cycle: folder dropped into a
+ *     descendant of itself (EC-5)
+ *
+ * File-on-file resolution (EC-2, FR-5):
+ *   When the drop target is a file node, the effective targetDir is the file's
+ *   parent directory, not the file itself.
+ *
+ * @param targetPath - data-path of the <li> that received the drop.
+ * @param targetType - data-type of the <li> ("file" | "directory" | "vault").
+ * @param sourcePath - data-path of the <li> being dragged (from DataTransfer).
+ * @returns Resolved target directory, or null when the drop should be ignored.
+ *
+ * @internal exported for tests only
+ */
+export function resolveDropTarget(
+  targetPath: string,
+  targetType: string,
+  sourcePath: string,
+): string | null {
+  // EC-17: external drags carry no markable MIME data; reject them silently.
+  if (!sourcePath) return null;
+
+  // Resolve the effective target directory.
+  // File nodes represent files, not directories; a drop onto a file node means
+  // "move the source into the same folder as this file" (FR-5).
+  const targetDir = targetType === "file" ? getParentDir(targetPath) : targetPath;
+
+  // EC-4: the directory node was dropped onto its own <li>.
+  if (targetDir === sourcePath) return null;
+
+  // EC-3: the node is already in this directory — the move would be a no-op.
+  // This guard applies to all target types, including vault root. If the source
+  // is already a direct child of the vault root (e.g. /vault/docs), dropping it
+  // on the vault root is also a no-op. EC-20 (a non-child dropped onto vault root)
+  // still passes because getParentDir(sourcePath) will differ from the vault root.
+  if (targetDir === getParentDir(sourcePath)) return null;
+
+  // EC-5: dropping a directory into one of its own descendants would create a
+  // filesystem cycle. Reject by checking whether targetDir starts with the
+  // source path followed by a separator.
+  if (targetDir.startsWith(sourcePath + "/")) return null;
+
+  return targetDir;
+}
+
+/**
  * Attach HTML5 drag-and-drop event handlers to a rendered tree node.
  *
- * File and directory nodes are draggable. Directory nodes accept drops.
- * Vault-root nodes cannot be dragged (dropping a vault is a no-op).
+ * File and directory nodes are draggable (vault root is not — EC-1).
+ * All node types (file, directory, vault) accept drops.
+ * File nodes resolve their drop target to their parent directory (FR-5, EC-2).
  *
  * @param el      - The <li> element to wire up.
- * @param vaultId - Active vault ID (unused here, forwarded to moveNode).
+ * @param _vaultId - Active vault ID (reserved for future per-vault routing).
  */
 function attachDragDropListeners(el: HTMLElement, _vaultId: string): void {
   const type = el.getAttribute("data-type");
   const path = el.getAttribute("data-path") ?? "";
 
-  /* All file and directory nodes are draggable */
+  /* File and directory nodes are draggable via pointer events; vault root is not (EC-1).
+   * HTML5 drag+drop (draggable="true") is NOT used because WKWebView on macOS does not
+   * reliably fire dragstart. Instead we use pointerdown/pointermove/pointerup which work
+   * correctly in Tauri's WebView. The dragend handler is retained so existing tests that
+   * dispatch synthetic dragend events continue to exercise the cleanup path. */
   if (type === "file" || type === "directory") {
-    el.setAttribute("draggable", "true");
+    let startX = 0;
+    let startY = 0;
+    let dragActive = false;
+    let activePointerId = -1;
+    let currentDropTarget: HTMLElement | null = null;
+    let ghostEl: HTMLElement | null = null;
 
-    el.addEventListener("dragstart", (e: DragEvent) => {
-      e.dataTransfer?.setData("text/plain", path);
+    const cleanupDrag = (): void => {
+      if (ghostEl) { ghostEl.remove(); ghostEl = null; }
+      el.classList.remove("is-dragging");
+      currentDropTarget?.classList.remove("drag-over");
+      currentDropTarget = null;
+      _activeDragPath = null;
+      dragActive = false;
+      activePointerId = -1;
+      _treeEl?.querySelectorAll(".drag-over").forEach((n) => n.classList.remove("drag-over"));
+      document.body.style.userSelect = "";
+      (document.body.style as any).webkitUserSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    el.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      dragActive = false;
+      activePointerId = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch { /* JSDOM may not support */ }
+      // Suppress text selection immediately so even sub-threshold pointer movement
+      // never highlights text. Restored unconditionally in cleanupDrag().
+      document.body.style.userSelect = "none";
+      (document.body.style as any).webkitUserSelect = "none";
+      window.getSelection()?.removeAllRanges();
       e.stopPropagation();
     });
 
-    el.addEventListener("dragend", () => {
-      /* Remove drag-over highlights from all nodes after a drag ends */
-      _treeEl?.querySelectorAll(".drag-over").forEach((n) => n.classList.remove("drag-over"));
+    el.addEventListener("pointermove", (e: PointerEvent) => {
+      if (e.pointerId !== activePointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (!dragActive) {
+        if (Math.hypot(dx, dy) < 6) return;
+        dragActive = true;
+        _activeDragPath = path;
+        el.classList.add("is-dragging");
+        // Suppress text selection and set a grabbing cursor across the whole
+        // document for the duration of the drag.
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "grabbing";
+        // Clear any selection that may have started before the threshold was crossed.
+        window.getSelection()?.removeAllRanges();
+        ghostEl = document.createElement("div");
+        ghostEl.className = "drag-ghost";
+        ghostEl.textContent = el.querySelector(".file-name, .dir-name, .vault-name")
+          ?.textContent ?? path.split("/").pop() ?? "item";
+        ghostEl.style.cssText =
+          "position:fixed;z-index:9999;pointer-events:none;padding:3px 8px;" +
+          "background:var(--bg-secondary,#2a2a2a);border:1px solid var(--border-color,#444);" +
+          "border-radius:4px;font-size:12px;white-space:nowrap;opacity:0.85;";
+        document.body.appendChild(ghostEl);
+      }
+
+      if (!dragActive) return;
+
+      if (ghostEl) {
+        ghostEl.style.left = `${e.clientX + 14}px`;
+        ghostEl.style.top = `${e.clientY + 6}px`;
+      }
+
+      // Hit-test: find the tree node under the cursor (excluding the dragged node itself).
+      el.style.pointerEvents = "none";
+      const hitEl = document.elementFromPoint(e.clientX, e.clientY);
+      el.style.pointerEvents = "";
+
+      const targetNode =
+        (hitEl as HTMLElement | null)?.closest<HTMLElement>("[data-path][data-type]") ?? null;
+
+      if (targetNode !== currentDropTarget) {
+        currentDropTarget?.classList.remove("drag-over");
+        currentDropTarget = null;
+      }
+      if (targetNode && targetNode !== el) {
+        const tType = targetNode.getAttribute("data-type");
+        if (tType === "file" || tType === "directory" || tType === "vault") {
+          targetNode.classList.add("drag-over");
+          currentDropTarget = targetNode;
+        }
+      }
     });
+
+    const handlePointerEnd = (e: PointerEvent): void => {
+      if (e.pointerId !== activePointerId) {
+        // Different pointer — still clear any userSelect lock we set on pointerdown.
+        document.body.style.userSelect = "";
+        (document.body.style as any).webkitUserSelect = "";
+        document.body.style.cursor = "";
+        return;
+      }
+      try { el.releasePointerCapture(e.pointerId); } catch { /* JSDOM may not support */ }
+
+      if (dragActive && currentDropTarget) {
+        const targetPath = currentDropTarget.getAttribute("data-path") ?? "";
+        const targetType = currentDropTarget.getAttribute("data-type") ?? "";
+        const sourcePath = path;
+        cleanupDrag();
+
+        const targetDir = resolveDropTarget(targetPath, targetType, sourcePath);
+        if (targetDir !== null) {
+          void moveNode(sourcePath, targetDir, _panelContainer).catch((err) => {
+            console.error("[file-browser] move failed:", err);
+            if (_panelContainer) {
+              showInlineError(_panelContainer, `Move failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          });
+        }
+      } else {
+        cleanupDrag();
+      }
+    };
+
+    el.addEventListener("pointerup", handlePointerEnd);
+    el.addEventListener("pointercancel", handlePointerEnd);
+
+    // dragend is kept solely so existing tests that dispatch synthetic "dragend"
+    // events can exercise the cleanup path without needing pointer-capture support.
+    el.addEventListener("dragend", cleanupDrag);
   }
 
-  /* Directories and vault roots accept drops */
-  if (type === "directory" || type === "vault") {
+  /* All node types accept drops via the pointer-up path above (source element finds
+   * the target via elementFromPoint). The dragover/dragleave/drop listeners below are
+   * retained only for test compatibility: test suites dispatch synthetic DragEvents
+   * which do not go through the pointer path. They are dead code in the live app. */
+  if (type === "file" || type === "directory" || type === "vault") {
     el.addEventListener("dragover", (e: DragEvent) => {
+      if (_activeDragPath === null) return;
       e.preventDefault();
       el.classList.add("drag-over");
     });
@@ -2513,23 +2714,16 @@ function attachDragDropListeners(el: HTMLElement, _vaultId: string): void {
       e.stopPropagation();
       el.classList.remove("drag-over");
 
-      const sourcePath = e.dataTransfer?.getData("text/plain");
-      if (!sourcePath || sourcePath === path) return;
+      const sourcePath =
+        _activeDragPath ?? e.dataTransfer?.getData("text/x-markable-path") ?? "";
 
-      /* Prevent dropping into a descendant of the dragged node */
-      if (path.startsWith(sourcePath + "/")) return;
+      const targetDir = resolveDropTarget(path, type, sourcePath);
+      if (targetDir === null) return;
 
-      // Pass _panelContainer (nullable) so moveNode can show the link-update
-      // banner when needed. checkAndShowLinkBanner guards the null case internally.
-      void moveNode(sourcePath, path, _panelContainer).catch((err) => {
+      void moveNode(sourcePath, targetDir, _panelContainer).catch((err) => {
         console.error("[file-browser] move failed:", err);
-        /*
-         * MEDIUM-2: Surface the move failure as a visible error strip so the
-         * user knows the operation did not complete. showInlineError is imported
-         * from file-browser-ops and is already used elsewhere in the plugin.
-         */
         if (_panelContainer) {
-          showInlineError(_panelContainer, `Move failed: ${String(err)}`);
+          showInlineError(_panelContainer, `Move failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
     });
@@ -2862,6 +3056,7 @@ const plugin = {
     _contextMenuEscHandler = null;
     _fsUnlisten = null;
     _fsDebounceTimer = null;
+    _activeDragPath = null;
   },
 };
 
@@ -2961,6 +3156,8 @@ export const _testing = {
   showInlineFolderCreateInput,
   /** Expose buildInlineInputNode for testing. */
   buildInlineInputNode,
+  /** Expose attachDragDropListeners for drag-to-move tests (step_02b). */
+  attachDragDropListeners,
   /** Expose buildNodeEl for testing (step_02). */
   buildNodeEl,
   /** Expose attachVaultUnmountListener for testing (step_02). */

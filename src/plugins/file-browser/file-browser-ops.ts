@@ -662,8 +662,43 @@ export async function moveNode(
   // Reload the vault index so the tree reflects the new location.
   await (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 
-  // Notify the tab manager so the open tab path and title update (FR-11).
-  (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(sourcePath, newPath);
+  // Update open tabs.
+  //
+  // For a directory move we must update every tab whose path lives under the
+  // moved directory, using prefix-substitution (mirrors the renameNode pattern
+  // from lines 388–406). The discriminator is whether any open tab's filePath
+  // starts with `sourcePath + "/"`:
+  //   - If yes  → this is a directory move; iterate and rewrite every matching tab.
+  //   - If no   → this is a file move (or a directory with no open tabs); fall
+  //               through to the single-path handleFileRename call.
+  //
+  // A file path never ends with "/" so `filePath.startsWith(sourcePath + "/")`
+  // is always false when sourcePath is a file path, making the else branch
+  // correct for file moves without requiring a separate nodeType parameter (FR-11, EC-8, EC-9).
+  const prefix = sourcePath + "/";
+  const tabs: Array<{ filePath: string | null }> =
+    (window as any).__MARKABLE_TAB_MANAGER__?.getTabs?.() ?? [];
+
+  // Determine whether any open tab is nested inside the moved node.
+  const directoryTabsExist = tabs.some((t) => t.filePath?.startsWith(prefix));
+
+  if (directoryTabsExist) {
+    // Directory move: rebuild the path for every tab inside the moved directory.
+    // getTabs() returns a shallow copy so iterating while handleFileRename mutates
+    // the live tab array is safe (same invariant relied on by renameNode).
+    for (const tab of tabs) {
+      if (tab.filePath?.startsWith(prefix)) {
+        // Replace only the leading sourcePath segment; preserve the relative tail.
+        const newTabPath = newPath + "/" + tab.filePath.slice(prefix.length);
+        (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(tab.filePath, newTabPath);
+      }
+    }
+  } else {
+    // File move (or directory with no open tabs): update the single path.
+    // handleFileRename is a no-op when no tab has the given filePath, so this is
+    // safe for directories that have no open tabs (EC-9).
+    (window as any).__MARKABLE_TAB_MANAGER__?.handleFileRename?.(sourcePath, newPath);
+  }
 
   // Only show the banner when the stem actually changed (AD-01).
   // For a standard move this guard is always false; it guards future edge cases.

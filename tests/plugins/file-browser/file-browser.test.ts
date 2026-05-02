@@ -1404,7 +1404,9 @@ describe("watch_vault and unwatch_vault lifecycle", () => {
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
 
 describe("drag-and-drop", () => {
-  it("dragstart on a file node sets the path in dataTransfer", () => {
+  it("file node is configured for pointer-based drag (no draggable attr)", () => {
+    // HTML5 drag (draggable="true") is NOT used because WKWebView on macOS does
+    // not reliably fire dragstart. Pointer events are used instead.
     setupVaultManager(makeVault(), makeVaultIndex(["/notes/note-a.md"]));
     const container = makeContainer();
     _testing.setPanelContainer(container);
@@ -1413,25 +1415,32 @@ describe("drag-and-drop", () => {
     const fileNode = container.querySelector<HTMLElement>(".tree-node-file");
     expect(fileNode).not.toBeNull();
 
-    // File nodes should have draggable="true"
-    expect(fileNode!.getAttribute("draggable")).toBe("true");
+    // draggable="true" must NOT be set — pointer events handle drag instead.
+    expect(fileNode!.getAttribute("draggable")).not.toBe("true");
   });
 
   it("drop on a vault node calls move_file Tauri command", async () => {
-    setupVaultManager(makeVault(), makeVaultIndex(["/notes/note-a.md"]));
+    // Source must be a NESTED file (/notes/sub/note-a.md) so its parent
+    // (/notes/sub) differs from the vault root (/notes). If the source were
+    // a direct child of the vault root, the EC-3 own-parent guard (H1 fix)
+    // would treat the drop as a no-op before invoking move_file.
+    setupVaultManager(makeVault(), makeVaultIndex(["/notes/sub/note-a.md"]));
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
 
-    const invokeMock = vi.fn().mockResolvedValue("/notes/sub/note-a.md");
+    const invokeMock = vi.fn().mockResolvedValue("/notes/note-a.md");
     (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
 
     const vaultNode = container.querySelector<HTMLElement>(".tree-node-vault");
     expect(vaultNode).not.toBeNull();
 
     const dt = {
-      getData: vi.fn(() => "/notes/note-a.md"),
+      getData: vi.fn((key: string) =>
+        key === "text/x-markable-path" ? "/notes/sub/note-a.md" : "",
+      ),
       setData: vi.fn(),
+      types: ["text/x-markable-path"],
     };
 
     const dropEvent = new DragEvent("drop", { bubbles: true, cancelable: true });
@@ -1441,7 +1450,7 @@ describe("drag-and-drop", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(invokeMock).toHaveBeenCalledWith("move_file", expect.objectContaining({
-      source: "/notes/note-a.md",
+      source: "/notes/sub/note-a.md",
     }));
   });
 });
@@ -1773,12 +1782,17 @@ describe("moveNode error handling (EC-19)", () => {
      *   a) a .file-browser-inline-error strip in the panel container, or
      *   b) a visible mechanism the user can observe.
      *
-     * After MEDIUM-2 was fixed, moveNode's catch handler calls showInlineError
-     * on _panelContainer, so we verify the error strip appears in the panel.
+     * After MEDIUM-2 fix, moveNode's catch handler calls showInlineError on
+     * _panelContainer, so we verify the error strip appears in the panel.
+     *
+     * Note: the source must be a DEEPLY nested file (/notes/sub/note-a.md) so
+     * its parent directory (/notes/sub) differs from the vault root (/notes).
+     * If the source were a direct child of the vault root, the EC-3 own-parent
+     * guard would short-circuit the drop before moveNode is ever called (H1 fix).
      */
-    setupVaultManager(makeVault(), makeVaultIndex(["/notes/note-a.md"]));
+    setupVaultManager(makeVault(), makeVaultIndex(["/notes/sub/note-a.md"]));
 
-    const invokeMock = vi.fn().mockRejectedValue(new Error("File 'note-a.md' already exists in '/notes/sub'"));
+    const invokeMock = vi.fn().mockRejectedValue(new Error("File 'note-a.md' already exists in '/notes'"));
     (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
 
     const container = makeContainer();
@@ -1790,8 +1804,11 @@ describe("moveNode error handling (EC-19)", () => {
     expect(vaultNode).not.toBeNull();
 
     const dt = {
-      getData: vi.fn(() => "/notes/note-a.md"),
+      getData: vi.fn((key: string) =>
+        key === "text/x-markable-path" ? "/notes/sub/note-a.md" : "",
+      ),
       setData: vi.fn(),
+      types: ["text/x-markable-path"],
     };
 
     const dropEvent = new DragEvent("drop", { bubbles: true, cancelable: true });
