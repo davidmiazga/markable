@@ -1,316 +1,302 @@
 ---
-title: Drag-to-Move Files and Folders in File Browser Tree
-last-updated: "2026-04-30"
+title: Outline Panel — Live Heading Tree with Bidirectional Fold Sync
+last-updated: "2026-05-02"
 review-cadence-days: 90
-status: archive
+status: active
 ---
 
-# Drag-to-Move Files and Folders in File Browser Tree
+# Outline Panel — Live Heading Tree with Bidirectional Fold Sync
 
 ## Feature Summary
 
-As a user with a vault open in the file browser, I want to drag any file or
-folder node onto a directory or vault-root node to move it there, so that I
-can reorganise my vault without leaving the editor.
-
-This is the final piece of full CRUD + reorganisation for the file browser
-tree, completing the sequence: Create (shipped), Rename + Delete (shipped),
-Move (this task).
+As a writer using Markable, I want a sidebar panel that shows a live H1–H6
+heading tree for the active document, so that I can navigate long documents
+quickly and collapse sections both from the panel and from the editor, with
+both views always staying in sync.
 
 ---
 
 ## Codebase Context Findings
 
-### Finding 1 — Drag-and-drop plumbing already exists but has gaps
+### Finding 1 — Auto-TOC plugin is the closest existing precedent
 
-`attachDragDropListeners` (file-browser.plugin.ts, line 2481) already:
-- Marks `file` and `directory` nodes as `draggable="true"`.
-- Sets `dragstart` data via `e.dataTransfer.setData("text/plain", path)`.
-- Adds `dragend` cleanup that removes `.drag-over` from all nodes.
-- Adds `dragover` / `dragleave` / `drop` on `directory` and `vault` nodes.
-- `drop` reads the source path, guards against dropping onto itself and
-  dropping into a descendant, then calls `moveNode(sourcePath, targetPath, _panelContainer)`.
+`src/plugins/auto-toc/auto-toc.plugin.ts` already implements:
+- `scanHeadings()` — a pure function that extracts ATX headings (H1–H6) from
+  raw document text, skipping fenced code blocks.
+- `findActiveIndex()` — finds the heading whose section contains the cursor.
+- A CM6 `updateListener` extension debounced at 150 ms that re-renders on
+  doc/selection changes.
+- A sidebar panel registered via `api.registerSidebarPanel()`.
 
-`moveNode` (file-browser-ops.ts, line 648) already:
-- Calls `move_file` Rust command.
-- Reloads the vault index.
-- Calls `handleFileRename` on the tab manager.
-- Shows the link-update banner when the stem changes (always false for moves,
-  but the guard exists for future safety).
+The Outline Panel can reuse the `HeadingEntry` type and the `scanHeadings`
+logic verbatim, but is a separate plugin with distinct fold state management
+not present in auto-toc.
 
-`move_file` (file_ops.rs, line 173) already:
-- Validates source exists.
-- Validates destination is a directory.
-- Rejects if `destination_dir/filename` already exists (EC-19 guard).
-- Returns the new absolute path on success.
+### Finding 2 — No folding infrastructure exists yet
 
-**This is therefore a "specify, harden, and complete UX" task, not a
-"write from scratch" task.** The primary work is:
-1. Handling the "file dropped on a file" case (drop into parent directory).
-2. Handling the folder-move case (`moveNode` only calls `handleFileRename`
-   for one path; all open tabs under the moved folder need updating).
-3. Ensuring drag visual feedback is correct and cleaned up on all paths.
-4. Specifying the inline error surface for the no-op and collision cases.
+The app has NO fold gutter, NO `foldEffect` / `unfoldEffect` in any extension,
+and NO `foldedRanges` usage anywhere in the codebase. This plugin introduces
+section folding as the first and only fold mechanism in Markable. CM6 provides
+the building blocks:
 
-### Finding 2 — File-on-file drop is not handled
+- `@codemirror/language`: `foldEffect`, `unfoldEffect`, `foldedRanges`,
+  `foldService`, `codeFolding`.
+- These are already exposed as window globals via `src/lib/cm-globals.ts` (the
+  `@codemirror/language` window global must be verified as exported there;
+  if absent, it must be added as a prerequisite step before plugin implementation).
 
-The current `drop` handler fires only on `directory` and `vault` nodes
-(these are the only nodes that register `dragover`/`drop`). If a user drags
-a file and releases it over another file node, nothing happens — no drop is
-registered because the file `<li>` is not a drop target. The intended
-behaviour (per the feature brief) is to treat a file-on-file drop as a drop
-into the target file's parent directory. This requires either:
-(a) making file nodes also accept drops and resolving `targetDir` to the
-    parent directory in the `drop` handler, or
-(b) keeping only directory/vault nodes as drop targets and relying on the
-    directory row being visible above the file. Option (a) is specified here
-    as it matches the stated intent and common file-browser conventions.
+### Finding 3 — `pluginCompartment` is the correct extension injection point
 
-### Finding 3 — Folder move does not update open tabs under moved folder
+Plugins add CM6 extensions via `api.addExtensions(extensions[])`. These are
+merged into `pluginCompartment` in `extensions.ts`. The Outline plugin's fold
+listener and gutter (if any) must use this path — no direct mutation of
+`buildExtensions()`.
 
-`moveNode` calls `handleFileRename(sourcePath, newPath)` where `newPath` is
-the new absolute path of the moved item. For a **file** move this is correct:
-`handleFileRename` updates the single tab whose `filePath === sourcePath`.
+### Finding 4 — Single shared EditorView; fold state is per EditorState
 
-For a **folder** move, `sourcePath` is a directory path, not a file path.
-`handleFileRename` will find no tab with `filePath === directoryPath` (tabs
-store file paths, not directory paths) and silently do nothing. All open tabs
-whose paths begin with `sourcePath + "/"` will be left with stale file paths
-pointing to the old (now non-existent) location.
+TabManager manages one EditorView. Tab switches call `view.setState(newState)`,
+replacing the entire EditorState. Each tab's EditorState is independent:
+`foldedRanges` is stored inside the state, so fold state is naturally per-tab.
+No explicit per-tab fold state storage is required at the plugin layer.
 
-`moveNode` must be updated to detect the directory case and iterate all open
-tabs, updating each one whose path starts with the moved directory's path —
-the same prefix-substitution pattern used by `renameNode` for directory
-renames (file-browser-ops.ts, lines 393–406).
+### Finding 5 — `window.__MARKABLE_EDITOR__` is the live EditorView reference
 
-### Finding 4 — `dragover` removes `.drag-over` class only on `dragleave`, not across siblings
+Plugins access the editor as
+`(window as any).__MARKABLE_EDITOR__ as EditorView`. The same pattern is
+used by auto-toc. The value is always current because TabManager updates it
+via `setEditorView` on init.
 
-When the user drags from one drop target to another, `dragleave` fires on the
-first target and removes `.drag-over`. Then `dragover` fires on the new target
-and adds `.drag-over` there. This sequencing is correct. However, the `dragend`
-cleanup in the drag source is the safety net — it removes `.drag-over` from all
-nodes in case the drag is abandoned outside any target. The existing
-implementation already does this correctly.
+### Finding 6 — Tab-change events are not yet a formal plugin API
 
-### Finding 5 — No visual feedback while dragging a node (drag ghost / opacity)
+Auto-toc detects tab changes through the CM6 `updateListener` — when the
+document changes (docChanged flag), the panel re-scans. This is the correct
+approach for the Outline Panel too. The listener receives every `ViewUpdate`
+including those caused by `setState()` on a tab switch (docChanged = true when
+the new state has a different document).
 
-The HTML5 drag API provides a default drag ghost (a semi-transparent copy of
-the element). The browser default is sufficient for this application. A custom
-`setDragImage` call is not required.
+### Finding 7 — `window.__CM_LANGUAGE__` global must exist for fold effects
 
-A subtle improvement: setting `opacity: 0.5` on the dragged element during a
-drag (`.is-dragging` CSS class on `dragstart`, removed on `dragend`) gives
-the user a clear signal of which node is in flight. This is low-risk and
-purely additive CSS.
-
-### Finding 6 — `move_file` Rust command only handles files, not directories
-
-`move_file` in `file_ops.rs` validates `src.exists()` but does NOT check
-whether the source is a file or directory. `std::fs::rename` works for both
-files and directories on macOS/POSIX, so the command works for directory
-moves without any code change. The function name `move_file` is a misnomer
-but the implementation is correct. No Rust changes are needed.
-
-### Finding 7 — No-op case: dropped on own parent directory
-
-The current `drop` handler guards `sourcePath === path` (prevents dropping a
-node onto itself — the case where a directory is dropped on itself). However
-it does NOT guard the case where a file is dropped on its own parent directory:
-`path === getParentDir(sourcePath)`. In this case `move_file` would try to
-rename `file.md` to `parentDir/file.md` (same as the current path), causing
-`rename_file` to return `Err("Destination already exists")`. This should be
-caught before the Rust call and treated as a silent no-op.
-
-### Finding 8 — CSS `.drag-over` class already defined
-
-The CSS rule `.drag-over { background: var(--drag-target-bg, rgba(92,107,192,.1)); outline: 1px dashed var(--accent-color); }` is already in `FILE_BROWSER_CSS` (line 346–349). No new CSS rules are needed for drop-target highlighting.
-
-### Finding 9 — Cycle-prevention guard already exists
-
-The current `drop` handler includes `if (path.startsWith(sourcePath + "/")) return;`
-which prevents dragging a folder into its own descendant. This guard is
-complete and correct.
-
-### Finding 10 — `moveNode` currently only shows link-update banner when stem changes
-
-For a file named `note.md` moved from `/vault/A/note.md` to `/vault/B/note.md`,
-the stem (`note`) does not change so `oldStem !== newStem` is false and the
-banner is suppressed (AD-01 guard). This is correct behaviour: moving a file
-does not change wiki-link paths because Markable wiki-links are stem-based, not
-path-based. No change needed here.
-
-### Finding 11 — Existing test file exists for this feature
-
-`tests/plugins/backlinks/create-note-from-broken-wikilink.test.ts` and
-`docs/specs/create-note-from-broken-wikilink/` exist but are unrelated to this
-feature. A new test file at
-`tests/plugins/file-browser/drag-to-move.test.ts` should be created for this
-feature (TDD in the Lead Developer phase).
+The fold API (`foldEffect`, `unfoldEffect`, `foldedRanges`, `foldService`,
+`codeFolding`) lives in `@codemirror/language`. `src/lib/cm-globals.ts` must
+expose this package as `window.__CM_LANGUAGE__`. If it is not yet exposed, that
+is a prerequisite code change (outside the plugin's IIFE boundary) that must
+be added before the plugin can use fold effects.
 
 ---
 
 ## Functional Requirements
 
-### FR-1 — Drag source: files and directories are draggable; vault root is not
+### FR-1 — Plugin registration and lifecycle
 
-Every `<li>` node with `data-type="file"` or `data-type="directory"` must have
-`draggable="true"` set and `dragstart` / `dragend` event handlers attached.
+The Outline Panel is a single IIFE plugin file compiled from
+`src/plugins/outline-panel/outline-panel.plugin.ts`. It exports
+`{ onEnable, onDisable }`.
 
-Vault root nodes (`data-type="vault"`) must NOT be draggable. They must NOT
-receive `draggable="true"`.
+On `onEnable`:
+- Inject plugin CSS (`<style id="__markable_outline_panel_css__">`).
+- Register a sidebar panel via `api.registerSidebarPanel({ id: "outline-panel",
+  title: "Outline", side: "left", render, destroy })`.
+- Register CM6 extensions via `api.addExtensions([...])`. Extensions must
+  include: (a) the `updateListener` for doc/fold-state changes, and (b) the
+  `foldService` needed for CM6 to know how to fold Markdown sections.
 
-### FR-2 — Drag source: `dragstart` stores source path and type
+On `onDisable`:
+- Call `api.unregisterSidebarPanel("outline-panel")`.
+- Call `api.removeExtensions()`.
+- Remove the `<style>` tag.
+- Null all module-level state variables (same cleanup pattern as auto-toc).
 
-On `dragstart`:
-- Call `e.dataTransfer.setData("text/x-markable-path", sourcePath)`.
-- Call `e.dataTransfer.setData("text/x-markable-type", nodeType)` where
-  `nodeType` is `"file"` or `"directory"`.
-- Add a CSS class `.is-dragging` to the dragged `<li>` so it can be dimmed
-  via CSS while in flight.
-- Call `e.stopPropagation()` to prevent the drag event from bubbling to a
-  parent drop target and triggering an unintended move.
+### FR-2 — Heading tree rendering
 
-Note: the current implementation uses `"text/plain"`. Switching to a
-namespaced MIME type (`"text/x-markable-path"`) prevents accidental drops
-from browser tabs or OS file manager events being interpreted as tree moves.
+The panel lists all ATX headings (H1–H6) extracted from the active document
+in document order. The same `scanHeadings()` logic used by auto-toc applies
+(see Finding 1). Headings inside fenced code blocks are excluded.
 
-### FR-3 — Drag source: `dragend` cleanup
+Each heading row in the panel displays:
+- A collapse/expand toggle chevron (visible for any heading that has "section
+  body" content — see FR-5 for the definition of section body).
+- The heading text, indented by level (H1 = 0 extra indent, each subsequent
+  level adds a fixed pixel increment, e.g. 12 px per level).
 
-On `dragend` (fires regardless of whether the drop was accepted):
-- Remove `.is-dragging` from the dragged element.
-- Remove `.drag-over` from all `.tree-node` elements in `_treeEl`.
+Empty headings (e.g. `# ` with no text) are displayed as a non-breaking space
+so the row remains visible and clickable.
 
-### FR-4 — Drop targets: directories and vault root accept drops
+### FR-3 — Heading navigation (click to scroll)
 
-Every `<li>` node with `data-type="directory"` or `data-type="vault"` must
-register `dragover`, `dragleave`, and `drop` event handlers.
+Clicking the heading text row (not the chevron) in the outline panel:
+1. Moves the editor cursor to the first character of the heading line
+   (`lineFrom` from the `HeadingEntry`).
+2. Scrolls the heading into the vertical centre of the editor viewport using
+   `EditorView.scrollIntoView(lineFrom, { y: "center" })`.
+3. Focuses the editor (`view.focus()`).
 
-File nodes (`data-type="file"`) must ALSO register `dragover`, `dragleave`,
-and `drop` handlers (see FR-5 for file-on-file resolution).
+If the target section is currently folded in the editor, the click must first
+unfold it, then navigate. Navigating into a folded range without unfolding
+would leave the cursor invisible inside a collapsed block, which violates
+expected editor behaviour.
 
-### FR-5 — File-on-file drop: resolve to parent directory
+### FR-4 — Active heading highlight
 
-When a `drop` event fires on a `<li data-type="file">`, resolve the target
-directory as `getParentDir(targetFilePath)` and proceed with the move as if
-the user had dropped onto that directory node.
+The panel continuously highlights the heading whose section contains the
+cursor. The active heading is the last heading in document order whose
+`lineFrom` is less than or equal to the current cursor position
+(`findActiveIndex()` logic from auto-toc). This updates on every cursor move
+(via the updateListener debounce at 150 ms).
 
-### FR-6 — Visual feedback: `.drag-over` highlight on valid drop targets
+### FR-5 — Definition of a collapsible section
 
-On `dragover`:
-- Call `e.preventDefault()` to signal a valid drop target to the browser.
-- Add `.drag-over` class to the target `<li>`.
+A "section" for heading H at line L consists of all lines from L+1 up to
+(but not including) the next heading of the same or higher level (i.e. same
+or fewer `#` characters), or to end of document if no such heading exists.
 
-On `dragleave`:
-- Remove `.drag-over` from the target `<li>`.
+A section is "collapsible" only if it contains at least one non-empty,
+non-whitespace-only line after the heading line itself. A heading with no
+body content below it (or only blank lines before the next heading) is not
+collapsible; its chevron is hidden or replaced with a neutral glyph.
 
-No additional visual feedback is required.
+The fold range for a heading is:
+- `from`: the end of the heading line (the character position immediately
+  after the last character on the heading line, exclusive of the newline).
+- `to`: the end of the last non-blank line of the section body (exclusive of
+  the trailing newline), or the end of the document if the section extends to
+  EOF.
 
-### FR-7 — Drop handler: no-op cases
+This range definition must be implemented as a CM6 `foldService` so that CM6's
+native fold/unfold commands operate consistently with the panel's own collapse
+actions (FR-6, FR-7).
 
-On `drop`, before calling `moveNode`, check for the following conditions and
-return silently (no Rust call, no error message):
+### FR-6 — Outline panel collapse folds the editor section
 
-1. **Source path is empty or not set**: `e.dataTransfer.getData("text/x-markable-path")` returns empty string.
-2. **Dropped on self**: `targetDir === sourcePath` (directory dropped on
-   itself) or `targetDir === getParentDir(sourcePath)` (dropped on own
-   parent directory — resolves to same location).
-3. **Descendant cycle**: `targetDir.startsWith(sourcePath + "/")` (dragging a
-   folder into one of its own descendants). Already implemented.
+When the user clicks the collapse chevron in the outline panel for heading H:
+1. Compute the fold range for H (FR-5).
+2. Dispatch `foldEffect.of({ from, to })` on the EditorView.
+3. CM6 applies the fold, hiding the section body in the editor.
+4. The panel re-renders (via the updateListener) showing H's chevron in
+   collapsed state.
 
-### FR-8 — Drop handler: collision error
+If the section is already folded (the `foldedRanges` RangeSet already covers
+`from`), the click acts as a toggle — dispatch `unfoldEffect.of({ from })` to
+expand it.
 
-If `moveNode` rejects because `move_file` returns an error containing "already
-exists", surface the error as an inline error strip via `showInlineError(_panelContainer, ...)`.
+### FR-7 — Editor fold gutter collapses section and syncs panel
 
-This is already implemented in the current `moveNode` catch block. Verify
-the error string from the Rust command is user-readable.
+The plugin adds a `codeFolding()` extension (CM6's built-in fold gutter widget)
+via `api.addExtensions`. This places a fold widget in the gutter on heading
+lines. When the user clicks the fold widget in the editor gutter:
+1. CM6 dispatches `foldEffect` internally.
+2. The plugin's `updateListener` receives the `ViewUpdate`.
+3. The listener reads `foldedRanges(update.state)` to determine which sections
+   are now folded.
+4. The panel re-renders with the correct chevron states for all headings.
 
-### FR-9 — Drop handler: general error
+No additional wiring is needed because the updateListener already fires on any
+state change, including fold state changes.
 
-If `moveNode` rejects for any other reason (e.g. source not found, permission
-error), surface the error via `showInlineError`.
+### FR-8 — Fold state is per-tab
 
-Already implemented. Verify.
+Because CM6 fold state is stored inside `EditorState` and TabManager uses
+`view.setState()` on tab switches, fold state is automatically preserved
+per-tab without any explicit plugin-level bookkeeping. When the user switches
+tabs, the updateListener fires with the new document and its fold state; the
+panel re-renders accordingly.
 
-### FR-10 — Drop handler: move a file
+### FR-9 — Collapsed section rows in the panel
 
-When the source type is `"file"`:
-1. Compute `targetDir` (either the directory node's path, or the parent of
-   the target file node for file-on-file drops).
-2. Apply no-op guards (FR-7).
-3. Call `moveNode(sourcePath, targetDir, _panelContainer)`.
-4. `moveNode` internally: calls `move_file`, calls `reloadVaultIndex`, calls
-   `handleFileRename(oldPath, newPath)`.
-5. After success: vault index reload triggers `onVaultChanged → renderPanel`.
-   The moved file appears in its new location in the tree.
+A heading whose section is folded in the editor is shown in the panel with:
+- A right-pointing chevron (collapsed indicator).
+- The heading text styled identically to non-collapsed headings (no strike-
+  through, no dimming — collapsed is a navigational state, not a disabled one).
 
-### FR-11 — Drop handler: move a directory
+All headings inside a collapsed parent section remain visible in the panel
+(the outline always shows the full flat list regardless of editor fold state).
+Only the chevron state of the directly-folded heading changes.
 
-When the source type is `"directory"`:
-1. Compute `targetDir` (the directory or vault-root node's path; file-on-file
-   is not possible for directory sources since files cannot be the source of
-   a file-on-directory resolution here — directory sources always land on
-   explicit directory or vault targets, or on a file target that resolves to
-   its parent).
-2. Apply no-op guards (FR-7), including the descendant-cycle guard.
-3. Call `moveNode(sourcePath, targetDir, _panelContainer)`.
+### FR-10 — Panel "collapse all" / "expand all" (optional, out of scope for v1)
 
-`moveNode` must be updated to handle the directory case:
-- After `move_file` returns `newPath` (the new absolute path of the directory):
-  - Reload vault index (already done).
-  - Iterate all open tabs via `__MARKABLE_TAB_MANAGER__.getTabs()`.
-  - For each tab whose `filePath` starts with `sourcePath + "/"`, compute
-    `newTabPath = newPath + "/" + tab.filePath.slice((sourcePath + "/").length)`
-    and call `handleFileRename(tab.filePath, newTabPath)`.
-  - The existing single `handleFileRename(sourcePath, newPath)` call must be
-    replaced or supplemented with this prefix-substitution loop.
+Per-heading collapse is the required v1 behaviour. A global "collapse all" or
+"expand all" button is deferred to a future iteration. It must NOT be
+implemented in this task.
 
-### FR-12 — Drop: always clean up drag-over highlight
+### FR-11 — Empty document and no-headings state
 
-On every `drop` event (success, no-op, or error), remove `.drag-over` from
-the target element before returning. Also remove `.is-dragging` from the
-source (in `dragend`).
+When the active document has no ATX headings (including the empty-tab
+"untitled" state), the panel displays a centred "No headings" message. This
+matches the auto-toc plugin's behaviour and provides a clear empty state.
 
-### FR-13 — Post-move tree update: automatic via vault index reload
+### FR-12 — Live update on document change
 
-`reloadVaultIndex()` fires `onVaultChanged → renderPanel`. The tree redraws
-with the moved item in its new location automatically. No manual DOM patching
-is needed.
+The panel re-renders within 150 ms of any document edit. The debounce timer is
+reset on each `ViewUpdate` where `update.docChanged || foldStateChanged`. Fold
+state changes (FR-7) must also trigger a re-render without requiring a document
+edit.
+
+Determining `foldStateChanged`: compare `foldedRanges(update.state)` against
+`foldedRanges(update.startState)` using the `RangeSet` identity check or
+`eq()` method to avoid unnecessary re-renders on cursor-only moves.
+
+### FR-13 — Plugin on/off toggle
+
+Disabling the plugin from the plugins panel:
+1. Calls `onDisable`, which unregisters the sidebar panel and removes CM6
+   extensions.
+2. The sidebar slot hides automatically (SidebarManager handles this).
+3. All fold effects applied while the plugin was active persist in the editor
+   state (the fold state is part of EditorState, not owned by the plugin).
+   This is acceptable and expected — disabling the panel does not unfold the
+   document.
+
+Re-enabling restores the panel with the current document's heading tree
+immediately (the updateListener fires on the first update after registration).
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1 — No new Rust commands**
-`move_file` handles both files and directories. No new Cargo changes.
+**NFR-1 — IIFE plugin boundary compliance**
+No ES module imports from app-internal modules (`bridge.ts`, `settings.ts`,
+`main.ts`, `extensions.ts`) at runtime. CM6 globals are accessed via window
+globals only (`window.__CM_VIEW__`, `window.__CM_LANGUAGE__`, etc.).
+`import type` annotations are permitted (erased by tsc).
 
-**NFR-2 — MIME type for drag data**
-Use `"text/x-markable-path"` and `"text/x-markable-type"` as the
-`dataTransfer` keys. This prevents false positives from external drag sources
-(browser link drags, OS file manager drops). External drops that do not set
-these keys are silently ignored.
+**NFR-2 — Performance: 100+ headings**
+`scanHeadings()` is O(lines). `rebuildOutline()` (the DOM rebuild equivalent
+of `rebuildTOC`) replaces `.innerHTML` on every call. Profiling the auto-toc
+plugin shows this is acceptable for up to 200+ headings per the existing EC-9
+note in auto-toc. The same threshold applies here: up to 200 headings must
+render without perceptible lag.
 
-**NFR-3 — IIFE plugin boundary compliance**
-All Tauri calls use `window.__TAURI_INTERNALS__.invoke(...)`. No ES module
-imports from `bridge.ts` at runtime.
+**NFR-3 — Performance: fold state check**
+Reading `foldedRanges(state)` on every `ViewUpdate` is O(1) for the getter
+call. Comparing fold state between `update.startState` and `update.state`
+must use `RangeSet` reference equality or the `.eq()` method (not serialization)
+to remain O(1).
 
-**NFR-4 — Single drag only**
-Multi-select drag is out of scope. Each drag operation moves exactly one node.
+**NFR-4 — No fold regression on plugin disable**
+`removeExtensions()` reconfigures `pluginCompartment` to remove the plugin's
+extensions, including `codeFolding()`. Existing fold ranges in the editor
+state remain intact (they live in the state's range set, which is unaffected
+by extension removal). This is acceptable — it matches CodeMirror's design.
 
-**NFR-5 — Cross-vault drag not supported**
-The vault root is the boundary. A drag that originates inside one vault root
-and is dropped outside its tree is a no-op (browser default — the drop lands
-outside the `file-tree` DOM element, no `drop` event fires on any tree node).
+**NFR-5 — CSS scoping**
+All CSS class names are prefixed `outline-` to avoid collisions with auto-toc
+(`.toc-*` prefix) and other plugins.
 
-**NFR-6 — Plugin build step after source changes**
-After any change to `src/plugins/file-browser/`:
+**NFR-6 — Plugin build step**
+After any change to `src/plugins/outline-panel/`:
 `npm run build:plugins && npm run sync:plugins`.
 
 **NFR-7 — No TODO comments in source**
-Deferred work is logged in `docs/specs/file-browser/00_index.md`.
+Deferred work is logged in `docs/specs/outline-panel/00_index.md`.
 
-**NFR-8 — Window size invariant**
-No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts`. Invariant unaffected.
+**NFR-8 — Window size invariant unchanged**
+No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts`.
+
+**NFR-9 — `window.__CM_LANGUAGE__` prerequisite**
+Before the plugin can use `foldEffect`, `unfoldEffect`, `foldedRanges`, and
+`codeFolding`, `src/lib/cm-globals.ts` must export the `@codemirror/language`
+package as a window global. The Architect must verify this during codebase
+analysis. If missing, adding it is a prerequisite step for the Lead Developer
+before the plugin implementation begins.
 
 ---
 
@@ -318,16 +304,18 @@ No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts`. Invariant unaffec
 
 | File | Change |
 |------|--------|
-| `src/plugins/file-browser/file-browser.plugin.ts` | Update `attachDragDropListeners`: switch to namespaced MIME type, add `.is-dragging` class, make file nodes valid drop targets (file-on-file resolution to parent dir), add source-type to dataTransfer |
-| `src/plugins/file-browser/file-browser-ops.ts` | Update `moveNode`: add directory-move prefix substitution for open tabs (iterate `getTabs()`, call `handleFileRename` per affected tab) |
+| `src/lib/cm-globals.ts` | Add `window.__CM_LANGUAGE__` export (prerequisite — only if not already present) |
+| `src/plugins/outline-panel/outline-panel.plugin.ts` | New file — the IIFE plugin |
+| `src/plugins/outline-panel/outline-panel.ts` | New file — pure logic (scanHeadings reuse or fork, foldRange computation, rebuildOutline) |
+| `src-tauri/plugins/core/outline-panel.js` | Built output — generated by `npm run build:plugins`, not hand-edited |
 
 ### Files that must NOT change
 
 | File | Reason |
 |------|--------|
-| `src-tauri/src/commands/file_ops.rs` | `move_file` handles both files and directories correctly |
-| `src/tabs/tab-manager.ts` | `handleFileRename` and `getTabs` already exist from the previous Rename task |
-| `src/lib/bridge.ts` | No new bridge wrappers required |
+| `src/plugins/auto-toc/auto-toc.plugin.ts` | Auto-toc is a separate plugin; do not merge concerns |
+| `src/editor/extensions.ts` | Plugin extensions go through `pluginCompartment` via `api.addExtensions`, not `buildExtensions` |
+| `src/editor/live-preview.ts` | No live-preview interaction required |
 | `src-tauri/src/lib.rs` | Window size invariant |
 | `src/lib/settings.ts` | Window size invariant |
 
@@ -335,119 +323,175 @@ No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts`. Invariant unaffec
 
 ## Out of Scope
 
-- **Multi-file drag**: single drag only; no multi-select support.
-- **Cross-vault drag**: the vault root is the hard boundary; no inter-vault moves.
-- **"Move to…" context menu item**: the disabled "Move to…" item in the context
-  menu is a future folder-picker UI. Not unlocked in this iteration.
-- **Drag-and-drop from OS Finder into the tree**: external drops are ignored.
-- **Undo of move**: disk operations are permanent.
-- **Drag to re-order within a directory**: the tree is always sorted by name;
-  custom ordering is not a supported concept.
+- **Global "collapse all" / "expand all" button** — deferred (FR-10).
+- **Drag-to-reorder headings** — the outline is read-only for navigation.
+- **Inline editing of heading text from the panel** — click navigates, does not
+  open an edit field.
+- **Setext headings** (`====` underline style) — ATX headings only, matching
+  the existing auto-toc behaviour.
+- **Folding non-heading constructs** (code blocks, blockquotes) — this plugin
+  folds Markdown sections delimited by headings only.
+- **Persisting fold state across app restarts** — fold state is in-memory only
+  (part of EditorState). Session restore does not re-apply folds.
+- **Custom fold keybindings** (e.g. Cmd-Shift-[ to fold at cursor) — the plugin
+  adds the fold gutter widget but does not register keyboard shortcuts.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1 — Drag source is vault root**
-Vault root nodes are not draggable (`draggable` attribute is never set on them).
-`dragstart` never fires. No action possible.
+**EC-1 — Document with no headings**
+`scanHeadings()` returns `[]`. The panel shows "No headings". No chevrons, no
+fold interactions possible.
 
-**EC-2 — Drop target is a file node (file-on-file)**
-`drop` fires on the file node. `targetDir` is resolved via `getParentDir(targetFilePath)`.
-Move proceeds as if the user dropped onto the parent directory. If the file is
-in the vault root, `targetDir` is the vault root path (a valid directory).
+**EC-2 — Document with a single heading and no body**
+The heading has no collapsible section (FR-5 — empty body). The chevron is
+hidden. The heading is still clickable for navigation.
 
-**EC-3 — Node dropped onto its own parent directory (no-op)**
-`targetDir === getParentDir(sourcePath)`. Guard in `drop` handler detects this
-and returns silently. No Rust call, no error shown.
+**EC-3 — Cursor above all headings (before the first heading)**
+`findActiveIndex()` returns -1. No heading is highlighted in the panel. No
+regression; this matches auto-toc behaviour (EC-3 in auto-toc).
 
-**EC-4 — Node dropped on itself (directory dropped on its own `<li>`)**
-`targetDir === sourcePath` (if a directory is both source and target). Guard
-catches this. No Rust call.
+**EC-4 — Cursor inside a folded section**
+The cursor may be inside the fold range (CM6 allows this). When folded, the
+cursor is hidden from view but the outline panel still shows the active heading
+(the fold's parent heading is highlighted). Navigating away via the panel
+first unfolds the target section before scrolling (FR-3).
 
-**EC-5 — Folder dragged into a descendant (cycle prevention)**
-`targetDir.startsWith(sourcePath + "/")`. Guard catches this and returns
-silently. No Rust call.
+**EC-5 — Click-to-navigate into a currently folded section**
+FR-3 specifies: dispatch `unfoldEffect` for the section containing the target
+heading, then dispatch the cursor selection and scroll. This prevents the
+cursor landing inside a hidden range.
 
-**EC-6 — Destination already contains a file/folder with the same name (collision)**
-`move_file` returns `Err("File 'X' already exists in 'Y'")`. `moveNode` rejects.
-The catch block calls `showInlineError(_panelContainer, "Move failed: …")`.
-The source file/folder is untouched.
+**EC-6 — Heading at the very end of the document (no trailing newline)**
+`scanHeadings()` handles the last line correctly (the existing auto-toc
+implementation is already verified for this case). The fold range `to` is
+`doc.length` (end of document). CM6 foldEffect accepts this.
 
-**EC-7 — Source file no longer exists at drag time (stale drag)**
-`move_file` returns `Err("Source not found: …")`. Same error surface as EC-6.
+**EC-7 — Two headings of different levels with no content between them**
+Example: `## Foo\n### Bar`. The section for `## Foo` has no non-blank body
+lines before `### Bar`. Per FR-5, this section is not collapsible; the chevron
+for `## Foo` is hidden. `### Bar` is separately evaluated.
 
-**EC-8 — Moving a directory that has open tabs inside it**
-After `move_file` succeeds, `moveNode` iterates `getTabs()` and calls
-`handleFileRename` for each affected tab. All open tabs under the moved
-directory receive updated `filePath` values. Unsaved changes in those tabs
-are preserved (the in-memory editor state is unaffected; the path update
-ensures the next Cmd-S writes to the correct new location).
+**EC-8 — Heading immediately preceded by a fenced code block containing `#` lines**
+`scanHeadings()` skips headings inside code fences. The fold panel renders only
+real document headings. No interaction with code-block `#` lines.
 
-**EC-9 — Moving a directory that has NO open tabs inside it**
-`getTabs()` iteration finds no matching tabs. No `handleFileRename` calls.
-Vault index reload triggers re-render. Normal path.
+**EC-9 — Document with 200+ headings**
+The entire `rebuildOutline()` call must complete without visible lag (NFR-2).
+All 200+ heading rows are built in a single `innerHTML`-clear pass. The
+`foldedRanges` check is O(1). Acceptable per auto-toc precedent.
 
-**EC-10 — Moving a file that is currently open in the active tab**
-`handleFileRename(oldPath, newPath)` updates the tab's `filePath` and title.
-The editor content is unchanged. The next Cmd-S writes to the new path.
+**EC-10 — Tab switch while a section is folded**
+`view.setState(newTabState)` replaces the entire EditorState. The new state's
+`foldedRanges` reflects the new tab's fold state (which may be empty on first
+visit). The `updateListener` fires with `docChanged = true`. The panel re-
+renders for the new document. Old fold state is preserved in the previous tab's
+EditorState (held by TabManager's `TabEntry`).
 
-**EC-11 — Moving a file that is open in a background (non-active) tab**
-Same as EC-10. `handleFileRename` updates all matching tabs, not just the
-active one.
+**EC-11 — Rapid toggle: plugin disabled and re-enabled before the debounce fires**
+`onDisable` clears the debounce timer and nulls `_enabled`. `onEnable` resets
+all state. The updateListener registered in `onEnable` is a fresh closure. No
+stale callbacks execute.
 
-**EC-12 — Moving a `.md` file changes its stem (not possible in a simple move)**
-`move_file` preserves the filename — only the parent directory changes. The
-stem is always identical before and after a move. `oldStem !== newStem` is
-always false. The link-update banner is correctly suppressed (AD-01 guard).
+**EC-12 — `foldEffect` dispatched on a section with no body**
+FR-5 ensures the plugin never dispatches `foldEffect` on a non-collapsible
+section (the chevron is hidden). If somehow a zero-length fold range is
+computed, CM6 silently ignores it (dispatching an effect with `from === to` is
+a no-op in CM6's fold system). Defensive guard recommended in the implementation.
 
-**EC-13 — Drag abandoned mid-air (user releases outside any drop target)**
-`drop` never fires. `dragend` fires on the source node. Cleanup: remove
-`.is-dragging` from the source, remove `.drag-over` from all nodes. No move
-occurs.
+**EC-13 — `window.__CM_LANGUAGE__` is not yet exposed**
+If the prerequisite step (NFR-9) is skipped, the plugin IIFE will throw a
+TypeError when accessing `(window as any).__CM_LANGUAGE__.foldEffect`. The
+plugin's `onEnable` must access this global inside a try/catch and log a clear
+error: `"Outline Panel: @codemirror/language not available as window global.
+Ensure cm-globals.ts exports __CM_LANGUAGE__."`. The plugin must not partially
+enable in this state.
 
-**EC-14 — Drag abandoned over a non-tree element (e.g. the editor area)**
-`dragend` fires on the source node (same as EC-13). The editor area does not
-register `dragover` with `preventDefault()`, so it does not accept the drop.
-Cleanup is correct.
+**EC-14 — Fold gutter widget shown for non-heading lines**
+`codeFolding()` uses the registered `foldService` to decide which lines get a
+fold widget. The plugin's `foldService` must return `null` for non-heading
+lines so the gutter widget appears only on collapsible heading lines (FR-5).
 
-**EC-15 — Rapid drag followed by immediate second drag before `reloadVaultIndex` completes**
-The vault index reload is async. The tree may re-render mid-second-drag. The
-second drag's `dragstart` captures the source path at that moment. If the
-first move has not yet been reflected in the DOM, the source node may still
-appear at its old location. Accepting this as a low-frequency edge case with
-no user-visible harm: the second drag will use the correct on-disk path because
-`data-path` attributes are set from the vault index at render time.
+**EC-15 — Live-preview mode (Typora-style hide-syntax)**
+In live-preview mode, `live-preview.ts` applies decorations that hide Markdown
+syntax (e.g. the `##` prefix characters). The heading lines are still present
+in the document; `lineFrom` values are still valid. The fold gutter renders on
+the same line regardless of decoration state. No special interaction required.
+The two extensions are independent.
 
-**EC-16 — `_panelContainer` is null when `drop` fires**
-`moveNode` accepts a nullable container for the banner. `showInlineError` is
-called from the catch block only if `_panelContainer` is non-null. If null,
-the error is logged to the console only. This matches the existing pattern.
+**EC-16 — User edits a heading so the fold range shifts**
+After the edit, `docChanged = true` triggers the debounce. On fire, the plugin
+re-scans headings and re-reads `foldedRanges`. Existing folds are anchored to
+character positions. If the heading was edited (its `lineFrom` changed), the
+old fold range may no longer align with the heading. The plugin does NOT attempt
+to migrate folds on edit — this is standard CM6 fold behaviour (fold ranges are
+not automatically relocated on document changes). The user must re-fold if
+desired.
 
-**EC-17 — Drop fires from an external source (OS Finder, browser link drag)**
-The `drop` handler reads `e.dataTransfer.getData("text/x-markable-path")`. An
-external drag source will not have set this key. The value will be an empty
-string. The empty-string guard in FR-7 causes an immediate silent return. No
-move is attempted.
+**EC-17 — Untitled / empty new document**
+The editor has no file content. `scanHeadings("")` returns `[]`. Panel shows
+"No headings". No crash.
 
-**EC-18 — Vault index reload fails after a successful move**
-The disk operation has already completed. `reloadVaultIndex()` rejects. The
-tree may be stale until the next FS watcher event (fires within 300 ms via the
-existing `handleFsEvent` debounce). Error is caught and logged. No user-facing
-crash.
+**EC-18 — Outline panel registered but sidebar is closed (not visible)**
+The updateListener still fires. The panel re-renders in the background (the
+container is in the DOM but not displayed). This matches auto-toc behaviour
+and is the correct approach — no visibility check is needed.
 
-**EC-19 — `move_file` destination directory does not exist**
-`move_file` validates `dst_dir.is_dir()` and returns `Err("Destination is not
-a directory: …")`. This cannot occur in normal usage because drop targets are
-always rendered from the vault index (which only includes existing directories).
-It can occur if the user has deleted a directory via the OS while a drag is in
-progress. The error surfaces via `showInlineError`.
+**EC-19 — Fold state changed by a future keyboard shortcut or another plugin**
+If another plugin or a future keybinding dispatches `foldEffect`/`unfoldEffect`,
+the updateListener receives the `ViewUpdate`. The fold-state change check
+(FR-12) detects the change and triggers a panel re-render. The outline panel
+stays in sync regardless of the source of the fold dispatch.
 
-**EC-20 — Moving a folder into the vault root**
-`targetDir` is the vault root path (the `data-type="vault"` node's `data-path`).
-`move_file` moves the folder into the vault root. This is valid and no special
-case is needed. The descendant-cycle guard does not fire because the vault root
-is not inside the moved folder.
+**EC-20 — `codeFolding()` extension added twice (rapid double enable)**
+`api.addExtensions` replaces any prior registration for this plugin id
+(idempotent per markable-plugin-api.ts). CM6 will not have duplicate
+`codeFolding()` extensions for this plugin. The `_enabled` guard in `onEnable`
+also prevents double-registration.
+
+---
+
+## Acceptance Criteria
+
+**AC-1** — With the plugin enabled, opening a document that has H1–H6 headings
+causes the outline panel to show all headings within 150 ms.
+
+**AC-2** — Clicking a heading row in the outline panel moves the cursor to that
+heading's line and scrolls it to the centre of the editor viewport.
+
+**AC-3** — Clicking the collapse chevron for a heading in the outline panel folds
+the corresponding section in the editor (the body lines become hidden behind a
+fold marker). The chevron updates to the collapsed state.
+
+**AC-4** — Clicking the collapse chevron again (when already collapsed) unfolds
+the section in the editor. The chevron returns to the expanded state.
+
+**AC-5** — Clicking the fold widget in the editor gutter on a heading line folds
+the section. The outline panel's chevron for that heading updates to collapsed
+within 150 ms.
+
+**AC-6** — Clicking the fold widget in the editor gutter on an already-folded
+heading unfolds the section. The outline panel's chevron returns to expanded.
+
+**AC-7** — Switching tabs updates the outline panel to show the new document's
+headings and correctly reflects that document's fold state.
+
+**AC-8** — With a section folded, switching away from the tab and back again
+preserves the fold state in the editor and in the panel.
+
+**AC-9** — A document with no headings shows a "No headings" message in the panel.
+No errors are thrown.
+
+**AC-10** — Disabling the plugin from the plugins panel removes the sidebar panel
+and the fold gutter. No console errors. Re-enabling restores both.
+
+**AC-11** — A heading that has no body content (nothing before the next same-or-
+higher-level heading) shows no collapse chevron. Clicking its text row still
+navigates correctly.
+
+**AC-12** — With the plugin enabled, a document with 200 headings renders in the
+outline panel without perceptible lag (< 200 ms total).
 
 ---
 

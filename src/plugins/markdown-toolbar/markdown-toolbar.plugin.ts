@@ -80,7 +80,7 @@ export type ToolbarSettings = UnifiedToolbarSettings;
  */
 export const DEFAULT_SETTINGS: UnifiedToolbarSettings = {
   toolbarMode: "floating",
-  sidebarSide: "left",
+  sidebarSide: "right",
 };
 
 /**

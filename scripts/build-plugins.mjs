@@ -66,6 +66,8 @@ const PLUGINS = [
   ["file-browser",      "src/plugins/file-browser/file-browser.plugin.ts"],
   // PKM Step 03: Knowledge Graph — D3 force-directed graph, no dynamic imports.
   ["knowledge-graph",   "src/plugins/knowledge-graph/knowledge-graph.plugin.ts"],
+  // Outline Panel — live heading tree with bidirectional fold sync.
+  ["outline-panel",     "src/plugins/outline-panel/outline-panel.plugin.ts"],
 ];
 
 /**
