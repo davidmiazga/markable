@@ -78,11 +78,12 @@
 /* ---- Chevron toggle button ---- */
 
 .find-widget-chevron {
-  /* Shared base with toggle buttons, but slightly different shape. */
   flex-shrink: 0;
-  width: 22px;
+  width: auto;
+  min-width: 22px;
   height: 26px;
-  padding: 0;
+  padding: 0 5px;
+  gap: 4px;
   border-radius: 4px;
   font-size: 16px;
   font-weight: 400;
@@ -96,7 +97,7 @@
 
   background-color: transparent;
   color: var(--text-secondary);
-  transition: transform 0.15s ease, background-color 0.1s ease, color 0.1s ease;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
 .find-widget-chevron:hover {
@@ -104,8 +105,13 @@
   color: var(--text-primary);
 }
 
-/* FR-3.9: Rotate 90° when the replace row is expanded. */
-.find-widget-chevron.expanded {
+/* FR-3.9: Only the icon span rotates so the kbd badge stays upright. */
+.find-widget-chevron-icon {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.find-widget-chevron.expanded .find-widget-chevron-icon {
   transform: rotate(90deg);
 }
 
@@ -214,7 +220,6 @@
 .find-widget-next,
 .find-widget-close {
   flex-shrink: 0;
-  width: 26px;
   height: 26px;
   padding: 0;
   border-radius: 4px;
@@ -228,10 +233,22 @@
   line-height: 1;
 
   background-color: transparent;
-  /* FR-9.3: Use secondary text color so buttons are visible but not
-     dominant (NOT transparent text on transparent background). */
   color: var(--text-secondary);
   transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+/* Close button keeps a fixed square size — no kbd badge inside. */
+.find-widget-close {
+  width: 26px;
+}
+
+/* Prev/next expand to fit their kbd badge. */
+.find-widget-prev,
+.find-widget-next {
+  width: auto;
+  min-width: 26px;
+  padding: 0 5px;
+  gap: 4px;
 }
 
 .find-widget-prev:hover,
@@ -239,6 +256,21 @@
 .find-widget-close:hover {
   background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
   color: var(--text-primary);
+}
+
+/* ---- Inline key-binding badge (used in prev/next and replace buttons) ---- */
+
+.fw-kbd {
+  font-family: var(--key-font, var(--mono-font, monospace));
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--code-bg, rgba(255,255,255,0.08));
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  pointer-events: none;
+  line-height: 1.4;
 }
 
 /* ---- Replace row ---- */
@@ -256,12 +288,15 @@
 .find-widget-replace-one,
 .find-widget-replace-all {
   flex-shrink: 0;
-  padding: 3px 10px;
+  padding: 3px 8px;
   border-radius: 4px;
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 
   /* FR-9.3: Explicit background and text color — NOT transparent, ensuring
      contrast on both light and dark themes. */
@@ -291,5 +326,457 @@
     /* Override JS-set position to ensure the widget is fully visible. */
     right: 16px !important;
     left: 16px !important;
+  }
+}
+
+/* ============================================================
+   Multi-file Find & Replace additions (Steps 02–05)
+   ============================================================ */
+
+/* ---- Scope toggle row ---- */
+
+.find-widget-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--search-panel-border);
+}
+
+.find-widget-scope-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-color);
+  background-color: transparent;
+  color: var(--text-secondary);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.find-widget-scope-btn:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+.find-widget-scope-btn.active {
+  background-color: color-mix(in srgb, var(--link-color) 15%, var(--bg-primary));
+  color: var(--link-color);
+  border-color: color-mix(in srgb, var(--link-color) 35%, transparent);
+}
+
+.find-widget-scope-btn:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 1px;
+}
+
+/* ---- Vault results panel ---- */
+
+.find-widget-vault-results {
+  /* max-height constrains the scrollable area (FR-3, FR-16). */
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--search-panel-border);
+  /* Smooth open animation for vault results panel (Step 05). */
+  transition: max-height 0.1s ease;
+}
+
+/* Dark mode: extra shadow depth for vault results panel. */
+[data-theme="dark"] .find-widget-vault-results {
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Scope row: avoid double border when vault results are visible (Step 05). */
+.find-widget-scope-row + .find-widget-vault-results {
+  border-top: none;
+}
+
+/* ---- File group ---- */
+
+.find-widget-file-group {
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--search-panel-border) 50%, transparent);
+  outline: none;
+}
+
+.find-widget-file-group:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--link-color);
+}
+
+.find-widget-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  cursor: default;
+}
+
+.find-widget-file-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.find-widget-file-match-count {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background-color: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+/* ---- Excerpt rows ---- */
+
+.find-widget-excerpt-list {
+  margin-top: 2px;
+}
+
+.find-widget-excerpt {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.find-widget-excerpt:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.find-widget-excerpt:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--link-color);
+}
+
+.find-widget-excerpt--active {
+  background-color: color-mix(in srgb, var(--link-color) 14%, transparent);
+  outline: none;
+}
+
+.find-widget-excerpt-linenum {
+  color: var(--text-secondary);
+  font-size: 10px;
+  min-width: 24px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.find-widget-excerpt-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.find-widget-match-highlight {
+  /* Bold + background tint for matched substring (FR-4). */
+  background-color: color-mix(in srgb, hsl(45, 90%, 55%) 30%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Replace preview: old text (strikethrough red tint) + new text (green tint). */
+.find-widget-match-del {
+  background-color: color-mix(in srgb, hsl(0, 75%, 55%) 18%, transparent);
+  color: var(--text-secondary);
+  text-decoration: line-through;
+  border-radius: 2px 0 0 2px;
+  padding: 0 1px;
+}
+
+.find-widget-match-ins {
+  background-color: color-mix(in srgb, hsl(120, 65%, 45%) 22%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 0 2px 2px 0;
+  padding: 0 1px;
+}
+
+/* ---- Replace preview diff list (used in In File & Replace All panels) ---- */
+
+.find-widget-preview-list {
+  margin: 8px 0;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid var(--search-panel-border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.find-widget-preview-file-header {
+  position: sticky;
+  top: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--search-panel-bg);
+  border-bottom: 1px solid var(--search-panel-border);
+}
+
+.find-widget-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 8px;
+}
+
+.find-widget-preview-linenum {
+  min-width: 24px;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.find-widget-preview-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.find-widget-preview-more {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+/* ---- "Show all N" expander ---- */
+
+.find-widget-show-all {
+  font-size: 11px;
+  color: var(--link-color);
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.find-widget-show-all:hover {
+  text-decoration: underline;
+}
+
+/* ---- No-results / status / notice ---- */
+
+.find-widget-vault-no-results {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: hsl(0, 72%, 51%);
+  text-align: center;
+}
+
+.find-widget-vault-status {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.find-widget-vault-notice {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--search-panel-border);
+}
+
+.find-widget-vault-notice-warn {
+  color: hsl(30, 90%, 50%);
+}
+
+/* ---- "In File" replace button (vault scope only) ---- */
+
+.find-widget-replace-in-file {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  transition: background-color 0.1s ease;
+}
+
+.find-widget-replace-in-file:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+}
+
+/* ---- Confirmation panel ---- */
+
+.find-widget-confirmation {
+  border-top: 1px solid var(--search-panel-border);
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+[data-theme="dark"] .find-widget-confirmation {
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.find-widget-confirmation-summary {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.find-widget-confirmation-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.find-widget-confirm-replace-all {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--link-color);
+  background-color: var(--link-color);
+  color: #fff;
+  transition: opacity 0.1s ease;
+}
+
+.find-widget-confirm-replace-all:hover {
+  opacity: 0.85;
+}
+
+.find-widget-confirm-cancel {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.1s ease;
+}
+
+.find-widget-confirm-cancel:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+}
+
+/* ---- Progress panel ---- */
+
+.find-widget-progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.find-widget-progress-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.find-widget-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.find-widget-progress-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+  width: 14px;
+  text-align: center;
+}
+
+.find-widget-progress-icon.success { color: hsl(140, 60%, 40%); }
+.find-widget-progress-icon.error   { color: hsl(0, 72%, 51%); }
+.find-widget-progress-icon.skipped { color: var(--text-secondary); }
+
+.find-widget-progress-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.find-widget-progress-error-msg {
+  color: hsl(0, 72%, 51%);
+}
+
+.find-widget-progress-done {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.1s ease;
+  margin-top: 6px;
+}
+
+.find-widget-progress-done:hover {
+  background-color: color-mix(in srgb, var(--text-primary) 8%, var(--bg-primary));
+}
+
+/* ---- Regexp-disabled tooltip ---- */
+
+.find-widget-regexp-disabled {
+  /* Hidden by default; shown via JS when vault scope is active (EC-9). */
+  display: none;
+  position: absolute;
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--search-panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: none;
+  z-index: 201;
+  white-space: nowrap;
+}
+
+/* ---- Narrow viewport reflow ---- */
+
+@media (max-width: 400px) {
+  .find-widget-scope-row {
+    flex-wrap: wrap;
+  }
+  .find-widget-vault-results {
+    max-height: 200px;
+  }
+}
+
+/* Short viewport: more aggressive height cap (FR-16). */
+@media (max-height: 500px) {
+  .find-widget-vault-results {
+    max-height: 150px;
+  }
+  .find-widget-confirmation {
+    max-height: 150px;
   }
 }

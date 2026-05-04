@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-04-30
+**Last Updated:** 2026-05-03
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -66,20 +66,23 @@
   - **Text-selection suppression**: During pointer drag, moving over the editor or other text areas caused browser text selection. Fix: `document.body.style.userSelect = "none"` (+ `-webkit-` prefix) applied on `pointerdown` (not after the threshold), cleared unconditionally in `cleanupDrag()`. `window.getSelection()?.removeAllRanges()` called when drag activates to clear any selection formed in the sub-threshold phase. 2026-05-02.
 - **Rename and Delete file/folder from file browser tree** — Completed full CRUD for the file browser. The UI entry points (context menus, F2 key, Delete key, inline rename input) already existed; this task fixed the broken tab-manager wiring and gaps. Added `handleFileRename(oldPath, newPath)` and `closeFileByPath(path)` to `TabManager`. Fixed `renameNode` to use `nodeType: "file"|"directory"` parameter instead of extension-sniffing (correctly handles extension-less files like `Makefile`). Fixed `deleteFile`/`deleteDirectory` to close open tabs via `closeFileByPath` before deleting (with abort-on-cancel); added `try/catch + showInlineError` for Rust-level errors. Fixed `closeTabsUnder` to snapshot via `getTabs()` before iterating (EC-10 race guard). Added `dblclick` listener for file/directory nodes → inline rename. Added Delete key handler for directory nodes. Removed 4 redundant `reloadAndRender` calls. 33 new Vitest tests; code-reviewer approved 2026-04-30.
 - **File browser multi-file fixes** — Four issues resolved post-create-file feature: (1) `.txt` files now route to `openFileInTab` instead of `openMediaInTab`, opening in the editor like `.md` files; `.txt` nodes are no longer dimmed in the tree. (2) `.md` files now show their `.md` suffix in the tree label (`node.name + ".md"` for md-typed nodes — the vault index strips the extension; the label restores it). (3) Duplicate-tab guard confirmed working: `openFileInTab` and `openMediaInTab` both have dedup guards that activate the existing tab instead of opening a second copy. (4) Media viewer transparent background bug fixed: `#media-viewer` used `var(--bg-color)` which is undefined in all themes (themes define `--bg-primary`); replaced with `var(--bg-primary, #1e1e2e)`; also added `display: none !important` to the `.cm-editor` hide rule as a guard against CM6 inline-style overrides; `z-index: 1` added to `#media-viewer` to cover any stray CM6 overlay elements. Plugin IIFE rebuilt and synced. 2026-04-30.
+- **Outline Panel plugin** — Sidebar H1–H6 heading tree with click-to-navigate and bidirectional section collapse. Collapsing from the panel folds the editor section via CM6 `foldEffect`; clicking the fold widget in the editor gutter syncs the panel. Inline fold-triangle glyphs injected into editor heading lines via CM6 `ViewPlugin` + `WidgetType`, positioned in the left margin with animated CSS transitions. `scanHeadings`, `findActiveIndex`, `computeFoldRange` are exported pure functions. Plugin on/off toggle supported; `foldService` registered so CM6 knows fold boundaries for Markdown sections. Multiple bug fixes during polish: `unfoldEffect` requires both `from` AND `to` fields (CM6 silently ignores unfold if `to` is missing); CSS specificity fight with `.cm-live-h1 span` resolved by `.cm-content .outline-fold-glyph` selector; stale `injectCSS` guard (early-return if `<style>` tag already existed) replaced with unconditional `textContent` overwrite; `padding-right` swapped for `margin-right` so `transform-origin: 50% 50%` stays visually centred on the glyph; chevron transition set to `0.6s ease`. 33 Vitest tests. 2026-05-03.
+- **Sidebar default side — right for all plugins except file browser** — All sidebar panels now default to the right sidebar. File Browser stays left (hardcoded, unchanged). Only two sources needed changing: `outline-panel.plugin.ts` `side: "left"` → `"right"`, and `markdown-toolbar.plugin.ts` `DEFAULT_SETTINGS.sidebarSide: "left"` → `"right"`. All other plugins (Auto TOC, Backlinks, Daily Note, Knowledge Graph, YAML Pane) were already right. User-moved panels persist via `settings.sidebar.panelSides` override map and are unaffected. 2026-05-03.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-02.**
+**Session ended 2026-05-03.**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **71 files, 3214 passing, 39 skipped**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
+- Test suite: **71+ files, 3247+ passing**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
 - **Build reminder**: after any plugin TypeScript change, run `npm run build:plugins && npm run sync:plugins`.
 - **Drag reminder**: HTML5 drag (`draggable="true"`, `dragstart`) does NOT work in Tauri WKWebView on macOS. Always use pointer events (`pointerdown`/`pointermove`/`pointerup`) for any drag interaction in the file browser. Suppress text selection with `document.body.style.userSelect = "none"` on `pointerdown` (not after a threshold), restored in cleanup.
+- **Sidebar side reminder**: all panels default to the right sidebar. File browser is the sole left-side exception. User overrides persist in `settings.sidebar.panelSides`; clear that map if defaults need to take effect on an existing install.
 
 #### How to resume
 1. Read `PROGRESS.md` (this file) for full feature history.
@@ -96,7 +99,7 @@ These align with the project direction: File Browser is the gateway to PKM.
 | **Rename / delete from file browser tree** | Low–Med | In-tree right-click; backlink-update banner already handles renames |
 | **Pinned tabs** | Low | `pin()`/`unpin()` on TabManager; tab context menu hook already in place |
 | ~~**Create note from broken wikilink**~~ | ~~Low~~ | ~~Done 2026-04-30~~ |
-| **Outline panel (document headings)** | Low–Med | Sidebar H1–H6 tree; click to jump |
+| ~~**Outline panel (document headings)**~~ | ~~Low–Med~~ | ~~Done 2026-05-03~~ |
 | **Multi-file Find & Replace** | Med | Single-file done; `search_vault_content` Rust cmd already exists |
 | **Quick capture / inbox note** | Med | Global shortcut → scratch-pad → inbox folder |
 | ~~**Drag files within vault tree**~~ | ~~Med~~ | ~~Done 2026-05-02~~ |

@@ -592,16 +592,19 @@ describe("Group 7: Keyboard handlers in find input", () => {
     expect(tabEvent.defaultPrevented).toBe(true);
   });
 
-  it("Tab in find input does NOT prevent default when replace row is hidden", () => {
-    const { findInput } = getWidgetElements(widget);
+  it("Tab in find input always intercepts default and opens replace row", () => {
+    const { findInput, replaceRow } = getWidgetElements(widget);
+    // Ensure replace row starts hidden.
+    expect(replaceRow.style.display).toBe("none");
     const tabEvent = new KeyboardEvent("keydown", {
       key: "Tab",
       bubbles: true,
       cancelable: true,
     });
     findInput.dispatchEvent(tabEvent);
-    // When replace row is hidden, Tab should not be intercepted.
-    expect(tabEvent.defaultPrevented).toBe(false);
+    // Tab should always be intercepted and open the replace row.
+    expect(tabEvent.defaultPrevented).toBe(true);
+    expect(replaceRow.style.display).not.toBe("none");
   });
 });
 

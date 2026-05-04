@@ -1,497 +1,638 @@
 ---
-title: Outline Panel — Live Heading Tree with Bidirectional Fold Sync
-last-updated: "2026-05-02"
+title: Multi-file Find & Replace
+last-updated: "2026-05-03"
 review-cadence-days: 90
 status: active
 ---
 
-# Outline Panel — Live Heading Tree with Bidirectional Fold Sync
+# Multi-file Find & Replace
 
 ## Feature Summary
 
-As a writer using Markable, I want a sidebar panel that shows a live H1–H6
-heading tree for the active document, so that I can navigate long documents
-quickly and collapse sections both from the panel and from the editor, with
-both views always staying in sync.
+As a PKM user with an active vault, I want the existing Find & Replace floating
+widget to grow a "Vault" scope toggle so I can search and replace text across
+every file in my vault (or just the files under a selected folder) — without
+leaving the familiar single-file widget interaction I already know. When vault
+scope is off the widget behaves exactly as it does today; when vault scope is on
+the widget expands downward into a grouped file-results list, and replace
+operates at three levels of granularity: this match, all in file, all in vault,
+with a confirmation summary before a destructive "all in vault" replace commits.
 
 ---
 
 ## Codebase Context Findings
 
-### Finding 1 — Auto-TOC plugin is the closest existing precedent
+### `src/editor/find-widget.ts` — existing widget
 
-`src/plugins/auto-toc/auto-toc.plugin.ts` already implements:
-- `scanHeadings()` — a pure function that extracts ATX headings (H1–H6) from
-  raw document text, skipping fenced code blocks.
-- `findActiveIndex()` — finds the heading whose section contains the cursor.
-- A CM6 `updateListener` extension debounced at 150 ms that re-renders on
-  doc/selection changes.
-- A sidebar panel registered via `api.registerSidebarPanel()`.
+`FindWidget` is a class instantiated once by `createFindWidget(view: EditorView)`
+and appended to `document.body` as `position:fixed`. Relevant state fields:
 
-The Outline Panel can reuse the `HeadingEntry` type and the `scanHeadings`
-logic verbatim, but is a separate plugin with distinct fold state management
-not present in auto-toc.
+- `_isOpen: boolean` — whether the widget is visible (line 88)
+- `_replaceVisible: boolean` — whether the replace row is expanded (line 90)
+- `_matchCase`, `_wholeWord`, `_regexp: boolean` — toggle state (lines 94–96)
+- `root: HTMLDivElement` — the root container (line 56); DOM is built in
+  `_buildDom()` at construction time, not lazily
 
-### Finding 2 — No folding infrastructure exists yet
+Current DOM tree (built in `_buildDom()`, lines 262–403):
+```
+.find-widget
+  .find-widget-find-row
+    .find-widget-chevron   (›, toggles replace row)
+    .find-widget-input     (find text)
+    .find-widget-toggle    (Aa / ab / .*)  ×3
+    .find-widget-count     (N of M label)
+    .find-widget-prev  ↑
+    .find-widget-next  ↓
+    .find-widget-close ×
+  .find-widget-replace-row  (hidden by default)
+    .find-widget-replace-input
+    .find-widget-replace-one  "Replace"
+    .find-widget-replace-all  "All"
+```
 
-The app has NO fold gutter, NO `foldEffect` / `unfoldEffect` in any extension,
-and NO `foldedRanges` usage anywhere in the codebase. This plugin introduces
-section folding as the first and only fold mechanism in Markable. CM6 provides
-the building blocks:
+Width is clamped `min-width: 320px; max-width: 480px` (find-widget.css line 29).
+z-index is 200 (find-widget.css line 27). Position is `right: 16px; top: 54px`
+by default, converted to absolute `left/top` on first drag (line 779).
 
-- `@codemirror/language`: `foldEffect`, `unfoldEffect`, `foldedRanges`,
-  `foldService`, `codeFolding`.
-- These are already exposed as window globals via `src/lib/cm-globals.ts` (the
-  `@codemirror/language` window global must be verified as exported there;
-  if absent, it must be added as a prerequisite step before plugin implementation).
+The `replaceAll` button (line 576) currently dispatches `replaceAll(this.view)` —
+a CM6 command that operates on the single active EditorView. This remains
+unchanged when vault scope is off.
 
-### Finding 3 — `pluginCompartment` is the correct extension injection point
+`open(mode)` (line 146) accepts `'find' | 'replace'`. There is no `'vault'` mode
+yet. Keybinding wiring is in `src/main.ts` (not read, but confirmed by reference
+at line 30 importing `getCurrentSettings`).
 
-Plugins add CM6 extensions via `api.addExtensions(extensions[])`. These are
-merged into `pluginCompartment` in `extensions.ts`. The Outline plugin's fold
-listener and gutter (if any) must use this path — no direct mutation of
-`buildExtensions()`.
+### `src/editor/find-widget.css`
 
-### Finding 4 — Single shared EditorView; fold state is per EditorState
+The widget has a `border-top: 1px solid var(--search-panel-border)` rule on
+`.find-widget-replace-row` (line 253). A new vault-results row must follow the
+same pattern. The `@media (max-width: 400px)` rule (line 287) collapses the
+widget to `calc(100vw - 32px)` — the vault results panel must reflow gracefully
+at this breakpoint.
 
-TabManager manages one EditorView. Tab switches call `view.setState(newState)`,
-replacing the entire EditorState. Each tab's EditorState is independent:
-`foldedRanges` is stored inside the state, so fold state is naturally per-tab.
-No explicit per-tab fold state storage is required at the plugin layer.
+### `src/lib/bridge.ts` — existing search and write bridges
 
-### Finding 5 — `window.__MARKABLE_EDITOR__` is the live EditorView reference
+`searchVaultContent(params)` (line 481) — fully typed bridge for the Rust
+`search_vault_content` command. Parameters:
+- `rootPaths: string[]` — vault root directories
+- `excludePatterns: string[]` — glob patterns to skip
+- `query: string` — substring (the command itself is case-insensitive; case
+  sensitivity is handled client-side or passed as a flag — see note on Rust
+  command below)
+- `maxResults: number` — file cap
 
-Plugins access the editor as
-`(window as any).__MARKABLE_EDITOR__ as EditorView`. The same pattern is
-used by auto-toc. The value is always current because TabManager updates it
-via `setEditorView` on init.
+Returns `FileResult<ContentSearchPayload>`.
 
-### Finding 6 — Tab-change events are not yet a formal plugin API
+`ContentSearchPayload` (line 453):
+```typescript
+{ results: FileContentResult[]; capped: boolean; skippedCount: number }
+```
 
-Auto-toc detects tab changes through the CM6 `updateListener` — when the
-document changes (docChanged flag), the panel re-scans. This is the correct
-approach for the Outline Panel too. The listener receives every `ViewUpdate`
-including those caused by `setState()` on a tab switch (docChanged = true when
-the new state has a different document).
+`FileContentResult` (line 440):
+```typescript
+{ path: string; title: string; matches: LineMatch[] }
+```
 
-### Finding 7 — `window.__CM_LANGUAGE__` global must exist for fold effects
+`LineMatch` (line 422):
+```typescript
+{ lineNumber: number; lineText: string; columnStart: number }
+```
 
-The fold API (`foldEffect`, `unfoldEffect`, `foldedRanges`, `foldService`,
-`codeFolding`) lives in `@codemirror/language`. `src/lib/cm-globals.ts` must
-expose this package as `window.__CM_LANGUAGE__`. If it is not yet exposed, that
-is a prerequisite code change (outside the plugin's IIFE boundary) that must
-be added before the plugin can use fold effects.
+`writeFile(path, content)` (line 79) — atomic write via temp-file-swap.
+Returns `FileResult<void>`. This is the bridge that replace-in-file operations
+will use.
+
+`readFile(path)` (line 34) — reads file as UTF-8 string. Returns
+`FileResult<string>`. Replace operations must read the current file content
+before writing.
+
+### `src-tauri/src/commands/vault.rs` — Rust `search_vault_content`
+
+Signature (line 1143):
+```rust
+pub async fn search_vault_content(
+    root_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+    query: String,
+    max_results: u32,
+) -> Result<ContentSearchPayload, String>
+```
+
+The Rust implementation (line 1153) performs `query.trim().to_lowercase()` and
+matches against each line's `.to_lowercase()` — the search is always
+**case-insensitive** at the Rust level. There is no `case_sensitive` flag exposed
+on the Rust command. The existing case-sensitivity toggle in the widget (`_matchCase`)
+currently controls the CM6 `SearchQuery` only.
+
+Implication for multi-file search: the Rust command always returns
+case-insensitive matches. The client side must post-filter results when
+`_matchCase` is on to discard false positives returned by the Rust command.
+This is a known constraint the architect must address.
+
+The command also does not accept a `regex` flag. Regex matching across files
+must be implemented client-side if it is in scope, or explicitly called out of
+scope. (See Out of Scope below — regex is out of scope for vault search.)
+
+File size cap: files larger than `SEARCH_MAX_FILE_BYTES` (1 MB, confirmed by
+test at vault.rs line 2137) are read only up to the cap; matches beyond 1 MB
+are not returned but `skipped_count` is not incremented.
+
+### `src/plugins/file-browser/file-browser.plugin.ts` — folder selection state
+
+The file-browser plugin does **not** currently expose a "selected folder path"
+global or event. Module-level folder state is tracked only implicitly through
+context menu target resolution — the `showContextMenu()` function (line 2017)
+is called inline with the path of the right-clicked node and does not persist
+the selection beyond the menu's lifetime. There is no `_selectedFolderPath` or
+equivalent module-level variable.
+
+The plugin exposes one window global on enable: `window.__MARKABLE_OPEN_MANAGE_VAULTS__`
+(line 2972). The vault manager is accessed via `window.__MARKABLE_VAULT_MANAGER__`.
+The current open file is read from `window.__MARKABLE_CURRENT_FILE__` (line 2992).
+
+Consequence for folder scope: the "Folder" scope option requires the architect
+to design a mechanism by which the file-browser plugin exposes the currently
+selected/highlighted folder path so the find widget can read it. Two candidate
+approaches exist:
+1. A new `window.__MARKABLE_FILE_BROWSER__` global exposing a `getSelectedFolderPath(): string | null` accessor.
+2. A custom DOM event `markable-folder-selected` dispatched by the file-browser
+   on right-click or single-click selection.
+
+The architect must choose one. Neither exists today — this is a new contract to
+be designed.
 
 ---
 
 ## Functional Requirements
 
-### FR-1 — Plugin registration and lifecycle
+### FR-1 — Vault scope toggle (conditional visibility)
 
-The Outline Panel is a single IIFE plugin file compiled from
-`src/plugins/outline-panel/outline-panel.plugin.ts`. It exports
-`{ onEnable, onDisable }`.
+The widget gains a scope-toggle control group with two or three options:
+- "File" (always shown) — current single-file behaviour, unchanged
+- "Vault" (shown when a vault is active) — searches all `.md` files in the vault
+- "Folder" (shown when a vault is active AND a folder is currently selected in
+  the File Browser sidebar) — searches only `.md` files under the selected folder
+  path (non-recursive is incorrect — the scope IS recursive under the folder)
 
-On `onEnable`:
-- Inject plugin CSS (`<style id="__markable_outline_panel_css__">`).
-- Register a sidebar panel via `api.registerSidebarPanel({ id: "outline-panel",
-  title: "Outline", side: "left", render, destroy })`.
-- Register CM6 extensions via `api.addExtensions([...])`. Extensions must
-  include: (a) the `updateListener` for doc/fold-state changes, and (b) the
-  `foldService` needed for CM6 to know how to fold Markdown sections.
+When no vault is active (vault manager returns null for `getActiveVault()`), the
+scope toggle is not rendered and the widget behaves exactly as today.
 
-On `onDisable`:
-- Call `api.unregisterSidebarPanel("outline-panel")`.
-- Call `api.removeExtensions()`.
-- Remove the `<style>` tag.
-- Null all module-level state variables (same cleanup pattern as auto-toc).
+### FR-2 — Scope toggle placement and widget expansion
 
-### FR-2 — Heading tree rendering
+The scope toggle sits between the find row and the existing replace row.
+When "File" scope is active: widget renders exactly as today (no change to
+existing DOM layout).
+When "Vault" or "Folder" scope is selected: the widget expands downward to show
+a vault-results panel below the scope toggle row, still above the replace row.
+The replace row remains accessible via the chevron when vault scope is active.
 
-The panel lists all ATX headings (H1–H6) extracted from the active document
-in document order. The same `scanHeadings()` logic used by auto-toc applies
-(see Finding 1). Headings inside fenced code blocks are excluded.
+### FR-3 — Live results as you type (vault/folder scope)
 
-Each heading row in the panel displays:
-- A collapse/expand toggle chevron (visible for any heading that has "section
-  body" content — see FR-5 for the definition of section body).
-- The heading text, indented by level (H1 = 0 extra indent, each subsequent
-  level adds a fixed pixel increment, e.g. 12 px per level).
+When vault or folder scope is active, results update as the user types in the
+find input with a **150 ms debounce**. Each debounce tick calls
+`searchVaultContent` via `bridge.ts`. The query string, `rootPaths`, and
+`excludePatterns` are derived from the active vault's configuration via
+`window.__MARKABLE_VAULT_MANAGER__`.
 
-Empty headings (e.g. `# ` with no text) are displayed as a non-breaking space
-so the row remains visible and clickable.
+When folder scope is active, `rootPaths` is set to `[selectedFolderPath]` (a
+single-element array containing the folder path exposed by the file-browser).
 
-### FR-3 — Heading navigation (click to scroll)
+Results are displayed in a scrollable list inside the widget. Maximum height of
+the results list: 320px with `overflow-y: auto`. Width follows the widget's
+existing `min-width: 320px; max-width: 480px` constraint.
 
-Clicking the heading text row (not the chevron) in the outline panel:
-1. Moves the editor cursor to the first character of the heading line
-   (`lineFrom` from the `HeadingEntry`).
-2. Scrolls the heading into the vertical centre of the editor viewport using
-   `EditorView.scrollIntoView(lineFrom, { y: "center" })`.
-3. Focuses the editor (`view.focus()`).
+### FR-4 — Results list rendering
 
-If the target section is currently folded in the editor, the click must first
-unfold it, then navigate. Navigating into a folded range without unfolding
-would leave the cursor invisible inside a collapsed block, which violates
-expected editor behaviour.
+Each file with one or more matches is shown as a collapsible group:
+```
+[file-title]  (N matches)
+  [line excerpt, match term highlighted]
+  [line excerpt, match term highlighted]
+  ...
+```
+File groups are sorted by match count descending (the Rust command already
+returns them in this order).
 
-### FR-4 — Active heading highlight
+Each excerpt shows the full `lineText` from the `LineMatch` struct, with the
+matched substring visually highlighted (bold or background tint). The
+`columnStart` field from `LineMatch` identifies the start of the highlight
+region; the length of the match term is known from the find input value.
 
-The panel continuously highlights the heading whose section contains the
-cursor. The active heading is the last heading in document order whose
-`lineFrom` is less than or equal to the current cursor position
-(`findActiveIndex()` logic from auto-toc). This updates on every cursor move
-(via the updateListener debounce at 150 ms).
+File groups are collapsed by default showing a maximum of 3 excerpts. A "Show
+all N" link expands the group to show all matches within that file.
 
-### FR-5 — Definition of a collapsible section
+When `capped: true` in the payload, show a notice below the results list:
+"Results limited to the first N files. Refine your query to see more."
+(where N = the `maxResults` value passed to the search).
 
-A "section" for heading H at line L consists of all lines from L+1 up to
-(but not including) the next heading of the same or higher level (i.e. same
-or fewer `#` characters), or to end of document if no such heading exists.
+When `skippedCount > 0`, show a secondary notice: "N file(s) could not be read."
 
-A section is "collapsible" only if it contains at least one non-empty,
-non-whitespace-only line after the heading line itself. A heading with no
-body content below it (or only blank lines before the next heading) is not
-collapsible; its chevron is hidden or replaced with a neutral glyph.
+### FR-5 — "No results" state
 
-The fold range for a heading is:
-- `from`: the end of the heading line (the character position immediately
-  after the last character on the heading line, exclusive of the newline).
-- `to`: the end of the last non-blank line of the section body (exclusive of
-  the trailing newline), or the end of the document if the section extends to
-  EOF.
+When a query returns zero `FileContentResult` entries (non-empty `results` array
+with zero files OR the command returns an error), display: "No results in vault."
+(or "No results in folder." for folder scope). Use the same red tint styling as
+the existing single-file no-results state (`find-widget-no-results` class
+pattern).
 
-This range definition must be implemented as a CM6 `foldService` so that CM6's
-native fold/unfold commands operate consistently with the panel's own collapse
-actions (FR-6, FR-7).
+### FR-6 — Replace levels in vault scope
 
-### FR-6 — Outline panel collapse folds the editor section
+When vault or folder scope is active and the replace row is open, three replace
+actions are available:
 
-When the user clicks the collapse chevron in the outline panel for heading H:
-1. Compute the fold range for H (FR-5).
-2. Dispatch `foldEffect.of({ from, to })` on the EditorView.
-3. CM6 applies the fold, hiding the section body in the editor.
-4. The panel re-renders (via the updateListener) showing H's chevron in
-   collapsed state.
+- **Replace** (existing button, repurposed): replaces the single match whose
+  excerpt is currently focused/highlighted in the results list, then advances
+  to the next match. If no match is focused in the results list, falls back
+  to replacing in the active CM6 editor (same as today).
+- **Replace in File**: replaces all matches in the file whose group is currently
+  focused, then re-runs the search to update the results list.
+- **Replace All in Vault/Folder**: see FR-7 (confirmation step required).
 
-If the section is already folded (the `foldedRanges` RangeSet already covers
-`from`), the click acts as a toggle — dispatch `unfoldEffect.of({ from })` to
-expand it.
+The "Replace in File" button appears only when vault or folder scope is active.
+Its label reads "In File" to fit the widget's horizontal constraints.
 
-### FR-7 — Editor fold gutter collapses section and syncs panel
+### FR-7 — Staged "Replace All" confirmation
 
-The plugin adds a `codeFolding()` extension (CM6's built-in fold gutter widget)
-via `api.addExtensions`. This places a fold widget in the gutter on heading
-lines. When the user clicks the fold widget in the editor gutter:
-1. CM6 dispatches `foldEffect` internally.
-2. The plugin's `updateListener` receives the `ViewUpdate`.
-3. The listener reads `foldedRanges(update.state)` to determine which sections
-   are now folded.
-4. The panel re-renders with the correct chevron states for all headings.
+When the user activates "Replace All" with vault or folder scope active, the
+replace does NOT commit immediately. Instead:
 
-No additional wiring is needed because the updateListener already fires on any
-state change, including fold state changes.
+1. A confirmation summary replaces the results list inside the widget:
+   "Replace '[find term]' with '[replace term]' in [N] files ([M] matches)?"
+2. Two buttons appear: "Confirm Replace All" and "Cancel".
+3. Clicking "Confirm Replace All" performs the replace sequentially across all
+   matched files (read → string-replace → writeFile via bridge). A progress
+   indicator ("Replacing N of M files…") replaces the summary during execution.
+4. Clicking "Cancel" returns to the normal results list without any writes.
+5. After completion, the results list refreshes automatically (a new search runs
+   against the now-modified files).
 
-### FR-8 — Fold state is per-tab
+### FR-8 — Replace mechanics (file I/O)
 
-Because CM6 fold state is stored inside `EditorState` and TabManager uses
-`view.setState()` on tab switches, fold state is automatically preserved
-per-tab without any explicit plugin-level bookkeeping. When the user switches
-tabs, the updateListener fires with the new document and its fold state; the
-panel re-renders accordingly.
+For each file targeted by a replace operation:
+1. Call `readFile(path)` from bridge.ts to get current content.
+2. Perform the string replacement in JavaScript (respecting `_matchCase`,
+   `_wholeWord`, and — for single-file scope only — `_regexp` toggle state).
+3. Call `writeFile(path, newContent)` from bridge.ts (atomic temp-file-swap).
+4. If the file is currently open in a tab, update the tab's CM6 editor state
+   to reflect the new content so the user does not see stale content.
 
-### FR-9 — Collapsed section rows in the panel
+### FR-9 — Unsaved tab collision
 
-A heading whose section is folded in the editor is shown in the panel with:
-- A right-pointing chevron (collapsed indicator).
-- The heading text styled identically to non-collapsed headings (no strike-
-  through, no dimming — collapsed is a navigational state, not a disabled one).
+Before writing to any file that is currently open in a tab, check whether the
+tab has unsaved changes (dirty state). If the tab is dirty:
+- Do not silently overwrite. Prompt the user: "The file '[name]' has unsaved
+  changes. Replace anyway and discard unsaved changes?"
+- If the user confirms, apply the replacement to the CM6 editor state (not
+  via writeFile) so the file remains dirty and the user can still undo.
+- If the user cancels that individual file, skip it and continue with the
+  remaining files in a "Replace All" operation.
 
-All headings inside a collapsed parent section remain visible in the panel
-(the outline always shows the full flat list regardless of editor fold state).
-Only the chevron state of the directly-folded heading changes.
+### FR-10 — Keyboard shortcut
 
-### FR-10 — Panel "collapse all" / "expand all" (optional, out of scope for v1)
+No new top-level keyboard shortcut is introduced. The widget is opened via the
+existing Cmd-F (find) and Cmd-Shift-F (replace) shortcuts. The scope toggle is
+toggled by clicking only (not keyboard-driven in this iteration).
 
-Per-heading collapse is the required v1 behaviour. A global "collapse all" or
-"expand all" button is deferred to a future iteration. It must NOT be
-implemented in this task.
+### FR-11 — Scope toggle persistence
 
-### FR-11 — Empty document and no-headings state
+The last-used scope selection ("File", "Vault", or "Folder") is persisted to
+settings via `updateSettings()` so reopening the widget restores the last scope.
+Persisted key: `findWidget.scope` (a new field on the existing `FindWidgetPosition`
+settings shape, or a sibling key `findWidget` object extension).
 
-When the active document has no ATX headings (including the empty-tab
-"untitled" state), the panel displays a centred "No headings" message. This
-matches the auto-toc plugin's behaviour and provides a clear empty state.
+### FR-12 — maxResults cap
 
-### FR-12 — Live update on document change
+The `maxResults` parameter passed to `searchVaultContent` is 200 files. This
+provides a practical upper bound without blocking the UI for very large vaults.
+When `capped: true` is returned, the notice described in FR-4 is displayed.
 
-The panel re-renders within 150 ms of any document edit. The debounce timer is
-reset on each `ViewUpdate` where `update.docChanged || foldStateChanged`. Fold
-state changes (FR-7) must also trigger a re-render without requiring a document
-edit.
+### FR-13 — Case sensitivity in vault search
 
-Determining `foldStateChanged`: compare `foldedRanges(update.state)` against
-`foldedRanges(update.startState)` using the `RangeSet` identity check or
-`eq()` method to avoid unnecessary re-renders on cursor-only moves.
+Because the Rust `search_vault_content` command is always case-insensitive, the
+client must post-filter results when `_matchCase` is `true`: any `LineMatch`
+whose `lineText` does not contain the exact-case query string is removed. Files
+where all matches are filtered out are removed from the results list entirely.
 
-### FR-13 — Plugin on/off toggle
+### FR-14 — Whole-word matching in vault search
 
-Disabling the plugin from the plugins panel:
-1. Calls `onDisable`, which unregisters the sidebar panel and removes CM6
-   extensions.
-2. The sidebar slot hides automatically (SidebarManager handles this).
-3. All fold effects applied while the plugin was active persist in the editor
-   state (the fold state is part of EditorState, not owned by the plugin).
-   This is acceptable and expected — disabling the panel does not unfold the
-   document.
+When `_wholeWord` is `true`, the client post-filters results: a `LineMatch` is
+kept only when the matched substring is bounded by non-word characters (or
+string boundaries) on both sides. Implementation uses a JavaScript regex with
+`\b` word-boundary anchors constructed from the (escaped) query string.
 
-Re-enabling restores the panel with the current document's heading tree
-immediately (the updateListener fires on the first update after registration).
+### FR-15 — Regex in vault scope is out of scope
+
+Regex (`_regexp` toggle) applies only to single-file (CM6) search. When vault
+or folder scope is active and `_regexp` is on, the regex toggle is visually
+disabled (greyed out) and a tooltip reads "Regex not supported in vault search."
+The find input still accepts the text literally for vault search purposes.
+
+### FR-16 — Widget size constraint with results panel open
+
+When vault scope is active and results are shown, `max-width` remains 480px.
+The widget's height is unconstrained (grows as needed) up to a practical limit:
+the results list has `max-height: 320px`. The confirmation panel (FR-7) also
+has `max-height: 320px`. The widget must not overflow the viewport vertically;
+if the expanded widget would overflow, the results list shrinks to fit.
 
 ---
 
 ## Non-Functional Requirements
 
-**NFR-1 — IIFE plugin boundary compliance**
-No ES module imports from app-internal modules (`bridge.ts`, `settings.ts`,
-`main.ts`, `extensions.ts`) at runtime. CM6 globals are accessed via window
-globals only (`window.__CM_VIEW__`, `window.__CM_LANGUAGE__`, etc.).
-`import type` annotations are permitted (erased by tsc).
+### NFR-1 — No regression on single-file behaviour
 
-**NFR-2 — Performance: 100+ headings**
-`scanHeadings()` is O(lines). `rebuildOutline()` (the DOM rebuild equivalent
-of `rebuildTOC`) replaces `.innerHTML` on every call. Profiling the auto-toc
-plugin shows this is acceptable for up to 200+ headings per the existing EC-9
-note in auto-toc. The same threshold applies here: up to 200 headings must
-render without perceptible lag.
+When no vault is active, or when "File" scope is selected, every existing
+FindWidget behaviour is identical to today. This is a hard constraint. The
+architect must design the vault extension as additive DOM/state layered on top
+of the existing structure, not as a refactor of existing code paths.
 
-**NFR-3 — Performance: fold state check**
-Reading `foldedRanges(state)` on every `ViewUpdate` is O(1) for the getter
-call. Comparing fold state between `update.startState` and `update.state`
-must use `RangeSet` reference equality or the `.eq()` method (not serialization)
-to remain O(1).
+### NFR-2 — Search debounce 150 ms
 
-**NFR-4 — No fold regression on plugin disable**
-`removeExtensions()` reconfigures `pluginCompartment` to remove the plugin's
-extensions, including `codeFolding()`. Existing fold ranges in the editor
-state remain intact (they live in the state's range set, which is unaffected
-by extension removal). This is acceptable — it matches CodeMirror's design.
+Vault search must not fire on every keystroke. 150 ms debounce measured from the
+last keypress before the `searchVaultContent` call is issued.
 
-**NFR-5 — CSS scoping**
-All CSS class names are prefixed `outline-` to avoid collisions with auto-toc
-(`.toc-*` prefix) and other plugins.
+### NFR-3 — Replace is non-destructive for open tabs
 
-**NFR-6 — Plugin build step**
-After any change to `src/plugins/outline-panel/`:
-`npm run build:plugins && npm run sync:plugins`.
+Writes to open tabs go through the CM6 editor state transaction layer, not
+directly via `writeFile`, so the user retains undo history for in-memory changes.
+Writes to files not currently open use `writeFile` directly (atomic swap on disk).
 
-**NFR-7 — No TODO comments in source**
-Deferred work is logged in `docs/specs/outline-panel/00_index.md`.
+### NFR-4 — Performance ceiling
 
-**NFR-8 — Window size invariant unchanged**
-No changes to `src-tauri/src/lib.rs` or `src/lib/settings.ts`.
+For a vault of up to 200 files matching the query (the `maxResults` cap), the
+results list must render within 300 ms of receiving the `ContentSearchPayload`.
+The `searchVaultContent` Rust command itself is expected to complete within 2 s
+for a 1 000-file vault on consumer hardware (this is an existing command with
+established performance — not a new constraint).
 
-**NFR-9 — `window.__CM_LANGUAGE__` prerequisite**
-Before the plugin can use `foldEffect`, `unfoldEffect`, `foldedRanges`, and
-`codeFolding`, `src/lib/cm-globals.ts` must export the `@codemirror/language`
-package as a window global. The Architect must verify this during codebase
-analysis. If missing, adding it is a prerequisite step for the Lead Developer
-before the plugin implementation begins.
+### NFR-5 — CM6 state consistency after replace
+
+After a replace operation touches a file that is currently open in a tab, the
+CM6 editor document state must match the on-disk content. Any mismatch (e.g.,
+stale highlights from the now-superseded CM6 `SearchQuery`) must be cleared by
+dispatching an updated query after the replace.
+
+### NFR-6 — Error handling
+
+All `readFile` and `writeFile` calls return `FileResult<T>` (never throw). Any
+`ok: false` result during a "Replace All" operation must be surfaced to the user
+as a per-file warning without aborting the rest of the batch.
+
+### NFR-7 — Accessibility
+
+The results list must be keyboard-navigable: Tab / arrow keys move focus between
+file groups and match excerpts. Each excerpt has an accessible label
+(file title + line number). The confirmation dialog (FR-7) must trap focus
+between its two buttons until dismissed.
+
+### NFR-8 — Tests
+
+The vault-search client-side post-filtering (FR-13, FR-14) and the replace
+mechanics (FR-8, FR-9) must have unit tests in the `tests/` directory. The
+existing `tests/plugins/file-browser/` structure is the reference pattern.
+No integration test that launches Tauri is required for this feature.
 
 ---
 
 ## Files That Must Change
 
-| File | Change |
-|------|--------|
-| `src/lib/cm-globals.ts` | Add `window.__CM_LANGUAGE__` export (prerequisite — only if not already present) |
-| `src/plugins/outline-panel/outline-panel.plugin.ts` | New file — the IIFE plugin |
-| `src/plugins/outline-panel/outline-panel.ts` | New file — pure logic (scanHeadings reuse or fork, foldRange computation, rebuildOutline) |
-| `src-tauri/plugins/core/outline-panel.js` | Built output — generated by `npm run build:plugins`, not hand-edited |
+| File | Change type | Reason |
+|---|---|---|
+| `src/editor/find-widget.ts` | Extend | Add vault scope toggle, results panel, vault replace logic, FR-8/FR-9 collision handling |
+| `src/editor/find-widget.css` | Extend | New CSS classes for scope row, results list, file groups, excerpts, confirmation panel |
+| `src/lib/bridge.ts` | Extend | Possibly add a `replaceInFileBatch` helper or confirm `readFile`+`writeFile` is sufficient; no new Rust command needed |
+| `src/plugins/file-browser/file-browser.plugin.ts` | Extend | Expose selected folder path via `window.__MARKABLE_FILE_BROWSER__.getSelectedFolderPath()` (or custom event) |
+| `src/lib/settings.ts` | Extend | Add `findWidget.scope` field to `FindWidgetSettings` shape; update `DEFAULT_SETTINGS` |
+| `tests/editor/find-widget-vault.test.ts` | Create | Unit tests for vault post-filtering and replace mechanics |
 
-### Files that must NOT change
+## Files That Must NOT Change
 
 | File | Reason |
-|------|--------|
-| `src/plugins/auto-toc/auto-toc.plugin.ts` | Auto-toc is a separate plugin; do not merge concerns |
-| `src/editor/extensions.ts` | Plugin extensions go through `pluginCompartment` via `api.addExtensions`, not `buildExtensions` |
-| `src/editor/live-preview.ts` | No live-preview interaction required |
-| `src-tauri/src/lib.rs` | Window size invariant |
-| `src/lib/settings.ts` | Window size invariant |
+|---|---|
+| `src-tauri/src/commands/vault.rs` | The `search_vault_content` command already satisfies all search needs; no new Rust commands are required |
+| `src-tauri/src/commands/files.rs` | `write_file` already exists; no new write commands needed |
+| `src/editor/extensions.ts` | No CM6 extension changes required |
+| `src/editor/live-preview.ts` | Unrelated to search |
+| `src/tabs/tab-manager.ts` | Tab dirty-state check must use the existing tab manager API, not modify it |
+| `src/main.ts` keybinding wiring | No new top-level shortcuts (FR-10) |
 
 ---
 
 ## Out of Scope
 
-- **Global "collapse all" / "expand all" button** — deferred (FR-10).
-- **Drag-to-reorder headings** — the outline is read-only for navigation.
-- **Inline editing of heading text from the panel** — click navigates, does not
-  open an edit field.
-- **Setext headings** (`====` underline style) — ATX headings only, matching
-  the existing auto-toc behaviour.
-- **Folding non-heading constructs** (code blocks, blockquotes) — this plugin
-  folds Markdown sections delimited by headings only.
-- **Persisting fold state across app restarts** — fold state is in-memory only
-  (part of EditorState). Session restore does not re-apply folds.
-- **Custom fold keybindings** (e.g. Cmd-Shift-[ to fold at cursor) — the plugin
-  adds the fold gutter widget but does not register keyboard shortcuts.
+- Glob / file-pattern filters (e.g., `*.md` only, exclude `archive/**`): the
+  vault is the unit of scope; glob filters are not in this iteration.
+- Regex vault search: regex applies only to single-file (CM6) scope (FR-15).
+- Search history / recent queries: not in this iteration.
+- Preview-before-replace diff view: the confirmation summary (FR-7) shows file
+  count and match count only, not a full diff.
+- New keyboard shortcuts for scope selection (FR-10).
+- Non-Markdown file search (`.txt`, `.html`, etc.): the Rust command already
+  restricts to `.md` files; this scope is inherited.
+- Undo across files for "Replace All in Vault": each file's replace is its own
+  `writeFile` atomic swap. Cross-file undo is not supported. Users should use
+  git for recovery.
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1 — Document with no headings**
-`scanHeadings()` returns `[]`. The panel shows "No headings". No chevrons, no
-fold interactions possible.
+**EC-1 — No vault active.**
+The scope toggle is not rendered. The widget behaves exactly as today. No search
+is triggered. The "Vault" and "Folder" options are absent from the toggle.
 
-**EC-2 — Document with a single heading and no body**
-The heading has no collapsible section (FR-5 — empty body). The chevron is
-hidden. The heading is still clickable for navigation.
+**EC-2 — Vault with zero matches.**
+`searchVaultContent` returns `results: []`. The results list shows "No results in
+vault." (FR-5). The replace buttons are disabled / non-interactive. No crash.
 
-**EC-3 — Cursor above all headings (before the first heading)**
-`findActiveIndex()` returns -1. No heading is highlighted in the panel. No
-regression; this matches auto-toc behaviour (EC-3 in auto-toc).
+**EC-3 — Query is empty when vault scope is active.**
+No search call is made (guard on empty string, mirroring the Rust guard at
+vault.rs line 1154). The results list shows nothing (blank state, not "No results").
 
-**EC-4 — Cursor inside a folded section**
-The cursor may be inside the fold range (CM6 allows this). When folded, the
-cursor is hidden from view but the outline panel still shows the active heading
-(the fold's parent heading is highlighted). Navigating away via the panel
-first unfolds the target section before scrolling (FR-3).
+**EC-4 — Vault scope selected but vault becomes inactive mid-session.**
+If the user switches away from a vault (via vault manager) while the widget is
+open in Vault scope, the scope reverts to "File" automatically and the results
+list is cleared. The vault-changed event from `window.__MARKABLE_VAULT_MANAGER__`
+triggers this cleanup.
 
-**EC-5 — Click-to-navigate into a currently folded section**
-FR-3 specifies: dispatch `unfoldEffect` for the section containing the target
-heading, then dispatch the cursor selection and scroll. This prevents the
-cursor landing inside a hidden range.
+**EC-5 — Folder scope selected but no folder is currently highlighted in the
+File Browser.**
+The "Folder" toggle option is not rendered at all when no folder is selected
+(FR-1). If the folder selection is cleared after the user has already switched
+to Folder scope, the widget gracefully falls back to "Vault" scope with a brief
+status message: "Folder selection lost. Showing vault results."
 
-**EC-6 — Heading at the very end of the document (no trailing newline)**
-`scanHeadings()` handles the last line correctly (the existing auto-toc
-implementation is already verified for this case). The fold range `to` is
-`doc.length` (end of document). CM6 foldEffect accepts this.
+**EC-6 — Replace in a file that has been modified on disk since the search ran.**
+The `readFile` call in FR-8 step 1 fetches the current on-disk content at
+replace time. If the content has changed since the search snapshot, the string
+replacement runs against the current content. If the find term no longer exists
+in the current content, the replacement is a no-op; the file is not written.
+The results list refreshes after the replace batch to reflect current state.
 
-**EC-7 — Two headings of different levels with no content between them**
-Example: `## Foo\n### Bar`. The section for `## Foo` has no non-blank body
-lines before `### Bar`. Per FR-5, this section is not collapsible; the chevron
-for `## Foo` is hidden. `### Bar` is separately evaluated.
+**EC-7 — Replace collides with unsaved tab content.**
+Covered by FR-9. The user is prompted. Confirming applies the replacement to
+the CM6 editor state (marking the tab dirty). Cancelling skips that file.
 
-**EC-8 — Heading immediately preceded by a fenced code block containing `#` lines**
-`scanHeadings()` skips headings inside code fences. The fold panel renders only
-real document headings. No interaction with code-block `#` lines.
+**EC-8 — "Replace All in Vault" targets a file the app cannot write (permissions).**
+`writeFile` returns `ok: false`. The per-file error is surfaced as a warning in
+the confirmation/progress panel (NFR-6). Remaining files in the batch continue
+to be processed.
 
-**EC-9 — Document with 200+ headings**
-The entire `rebuildOutline()` call must complete without visible lag (NFR-2).
-All 200+ heading rows are built in a single `innerHTML`-clear pass. The
-`foldedRanges` check is O(1). Acceptable per auto-toc precedent.
+**EC-9 — Regex toggle is active when user switches to vault scope.**
+The regex toggle is visually disabled (greyed, pointer-events: none) while vault
+or folder scope is active (FR-15). The toggle state `_regexp` is not cleared —
+if the user switches back to file scope, the regex toggle resumes its prior state.
 
-**EC-10 — Tab switch while a section is folded**
-`view.setState(newTabState)` replaces the entire EditorState. The new state's
-`foldedRanges` reflects the new tab's fold state (which may be empty on first
-visit). The `updateListener` fires with `docChanged = true`. The panel re-
-renders for the new document. Old fold state is preserved in the previous tab's
-EditorState (held by TabManager's `TabEntry`).
+**EC-10 — Case-sensitive search with a mixed-case query, vault scope.**
+The Rust command returns case-insensitive matches. The client post-filter
+(FR-13) discards matches where `lineText` does not contain the exact-case
+substring. If post-filtering empties all matches for a file, that file is
+removed from the display. Performance: post-filtering is O(total matches) in
+JavaScript, not a Rust round-trip.
 
-**EC-11 — Rapid toggle: plugin disabled and re-enabled before the debounce fires**
-`onDisable` clears the debounce timer and nulls `_enabled`. `onEnable` resets
-all state. The updateListener registered in `onEnable` is a fresh closure. No
-stale callbacks execute.
+**EC-11 — Whole-word search with a query that is a substring of another word.**
+The client post-filter (FR-14) uses `\b` boundary matching. A match like "cat"
+in "concatenate" is discarded. The regex is built from the escaped query string
+(special characters in the query are escaped via `escapeRegex()` before
+constructing the word-boundary pattern).
 
-**EC-12 — `foldEffect` dispatched on a section with no body**
-FR-5 ensures the plugin never dispatches `foldEffect` on a non-collapsible
-section (the chevron is hidden). If somehow a zero-length fold range is
-computed, CM6 silently ignores it (dispatching an effect with `from === to` is
-a no-op in CM6's fold system). Defensive guard recommended in the implementation.
+**EC-12 — Very large vault (1 000+ files).**
+The `maxResults` cap of 200 (FR-12) limits `ContentSearchPayload.results` to 200
+files. The UI renders a "Results limited to the first 200 files" notice when
+`capped: true`. The results list is virtualised (or at minimum rendered lazily
+with a `max-height: 320px` scrollable container) so 200 file groups do not
+freeze the DOM.
 
-**EC-13 — `window.__CM_LANGUAGE__` is not yet exposed**
-If the prerequisite step (NFR-9) is skipped, the plugin IIFE will throw a
-TypeError when accessing `(window as any).__CM_LANGUAGE__.foldEffect`. The
-plugin's `onEnable` must access this global inside a try/catch and log a clear
-error: `"Outline Panel: @codemirror/language not available as window global.
-Ensure cm-globals.ts exports __CM_LANGUAGE__."`. The plugin must not partially
-enable in this state.
+**EC-13 — Replace term is empty string.**
+An empty replace term performs a deletion (removes the find term). This is valid
+behaviour consistent with the existing single-file "Replace All" (the CM6
+`replaceAll` command allows empty replacement strings). The confirmation summary
+(FR-7) must show: "Delete '[find term]' in N files (M matches)?" to make the
+destructive intent clear.
 
-**EC-14 — Fold gutter widget shown for non-heading lines**
-`codeFolding()` uses the registered `foldService` to decide which lines get a
-fold widget. The plugin's `foldService` must return `null` for non-heading
-lines so the gutter widget appears only on collapsible heading lines (FR-5).
+**EC-14 — Find term contains characters that are special in the Rust command.**
+The Rust `search_vault_content` command uses substring (not regex) matching, so
+special characters in the query are treated literally (confirmed by vault.rs
+test D-3, line 2113). No escaping is needed for the Rust call. JavaScript
+post-filters for whole-word mode must still escape the term before constructing
+the `RegExp`.
 
-**EC-15 — Live-preview mode (Typora-style hide-syntax)**
-In live-preview mode, `live-preview.ts` applies decorations that hide Markdown
-syntax (e.g. the `##` prefix characters). The heading lines are still present
-in the document; `lineFrom` values are still valid. The fold gutter renders on
-the same line regardless of decoration state. No special interaction required.
-The two extensions are independent.
+**EC-15 — File browser plugin is disabled when the Find widget is opened in
+vault scope.**
+`window.__MARKABLE_FILE_BROWSER__` would be null/absent. The "Folder" scope
+option must not render. If vault scope is selected and the file-browser plugin
+is subsequently disabled, the widget falls back gracefully to "Vault" scope
+(same cleanup path as EC-5).
 
-**EC-16 — User edits a heading so the fold range shifts**
-After the edit, `docChanged = true` triggers the debounce. On fire, the plugin
-re-scans headings and re-reads `foldedRanges`. Existing folds are anchored to
-character positions. If the heading was edited (its `lineFrom` changed), the
-old fold range may no longer align with the heading. The plugin does NOT attempt
-to migrate folds on edit — this is standard CM6 fold behaviour (fold ranges are
-not automatically relocated on document changes). The user must re-fold if
-desired.
+**EC-16 — The widget is positioned near the bottom of the viewport when vault
+scope is activated.**
+The results list expands the widget downward. Viewport overflow is handled by
+the `_clampY` mechanism already present for drag positioning, but the expanded
+widget height is not dragged — it grows in place. The architect must decide
+whether to cap the results list height more aggressively (e.g., `max-height:
+200px`) when the widget's top position is near the bottom of the viewport, or
+to always anchor the widget to a scroll-friendly position when vault scope is
+engaged.
 
-**EC-17 — Untitled / empty new document**
-The editor has no file content. `scanHeadings("")` returns `[]`. Panel shows
-"No headings". No crash.
+**EC-17 — User presses Escape while the confirmation panel (FR-7) is open.**
+Escape cancels the confirmation and returns to the results list (same as clicking
+"Cancel"). The Escape handler in `_attachEvents` (line 427) currently closes the
+widget entirely; this must be intercepted when the confirmation panel is visible
+so Escape cancels the confirmation instead of closing the widget.
 
-**EC-18 — Outline panel registered but sidebar is closed (not visible)**
-The updateListener still fires. The panel re-renders in the background (the
-container is in the DOM but not displayed). This matches auto-toc behaviour
-and is the correct approach — no visibility check is needed.
+**EC-18 — Search completes but the widget has been closed before results render.**
+If the user closes the widget during the 150 ms debounce or during the async
+`searchVaultContent` call, the results must be discarded (not rendered into a
+hidden widget). A cancellation flag or "generation counter" pattern guards
+against stale async results updating the DOM after close.
 
-**EC-19 — Fold state changed by a future keyboard shortcut or another plugin**
-If another plugin or a future keybinding dispatches `foldEffect`/`unfoldEffect`,
-the updateListener receives the `ViewUpdate`. The fold-state change check
-(FR-12) detects the change and triggers a panel re-render. The outline panel
-stays in sync regardless of the source of the fold dispatch.
+**EC-19 — Widget drag while vault results are open.**
+The existing drag implementation (lines 759–826) moves the entire `.find-widget`
+element including the results panel. This is correct and no special handling is
+needed. The existing viewport-clamp logic in `_clampX`/`_clampY` must account
+for the increased height of the widget.
 
-**EC-20 — `codeFolding()` extension added twice (rapid double enable)**
-`api.addExtensions` replaces any prior registration for this plugin id
-(idempotent per markable-plugin-api.ts). CM6 will not have duplicate
-`codeFolding()` extensions for this plugin. The `_enabled` guard in `onEnable`
-also prevents double-registration.
+**EC-20 — Replace All partially fails (some files succeed, some fail).**
+After a partial failure, the progress panel shows a per-file summary: green
+checkmark for succeeded files, red X for failed files with the error message
+from `FileResult.error.message`. The "done" state is reached even if some files
+failed; the user can retry the failed files individually.
 
 ---
 
 ## Acceptance Criteria
 
-**AC-1** — With the plugin enabled, opening a document that has H1–H6 headings
-causes the outline panel to show all headings within 150 ms.
+**AC-1** — When no vault is active, the widget opens via Cmd-F / Cmd-Shift-F
+with no scope toggle visible and behaves identically to the current
+implementation in all respects.
 
-**AC-2** — Clicking a heading row in the outline panel moves the cursor to that
-heading's line and scrolls it to the centre of the editor viewport.
+**AC-2** — When a vault is active, the widget displays a scope toggle with "File"
+and "Vault" options. "File" is the default unless a prior session persisted
+"Vault" or "Folder".
 
-**AC-3** — Clicking the collapse chevron for a heading in the outline panel folds
-the corresponding section in the editor (the body lines become hidden behind a
-fold marker). The chevron updates to the collapsed state.
+**AC-3** — Selecting "Vault" scope and typing a query of at least one character
+triggers a search with the 150 ms debounce. Results appear as a grouped file
+list within the widget.
 
-**AC-4** — Clicking the collapse chevron again (when already collapsed) unfolds
-the section in the editor. The chevron returns to the expanded state.
+**AC-4** — Each file group in the results list shows the file title, match count,
+and up to 3 excerpt lines. Match substrings are visually highlighted within
+excerpts. A "Show all N" control expands the group to show all matches.
 
-**AC-5** — Clicking the fold widget in the editor gutter on a heading line folds
-the section. The outline panel's chevron for that heading updates to collapsed
-within 150 ms.
+**AC-5** — When `capped: true` is returned, the notice "Results limited to the
+first 200 files" appears below the results list.
 
-**AC-6** — Clicking the fold widget in the editor gutter on an already-folded
-heading unfolds the section. The outline panel's chevron returns to expanded.
+**AC-6** — When a folder is selected in the File Browser and a vault is active,
+a "Folder" scope option appears in the toggle. Selecting it limits search to
+files under that folder.
 
-**AC-7** — Switching tabs updates the outline panel to show the new document's
-headings and correctly reflects that document's fold state.
+**AC-7** — When "File" scope is selected after having used "Vault" scope, the
+results panel is hidden and the widget returns to its normal single-file state.
 
-**AC-8** — With a section folded, switching away from the tab and back again
-preserves the fold state in the editor and in the panel.
+**AC-8** — The "Replace" button with vault scope active replaces the focused match
+in the results list. With no focused match, it falls back to replacing in the
+active CM6 editor.
 
-**AC-9** — A document with no headings shows a "No headings" message in the panel.
-No errors are thrown.
+**AC-9** — The "In File" button (vault scope only) replaces all matches in the
+file whose group is focused, then refreshes the results list.
 
-**AC-10** — Disabling the plugin from the plugins panel removes the sidebar panel
-and the fold gutter. No console errors. Re-enabling restores both.
+**AC-10** — Clicking "Replace All" with vault scope active shows the confirmation
+summary ("Replace '...' with '...' in N files (M matches)?") without committing
+any writes.
 
-**AC-11** — A heading that has no body content (nothing before the next same-or-
-higher-level heading) shows no collapse chevron. Clicking its text row still
-navigates correctly.
+**AC-11** — Clicking "Confirm Replace All" processes all matched files sequentially,
+showing a progress indicator. After completion the results list refreshes.
 
-**AC-12** — With the plugin enabled, a document with 200 headings renders in the
-outline panel without perceptible lag (< 200 ms total).
+**AC-12** — Clicking "Cancel" in the confirmation panel returns to the results
+list without any file writes.
+
+**AC-13** — When `_matchCase` is active in vault scope, the results list shows
+only exact-case matches (post-filter FR-13 is applied).
+
+**AC-14** — When `_wholeWord` is active in vault scope, the results list shows
+only word-boundary matches (post-filter FR-14 is applied).
+
+**AC-15** — When `_regexp` is active and vault scope is selected, the regexp
+toggle is visually disabled and the search proceeds as a literal-string vault
+search.
+
+**AC-16** — If a file in the "Replace All" batch is currently open in a tab with
+unsaved changes, a per-file prompt appears before that file is written. The user
+can confirm (apply to editor state, keep dirty) or skip (no write, continue batch).
+
+**AC-17** — If a file write fails (`writeFile` returns `ok: false`), the progress
+panel marks that file as failed and continues with the remaining files.
+
+**AC-18** — Pressing Escape while the confirmation panel is visible cancels the
+confirmation and returns to the results list without closing the widget.
+
+**AC-19** — The scope selection is persisted to settings and restored on the next
+`open()` call.
+
+**AC-20** — All existing FindWidget tests pass without modification.
+
+**AC-21** — Unit tests cover: (a) case-sensitive post-filter correctly discards
+case-mismatched results, (b) whole-word post-filter discards partial-word matches,
+(c) replace mechanics correctly read/modify/write file content.
 
 ---
 

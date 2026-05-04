@@ -659,6 +659,20 @@ let _fsUnlisten: (() => void) | null = null;
 let _fsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
+ * The absolute path of the folder currently selected/highlighted in the
+ * file browser. Updated when the user single-clicks a directory node or
+ * right-clicks a directory node (context menu target).
+ *
+ * null when no folder is selected or when only files are selected.
+ *
+ * Exposed via window.__MARKABLE_FILE_BROWSER__.getSelectedFolderPath()
+ * so the find widget can read it without a direct import dependency.
+ * This follows the pull model: the find widget reads synchronously at search
+ * time rather than caching an event-delivered value.
+ */
+let _selectedFolderPath: string | null = null;
+
+/**
  * Tracks the path of the node currently being dragged within the tree.
  * Set on dragstart, cleared on dragend. Used instead of dataTransfer.types
  * in the dragover handler because WKWebView (Tauri/macOS) does not always
@@ -1453,6 +1467,15 @@ function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => v
         /* Non-text assets (images, PDFs, etc.): open in the media viewer. */
         void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
       }
+      /*
+       * File node activated: clear folder selection. The find widget's
+       * "Folder" scope option will hide itself when getSelectedFolderPath()
+       * returns null (EC-5).
+       */
+      _selectedFolderPath = null;
+      window.dispatchEvent(
+        new CustomEvent("markable-folder-selected", { detail: { path: null } })
+      );
     } else if (type === "vault") {
       const nodeVaultId = el.getAttribute("data-vault-id") ?? "";
       const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
@@ -1464,8 +1487,24 @@ function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => v
         /* Inactive vault: switch to it (vault-manager fires onVaultChanged → re-render). */
         void vm?.switchVault?.(nodeVaultId);
       }
+      /*
+       * Vault root node activated: treat as a directory for folder scope
+       * purposes. The vault root is a valid scope for "Folder" search.
+       */
+      _selectedFolderPath = path;
+      window.dispatchEvent(
+        new CustomEvent("markable-folder-selected", { detail: { path } })
+      );
     } else if (type === "directory") {
       toggleDirectoryNode(el, path, vaultId);
+      /*
+       * Directory node activated: update folder selection so the find widget
+       * can offer a "Folder" scope option scoped to this directory.
+       */
+      _selectedFolderPath = path;
+      window.dispatchEvent(
+        new CustomEvent("markable-folder-selected", { detail: { path } })
+      );
     }
   };
 }
@@ -2270,6 +2309,22 @@ function handleContextMenu(e: MouseEvent, el: HTMLElement, vaultId: string): voi
   const type = el.getAttribute("data-type") as "vault" | "directory" | "file" | null;
   const path = el.getAttribute("data-path") ?? "";
 
+  /*
+   * Update the selected folder path when a context menu is invoked.
+   * This allows the find widget to read the right-clicked folder as the
+   * current scope target via getSelectedFolderPath() (step_01 contract).
+   *
+   * File right-clicks clear the folder selection (EC-5).
+   * Vault-root right-clicks are treated as valid folder scope (same as
+   * the vault-root activate handler above).
+   */
+  if (type === "directory") {
+    _selectedFolderPath = path;
+  } else if (type === "file") {
+    _selectedFolderPath = null;
+  }
+  // vault-root: do NOT clear; treat vault root as valid folder scope.
+
   let items: Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }>;
 
   if (type === "file") {
@@ -2862,6 +2917,12 @@ function setupVaultSubscriptions(vaultManager: any): void {
   _vaultChangedCb = (_vault: VaultEntry | null) => {
     if (!_enabled) return;
     _searchQuery = "";
+    /*
+     * Clear the selected folder path on vault change. When the vault switches
+     * (or becomes inactive), the previously selected folder is no longer
+     * meaningful. The find widget will fall back to "vault" scope (EC-4 / EC-5).
+     */
+    _selectedFolderPath = null;
     void refreshVaultData();
   };
 
@@ -2971,6 +3032,26 @@ const plugin = {
      */
     (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__ = openManageVaultsModal;
 
+    /*
+     * Expose the folder-selection accessor so the multi-file find widget can
+     * read the currently selected folder path synchronously at search time.
+     * The pull model (accessor) is used instead of a DOM event because the
+     * find widget needs the path at query dispatch time, not reactively.
+     *
+     * Follows the __MARKABLE_OPEN_MANAGE_VAULTS__ pattern (AD decision in
+     * docs/specs/multi-file-find-replace/00_index.md).
+     */
+    (window as any).__MARKABLE_FILE_BROWSER__ = {
+      /**
+       * Returns the absolute path of the folder currently highlighted in the
+       * file-browser sidebar, or null if no folder is selected or if the
+       * plugin is disabled.
+       */
+      getSelectedFolderPath(): string | null {
+        return _selectedFolderPath;
+      },
+    };
+
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
     api.registerSidebarPanel(makePanelDescriptor());
 
@@ -3005,6 +3086,13 @@ const plugin = {
 
     /* step_05: Unregister the window global so the button is unreachable while disabled */
     (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__ = null;
+
+    /*
+     * Null the file-browser global and clear the folder path so any retained
+     * accessor references return null after disable (FS-4).
+     */
+    (window as any).__MARKABLE_FILE_BROWSER__ = null;
+    _selectedFolderPath = null;
 
     /* Close any open context menu so it doesn't linger after disable */
     closeContextMenu();
@@ -3057,6 +3145,7 @@ const plugin = {
     _fsUnlisten = null;
     _fsDebounceTimer = null;
     _activeDragPath = null;
+    /* _selectedFolderPath is already cleared above (after nulling the global). */
   },
 };
 
@@ -3178,6 +3267,28 @@ export const _testing = {
   /** Get the FS debounce timer handle (null when no pending event). */
   getFsDebounceTimer(): ReturnType<typeof setTimeout> | null {
     return _fsDebounceTimer;
+  },
+
+  /**
+   * Directly set the module-level _selectedFolderPath variable.
+   *
+   * Used by tests to verify that getSelectedFolderPath() returns a non-null
+   * path (FS-6). In production code, this variable is only written by the
+   * folder-selection handler; the _testing accessor is the only way to set
+   * it directly without simulating a full DOM interaction.
+   *
+   * @param path - The path to set, or null to clear the selection.
+   */
+  setSelectedFolderPath(path: string | null): void {
+    _selectedFolderPath = path;
+  },
+
+  /**
+   * Read the current _selectedFolderPath directly (mirrors the public
+   * getSelectedFolderPath accessor but available before onEnable).
+   */
+  getSelectedFolderPath(): string | null {
+    return _selectedFolderPath;
   },
 };
 

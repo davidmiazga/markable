@@ -10,6 +10,7 @@ import { getSettings, saveSettings } from "./bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import type { VaultEntry } from "./vault-types";
+import type { FindScope } from "../editor/vault-search-utils";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
@@ -206,6 +207,16 @@ export interface MarkableSettings {
    * no longer exists in the `vaults` array (EC-11).
    */
   activeVaultId?: string | null;
+
+  /**
+   * Last-used scope for the find widget ("file", "vault", or "folder").
+   *
+   * Optional — absent in settings files created before multi-file find was
+   * added. FindWidget._restoreScope() defaults to "file" when this field is
+   * absent via the ?? "file" guard (FR-11). The Rust raw-JSON pass-through
+   * means this field is safe to add without modifying any Rust struct.
+   */
+  findWidgetScope?: FindScope;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */
