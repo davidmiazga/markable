@@ -519,6 +519,48 @@ const FILE_BROWSER_CSS = `
   margin-bottom: 12px;
 }
 
+.file-tree-pinned-section {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.15));
+  margin-bottom: 4px;
+}
+
+.file-tree-section-header {
+  padding: 6px 12px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary, rgba(255,255,255,.4));
+  user-select: none;
+}
+
+.tree-node-pinned {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.tree-node-pinned:hover {
+  background: var(--bg-hover, rgba(128,128,128,.1));
+}
+
+.tree-node-pinned.tree-node-active {
+  background: var(--selection-bg, rgba(92,107,192,.2));
+}
+
+/* Red dot shown before each pinned item label */
+.tree-node-pinned-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e05252;
+}
+
 `;
 
 
@@ -611,6 +653,12 @@ let _settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let _expandedPaths: Set<string> = new Set();
 
 /**
+ * Absolute paths that the user has pinned to the "Pinned" section at the top
+ * of the tree. Keyed per vault via FileBrowserSettings.pinnedPaths.
+ */
+let _pinnedPaths: Set<string> = new Set();
+
+/**
  * Cached plugin API reference so we can call saveSettings from event handlers
  * without threading the api object through every function call.
  */
@@ -691,6 +739,7 @@ let _activeDragPath: string | null = null;
  */
 interface FileBrowserSettings {
   expandedPaths: Record<string, string[]>;
+  pinnedPaths?: Record<string, string[]>;
 }
 
 /**
@@ -707,8 +756,11 @@ async function loadExpandedPaths(vaultId: string): Promise<void> {
     const saved = await _api.loadSettings() as FileBrowserSettings | null;
     const paths = saved?.expandedPaths?.[vaultId] ?? [];
     _expandedPaths = new Set(paths);
+    const pinned = saved?.pinnedPaths?.[vaultId] ?? [];
+    _pinnedPaths = new Set(pinned);
   } catch {
     _expandedPaths = new Set();
+    _pinnedPaths = new Set();
   }
 }
 
@@ -731,11 +783,108 @@ function scheduleSettingsSave(vaultId: string): void {
       const existing = (await _api.loadSettings()) as FileBrowserSettings | null;
       const expandedPaths = existing?.expandedPaths ?? {};
       expandedPaths[vaultId] = Array.from(_expandedPaths);
-      await _api.saveSettings({ expandedPaths });
+      const pinnedPaths = existing?.pinnedPaths ?? {};
+      pinnedPaths[vaultId] = Array.from(_pinnedPaths);
+      await _api.saveSettings({ expandedPaths, pinnedPaths });
     } catch {
       /* Save failure is non-critical — expanded state is in-memory until next open. */
     }
   }, SETTINGS_SAVE_DEBOUNCE_MS);
+}
+
+// ── Pinned paths helpers ──────────────────────────────────────────────────────
+
+function pinPath(path: string, vaultId: string): void {
+  _pinnedPaths.add(path);
+  scheduleSettingsSave(vaultId);
+  renderPanel();
+}
+
+function unpinPath(path: string, vaultId: string): void {
+  _pinnedPaths.delete(path);
+  scheduleSettingsSave(vaultId);
+  renderPanel();
+}
+
+/**
+ * Depth-first search for a TreeNode by absolute path.
+ * Used by buildPinnedSection to distinguish files from directories.
+ */
+function findNodeByPath(nodes: TreeNode[], path: string): TreeNode | null {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    const found = findNodeByPath(node.children, path);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Build the "Pinned" sticky section rendered above the vault tree.
+ * Returns null when no paths are pinned (section is omitted entirely).
+ */
+function buildPinnedSection(activeFile: string | null, vaultId: string): HTMLElement | null {
+  if (_pinnedPaths.size === 0) return null;
+
+  const section = document.createElement("div");
+  section.className = "file-tree-pinned-section";
+
+  const header = document.createElement("div");
+  header.className = "file-tree-section-header";
+  header.textContent = "Pinned";
+  section.appendChild(header);
+
+  const ul = document.createElement("ul");
+  ul.className = "file-tree file-tree-pinned";
+  ul.setAttribute("role", "tree");
+
+  for (const pinnedPath of _pinnedPaths) {
+    const name = pinnedPath.split("/").pop() ?? pinnedPath;
+    const isDir = findNodeByPath(_currentTree, pinnedPath)?.type === "directory";
+
+    const li = document.createElement("li");
+    li.className = "tree-node tree-node-pinned";
+    li.setAttribute("data-path", pinnedPath);
+    li.tabIndex = 0;
+    if (pinnedPath === activeFile) li.classList.add("tree-node-active");
+
+    const dot = document.createElement("span");
+    dot.className = "tree-node-pinned-dot";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "tree-node-label";
+    nameSpan.textContent = name;
+    nameSpan.title = pinnedPath;
+
+    li.appendChild(dot);
+    li.appendChild(nameSpan);
+
+    if (!isDir) {
+      li.addEventListener("click", () => {
+        const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+        void tabMgr?.openFileInTab?.(pinnedPath);
+      });
+    }
+
+    li.addEventListener("contextmenu", (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const normalItems = isDir
+        ? buildDirContextMenuItems(li, pinnedPath, vaultId)
+        : buildFileContextMenuItems(li, pinnedPath, vaultId);
+      const unpinItem = { label: "Unpin", handler: () => unpinPath(pinnedPath, vaultId) };
+      showContextMenu(
+        [unpinItem, { separator: true, label: "", handler: null }, ...normalItems],
+        e.clientX,
+        e.clientY,
+      );
+    });
+
+    ul.appendChild(li);
+  }
+
+  section.appendChild(ul);
+  return section;
 }
 
 // ── Manage Vaults modal ───────────────────────────────────────────────────────
@@ -1242,6 +1391,8 @@ function buildTreeUl(
     ], e.clientX, e.clientY);
   });
 
+  const pinnedSection = buildPinnedSection(activeFile, vaultId);
+  if (pinnedSection) wrapper.appendChild(pinnedSection);
   wrapper.appendChild(card);
 }
 
@@ -1932,6 +2083,7 @@ export async function refreshVaultData(): Promise<void> {
    * Load expanded paths for this vault from settings so the tree restores
    * the user's last open/close state when the vault changes.
    */
+  _pinnedPaths = new Set();
   await loadExpandedPaths(activeVault.id);
 
   /* Fast path: vault-manager already has a loaded index — render immediately */
@@ -2121,6 +2273,11 @@ function buildFileContextMenuItems(
 
   return [
     {
+      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
+      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
+    },
+    { separator: true, label: "", handler: null },
+    {
       label: "New Note",
       handler: () => {
         if (!container) return;
@@ -2184,6 +2341,11 @@ function buildDirContextMenuItems(
   const container = _panelContainer;
 
   return [
+    {
+      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
+      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
+    },
+    { separator: true, label: "", handler: null },
     {
       label: "New Note",
       handler: () => {
@@ -2964,6 +3126,7 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
     title: "Files",
     side: "left",
     defaultWidth: 240,
+    icon: `<svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 24 24" width="16" fill="currentColor"><path d="M13 12h7v1.5h-7zm0-2.5h7V11h-7zm0 5h7V16h-7zM21 4H3C1.9 4 1 4.9 1 6v13c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-10 15H3V6h8v13zm10 0h-8V6h8v13z"/></svg>`,
 
     render(container: HTMLElement): void {
       _panelContainer = container;
@@ -3138,6 +3301,7 @@ const plugin = {
     _currentTree = [];
     _isLoading = false;
     _expandedPaths = new Set();
+    _pinnedPaths = new Set();
     _lastKnownFile = null;
     _contextMenu = null;
     _contextMenuDismiss = null;
@@ -3211,6 +3375,20 @@ export const _testing = {
   getExpandedPaths(): Set<string> {
     return _expandedPaths;
   },
+  /** Set pinned paths. */
+  setPinnedPaths(paths: Set<string>): void {
+    _pinnedPaths = paths;
+  },
+  /** Get pinned paths. */
+  getPinnedPaths(): Set<string> {
+    return _pinnedPaths;
+  },
+  /** Expose buildPinnedSection for testing. */
+  buildPinnedSection,
+  /** Expose pinPath for testing. */
+  pinPath,
+  /** Expose unpinPath for testing. */
+  unpinPath,
   /** Directly call renderPanel for testing. */
   renderPanel,
   /** Directly call updateActiveFileHighlight for testing. */

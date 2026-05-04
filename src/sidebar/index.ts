@@ -19,4 +19,5 @@ export {
   movePanelToSide,
   focusSidebarPanel,
   toggleSidebarPanel as toggleSidebarPanel,
+  iconizeNonPinnedOrToggle,
 } from "./sidebar-manager";

@@ -71,6 +71,13 @@ export interface TabEntry {
    * scroll position does not reset to the top.
    */
   scrollTop: number;
+
+  /**
+   * True when the tab is pinned. Pinned tabs sort to the front of the tab list
+   * and are skipped by closeOtherTabs() and closeAllTabs(). Closing a pinned
+   * tab auto-unpins it first rather than blocking the close.
+   */
+  pinned?: boolean;
 }
 
 /**

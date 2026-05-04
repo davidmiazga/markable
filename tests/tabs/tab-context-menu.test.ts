@@ -29,6 +29,8 @@ vi.mock("../../src/tabs/tab-manager", () => ({
     closeOtherTabs: vi.fn(),
     closeAllTabs: vi.fn(),
     getTabCount: vi.fn().mockReturnValue(3),
+    pinTab: vi.fn(),
+    unpinTab: vi.fn(),
   },
 }));
 
@@ -49,6 +51,8 @@ const mockTabManager = tabManager as unknown as {
   closeOtherTabs: ReturnType<typeof vi.fn>;
   closeAllTabs: ReturnType<typeof vi.fn>;
   getTabCount: ReturnType<typeof vi.fn>;
+  pinTab: ReturnType<typeof vi.fn>;
+  unpinTab: ReturnType<typeof vi.fn>;
 };
 
 const mockRevealInFinder = revealInFinder as ReturnType<typeof vi.fn>;
@@ -108,15 +112,16 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
   });
 
   /**
-   * TCM-02: The menu contains exactly four action items and one separator.
+   * TCM-02: The menu contains exactly five action items and one separator.
+   * Items: Pin/Unpin Tab, Close Tab, Close Other Tabs, Close All Tabs, Reveal in Finder.
    */
-  it("TCM-02: menu has four items and one separator", () => {
+  it("TCM-02: menu has five items and one separator", () => {
     showTabContextMenu(makeTab(), 100, 100);
 
     const items = document.querySelectorAll(".context-menu-item");
     const separators = document.querySelectorAll(".context-menu-separator");
 
-    expect(items.length).toBe(4);
+    expect(items.length).toBe(5);
     expect(separators.length).toBe(1);
   });
 
@@ -132,8 +137,8 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
     showTabContextMenu(makeTab(), 100, 100);
 
     const items = document.querySelectorAll(".context-menu-item");
-    // Index 1 = "Close Other Tabs" (0=Close Tab, 1=Close Other, 2=Close All, 3=Reveal)
-    expect(items[1].classList.contains("disabled")).toBe(true);
+    // Index 2 = "Close Other Tabs" (0=Pin, 1=Close Tab, 2=Close Other, 3=Close All, 4=Reveal)
+    expect(items[2].classList.contains("disabled")).toBe(true);
   });
 
   /**
@@ -193,8 +198,8 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
     showTabContextMenu(tab, 100, 100);
 
     const items = document.querySelectorAll(".context-menu-item");
-    // Index 0 = "Close Tab"
-    const closeTabItem = items[0] as HTMLElement;
+    // Index 1 = "Close Tab" (0=Pin, 1=Close Tab, 2=Close Other, 3=Close All, 4=Reveal)
+    const closeTabItem = items[1] as HTMLElement;
     closeTabItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
 
     expect(mockTabManager.closeTab).toHaveBeenCalledWith("my-tab");
@@ -227,6 +232,37 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
   });
 
   /**
+   * Pin/Unpin: shows "Pin Tab" for unpinned tabs, "Unpin Tab" for pinned tabs.
+   */
+  it("shows 'Pin Tab' for an unpinned tab", () => {
+    showTabContextMenu(makeTab({ pinned: false }), 100, 100);
+    const items = document.querySelectorAll(".context-menu-item");
+    expect(items[0].textContent).toBe("Pin Tab");
+  });
+
+  it("shows 'Unpin Tab' for a pinned tab", () => {
+    showTabContextMenu(makeTab({ pinned: true }), 100, 100);
+    const items = document.querySelectorAll(".context-menu-item");
+    expect(items[0].textContent).toBe("Unpin Tab");
+  });
+
+  it("mousedown on 'Pin Tab' calls tabManager.pinTab with the tab id", () => {
+    const tab = makeTab({ id: "pin-me", pinned: false });
+    showTabContextMenu(tab, 100, 100);
+    const items = document.querySelectorAll(".context-menu-item");
+    (items[0] as HTMLElement).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(mockTabManager.pinTab).toHaveBeenCalledWith("pin-me");
+  });
+
+  it("mousedown on 'Unpin Tab' calls tabManager.unpinTab with the tab id", () => {
+    const tab = makeTab({ id: "unpin-me", pinned: true });
+    showTabContextMenu(tab, 100, 100);
+    const items = document.querySelectorAll(".context-menu-item");
+    (items[0] as HTMLElement).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(mockTabManager.unpinTab).toHaveBeenCalledWith("unpin-me");
+  });
+
+  /**
    * Additional: closeTabContextMenu() is idempotent (safe when no menu is open).
    */
   it("closeTabContextMenu() is a no-op when no menu is open", () => {
@@ -242,8 +278,8 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
     showTabContextMenu(makeTab(), 100, 100);
 
     const items = document.querySelectorAll(".context-menu-item");
-    // Index 2 = "Close All Tabs"
-    const closeAllItem = items[2] as HTMLElement;
+    // Index 3 = "Close All Tabs" (0=Pin, 1=Close Tab, 2=Close Other, 3=Close All, 4=Reveal)
+    const closeAllItem = items[3] as HTMLElement;
     closeAllItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
 
     expect(mockTabManager.closeAllTabs).toHaveBeenCalledOnce();

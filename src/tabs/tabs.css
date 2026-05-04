@@ -38,6 +38,9 @@
    */
   --tab-dot-dirty-indicator-color: var(--accent, #0078d4);
 
+  /* Pin indicator color — red dot, distinct from the blue dirty dot. */
+  --tab-pin-color: #e05252;
+
   /* Regular mode (step_03) */
   --tab-regular-height: 36px;
   --tab-regular-bg: var(--bg-secondary, #252526);
@@ -145,6 +148,18 @@
   height: 5px;
   border-radius: 50%;
   background: var(--tab-dot-dirty-indicator-color);
+}
+
+/* Pin indicator: small red dot in the bottom-left corner of the dot/pill */
+.tab-dot.is-pinned::before {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: -2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tab-pin-color, #e05252);
 }
 
 /*
@@ -290,6 +305,19 @@
 
 .tab-label.is-dirty .tab-label-dirty {
   display: inline;
+}
+
+/* Pin indicator for regular tab bar: small red dot before the dirty bullet. */
+.tab-label.is-pinned::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tab-pin-color, #e05252);
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 4px;
 }
 
 /*
@@ -458,6 +486,19 @@
 .tab-vertical-col.is-dirty .tab-vertical-text::after {
   content: " •";
   color: var(--tab-dot-dirty-indicator-color);
+}
+
+/* Pin indicator: small red dot in the top-right corner of the column. */
+.tab-vertical-col.is-pinned::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tab-pin-color, #e05252);
+  pointer-events: none;
 }
 
 /* Close button — inherits column color (white at 50% / full opacity). */

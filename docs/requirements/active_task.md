@@ -2,7 +2,7 @@
 title: Multi-file Find & Replace
 last-updated: "2026-05-03"
 review-cadence-days: 90
-status: active
+status: reference
 ---
 
 # Multi-file Find & Replace

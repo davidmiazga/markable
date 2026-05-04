@@ -47,6 +47,12 @@ export interface SessionTabEntry {
    * Zero when the document was opened but never scrolled.
    */
   scrollTop: number;
+
+  /**
+   * True when this tab was pinned at the time the session was saved.
+   * Restored by TabManager.init() on the next launch.
+   */
+  pinned?: boolean;
 }
 
 /**
@@ -69,6 +75,8 @@ export interface PluginEnableRecord {
  */
 export interface SidebarPanelState {
   accordionExpanded: boolean;
+  iconized?: boolean;
+  pinned?: boolean;
 }
 
 /**

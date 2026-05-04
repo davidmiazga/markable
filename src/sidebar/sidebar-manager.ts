@@ -21,6 +21,10 @@ import {
 } from "../lib/settings";
 import type { SidebarSettings, SidebarSlotState } from "../lib/settings";
 
+// ── Material icon SVGs ────────────────────────────────────────────────────────
+// Inline SVG paths sourced from the Material Symbols / Material Icons library
+// (Apache-2.0 licensed). Using inline SVG avoids a font dependency.
+
 // ── Public API type ───────────────────────────────────────────────────────────
 
 /**
@@ -70,6 +74,12 @@ export interface SidebarPanelDescriptor {
   defaultWidth?: number;
 
   /**
+   * Emoji, single letter, or short text shown in the icon strip button.
+   * Falls back to title.charAt(0) when absent.
+   */
+  icon?: string;
+
+  /**
    * Optional action buttons rendered in the accordion header, after the title
    * and before the move/toggle buttons. Each button shows its icon as text and
    * its title as a tooltip.
@@ -97,6 +107,10 @@ interface RegisteredPanel {
    */
   tabEl: HTMLButtonElement | null;
   /**
+   * The icon strip button for this panel. Always present after register().
+   */
+  iconBtnEl: HTMLButtonElement | null;
+  /**
    * The side this panel is currently placed on. Starts as descriptor.side
    * but may be overridden by the user via movePanel(). Always reflects the
    * actual DOM placement — use this instead of descriptor.side for any slot
@@ -119,6 +133,10 @@ interface SlotRuntime {
   tabBarEl: HTMLDivElement | null;
   /** The resize handle element. Null until the sidebar slot is created. */
   resizeHandleEl: HTMLDivElement | null;
+  /** The icon strip element (44px column, outer edge). Null until slot is created. */
+  iconStripEl: HTMLDivElement | null;
+  /** The content area element (flex:1, holds tab bar, panels, resize handle). Null until slot is created. */
+  contentAreaEl: HTMLDivElement | null;
   /** Panel ids in registration order for this side. */
   panelIds: string[];
 }
@@ -135,8 +153,8 @@ const registeredPanels = new Map<string, RegisteredPanel>();
  * created in register() when the first panel for that side arrives.
  */
 const slotRuntime: Record<"left" | "right", SlotRuntime> = {
-  left:  { el: null, tabBarEl: null, resizeHandleEl: null, panelIds: [] },
-  right: { el: null, tabBarEl: null, resizeHandleEl: null, panelIds: [] },
+  left:  { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] },
+  right: { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] },
 };
 
 /** The #app-row flex row that contains #sidebar-left, #editor, #sidebar-right. */
@@ -263,6 +281,7 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
     contentEl,
     wrapperEl,
     tabEl: null,
+    iconBtnEl: null,
     effectiveSide,
   };
   registeredPanels.set(descriptor.id, panelRecord);
@@ -275,6 +294,14 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
   _renderPanel(descriptor.id);
 
   _restoreAccordionFromSettings(descriptor.id, effectiveSide);
+
+  // Build and wire the icon strip button.
+  const iconBtn = _buildIconButton(descriptor.id, panelRecord, effectiveSide);
+  runtime.iconStripEl!.appendChild(iconBtn);
+  panelRecord.iconBtnEl = iconBtn;
+
+  // Restore iconized/pinned visual state from persisted settings.
+  _restoreIconizedFromSettings(descriptor.id, effectiveSide);
 
   // Persist the updated sidebar state for this side.
   // Always set open: true on registration — enabling a plugin always shows its
@@ -328,6 +355,10 @@ export function unregister(pluginId: string, panelId: string): void {
 
   _destroyPanelDOM(panel, panelId);
 
+  // Remove icon strip button.
+  panel.iconBtnEl?.remove();
+  panel.iconBtnEl = null;
+
   // Remove from registry and the side's ordered panel list.
   registeredPanels.delete(panelId);
   runtime.panelIds = runtime.panelIds.filter((id) => id !== panelId);
@@ -367,6 +398,13 @@ export function toggleSide(side: "left" | "right"): void {
   // Toggle visibility via display style (not CSS class) to avoid conflicts
   // with the CSS-defined display:flex on #sidebar-left / #sidebar-right.
   el.style.display = nextOpen ? "" : "none";
+
+  // When opening, ensure the content area is visible even if it was hidden
+  // because all panels were previously iconized.
+  if (nextOpen) {
+    const runtime = slotRuntime[side];
+    if (runtime.contentAreaEl) runtime.contentAreaEl.style.display = "";
+  }
 
   updateSettings((s) => ({
     ...s,
@@ -494,12 +532,11 @@ function _moveWrapperToSlot(
   // Slot always exists after init() — no lazy creation needed.
   const newRuntime = slotRuntime[newSide];
 
-  // Insert before the resize handle so the handle remains the last child —
-  // consistent with the insertion order used in _buildPanelWrapper.
+  // Insert into contentAreaEl before the resize handle so the handle stays last.
   if (newRuntime.resizeHandleEl) {
-    newRuntime.el!.insertBefore(panel.wrapperEl, newRuntime.resizeHandleEl);
+    newRuntime.contentAreaEl!.insertBefore(panel.wrapperEl, newRuntime.resizeHandleEl);
   } else {
-    newRuntime.el!.appendChild(panel.wrapperEl);
+    newRuntime.contentAreaEl!.appendChild(panel.wrapperEl);
   }
 
   // Register the panel id on the new side and reconcile its tab bar.
@@ -624,6 +661,14 @@ export function restoreFromSettings(): void {
     if (slotSettings?.activeTabId && runtime.panelIds.includes(slotSettings.activeTabId)) {
       _setActivePanel(side, slotSettings.activeTabId, /* persist= */ false);
     }
+
+    // Hide contentAreaEl when all panels on this side are iconized.
+    const allIconized = runtime.panelIds.length > 0 && runtime.panelIds.every(
+      (id) => registeredPanels.get(id)?.wrapperEl.classList.contains("is-iconized") ?? false
+    );
+    if (runtime.contentAreaEl && allIconized) {
+      runtime.contentAreaEl.style.display = "none";
+    }
   }
 }
 
@@ -673,8 +718,8 @@ function _buildSidebarSettings(
  */
 export function _resetForTests(): void {
   registeredPanels.clear();
-  slotRuntime.left  = { el: null, tabBarEl: null, resizeHandleEl: null, panelIds: [] };
-  slotRuntime.right = { el: null, tabBarEl: null, resizeHandleEl: null, panelIds: [] };
+  slotRuntime.left  = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] };
+  slotRuntime.right = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] };
   appRowEl = null;
   initialized = false;
 }
@@ -701,22 +746,39 @@ function _createSlotElement(side: "left" | "right"): void {
   const slotEl = document.createElement("div");
   slotEl.id = side === "left" ? "sidebar-left" : "sidebar-right";
 
-  // Apply the persisted width, falling back to the 220 px default.
-  // (Plugin-supplied defaultWidth is applied at register() time when this
-  // is the first panel for the side and no persisted width exists.)
   const settings = getCurrentSettings();
   const persistedWidth = settings.sidebar?.[side]?.width;
   const width = persistedWidth ?? 220;
   slotEl.style.width = `${width}px`;
-
-  // Start hidden. Both sidebars are closed by default until a plugin is
-  // enabled or the user explicitly opens one with Cmd-Shift-[ / Cmd-Shift-].
   slotEl.style.display = "none";
 
-  // Attach the resize handle (appended as last child of slotEl).
-  const handle = _attachResizeHandle(side, slotEl);
-  runtime.resizeHandleEl = handle;
+  // Icon strip — fixed-width column on the outer edge.
+  // Default: ghost (opacity 0, 25px). Hover: 30% opacity hint.
+  // Click on the strip → expand to full width. Click on background → collapse.
+  const iconStripEl = document.createElement("div");
+  iconStripEl.className = "sidebar-icon-strip";
+  iconStripEl.addEventListener("click", (e) => {
+    if (!iconStripEl.classList.contains("is-expanded")) {
+      e.stopPropagation();
+      iconStripEl.classList.add("is-expanded");
+    } else if (e.target === iconStripEl) {
+      iconStripEl.classList.remove("is-expanded");
+    }
+  });
+  slotEl.appendChild(iconStripEl);
+
+  // Content area — holds the tab bar, panel wrappers, and resize handle.
+  const contentAreaEl = document.createElement("div");
+  contentAreaEl.className = "sidebar-content-area";
+  slotEl.appendChild(contentAreaEl);
+
+  // Attach resize handle inside contentAreaEl so it positions relative to it.
+  const handle = _attachResizeHandle(side, slotEl, contentAreaEl);
+
   runtime.el = slotEl;
+  runtime.iconStripEl = iconStripEl;
+  runtime.contentAreaEl = contentAreaEl;
+  runtime.resizeHandleEl = handle;
 }
 
 /**
@@ -801,15 +863,21 @@ function _buildPanelWrapper(
   contentEl.className = "sidebar-panel-content";
   wrapperEl.appendChild(contentEl);
 
-  // Insert before the resize handle so the handle stays last.
+  // Insert into contentAreaEl before the resize handle so the handle stays last.
   if (runtime.resizeHandleEl) {
-    runtime.el!.insertBefore(wrapperEl, runtime.resizeHandleEl);
+    runtime.contentAreaEl!.insertBefore(wrapperEl, runtime.resizeHandleEl);
   } else {
-    runtime.el!.appendChild(wrapperEl);
+    runtime.contentAreaEl!.appendChild(wrapperEl);
   }
 
   // Wire accordion toggle click → _handleAccordionToggle.
   toggleBtn.addEventListener("click", () => _handleAccordionToggle(descriptor.id));
+
+  // Right-click on panel header → pin/unpin context menu.
+  headerEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    _showPanelContextMenu(descriptor.id, e.clientX, e.clientY);
+  });
 
   return { wrapperEl, contentEl };
 }
@@ -944,12 +1012,13 @@ function _buildTabButton(
  */
 function _attachResizeHandle(
   side: "left" | "right",
-  slotEl: HTMLDivElement
+  slotEl: HTMLDivElement,
+  contentAreaEl: HTMLDivElement
 ): HTMLDivElement {
   const handle = document.createElement("div");
   handle.className = "sidebar-resize-handle";
   handle.dataset.side = side;
-  slotEl.appendChild(handle);
+  contentAreaEl.appendChild(handle);
 
   let startX = 0;
   let startWidth = 0;
@@ -1041,11 +1110,11 @@ function _reconcileTabBar(side: "left" | "right"): void {
       _setActivePanel(side, runtime.panelIds[0], /* persist= */ false);
     }
   } else {
-    // Ensure the tab bar element exists, prepended inside the slot.
+    // Ensure the tab bar element exists, prepended inside the content area.
     if (!runtime.tabBarEl) {
       const bar = document.createElement("div");
       bar.className = "sidebar-tab-bar";
-      runtime.el!.prepend(bar);
+      runtime.contentAreaEl!.prepend(bar);
       runtime.tabBarEl = bar;
     }
 
@@ -1095,8 +1164,9 @@ function _setActivePanel(
     if (!panel) return;
 
     const isActive = id === panelId;
-    // Show the active panel wrapper; hide inactive ones.
-    panel.wrapperEl.style.display = isActive ? "" : "none";
+    const isIconized = panel.wrapperEl.classList.contains("is-iconized");
+    // Show only when active AND not iconized; hide otherwise.
+    panel.wrapperEl.style.display = (isActive && !isIconized) ? "" : "none";
     // Toggle tab active class (no-op when tabEl is null — single-panel mode).
     panel.tabEl?.classList.toggle("sidebar-tab-active", isActive);
   });
@@ -1236,6 +1306,237 @@ function _getActiveTabId(side: "left" | "right"): string | null {
   return activeId ?? runtime.panelIds[0];
 }
 
+// ── Private helpers: icon strip ───────────────────────────────────────────────
+
+/**
+ * Show a minimal right-click context menu on a panel header.
+ * Currently offers only Pin / Unpin — the one action not reachable from the
+ * panel chrome without the now-removed pin button.
+ */
+function _showPanelContextMenu(panelId: string, x: number, y: number): void {
+  document.querySelector(".sidebar-panel-ctx-menu")?.remove();
+
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const side = panel.effectiveSide;
+  const isPinned = getCurrentSettings().sidebar?.[side]?.panels?.[panelId]?.pinned ?? false;
+
+  const menu = document.createElement("ul");
+  menu.className = "sidebar-panel-ctx-menu";
+  menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:9999;` +
+    `background:var(--bg-secondary,#252526);border:1px solid var(--border-color,rgba(128,128,128,.2));` +
+    `border-radius:6px;padding:4px 0;list-style:none;margin:0;min-width:130px;` +
+    `box-shadow:0 4px 12px rgba(0,0,0,.35);`;
+
+  const item = document.createElement("li");
+  item.style.cssText = `padding:6px 14px;cursor:pointer;font-family:var(--ui-font);` +
+    `font-size:12px;color:var(--text-primary,#ccc);user-select:none;`;
+  item.textContent = isPinned ? "Unpin panel" : "Pin panel";
+  item.addEventListener("mouseenter", () => { item.style.background = "var(--code-bg,rgba(128,128,128,.1))"; });
+  item.addEventListener("mouseleave", () => { item.style.background = ""; });
+  item.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    _handlePinToggle(panelId);
+    menu.remove();
+    document.removeEventListener("mousedown", outside);
+  });
+  menu.appendChild(item);
+  document.body.appendChild(menu);
+
+  function outside(e: MouseEvent): void {
+    if (!menu.contains(e.target as Node)) {
+      menu.remove();
+      document.removeEventListener("mousedown", outside);
+    }
+  }
+  setTimeout(() => document.addEventListener("mousedown", outside), 0);
+}
+
+/**
+ * Build a single icon strip button for a panel.
+ */
+function _buildIconButton(
+  panelId: string,
+  panel: RegisteredPanel,
+  side: "left" | "right"
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.className = "sidebar-icon-btn";
+  btn.dataset.panelId = panelId;
+  const icon = panel.descriptor.icon;
+  if (icon && icon.trimStart().startsWith("<")) {
+    btn.innerHTML = icon;
+  } else if (icon) {
+    btn.textContent = icon;
+  } else {
+    btn.textContent = panel.descriptor.title.charAt(0).toUpperCase();
+  }
+  btn.title = panel.descriptor.title;
+  btn.addEventListener("click", () => _handleIconBtnClick(side, panelId));
+  return btn;
+}
+
+/**
+ * Handle a click on an icon strip button.
+ *
+ * If the panel is iconized → un-iconize and activate it.
+ * If the panel is expanded and not pinned → iconize it.
+ * If the panel is expanded and pinned → no-op.
+ */
+function _handleIconBtnClick(side: "left" | "right", panelId: string): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const settings = getCurrentSettings();
+  const isPinned = settings.sidebar?.[side]?.panels?.[panelId]?.pinned ?? false;
+  const isIconized = panel.wrapperEl.classList.contains("is-iconized");
+
+  if (isIconized) {
+    _setIconized(side, panelId, false);
+    _setActivePanel(side, panelId, /* persist= */ true);
+  } else if (!isPinned) {
+    _setIconized(side, panelId, true);
+  }
+}
+
+/**
+ * Set the iconized state of a panel, updating DOM and persisting to settings.
+ *
+ * When all panels on a side become iconized, the contentAreaEl is hidden so
+ * only the icon strip remains visible.
+ */
+function _setIconized(side: "left" | "right", panelId: string, iconized: boolean): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  panel.wrapperEl.classList.toggle("is-iconized", iconized);
+  panel.wrapperEl.style.display = iconized ? "none" : "";
+  panel.iconBtnEl?.classList.toggle("is-active", !iconized);
+
+  // Hide contentAreaEl when all panels on this side are now iconized.
+  const runtime = slotRuntime[side];
+  const allIconized = runtime.panelIds.every((id) => {
+    if (id === panelId) return iconized;
+    return registeredPanels.get(id)?.wrapperEl.classList.contains("is-iconized") ?? false;
+  });
+  if (runtime.contentAreaEl) {
+    runtime.contentAreaEl.style.display = allIconized ? "none" : "";
+  }
+
+  updateSettings((s) => ({
+    ...s,
+    sidebar: _buildSidebarSettings(s.sidebar, side, {
+      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      panels: {
+        ...(s.sidebar?.[side]?.panels ?? {}),
+        [panelId]: {
+          ...(s.sidebar?.[side]?.panels?.[panelId] ?? { accordionExpanded: true }),
+          iconized,
+        },
+      },
+    }),
+  }));
+}
+
+/**
+ * Toggle the pinned state of a panel.
+ *
+ * A pinned panel cannot be iconized via the icon strip button. Pinned state is
+ * shown via an accent dot on the icon button and by the pin button in the header.
+ */
+function _handlePinToggle(panelId: string): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const side = panel.effectiveSide;
+  const settings = getCurrentSettings();
+  const currentPinned = settings.sidebar?.[side]?.panels?.[panelId]?.pinned ?? false;
+  const newPinned = !currentPinned;
+
+  panel.iconBtnEl?.classList.toggle("is-pinned", newPinned);
+  panel.wrapperEl.classList.toggle("is-pinned", newPinned);
+
+  updateSettings((s) => ({
+    ...s,
+    sidebar: _buildSidebarSettings(s.sidebar, side, {
+      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      panels: {
+        ...(s.sidebar?.[side]?.panels ?? {}),
+        [panelId]: {
+          ...(s.sidebar?.[side]?.panels?.[panelId] ?? { accordionExpanded: true }),
+          pinned: newPinned,
+        },
+      },
+    }),
+  }));
+}
+
+/**
+ * Restore iconized and pinned visual state from persisted settings for a panel.
+ *
+ * Called from register() after the icon button is created.
+ */
+function _restoreIconizedFromSettings(panelId: string, side: "left" | "right"): void {
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const panelState = getCurrentSettings().sidebar?.[side]?.panels?.[panelId];
+  const iconized = panelState?.iconized ?? false;
+  const pinned = panelState?.pinned ?? false;
+
+  if (iconized) {
+    panel.wrapperEl.classList.add("is-iconized");
+    panel.wrapperEl.style.display = "none";
+    panel.iconBtnEl?.classList.remove("is-active");
+  } else {
+    panel.iconBtnEl?.classList.add("is-active");
+  }
+
+  if (pinned) {
+    panel.iconBtnEl?.classList.add("is-pinned");
+    panel.wrapperEl.classList.add("is-pinned");
+  }
+}
+
+// ── Public: iconizeNonPinnedOrToggle ──────────────────────────────────────────
+
+/**
+ * Iconize all non-pinned panels on the given side.
+ *
+ * If all panels on the side are pinned, falls back to a full toggleSide().
+ * Called by the Cmd-Shift-[ / Cmd-Shift-] keyboard shortcuts in main.ts so that
+ * pinned panels remain visible when the user collapses the sidebar.
+ *
+ * @param side  The sidebar side to act on.
+ */
+export function iconizeNonPinnedOrToggle(side: "left" | "right"): void {
+  const runtime = slotRuntime[side];
+
+  if (!runtime.el || runtime.panelIds.length === 0) {
+    toggleSide(side);
+    return;
+  }
+
+  const settings = getCurrentSettings();
+  const allPinned = runtime.panelIds.every(
+    (id) => settings.sidebar?.[side]?.panels?.[id]?.pinned ?? false
+  );
+
+  if (allPinned) {
+    toggleSide(side);
+    return;
+  }
+
+  for (const id of runtime.panelIds) {
+    const isPinned = settings.sidebar?.[side]?.panels?.[id]?.pinned ?? false;
+    const isIconized = registeredPanels.get(id)?.wrapperEl.classList.contains("is-iconized") ?? false;
+    if (!isPinned && !isIconized) {
+      _setIconized(side, id, true);
+    }
+  }
+}
+
 /**
  * Build the panels Record<string, SidebarPanelState> for persisting one side.
  *
@@ -1248,16 +1549,20 @@ function _getActiveTabId(side: "left" | "right"): string | null {
  */
 function _buildPanelsRecord(
   side: "left" | "right"
-): Record<string, { accordionExpanded: boolean }> {
-  const record: Record<string, { accordionExpanded: boolean }> = {};
+): Record<string, { accordionExpanded: boolean; iconized?: boolean; pinned?: boolean }> {
+  const record: Record<string, { accordionExpanded: boolean; iconized?: boolean; pinned?: boolean }> = {};
   const runtime = slotRuntime[side];
+  const settings = getCurrentSettings();
 
   runtime.panelIds.forEach((id) => {
     const p = registeredPanels.get(id);
     if (!p) return;
-    // A non-"none" display means expanded; anything else (including "") means
-    // the content area is visible (flex takes over from CSS).
-    record[id] = { accordionExpanded: p.contentEl.style.display !== "none" };
+    const existing = settings.sidebar?.[side]?.panels?.[id];
+    record[id] = {
+      accordionExpanded: p.contentEl.style.display !== "none",
+      iconized: p.wrapperEl.classList.contains("is-iconized"),
+      pinned: existing?.pinned ?? false,
+    };
   });
 
   return record;

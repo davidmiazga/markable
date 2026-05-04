@@ -13,9 +13,8 @@
 #sidebar-left,
 #sidebar-right {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;    /* Icon strip + content area side by side */
   flex-shrink: 0;
-  position: relative;     /* Contains the absolutely-positioned resize handle */
   overflow: hidden;
   background: var(--bg-titlebar);
   min-width: 150px;
@@ -28,6 +27,104 @@
 
 #sidebar-right {
   border-left: none;
+}
+
+/* ── Icon strip ───────────────────────────────────────────────────────────────── */
+
+/*
+ * Ghost state: 25px wide, fully transparent.
+ * Hover: 30% opacity reveals the strip as a subtle visual hint.
+ * Expanded (.is-expanded): full 44px, fully opaque with a border separator.
+ */
+.sidebar-icon-strip {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 25px;
+  padding: 4px 0;
+  gap: 2px;
+  background: var(--bg-titlebar);
+  opacity: 0;
+  overflow: hidden;
+  cursor: pointer;
+  transition: opacity 0.15s ease, width 0.15s ease;
+}
+
+.sidebar-icon-strip:hover:not(.is-expanded) {
+  opacity: 0.3;
+}
+
+.sidebar-icon-strip.is-expanded {
+  width: 44px;
+  opacity: 1;
+  cursor: default;
+  border-right: 1px solid var(--border-color, rgba(128,128,128,.15));
+}
+
+#sidebar-right .sidebar-icon-strip.is-expanded {
+  border-right: none;
+  border-left: 1px solid var(--border-color, rgba(128,128,128,.15));
+}
+
+#sidebar-right .sidebar-icon-strip {
+  order: 1;
+}
+
+/* Buttons are non-interactive when strip is collapsed so clicks expand the strip */
+.sidebar-icon-strip:not(.is-expanded) .sidebar-icon-btn {
+  pointer-events: none;
+}
+
+.sidebar-icon-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  position: relative;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-icon-btn:hover {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.sidebar-icon-btn.is-active {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+/* Red dot on the icon button when the panel is pinned */
+.sidebar-icon-btn.is-pinned::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #e05252;
+}
+
+/* ── Content area ────────────────────────────────────────────────────────────── */
+
+.sidebar-content-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;     /* Contains the absolutely-positioned resize handle */
+  overflow: hidden;
 }
 
 /* ── Tab bar ─────────────────────────────────────────────────────────────────── */
@@ -94,6 +191,21 @@
   padding: 0 8px 0 12px;
   border-bottom: none;
   cursor: default;
+}
+
+/* Pinned panel: red dot before the title text */
+.sidebar-panel-wrapper.is-pinned .sidebar-panel-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e05252;
+  margin-right: 6px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
 }
 
 .sidebar-panel-title {

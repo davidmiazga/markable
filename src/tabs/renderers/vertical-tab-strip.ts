@@ -198,6 +198,7 @@ export class VerticalTabStrip implements ITabRenderer {
     col.className = "tab-vertical-col";
     if (isActive) col.classList.add("is-active");
     col.classList.toggle("is-dirty", tab.isDirty);
+    col.classList.toggle("is-pinned", tab.pinned === true);
     col.setAttribute("role", "tab");
     col.setAttribute("aria-selected", String(isActive));
     col.setAttribute("aria-label", tab.title);

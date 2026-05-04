@@ -236,6 +236,9 @@ export class MinimalTabBar implements ITabRenderer {
     if (tab.isDirty) {
       btn.classList.add("is-dirty");
     }
+    if (tab.pinned) {
+      btn.classList.add("is-pinned");
+    }
 
     // Wire the tooltip (800 ms delay, FR-3.1).
     this._attachTooltipHandlers(btn, tab);

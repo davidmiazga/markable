@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-03
+**Last Updated:** 2026-05-04
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -68,21 +68,26 @@
 - **File browser multi-file fixes** — Four issues resolved post-create-file feature: (1) `.txt` files now route to `openFileInTab` instead of `openMediaInTab`, opening in the editor like `.md` files; `.txt` nodes are no longer dimmed in the tree. (2) `.md` files now show their `.md` suffix in the tree label (`node.name + ".md"` for md-typed nodes — the vault index strips the extension; the label restores it). (3) Duplicate-tab guard confirmed working: `openFileInTab` and `openMediaInTab` both have dedup guards that activate the existing tab instead of opening a second copy. (4) Media viewer transparent background bug fixed: `#media-viewer` used `var(--bg-color)` which is undefined in all themes (themes define `--bg-primary`); replaced with `var(--bg-primary, #1e1e2e)`; also added `display: none !important` to the `.cm-editor` hide rule as a guard against CM6 inline-style overrides; `z-index: 1` added to `#media-viewer` to cover any stray CM6 overlay elements. Plugin IIFE rebuilt and synced. 2026-04-30.
 - **Outline Panel plugin** — Sidebar H1–H6 heading tree with click-to-navigate and bidirectional section collapse. Collapsing from the panel folds the editor section via CM6 `foldEffect`; clicking the fold widget in the editor gutter syncs the panel. Inline fold-triangle glyphs injected into editor heading lines via CM6 `ViewPlugin` + `WidgetType`, positioned in the left margin with animated CSS transitions. `scanHeadings`, `findActiveIndex`, `computeFoldRange` are exported pure functions. Plugin on/off toggle supported; `foldService` registered so CM6 knows fold boundaries for Markdown sections. Multiple bug fixes during polish: `unfoldEffect` requires both `from` AND `to` fields (CM6 silently ignores unfold if `to` is missing); CSS specificity fight with `.cm-live-h1 span` resolved by `.cm-content .outline-fold-glyph` selector; stale `injectCSS` guard (early-return if `<style>` tag already existed) replaced with unconditional `textContent` overwrite; `padding-right` swapped for `margin-right` so `transform-origin: 50% 50%` stays visually centred on the glyph; chevron transition set to `0.6s ease`. 33 Vitest tests. 2026-05-03.
 - **Sidebar default side — right for all plugins except file browser** — All sidebar panels now default to the right sidebar. File Browser stays left (hardcoded, unchanged). Only two sources needed changing: `outline-panel.plugin.ts` `side: "left"` → `"right"`, and `markdown-toolbar.plugin.ts` `DEFAULT_SETTINGS.sidebarSide: "left"` → `"right"`. All other plugins (Auto TOC, Backlinks, Daily Note, Knowledge Graph, YAML Pane) were already right. User-moved panels persist via `settings.sidebar.panelSides` override map and are unaffected. 2026-05-03.
+- **Multi-file Find & Replace** — Vault-scoped search and replace with full previewing pipeline. Single-replace-advance bug fixed (8 bugs: state capture, pending index, focus sync, data-text attribute, etc.). Inline del/ins preview in excerpt rows: typing in replace box shows `~~old~~` + green `new` across all matched excerpts using `_buildMatchRegex` (global regex, respects match-case / whole-word / regexp). `⌘⌥↩` reassigned from raw single-replace to **In File preview panel** (`_showInFilePreview`); `⌘⌥⇧↩` shows **Vault-wide preview panel** (`_showConfirmationPanel` enhanced). Both panels render a scrollable diff list via `_buildPreviewList(files, findTerm, replaceTerm, maxRows)` — one sticky file-header per file, one row per match, all occurrences per line shown. Vault-wide cap: 50 rows + "…and N more changes" notice. Multi-occurrence fix: Rust returns one `LineMatch` per line (first occurrence only), so `data-col`-based rendering only showed first del/ins; rewritten to scan entire `lineText` with `_buildMatchRegex` to match what `applyStringReplace` (global regex) actually does. `escapeRegex` added to import from `vault-search-utils`. CSS classes added: `.find-widget-preview-list`, `.find-widget-preview-file-header`, `.find-widget-preview-row`, `.find-widget-preview-linenum`, `.find-widget-preview-text`, `.find-widget-preview-more`, `.find-widget-match-del`, `.find-widget-match-ins`. 11 stale `sidebarSide: "left"` default assertions in `markdown-toolbar.test.ts` updated to `"right"`. 3265+ Vitest tests passing. 2026-05-03.
+- **Pinned Tabs** — Right-click any tab → "Pin Tab" moves it to the front and survives "Close Other Tabs" / "Close All Tabs". `pinTab`/`unpinTab` on `TabManager`; `_sortPinnedTabsToFront()` stable-partitions the array; `closeOtherTabs` / `closeAllTabs` skip pinned; `closeTab` auto-unpins before closing; session serialisation preserves `pinned: true`; `init()` restores pinned order. Context menu shows correct label (Pin / Unpin). All three renderers toggle `is-pinned` class; regular renderer prepends `📌` span. CSS: `.tab-label-pin` hidden by default, shown when `.is-pinned`; `.tab-dot.is-pinned::before` accent dot for minimal; `.tab-vertical-col.is-pinned::before` emoji top-right for vertical. 13 new tab-manager tests + 4 context-menu tests; all 3289 tests passing. 2026-05-04.
+- **Pinned file browser items** — Right-click any file or folder in the tree → "Pin" / "Unpin". A "Pinned" section renders above the vault tree listing all pinned items as a flat list (filename + full path subtitle). Click opens the file; right-click shows "Unpin" first then the normal context menu items. `_pinnedPaths: Set<string>` module state; serialised into `FileBrowserSettings.pinnedPaths[vaultId]`. Section hidden when no pins. `findNodeByPath`, `pinPath`, `unpinPath`, `buildPinnedSection` helpers; `_testing` exports extended. Plugin rebuilt and synced. 2026-05-04.
+- **Sidebar icon strip + panel pin** — Each sidebar slot gains a 44 px icon strip on its outer edge. Each panel gets a one-letter (or `icon:` emoji) button; clicking iconizes/un-iconizes the panel. When all panels on a side are iconized the content area collapses to icon-strip-only. A 📌 pin button in each panel header locks it open — a pinned panel cannot be iconized via the strip. `Cmd-Shift-[/]` shortcut now calls `iconizeNonPinnedOrToggle` (iconizes non-pinned panels; falls back to `toggleSide` when all are pinned). Iconized + pinned state persisted to `SidebarPanelState.iconized/pinned`. New functions: `_buildIconButton`, `_handleIconBtnClick`, `_setIconized`, `_handlePinToggle`, `_restoreIconizedFromSettings`, exported `iconizeNonPinnedOrToggle`. CSS: `.sidebar-icon-strip`, `.sidebar-icon-btn`, `.sidebar-content-area`, `.sidebar-pin-btn`. 15 new sidebar tests; 70 total; 3304 passing. 2026-05-04.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-03.**
+**Session ended 2026-05-04.**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **71+ files, 3247+ passing**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
+- Test suite: **74 files, 3304 passing**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
 - **Build reminder**: after any plugin TypeScript change, run `npm run build:plugins && npm run sync:plugins`.
 - **Drag reminder**: HTML5 drag (`draggable="true"`, `dragstart`) does NOT work in Tauri WKWebView on macOS. Always use pointer events (`pointerdown`/`pointermove`/`pointerup`) for any drag interaction in the file browser. Suppress text selection with `document.body.style.userSelect = "none"` on `pointerdown` (not after a threshold), restored in cleanup.
 - **Sidebar side reminder**: all panels default to the right sidebar. File browser is the sole left-side exception. User overrides persist in `settings.sidebar.panelSides`; clear that map if defaults need to take effect on an existing install.
+- **Sidebar structure reminder**: `#sidebar-left/right` are now `flex-direction: row` — icon strip (44 px, outer edge) + content area (flex:1). Panel wrappers, tab bar, and resize handle all live inside `.sidebar-content-area`, not the slot root. Tests querying inside a specific side must use `#sidebar-right .sidebar-content-area` etc.
 
 #### How to resume
 1. Read `PROGRESS.md` (this file) for full feature history.
@@ -95,15 +100,16 @@ These align with the project direction: File Browser is the gateway to PKM.
 
 | Feature | Effort | Notes |
 |---------|--------|-------|
-| **Create file / folder from file browser tree** | Low–Med | Critical gap — in-tree create; needed for PKM usability |
-| **Rename / delete from file browser tree** | Low–Med | In-tree right-click; backlink-update banner already handles renames |
-| **Pinned tabs** | Low | `pin()`/`unpin()` on TabManager; tab context menu hook already in place |
+| ~~**Create file / folder from file browser tree**~~ | ~~Low–Med~~ | ~~Done 2026-04-30~~ |
+| ~~**Rename / delete from file browser tree**~~ | ~~Low–Med~~ | ~~Done 2026-04-30~~ |
+| ~~**Pinned tabs**~~ | ~~Low~~ | ~~Done 2026-05-04~~ |
+| ~~**Pinned file browser items**~~ | ~~Low–Med~~ | ~~Done 2026-05-04~~ |
+| ~~**Sidebar icon strip + panel pin**~~ | ~~Med–High~~ | ~~Done 2026-05-04~~ |
 | ~~**Create note from broken wikilink**~~ | ~~Low~~ | ~~Done 2026-04-30~~ |
 | ~~**Outline panel (document headings)**~~ | ~~Low–Med~~ | ~~Done 2026-05-03~~ |
-| **Multi-file Find & Replace** | Med | Single-file done; `search_vault_content` Rust cmd already exists |
+| ~~**Multi-file Find & Replace**~~ | ~~Med~~ | ~~Done 2026-05-03~~ |
 | **Quick capture / inbox note** | Med | Global shortcut → scratch-pad → inbox folder |
 | ~~**Drag files within vault tree**~~ | ~~Med~~ | ~~Done 2026-05-02~~ |
-| **Starred / bookmarked files** | Low–Med | Pin files to "Starred" section at top of file browser |
 | **AI YAML injection** | High | Reads note, suggests + writes front-matter; requires AI API integration |
 | **DMG build + code signing** | Med | Deferred from Phase 1; `CI=true` workaround documented in `docs/build-notes/` |
 

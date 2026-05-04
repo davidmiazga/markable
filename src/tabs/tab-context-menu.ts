@@ -100,6 +100,11 @@ export function showTabContextMenu(tab: TabEntry, x: number, y: number): void {
   ul.className = "context-menu";
   ul.setAttribute("role", "menu");
 
+  // ── Item: Pin / Unpin Tab ────────────────────────────────────────────────────
+  _addItem(ul, tab.pinned ? "Unpin Tab" : "Pin Tab", () => {
+    tab.pinned ? tabManager.unpinTab(tab.id) : tabManager.pinTab(tab.id);
+  });
+
   // ── Item: Close Tab ──────────────────────────────────────────────────────────
   // Always enabled. Delegates to closeTab() which handles dirty-confirm internally.
   _addItem(ul, "Close Tab", () => {

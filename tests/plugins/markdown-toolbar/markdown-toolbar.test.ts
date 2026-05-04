@@ -153,13 +153,13 @@ describe("mergeWithDefaults", () => {
   // AC-1.2: null input → DEFAULT_SETTINGS copy
   it("returns defaults when given null (EC-18)", () => {
     const result = mergeWithDefaults(null);
-    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "left" });
+    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "right" });
   });
 
   // AC-1.3a: partial object — toolbarMode present, sidebarSide absent
   it("fills missing sidebarSide from defaults (EC-19)", () => {
     const result = mergeWithDefaults({ toolbarMode: "sidebar" });
-    expect(result).toEqual({ toolbarMode: "sidebar", sidebarSide: "left" });
+    expect(result).toEqual({ toolbarMode: "sidebar", sidebarSide: "right" });
   });
 
   // AC-1.3b: partial object — sidebarSide present, toolbarMode absent
@@ -171,7 +171,7 @@ describe("mergeWithDefaults", () => {
   // AC-1.4: invalid toolbarMode value → fall back to default
   it("falls back to default toolbarMode for invalid value (EC-19)", () => {
     const result = mergeWithDefaults({ toolbarMode: "invalid" });
-    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "left" });
+    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "right" });
   });
 
   // AC-1.5a: pure function — same input produces equal output
@@ -879,7 +879,7 @@ afterEach(() => {
 describe("DEFAULT_SETTINGS", () => {
   it("has correct shape", () => {
     expect(DEFAULT_SETTINGS.toolbarMode).toBe("floating");
-    expect(DEFAULT_SETTINGS.sidebarSide).toBe("left");
+    expect(DEFAULT_SETTINGS.sidebarSide).toBe("right");
   });
 });
 
@@ -892,12 +892,12 @@ describe("STYLE_ID", () => {
 describe("mergeWithDefaults", () => {
   it("returns defaults when raw is null (EC-20)", () => {
     const result = mergeWithDefaults(null);
-    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "left" });
+    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "right" });
   });
 
   it("returns defaults when raw is empty object (EC-21)", () => {
     const result = mergeWithDefaults({});
-    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "left" });
+    expect(result).toEqual({ toolbarMode: "floating", sidebarSide: "right" });
   });
 
   it("preserves valid toolbarMode", () => {
@@ -912,18 +912,18 @@ describe("mergeWithDefaults", () => {
 
   it("falls back sidebarSide on invalid value", () => {
     const result = mergeWithDefaults({ sidebarSide: "center" });
-    expect(result.sidebarSide).toBe("left");
+    expect(result.sidebarSide).toBe("right");
   });
 
   it("fills missing sidebarSide from defaults", () => {
     const result = mergeWithDefaults({ toolbarMode: "sidebar" });
-    expect(result.sidebarSide).toBe("left");
+    expect(result.sidebarSide).toBe("right");
   });
 
   it("does not mutate DEFAULT_SETTINGS", () => {
     mergeWithDefaults(null);
     expect(DEFAULT_SETTINGS.toolbarMode).toBe("floating");
-    expect(DEFAULT_SETTINGS.sidebarSide).toBe("left");
+    expect(DEFAULT_SETTINGS.sidebarSide).toBe("right");
   });
 });
 
@@ -2197,13 +2197,13 @@ describe("step_01 — settings and CSS lifecycle", () => {
     // image-toolbar plugin had no settings (returned {}). Updated to reflect unified.
     const result = mergeWithDefaults(null);
     expect(result.toolbarMode).toBe("floating");
-    expect(result.sidebarSide).toBe("left");
+    expect(result.sidebarSide).toBe("right");
   });
 
   it("1.2 mergeWithDefaults({}) returns defaults (migrated)", () => {
     const result = mergeWithDefaults({});
     expect(result.toolbarMode).toBe("floating");
-    expect(result.sidebarSide).toBe("left");
+    expect(result.sidebarSide).toBe("right");
   });
 
   it("1.3 mergeWithDefaults({ unknownKey: 'foo' }) drops unknown keys (migrated)", () => {

@@ -51,6 +51,7 @@ import {
   restoreFromSettings,
   movePanel,
   movePanelToSide,
+  iconizeNonPinnedOrToggle,
   _resetForTests,
 } from "../src/sidebar/sidebar-manager";
 
@@ -1076,5 +1077,265 @@ describe("SidebarManager — movePanelToSide", () => {
       .map((result) => result.sidebar?.panelSides?.["panel-1"]);
 
     expect(panelSideValues).toContain("left");
+  });
+});
+
+// ── describe: icon strip ──────────────────────────────────────────────────────
+
+describe("SidebarManager — icon strip", () => {
+  it("register() appends an icon button to the icon strip", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const sidebarEl = document.getElementById("sidebar-right")!;
+    const strip = sidebarEl.querySelector(".sidebar-icon-strip");
+    expect(strip).not.toBeNull();
+
+    const btn = strip!.querySelector(".sidebar-icon-btn");
+    expect(btn).not.toBeNull();
+  });
+
+  it("icon button uses descriptor.icon when provided", () => {
+    init();
+    register("plugin-a", { ...makeDescriptor("panel-1", "right", { title: "Explorer" }), icon: "📁" });
+
+    const btn = document.querySelector(".sidebar-icon-btn")!;
+    expect(btn.textContent).toBe("📁");
+  });
+
+  it("icon button falls back to title.charAt(0) when icon is absent", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right", { title: "Files" }));
+
+    const btn = document.querySelector(".sidebar-icon-btn")!;
+    expect(btn.textContent).toBe("F");
+  });
+
+  it("unregister() removes the icon button from the strip", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    expect(document.querySelector(".sidebar-icon-btn")).not.toBeNull();
+
+    unregister("plugin-a", "panel-1");
+
+    expect(document.querySelector(".sidebar-icon-btn")).toBeNull();
+  });
+
+  it("clicking icon on iconized panel un-iconizes and activates it", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    // Pre-iconize by simulating persisted state: set is-iconized on wrapper.
+    const wrapper = document.querySelector<HTMLElement>(".sidebar-panel-wrapper")!;
+    wrapper.classList.add("is-iconized");
+    wrapper.style.display = "none";
+
+    const btn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+    btn.click();
+
+    // Panel should be un-iconized and visible.
+    expect(wrapper.classList.contains("is-iconized")).toBe(false);
+    expect(wrapper.style.display).not.toBe("none");
+  });
+
+  it("clicking icon on non-pinned expanded panel iconizes it", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const wrapper = document.querySelector<HTMLElement>(".sidebar-panel-wrapper")!;
+    expect(wrapper.classList.contains("is-iconized")).toBe(false);
+
+    const btn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+    btn.click();
+
+    expect(wrapper.classList.contains("is-iconized")).toBe(true);
+    expect(wrapper.style.display).toBe("none");
+  });
+
+  it("clicking icon on pinned panel is a no-op", () => {
+    mockGetCurrentSettings.mockReturnValue({
+      sidebar: {
+        right: {
+          open: true,
+          activeTabId: "panel-1",
+          width: 220,
+          panels: { "panel-1": { accordionExpanded: true, pinned: true } },
+        },
+      },
+    });
+
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const wrapper = document.querySelector<HTMLElement>(".sidebar-panel-wrapper")!;
+    const btn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+    btn.click();
+
+    // Pinned panel must not become iconized.
+    expect(wrapper.classList.contains("is-iconized")).toBe(false);
+  });
+
+  it("contentAreaEl is hidden when all panels on a side are iconized", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const contentArea = document.querySelector<HTMLElement>("#sidebar-right .sidebar-content-area")!;
+
+    // Click icon to iconize the single panel.
+    const btn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+    btn.click();
+
+    expect(contentArea.style.display).toBe("none");
+  });
+
+  it("contentAreaEl is restored when a panel is un-iconized", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const contentArea = document.querySelector<HTMLElement>("#sidebar-right .sidebar-content-area")!;
+    const btn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+
+    btn.click(); // iconize
+    expect(contentArea.style.display).toBe("none");
+
+    btn.click(); // un-iconize
+    expect(contentArea.style.display).toBe("");
+  });
+
+  it("panel header right-click context menu shows Pin panel option", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const header = document.querySelector<HTMLElement>(".sidebar-panel-header")!;
+    header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 100, clientY: 100 }));
+
+    const menu = document.querySelector(".sidebar-panel-ctx-menu");
+    expect(menu).not.toBeNull();
+    expect(menu!.textContent).toContain("Pin panel");
+
+    // Cleanup
+    menu!.remove();
+  });
+
+  it("panel header right-click → Pin panel → persists pinned state and adds is-pinned to icon button", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    mockUpdateSettings.mockClear();
+
+    const header = document.querySelector<HTMLElement>(".sidebar-panel-header")!;
+    header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 100, clientY: 100 }));
+
+    const menuItem = document.querySelector<HTMLElement>(".sidebar-panel-ctx-menu li")!;
+    menuItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+
+    // updateSettings should have been called with pinned: true
+    expect(mockUpdateSettings).toHaveBeenCalled();
+    const calls = mockUpdateSettings.mock.calls as Array<[(s: object) => {
+      sidebar: { right: { panels: { "panel-1": { pinned?: boolean } } } };
+    }]>;
+    const results = calls.map(([updater]) => updater({
+      sidebar: { right: { open: true, activeTabId: "panel-1", width: 220, panels: {} } },
+    }));
+    expect(results.some((r) => r.sidebar?.right?.panels?.["panel-1"]?.pinned === true)).toBe(true);
+
+    // Icon button should have is-pinned class
+    const iconBtn = document.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+    expect(iconBtn.classList.contains("is-pinned")).toBe(true);
+
+    // Panel wrapper should also have is-pinned (drives the header red dot)
+    const wrapper = document.querySelector<HTMLElement>(".sidebar-panel-wrapper")!;
+    expect(wrapper.classList.contains("is-pinned")).toBe(true);
+  });
+
+  it("iconizeNonPinnedOrToggle iconizes only non-pinned panels", () => {
+    mockGetCurrentSettings.mockReturnValue({
+      sidebar: {
+        right: {
+          open: true,
+          activeTabId: "panel-1",
+          width: 220,
+          panels: {
+            "panel-1": { accordionExpanded: true, pinned: true },
+            "panel-2": { accordionExpanded: true, pinned: false },
+          },
+        },
+      },
+    });
+
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right", { title: "P1" }));
+    register("plugin-b", makeDescriptor("panel-2", "right", { title: "P2" }));
+
+    iconizeNonPinnedOrToggle("right");
+
+    const w1 = document.querySelector<HTMLElement>('.sidebar-panel-wrapper[data-panel-id="panel-1"]')!;
+    const w2 = document.querySelector<HTMLElement>('.sidebar-panel-wrapper[data-panel-id="panel-2"]')!;
+
+    // panel-1 is pinned — must NOT be iconized.
+    expect(w1.classList.contains("is-iconized")).toBe(false);
+    // panel-2 is not pinned — must be iconized.
+    expect(w2.classList.contains("is-iconized")).toBe(true);
+  });
+
+  it("iconizeNonPinnedOrToggle falls back to toggleSide when all panels are pinned", () => {
+    mockGetCurrentSettings.mockReturnValue({
+      sidebar: {
+        right: {
+          open: true,
+          activeTabId: "panel-1",
+          width: 220,
+          panels: { "panel-1": { accordionExpanded: true, pinned: true } },
+        },
+      },
+    });
+
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    // Set slot to visible so toggleSide can close it.
+    document.getElementById("sidebar-right")!.style.display = "";
+
+    iconizeNonPinnedOrToggle("right");
+
+    // toggleSide would have toggled the slot visibility.
+    expect(document.getElementById("sidebar-right")!.style.display).toBe("none");
+  });
+
+  it("restoreFromSettings hides contentAreaEl when all panels are iconized", () => {
+    mockGetCurrentSettings.mockReturnValue({
+      sidebar: {
+        right: {
+          open: true,
+          activeTabId: "panel-1",
+          width: 220,
+          panels: { "panel-1": { accordionExpanded: true, iconized: true } },
+        },
+      },
+    });
+
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    restoreFromSettings();
+
+    const contentArea = document.querySelector<HTMLElement>("#sidebar-right .sidebar-content-area")!;
+    expect(contentArea).not.toBeNull();
+    expect(contentArea.style.display).toBe("none");
+  });
+
+  it("panel wrapper is inside .sidebar-content-area, not directly in the slot root", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const sidebarEl = document.getElementById("sidebar-right")!;
+    // Direct children of slot root should NOT include panel wrapper.
+    const directWrapper = Array.from(sidebarEl.children).find(
+      (c) => c.classList.contains("sidebar-panel-wrapper")
+    );
+    expect(directWrapper).toBeUndefined();
+
+    // Panel wrapper must be inside .sidebar-content-area.
+    const contentArea = sidebarEl.querySelector(".sidebar-content-area")!;
+    expect(contentArea.querySelector(".sidebar-panel-wrapper")).not.toBeNull();
   });
 });

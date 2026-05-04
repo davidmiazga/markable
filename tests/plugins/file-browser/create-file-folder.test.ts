@@ -292,8 +292,9 @@ describe("F — buildFileContextMenuItems includes New Folder", () => {
     el.setAttribute("data-path", "/vault/note.md");
     const items = _testing.buildFileContextMenuItems(el, "/vault/note.md", "v1");
     const nonSep = items.filter((i) => !i.separator);
-    expect(nonSep[0].label).toBe("New Note");
-    expect(nonSep[1].label).toBe("New Folder");
+    // Index 0 = Pin/Unpin, 1 = New Note, 2 = New Folder
+    expect(nonSep[1].label).toBe("New Note");
+    expect(nonSep[2].label).toBe("New Folder");
   });
 });
 

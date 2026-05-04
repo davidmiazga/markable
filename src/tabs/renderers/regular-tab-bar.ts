@@ -271,6 +271,7 @@ export class RegularTabBar implements ITabRenderer {
     // Toggle the is-dirty class on the outer button so CSS can control the
     // visibility of .tab-label-dirty via `.tab-label.is-dirty .tab-label-dirty`.
     btn.classList.toggle("is-dirty", tab.isDirty);
+    btn.classList.toggle("is-pinned", tab.pinned === true);
 
     // Dirty indicator span — always present in the DOM; visibility controlled
     // by CSS (.tab-label-dirty { display:none } by default,

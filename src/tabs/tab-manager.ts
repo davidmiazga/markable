@@ -148,8 +148,12 @@ export class TabManager {
         isDirty: false,
         doc: result.value,
         scrollTop: entry.scrollTop,
+        pinned: entry.pinned ?? false,
       });
     }
+
+    // Sort pinned tabs to the front after all tabs are restored.
+    this._sortPinnedTabsToFront();
 
     // Step 5 fallback: if no tabs were successfully restored, open an untitled
     // tab so the editor is never left empty (FR-6.5).
@@ -544,7 +548,8 @@ export class TabManager {
 
     const newTab = this._createUntitledTab();
     this.tabs.push(newTab);
-    this.activeIndex = this.tabs.length - 1;
+    this._sortPinnedTabsToFront();
+    this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
 
     this._applyActiveTab();
     this._notifyRenderer();
@@ -594,7 +599,8 @@ export class TabManager {
     };
 
     this.tabs.push(newTab);
-    this.activeIndex = this.tabs.length - 1;
+    this._sortPinnedTabsToFront();
+    this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
 
     this._applyActiveTab(); // enters view mode via the combined dispatch
 
@@ -771,6 +777,9 @@ export class TabManager {
 
     const tab = this.tabs[idx];
 
+    // Auto-unpin before closing so the pin state does not block the close.
+    if (tab.pinned) tab.pinned = false;
+
     if (this.tabs.length === 1) {
       // This is the last tab.
       // Media tabs are never dirty — skip the confirm dialog for them (FR-7).
@@ -851,9 +860,9 @@ export class TabManager {
    * @param id  The TabEntry.id of the tab to keep open.
    */
   async closeOtherTabs(id: string): Promise<void> {
-    // Build the list of tabs to attempt closing (all except the target).
+    // Build the list of tabs to attempt closing (all except the target and any pinned tabs).
     // getTabs() returns a shallow copy so the array can be safely mutated below.
-    const others = this.getTabs().filter((t) => t.id !== id);
+    const others = this.getTabs().filter((t) => t.id !== id && !t.pinned);
 
     for (const tab of others) {
       // Media tabs are never dirty — skip the confirm dialog for them.
@@ -927,9 +936,11 @@ export class TabManager {
     // Step 1: Snapshot prevents "mutation during iteration" hazards.
     const snapshot = [...this.tabs];
 
-    // Step 2: Collect the IDs the user confirmed closing.
+    // Step 2: Collect the IDs the user confirmed closing (pinned tabs are always skipped).
     const confirmedIds = new Set<string>();
     for (const tab of snapshot) {
+      // Pinned tabs survive batch-close operations.
+      if (tab.pinned) continue;
       // Media tabs are never dirty — close without dialog.
       if (tab.isDirty && tab.kind !== "media") {
         const confirmed = confirm(
@@ -1004,6 +1015,54 @@ export class TabManager {
     this._applyActiveTab();
     this._notifyRenderer();
     void this.saveSession();
+  }
+
+  /**
+   * Pins the tab with the given id.
+   *
+   * Pinned tabs sort to the front of the tab list (preserving relative order
+   * within each group) and are immune to closeOtherTabs() and closeAllTabs().
+   * No-op when the id is not found or the tab is already pinned.
+   */
+  pinTab(id: string): void {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (!tab || tab.pinned) return;
+    tab.pinned = true;
+    this._sortPinnedTabsToFront();
+    this._notifyRenderer();
+    void this.saveSession();
+  }
+
+  /**
+   * Unpins the tab with the given id.
+   *
+   * The tab stays in its current position — unpinning does not reorder.
+   * No-op when the id is not found or the tab is not pinned.
+   */
+  unpinTab(id: string): void {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (!tab || !tab.pinned) return;
+    tab.pinned = false;
+    this._notifyRenderer();
+    void this.saveSession();
+  }
+
+  /**
+   * Stably partitions this.tabs so all pinned tabs come before non-pinned tabs,
+   * preserving relative order within each group.
+   *
+   * Recalculates this.activeIndex so the currently active tab does not change
+   * after the reorder.
+   */
+  private _sortPinnedTabsToFront(): void {
+    const activeId = this.tabs[this.activeIndex]?.id;
+    const pinned   = this.tabs.filter((t) => t.pinned);
+    const unpinned = this.tabs.filter((t) => !t.pinned);
+    this.tabs = [...pinned, ...unpinned];
+    if (activeId) {
+      const newIdx = this.tabs.findIndex((t) => t.id === activeId);
+      if (newIdx !== -1) this.activeIndex = newIdx;
+    }
   }
 
   /**
@@ -1333,7 +1392,11 @@ export class TabManager {
 
     const openFiles = this.tabs
       .filter((t) => t.kind === "editor" && t.filePath !== null)
-      .map((t) => ({ filePath: t.filePath!, scrollTop: t.scrollTop }));
+      .map((t) => ({
+        filePath: t.filePath!,
+        scrollTop: t.scrollTop,
+        ...(t.pinned ? { pinned: true as const } : {}),
+      }));
 
     await updateSettings((s) => ({
       ...s,

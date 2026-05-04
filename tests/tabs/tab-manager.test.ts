@@ -846,3 +846,129 @@ describe("EC-10 / EC-11: setMode vertical sidebar toggleSide interaction", () =>
     expect(mockToggleSide).not.toHaveBeenCalled();
   });
 });
+
+// ── Pinned Tabs ───────────────────────────────────────────────────────────────
+
+describe("TabManager — pinned tabs", () => {
+  let manager: TabManager;
+
+  beforeEach(async () => {
+    setupDom();
+    mockGetCurrentSettings.mockReturnValue({
+      tabMode: undefined,
+      openFiles: undefined,
+      activeTabIndex: undefined,
+      recentFiles: [],
+    });
+    manager = new TabManager();
+    await manager.init(makeEditorView());
+    // Open three files so we have material to work with.
+    mockReadFile.mockResolvedValue({ ok: true, value: "content" });
+    await manager.openFileInTab("/a.md");
+    await manager.openFileInTab("/b.md");
+    await manager.openFileInTab("/c.md");
+    mockUpdateSettings.mockClear();
+    mockAddRecentFile.mockClear();
+  });
+
+  it("pinTab sets pinned=true and sorts the tab to the front", () => {
+    const tabs = manager.getTabs();
+    const cId = tabs.find((t) => t.filePath === "/c.md")!.id;
+    manager.pinTab(cId);
+    const updated = manager.getTabs();
+    expect(updated[0].filePath).toBe("/c.md");
+    expect(updated[0].pinned).toBe(true);
+  });
+
+  it("unpinTab clears pinned flag", () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    manager.pinTab(aId);
+    manager.unpinTab(aId);
+    const updated = manager.getTabs();
+    const aTab = updated.find((t) => t.filePath === "/a.md")!;
+    expect(aTab.pinned).toBeFalsy();
+  });
+
+  it("pinTab is a no-op when tab is already pinned", () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    manager.pinTab(aId);
+    mockUpdateSettings.mockClear();
+    manager.pinTab(aId); // second call: no-op
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("unpinTab is a no-op when tab is not pinned", () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    mockUpdateSettings.mockClear();
+    manager.unpinTab(aId); // not pinned: no-op
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("closeOtherTabs skips pinned tabs", async () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    const bId = tabs.find((t) => t.filePath === "/b.md")!.id;
+    manager.pinTab(aId);
+    await manager.closeOtherTabs(bId);
+    const remaining = manager.getTabs().map((t) => t.filePath);
+    expect(remaining).toContain("/a.md"); // pinned — survived
+    expect(remaining).toContain("/b.md"); // target — survived
+    expect(remaining).not.toContain("/c.md"); // unpinned other — closed
+  });
+
+  it("closeAllTabs skips pinned tabs", async () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    manager.pinTab(aId);
+    await manager.closeAllTabs();
+    const remaining = manager.getTabs().map((t) => t.filePath);
+    expect(remaining).toContain("/a.md"); // pinned — survived
+    expect(remaining).not.toContain("/b.md");
+    expect(remaining).not.toContain("/c.md");
+  });
+
+  it("closeTab on a pinned tab auto-unpins and closes", async () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    manager.pinTab(aId);
+    await manager.closeTab(aId);
+    const remaining = manager.getTabs().map((t) => t.filePath);
+    expect(remaining).not.toContain("/a.md");
+  });
+
+  it("saveSession serializes pinned:true only for pinned tabs", async () => {
+    const tabs = manager.getTabs();
+    const aId = tabs.find((t) => t.filePath === "/a.md")!.id;
+    manager.pinTab(aId);
+    mockUpdateSettings.mockClear();
+    await manager.saveSession();
+    const savedSettings = mockUpdateSettings.mock.calls[0][0]({});
+    const openFiles: Array<{ filePath: string; pinned?: boolean }> = savedSettings.openFiles;
+    const aEntry = openFiles.find((f) => f.filePath === "/a.md");
+    const bEntry = openFiles.find((f) => f.filePath === "/b.md");
+    expect(aEntry?.pinned).toBe(true);
+    expect(bEntry?.pinned).toBeUndefined();
+  });
+
+  it("init() restores pinned state and sorts pinned tabs to front", async () => {
+    mockGetCurrentSettings.mockReturnValue({
+      openFiles: [
+        { filePath: "/x.md", scrollTop: 0 },
+        { filePath: "/y.md", scrollTop: 0, pinned: true },
+        { filePath: "/z.md", scrollTop: 0 },
+      ],
+      activeTabIndex: 0,
+    });
+    mockReadFile.mockResolvedValue({ ok: true, value: "" });
+    const m2 = new TabManager();
+    await m2.init(makeEditorView());
+    const tabs = m2.getTabs();
+    expect(tabs[0].filePath).toBe("/y.md");
+    expect(tabs[0].pinned).toBe(true);
+    expect(tabs[1].pinned).toBeFalsy();
+    expect(tabs[2].pinned).toBeFalsy();
+  });
+});
