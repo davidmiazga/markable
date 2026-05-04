@@ -46,7 +46,7 @@
   --heading-h6-weight: 600;
 
   /* Layout constants */
-  --titlebar-height: 38px;
+  --titlebar-height: 30px;
   --traffic-light-offset: 80px;
   --preview-max-width: 720px;
   --preview-padding: 40px;
@@ -127,6 +127,7 @@ body {
   font-family: var(--ui-font);
   color: var(--text-primary);
   background-color: var(--bg-primary);
+  position: relative; /* anchor for absolutely-positioned #tab-strip in minimal mode */
 }
 
 /* Regular/vertical tab mode: darken titlebar to match the chrome strip.

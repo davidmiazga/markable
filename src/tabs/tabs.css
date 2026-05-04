@@ -72,10 +72,16 @@
   /* Height is controlled by the mode-specific class below */
 }
 
-/* Minimal mode: compact dot/pill row */
+/* Minimal mode: floats over content, taking no vertical space in the layout */
 #tab-strip.tab-mode-minimal {
+  position: absolute;
+  top: var(--titlebar-height);
+  left: 0;
+  right: 0;
   height: var(--tab-strip-height);
-  position: relative;   /* anchor for the absolutely-centred track */
+  z-index: 5;
+  background: transparent;
+  pointer-events: none; /* pass clicks through the empty strip area */
 }
 
 /*
@@ -89,6 +95,7 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+  pointer-events: auto; /* restore clicks for the dots when strip is pointer-events:none */
   display: flex;
   align-items: center;
   gap: 6px;
