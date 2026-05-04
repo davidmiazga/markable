@@ -244,6 +244,14 @@ export async function ensureDirectory(path: string): Promise<void> {
   await invoke("ensure_directory", { path });
 }
 
+/**
+ * Returns the user's home directory path (e.g. /Users/dave).
+ * Used to expand "~/" prefixes in user-configured paths.
+ */
+export async function getHomeDir(): Promise<string> {
+  return invoke<string>("get_home_dir");
+}
+
 // ── Core plugin copy ──────────────────────────────────────────────────────────
 
 /**

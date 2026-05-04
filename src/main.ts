@@ -22,6 +22,8 @@ import { previewCompartment, previewExtensions, spellCheckCompartment } from "./
 import { setViewMode } from "./editor/live-preview";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
+import { QuickCaptureWidget } from "./editor/quick-capture";
+import "./editor/quick-capture.css";
 import {
   toggleHeading,
   toggleInlineWrap,
@@ -110,6 +112,8 @@ let editor: ReturnType<typeof createEditor> = null;
 let previewEnabled = true;
 /** Floating find/replace widget. Initialized in initApp() after editor is ready. */
 let findWidget: FindWidget | null = null;
+/** Quick Capture overlay. Initialized in initApp(). */
+let quickCapture: QuickCaptureWidget | null = null;
 
 async function refreshRecentFilesMenu(): Promise<void> {
   await updateRecentFilesMenu(getCurrentSettings().recentFiles);
@@ -503,6 +507,10 @@ function showGoToLineOverlay(): void {
  */
 function handleAction(action: string): void {
   switch (action) {
+    case "quick-capture":
+      quickCapture?.open();
+      break;
+
     case "app-settings":    toggleSettingsPanel();    break;
     case "app-keybindings": toggleKeybindingsPanel(); break;
     case "app-plugins":
@@ -1104,6 +1112,9 @@ async function initApp() {
   // Create the floating find/replace widget (appended to document.body, hidden by default).
   // Must be created after `editor` is confirmed non-null.
   findWidget = createFindWidget(editor);
+
+  // Create the Quick Capture overlay (appended to document.body, hidden by default).
+  quickCapture = new QuickCaptureWidget();
 
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel();

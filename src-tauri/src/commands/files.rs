@@ -143,6 +143,11 @@ pub fn ensure_directory(path: String) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
 }
 
+#[tauri::command]
+pub fn get_home_dir() -> Result<String, String> {
+    std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

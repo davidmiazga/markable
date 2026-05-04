@@ -40,6 +40,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "tab-8",     label: "Switch to Tab 8",    defaultKey: "Cmd-8",   section: "File" },
   // Cmd-9 label says "last tab" to communicate the FR-5.3 special behaviour.
   { id: "tab-9",     label: "Switch to Last Tab", defaultKey: "Cmd-9",   section: "File" },
+  { id: "quick-capture",   label: "Quick Capture",          defaultKey: "Ctrl-C",          section: "File" },
   { id: "file-open",       label: "Open",                   defaultKey: "Cmd-O",           section: "File" },
   { id: "file-save",       label: "Save",                   defaultKey: "Cmd-S",           section: "File" },
   { id: "file-save-as",    label: "Save As",                defaultKey: "Cmd-Shift-S",     section: "File" },

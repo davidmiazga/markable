@@ -225,6 +225,20 @@ export interface MarkableSettings {
    * means this field is safe to add without modifying any Rust struct.
    */
   findWidgetScope?: FindScope;
+
+  /**
+   * Quick Capture overlay configuration.
+   * Optional — absent in settings files created before Quick Capture was added.
+   * QuickCaptureWidget falls back to DEFAULT_SETTINGS.quickCapture when absent.
+   */
+  quickCapture?: QuickCaptureSettings;
+}
+
+export interface QuickCaptureSettings {
+  /** Folder name relative to the active vault root. Default: "Inbox". */
+  inboxFolder: string;
+  /** Absolute path used when no vault is active. Supports "~/" prefix. */
+  fallbackPath: string;
 }
 
 /** Window size mode per axis: a preset percentage of screen, or "manual" (user-defined). */
@@ -297,6 +311,10 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
   /** FR-8.1: null means use default position (upper-right, below title bar). */
   findWidget: null,
   keybindings: {},
+  quickCapture: {
+    inboxFolder: "Inbox",
+    fallbackPath: "~/Documents/Markable Inbox",
+  },
   sidebar: {
     left: { ...DEFAULT_SIDEBAR_SLOT },
     right: { ...DEFAULT_SIDEBAR_SLOT },

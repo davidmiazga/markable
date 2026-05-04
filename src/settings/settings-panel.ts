@@ -152,6 +152,19 @@ export function createSettingsPanel(): void {
           </select>
           <p class="settings-description">Default style for new lists. Existing lists auto-detect their style from markers, or use a <code>&lt;!-- list: style --&gt;</code> comment override.</p>
         </div>
+
+        <div class="settings-section">
+          <label class="settings-label">Quick Capture</label>
+          <div class="settings-row">
+            <span class="settings-description">Inbox folder (relative to vault root)</span>
+            <input type="text" class="settings-input" id="settings-qc-inbox-folder" placeholder="Inbox" />
+          </div>
+          <div class="settings-row">
+            <span class="settings-description">Path when no vault is open</span>
+            <input type="text" class="settings-input settings-input-wide" id="settings-qc-fallback-path" placeholder="~/Documents/Markable Inbox" />
+          </div>
+          <p class="settings-description">Open with <kbd>⌃C</kbd>. Notes are saved silently to the inbox folder and do not open as tabs.</p>
+        </div>
       </div>
       <div class="settings-footer">
         <button class="btn btn-tertiary settings-btn-reset" id="settings-reset-defaults">
@@ -347,6 +360,26 @@ function wireEvents(): void {
     applyEditorSettings(getCurrentSettings().editor);
   });
 
+  // Quick Capture settings
+  const qcInboxFolder = panelElement.querySelector("#settings-qc-inbox-folder") as HTMLInputElement;
+  const qcFallbackPath = panelElement.querySelector("#settings-qc-fallback-path") as HTMLInputElement;
+  qcInboxFolder?.addEventListener("change", async () => {
+    const val = qcInboxFolder.value.trim();
+    if (!val) return;
+    await updateSettings((s) => ({
+      ...s,
+      quickCapture: { ...s.quickCapture, inboxFolder: val, fallbackPath: s.quickCapture?.fallbackPath ?? "~/Documents/Markable Inbox" },
+    }));
+  });
+  qcFallbackPath?.addEventListener("change", async () => {
+    const val = qcFallbackPath.value.trim();
+    if (!val) return;
+    await updateSettings((s) => ({
+      ...s,
+      quickCapture: { ...s.quickCapture, inboxFolder: s.quickCapture?.inboxFolder ?? "Inbox", fallbackPath: val },
+    }));
+  });
+
   // List style dropdown — persist the selected style immediately so the list
   // engine picks it up on the next Enter/Tab keypress. Follows the same
   // pattern as the window size dropdowns (wSelect/hSelect above).
@@ -438,6 +471,12 @@ function syncPanelToSettings(): void {
   }
 
   syncRecentFilesCount();
+
+  // Quick Capture fields
+  const qcInboxFolder = document.querySelector("#settings-qc-inbox-folder") as HTMLInputElement;
+  const qcFallbackPath = document.querySelector("#settings-qc-fallback-path") as HTMLInputElement;
+  if (qcInboxFolder) qcInboxFolder.value = settings.quickCapture?.inboxFolder ?? "Inbox";
+  if (qcFallbackPath) qcFallbackPath.value = settings.quickCapture?.fallbackPath ?? "~/Documents/Markable Inbox";
 }
 
 /**
