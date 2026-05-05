@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-04 (session 2)
+**Last Updated:** 2026-05-04 (session 3)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -74,18 +74,21 @@
 - **UI chrome compaction** — Titlebar reduced from 38 px to 30 px (`--titlebar-height`). Minimal tab strip is now `position: absolute` (`top: var(--titlebar-height); z-index: 5`), removed from flex flow so `#app` fills the full remaining height; strip background transparent; `pointer-events: none` on the strip passes clicks to the editor, `.tab-dot-track` restores `pointer-events: auto` so dots remain interactive. Vertical mode unchanged (side strip, no vertical space cost). `body` gains `position: relative` to anchor the strip. 2026-05-04.
 - **Sidebar rail (icon strip + panel pin)** — Each sidebar slot has a ghost icon rail on its outer edge: 25 px wide, 0 opacity by default; hovering reveals it at 30 % opacity; clicking once expands it to 44 px / full opacity (`.is-expanded`). Each registered panel gets an icon button (SVG or plain text via `descriptor.icon`; fallback: `title.charAt(0)`). Clicking the icon when the panel is un-iconized hides that panel's content; clicking it again reveals it. When all panels on a side are iconized the content area is hidden. Pin is right-click only on the panel header → "Pin panel" / "Unpin panel" context menu; no pin button in the header DOM. Pinned panels show a red dot (`#e05252`) before the panel title. Pinned panels cannot be iconized via the rail button. `Cmd-Shift-[/]` shortcut uses plain `toggleSidebarSide` (open/close); opening the sidebar always restores `contentAreaEl` visibility. `iconized` + `pinned` persisted to `SidebarPanelState`. New functions: `_buildIconButton`, `_handleIconBtnClick`, `_setIconized`, `_handlePinToggle`, `_restoreIconizedFromSettings`, exported `iconizeNonPinnedOrToggle` (available but not on keyboard shortcut). CSS: `.sidebar-icon-strip`, `.sidebar-icon-btn`, `.sidebar-content-area`; `.sidebar-icon-btn.is-pinned::after` red dot; `.sidebar-panel-wrapper.is-pinned .sidebar-panel-title::before` red dot. 70 sidebar tests passing. 2026-05-04.
 - **Quick Capture** — `Ctrl-C` opens a full-screen `hsla(0,0%,0%,0.8)` backdrop with a centered `600px × 70vh` panel. Title input is focused on open; "Title" label stacked above the input (not side-by-side). Content textarea fills remaining height. Auto-derives title from first line of content (strips `#`/`*`/`_`/backtick, truncates 60 chars) while `_titleDirty` is false; manual title edit marks it dirty. `Cmd-Enter` saves silently to `{vaultRoot}/Inbox/` (or `~/Documents/Markable Inbox` fallback), no tab opened. `Escape` / backdrop click closes without saving. Filename: slugified title + `YYYYMMDDThh-mm-ss.md` timestamp. New Rust `get_home_dir` command (`std::env::var("HOME")`); `getHomeDir()` bridge wrapper; `QuickCaptureSettings` interface (`inboxFolder`, `fallbackPath`) + `quickCapture` field in `MarkableSettings` + `DEFAULT_SETTINGS`. Settings panel "Quick Capture" section (after List Style). No borders on panel — shadow only (`hsla(0,0%,0%,0.6)`). 39 Vitest tests; TypeScript clean. 2026-05-04.
+- **Auto Title plugin** — Core plugin that pre-fills `# ` in new untitled tabs with the cursor placed after it, then silently saves using the H1 text as the filename on first Cmd-S (no dialog). Falls back to the Save As dialog when no vault is active or H1 is absent; in fallback mode the H1-derived name is pre-populated in the dialog. Configurable filename style (Normal Spaces / CamelCase / kebab-case) via the plugin detail view (`renderDetailExtra` → `buildSelectRow`), stored in plugin-own settings JSON. Pure helpers `extractH1`, `h1ToFilename(h1, style?)`, `resolveConflictPath` in `auto-title-helpers.ts`. `tab-manager.ts` wired with 3 surgical edits: `_createUntitledTab` sets `doc: "# "`, `_applyActiveTab` places cursor at `doc.length` + resets dirty flag + calls `editorView.focus()`, `saveActiveTab` intercepts untitled save to call resolver or fall through to dialog. 35 Vitest tests covering all 3 filename styles; TypeScript clean. `scripts/build-plugins.mjs` updated. 2026-05-04.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-04 (session 2).**
+**Session ended 2026-05-04 (session 3).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **75 files, ~3343 passing**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
+- Test suite: **76 files, 3378 passing (3417 total, 39 skipped)**. Rust: 174 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
 - No open branches. Working tree is clean.
+- **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.
+- **Auto Title window global contract**: `window.__MARKABLE_AUTO_TITLE__ = { resolveTargetPath(doc): Promise<string|null>, getFilenameStyle(): FilenameStyle }`. Set on `onEnable`, deleted on `onDisable`. Tab-manager reads `getFilenameStyle()` for the Save As dialog suggestion only; the resolver applies the style internally.
 - **Quick Capture keybinding**: `Ctrl-C` (macOS copy is `Cmd-C`, so `Ctrl-C` is free). Rebindable via Keybindings panel.
 - **Quick Capture DOM**: `#quick-capture-overlay` is the full-screen backdrop; `.qc-panel` is the centered card. Backdrop click closes without saving.
 - **Titlebar height**: `--titlebar-height: 30px` (was 38 px). If this value ever needs to change, update the single CSS variable in `src/styles.css` `:root`.
@@ -116,6 +119,7 @@ These align with the project direction: File Browser is the gateway to PKM.
 | ~~**Outline panel (document headings)**~~ | ~~Low–Med~~ | ~~Done 2026-05-03~~ |
 | ~~**Multi-file Find & Replace**~~ | ~~Med~~ | ~~Done 2026-05-03~~ |
 | ~~**Quick capture / inbox note**~~ | ~~Med~~ | ~~Done 2026-05-04~~ |
+| ~~**Auto Title plugin**~~ | ~~Low–Med~~ | ~~Done 2026-05-04~~ |
 | ~~**Drag files within vault tree**~~ | ~~Med~~ | ~~Done 2026-05-02~~ |
 | **AI YAML injection** | High | Reads note, suggests + writes front-matter; requires AI API integration |
 | **DMG build + code signing** | Med | Deferred from Phase 1; `CI=true` workaround documented in `docs/build-notes/` |

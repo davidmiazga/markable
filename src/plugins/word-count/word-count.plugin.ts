@@ -33,13 +33,15 @@ const {
 // Type-only import — erased by tsc, safe for IDE support.
 import type { ViewUpdate } from "@codemirror/view";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+import { buildToggleRow } from "../../settings/settings-fields";
 
 // ── Module-level state ────────────────────────────────────────────────────────
-// These variables are private to the IIFE closure after bundling — they are
-// not visible outside the Function() scope at runtime.
 
 /** Debounce interval in milliseconds to throttle status bar updates while typing. */
 const DEBOUNCE_MS = 150;
+
+/** Reading speed assumption in words per minute. */
+const WPM = 200;
 
 /** Reference to the status bar center zone element, set in onEnable. */
 let _targetEl: HTMLElement | null = null;
@@ -50,14 +52,17 @@ let _enabled = false;
 /** Active debounce timer handle. Cleared on each new event and on disable. */
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Whether to show reading time alongside word/char counts. Persisted via plugin settings. */
+let _showReadingTime = false;
+
+/** Plugin API reference, held so renderDetailExtra can save settings. */
+let _api: MarkablePluginAPI | null = null;
+
 // ── Word counting ─────────────────────────────────────────────────────────────
 
 /**
  * Count the number of words in a string by splitting on whitespace runs.
  * Returns 0 for empty or whitespace-only strings.
- *
- * @param text - Raw document or selection text.
- * @returns    Integer word count.
  */
 function countWords(text: string): number {
   if (!text.trim()) return 0;
@@ -65,46 +70,40 @@ function countWords(text: string): number {
 }
 
 /**
- * Update the status bar center zone with the current word and character counts.
+ * Format a word count as a reading-time string (e.g. "~3 min read", "< 1 min read").
+ */
+function readingTimeLabel(words: number): string {
+  const mins = Math.round(words / WPM);
+  return mins < 1 ? "< 1 min read" : `~${mins} min read`;
+}
+
+/**
+ * Update the status bar center zone with word/char counts and optionally reading time.
  *
- * When there is an active selection (selFrom !== selTo), the display shows
- * "N / M words    X / Y chars" (selection counts / total counts).
- * When there is no selection: "N words    M chars".
- *
- * @param docText  - Full document text as a plain string.
- * @param selFrom  - Selection start offset (equals selTo when no selection).
- * @param selTo    - Selection end offset.
+ * When there is an active selection the display shows selection / total counts.
+ * Reading time is shown only when there is no selection (it reflects the whole doc).
  */
 function updateDisplay(docText: string, selFrom: number, selTo: number): void {
   if (!_targetEl || !_enabled) return;
   const totalWords = countWords(docText);
   const totalChars = docText.length;
+
   if (selFrom !== selTo) {
     const selText = docText.slice(selFrom, selTo);
-    _targetEl.textContent = `${countWords(selText)} / ${totalWords} words    ${selText.length} / ${totalChars} chars`;
+    _targetEl.textContent =
+      `${countWords(selText)} / ${totalWords} words    ${selText.length} / ${totalChars} chars`;
   } else {
-    _targetEl.textContent = `${totalWords} words    ${totalChars} chars`;
+    const readingTime = _showReadingTime ? `    ${readingTimeLabel(totalWords)}` : "";
+    _targetEl.textContent = `${totalWords} words    ${totalChars} chars${readingTime}`;
   }
 }
 
 // ── CM6 extension ─────────────────────────────────────────────────────────────
 
-/**
- * CM6 updateListener registered via api.addExtensions() in onEnable.
- *
- * Fires on every editor transaction. Short-circuits if the plugin is disabled
- * or if neither the document nor the selection changed (perf: avoids redundant
- * debounce scheduling on cursor blink or focus events).
- *
- * Debounced at DEBOUNCE_MS so rapid keystrokes do not trigger a display update
- * on every character.
- */
 const wordCountListener = EditorView.updateListener.of((update: ViewUpdate) => {
   if (!_enabled) return;
   if (!update.docChanged && !update.selectionSet) return;
-  // Cancel any pending debounce before scheduling a new one.
   if (_debounceTimer) clearTimeout(_debounceTimer);
-  // Snapshot state before the async delay so the correct doc/sel is used.
   const docText = update.state.doc.toString();
   const sel = update.state.selection.main;
   _debounceTimer = setTimeout(
@@ -113,31 +112,46 @@ const wordCountListener = EditorView.updateListener.of((update: ViewUpdate) => {
   );
 });
 
+// ── Plugin settings UI ────────────────────────────────────────────────────────
+
+function renderDetailExtra(container: HTMLElement): void {
+  const row = buildToggleRow({
+    label: "Show reading time",
+    description: "Appends an estimated read time to the status bar (assumes 200 WPM).",
+    checked: _showReadingTime,
+    onChange: async (checked) => {
+      _showReadingTime = checked;
+      if (_api) await _api.saveSettings({ showReadingTime: checked });
+      // Refresh display immediately so the change is visible without typing.
+      const view = (window as any).__MARKABLE_EDITOR_VIEW__;
+      if (view) {
+        const docText = view.state.doc.toString();
+        const sel = view.state.selection.main;
+        updateDisplay(docText, sel.from, sel.to);
+      }
+    },
+  });
+  container.appendChild(row);
+}
+
 // ── Plugin object ─────────────────────────────────────────────────────────────
 
-/**
- * UnifiedPlugin definition for Word Count.
- *
- * onEnable: sets the target element, ensures the status bar is visible,
- *   and registers the CM6 updateListener via api.addExtensions().
- *
- * onDisable: clears the display text, nulls the target element, cancels the
- *   pending debounce timer, removes the CM6 extension, and hides the status bar
- *   if no other plugin is using it.
- */
 export default {
   id: "word-count",
   name: "Word Count",
   version: "1.0.0",
   description: "Word and character count in the status bar",
   detail:
-    "Displays a live word count and character count in the status bar. Updates as you type. Shows selection count when text is selected.",
+    "Displays a live word count and character count in the status bar. Updates as you type. Shows selection count when text is selected. Optionally shows estimated reading time.",
 
-  onEnable(api: MarkablePluginAPI): void {
+  async onEnable(api: MarkablePluginAPI): Promise<void> {
     _enabled = true;
+    _api = api;
     _targetEl = api.statusBar.center;
-    // Register as a status bar dependent so hideStatusBarIfUnused() keeps the
-    // bar visible while this plugin is enabled (Bug #3/#4 fix).
+
+    const stored = await api.loadSettings().catch(() => null) as Record<string, unknown> | null;
+    if (stored?.showReadingTime === true) _showReadingTime = true;
+
     api.registerStatusBarDependent();
     api.ensureStatusBar();
     api.addExtensions([wordCountListener]);
@@ -145,6 +159,7 @@ export default {
 
   onDisable(api: MarkablePluginAPI): void {
     _enabled = false;
+    _api = null;
     if (_targetEl) _targetEl.textContent = "";
     _targetEl = null;
     if (_debounceTimer) {
@@ -152,9 +167,9 @@ export default {
       _debounceTimer = null;
     }
     api.removeExtensions();
-    // Unregister before hiding so the STATUS_BAR_PLUGINS set is correct when
-    // hideStatusBarIfUnused() checks whether to hide (Bug #3/#4 fix).
     api.unregisterStatusBarDependent();
     api.hideStatusBarIfUnused();
   },
+
+  renderDetailExtra,
 };
