@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-04 (session 3)
+**Last Updated:** 2026-05-05 (session 4)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -74,6 +74,7 @@
 - **UI chrome compaction** — Titlebar reduced from 38 px to 30 px (`--titlebar-height`). Minimal tab strip is now `position: absolute` (`top: var(--titlebar-height); z-index: 5`), removed from flex flow so `#app` fills the full remaining height; strip background transparent; `pointer-events: none` on the strip passes clicks to the editor, `.tab-dot-track` restores `pointer-events: auto` so dots remain interactive. Vertical mode unchanged (side strip, no vertical space cost). `body` gains `position: relative` to anchor the strip. 2026-05-04.
 - **Sidebar rail (icon strip + panel pin)** — Each sidebar slot has a ghost icon rail on its outer edge: 25 px wide, 0 opacity by default; hovering reveals it at 30 % opacity; clicking once expands it to 44 px / full opacity (`.is-expanded`). Each registered panel gets an icon button (SVG or plain text via `descriptor.icon`; fallback: `title.charAt(0)`). Clicking the icon when the panel is un-iconized hides that panel's content; clicking it again reveals it. When all panels on a side are iconized the content area is hidden. Pin is right-click only on the panel header → "Pin panel" / "Unpin panel" context menu; no pin button in the header DOM. Pinned panels show a red dot (`#e05252`) before the panel title. Pinned panels cannot be iconized via the rail button. `Cmd-Shift-[/]` shortcut uses plain `toggleSidebarSide` (open/close); opening the sidebar always restores `contentAreaEl` visibility. `iconized` + `pinned` persisted to `SidebarPanelState`. New functions: `_buildIconButton`, `_handleIconBtnClick`, `_setIconized`, `_handlePinToggle`, `_restoreIconizedFromSettings`, exported `iconizeNonPinnedOrToggle` (available but not on keyboard shortcut). CSS: `.sidebar-icon-strip`, `.sidebar-icon-btn`, `.sidebar-content-area`; `.sidebar-icon-btn.is-pinned::after` red dot; `.sidebar-panel-wrapper.is-pinned .sidebar-panel-title::before` red dot. 70 sidebar tests passing. 2026-05-04.
 - **Quick Capture** — `Ctrl-C` opens a full-screen `hsla(0,0%,0%,0.8)` backdrop with a centered `600px × 70vh` panel. Title input is focused on open; "Title" label stacked above the input (not side-by-side). Content textarea fills remaining height. Auto-derives title from first line of content (strips `#`/`*`/`_`/backtick, truncates 60 chars) while `_titleDirty` is false; manual title edit marks it dirty. `Cmd-Enter` saves silently to `{vaultRoot}/Inbox/` (or `~/Documents/Markable Inbox` fallback), no tab opened. `Escape` / backdrop click closes without saving. Filename: slugified title + `YYYYMMDDThh-mm-ss.md` timestamp. New Rust `get_home_dir` command (`std::env::var("HOME")`); `getHomeDir()` bridge wrapper; `QuickCaptureSettings` interface (`inboxFolder`, `fallbackPath`) + `quickCapture` field in `MarkableSettings` + `DEFAULT_SETTINGS`. Settings panel "Quick Capture" section (after List Style). No borders on panel — shadow only (`hsla(0,0%,0%,0.6)`). 39 Vitest tests; TypeScript clean. 2026-05-04.
+- **Reading time in Word Count** — Optional `~N min read` label added to the word count status bar. Toggled in Plugins → Word Count → "Show reading time" (default off). Assumes 200 WPM; shows `< 1 min read` for short notes; displayed only when there is no active selection. Setting persisted via plugin-own settings (`plugins/word-count/settings.json`). No new tests needed — pure display logic. 2026-05-05.
 - **Auto Title plugin** — Core plugin that pre-fills `# ` in new untitled tabs with the cursor placed after it, then silently saves using the H1 text as the filename on first Cmd-S (no dialog). Falls back to the Save As dialog when no vault is active or H1 is absent; in fallback mode the H1-derived name is pre-populated in the dialog. Configurable filename style (Normal Spaces / CamelCase / kebab-case) via the plugin detail view (`renderDetailExtra` → `buildSelectRow`), stored in plugin-own settings JSON. Pure helpers `extractH1`, `h1ToFilename(h1, style?)`, `resolveConflictPath` in `auto-title-helpers.ts`. `tab-manager.ts` wired with 3 surgical edits: `_createUntitledTab` sets `doc: "# "`, `_applyActiveTab` places cursor at `doc.length` + resets dirty flag + calls `editorView.focus()`, `saveActiveTab` intercepts untitled save to call resolver or fall through to dialog. 35 Vitest tests covering all 3 filename styles; TypeScript clean. `scripts/build-plugins.mjs` updated. 2026-05-04.
 
 ### Known Regressions 🔴
@@ -81,7 +82,7 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-04 (session 3).**
+**Session ended 2026-05-05 (session 4).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.

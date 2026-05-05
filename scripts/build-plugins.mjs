@@ -70,6 +70,8 @@ const PLUGINS = [
   ["outline-panel",     "src/plugins/outline-panel/outline-panel.plugin.ts"],
   // Auto Title — derives filename from H1 heading on first save of a new file.
   ["auto-title",        "src/plugins/auto-title/auto-title.plugin.ts"],
+  // Typing Assist — smart typography (curly quotes, smart dashes, ellipsis).
+  ["typing-assist",     "src/plugins/typing-assist/typing-assist.plugin.ts"],
 ];
 
 /**
