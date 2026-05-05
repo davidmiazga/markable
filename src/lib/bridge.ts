@@ -558,3 +558,23 @@ export async function scanVaultTags(params: {
     };
   }
 }
+
+export async function renameFile(
+  oldPath: string,
+  newPath: string,
+): Promise<FileResult<void>> {
+  try {
+    await invoke("rename_file", { oldPath, newPath });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "rename_file",
+        path: oldPath,
+      } satisfies TauriCommandError,
+    };
+  }
+}

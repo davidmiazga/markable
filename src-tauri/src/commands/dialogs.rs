@@ -59,17 +59,21 @@ pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, S
 /// - Filters to `.md` and `.txt` files
 /// - Allows creating new file or overwriting existing
 #[tauri::command]
-pub async fn save_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub async fn save_file_dialog(
+    app: tauri::AppHandle,
+    suggested_filename: Option<String>,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let (tx, rx) = mpsc::channel();
+    let filename = suggested_filename.unwrap_or_else(|| "untitled.md".to_string());
 
     app.dialog()
         .file()
         .add_filter("Markdown", &["md"])
         .add_filter("Text", &["txt"])
         .add_filter("All Files", &["*"])
-        .set_file_name("untitled.md")
+        .set_file_name(&filename)
         .save_file(move |path| {
             let path_string = path.map(|p| p.to_string());
             let _ = tx.send(path_string);

@@ -68,6 +68,8 @@ const PLUGINS = [
   ["knowledge-graph",   "src/plugins/knowledge-graph/knowledge-graph.plugin.ts"],
   // Outline Panel — live heading tree with bidirectional fold sync.
   ["outline-panel",     "src/plugins/outline-panel/outline-panel.plugin.ts"],
+  // Auto Title — derives filename from H1 heading on first save of a new file.
+  ["auto-title",        "src/plugins/auto-title/auto-title.plugin.ts"],
 ];
 
 /**

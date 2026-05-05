@@ -25,6 +25,7 @@
 import { EditorView } from "@codemirror/view";
 import type { TabEntry, ITabRenderer } from "./tab-types";
 import { readFile, writeFile, saveFileDialog } from "../lib/bridge";
+import { extractH1, h1ToFilename } from "../plugins/auto-title/auto-title-helpers";
 import { getCurrentSettings, updateSettings, addRecentFile } from "../lib/settings";
 import { setLivePreviewFilePath, setViewMode } from "../editor/live-preview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -258,13 +259,14 @@ export class TabManager {
    * @returns  A new TabEntry with a unique id, no filePath, and empty doc.
    */
   private _createUntitledTab(): TabEntry {
+    const autoTitle = (window as unknown as Record<string, unknown>)["__MARKABLE_AUTO_TITLE__"];
     return {
       id: crypto.randomUUID(),
       kind: "editor",
       filePath: null,
       title: "Untitled",
       isDirty: false,
-      doc: "",
+      doc: autoTitle ? "# " : "",
       scrollTop: 0,
     };
   }
@@ -347,12 +349,20 @@ export class TabManager {
     // Untitled tabs start in edit mode so the user can type immediately.
     this.editorView.dispatch({
       changes: { from: 0, to: this.editorView.state.doc.length, insert: tab.doc },
-      selection: { anchor: 0 },
+      selection: { anchor: tab.filePath === null ? tab.doc.length : 0 },
       effects: [
         editableCompartment.reconfigure(EditorView.editable.of(true)),
         ...(tab.filePath !== null ? [setViewMode.of(true)] : []),
       ],
     });
+
+    // Auto-title pre-fills "# " which triggers markActiveTabDirty via the
+    // updateListener. Reset here so the tab doesn't show the dirty indicator
+    // until the user actually types.
+    if (tab.filePath === null && tab.doc.length > 0) {
+      tab.isDirty = false;
+      this.editorView.focus();
+    }
 
     // Restore the scroll position the user was at when they last left this tab.
     this.editorView.scrollDOM.scrollTop = tab.scrollTop;
@@ -1194,7 +1204,34 @@ export class TabManager {
     if (!tab || tab.kind === "media") return;
 
     if (tab.filePath === null) {
-      await this.saveActiveTabAs();
+      const resolver = (window as unknown as Record<string, unknown>)["__MARKABLE_AUTO_TITLE__"] as
+        | { resolveTargetPath(doc: string): Promise<string | null>; getFilenameStyle?(): string }
+        | undefined;
+
+      if (resolver) {
+        const content = this.editorView!.state.doc.toString();
+        const targetPath = await resolver.resolveTargetPath(content);
+        if (targetPath !== null) {
+          const result = await writeFile(targetPath, content);
+          if (!result.ok) { alert(`Could not save file: ${result.error.message}`); return; }
+          tab.filePath = targetPath;
+          tab.title = this._titleFromPath(targetPath);
+          tab.isDirty = false;
+          this._updateTitleBar(tab);
+          this._notifyRenderer();
+          void addRecentFile(targetPath);
+          setLivePreviewFilePath(targetPath);
+          (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = targetPath;
+          void this.saveSession();
+          void (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+          return;
+        }
+      }
+      const fallbackDoc = this.editorView!.state.doc.toString();
+      const h1 = extractH1(fallbackDoc);
+      const filenameStyle = (resolver?.getFilenameStyle?.() ?? "spaces") as "spaces" | "camel" | "kebab";
+      const suggested = h1 ? h1ToFilename(h1, filenameStyle) + ".md" : undefined;
+      await this.saveActiveTabAs(suggested);
       return;
     }
 
@@ -1225,11 +1262,11 @@ export class TabManager {
    * The early-return guard makes this a silent no-op for media tabs, which
    * matches the same protection applied in saveActiveTab().
    */
-  async saveActiveTabAs(): Promise<void> {
+  async saveActiveTabAs(suggestedFilename?: string): Promise<void> {
     const tab = this.getActiveTab();
     if (!tab || tab.kind === "media") return;
 
-    const dialogResult = await saveFileDialog();
+    const dialogResult = await saveFileDialog(suggestedFilename);
     if (dialogResult.cancelled) return; // User cancelled (EC-12).
 
     const path = dialogResult.path;

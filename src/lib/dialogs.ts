@@ -53,9 +53,11 @@ export async function openFileDialog(): Promise<DialogResult> {
  * }
  * ```
  */
-export async function saveFileDialog(): Promise<DialogResult> {
+export async function saveFileDialog(suggestedFilename?: string): Promise<DialogResult> {
   try {
-    const path = await invoke<string | null>("save_file_dialog");
+    const path = await invoke<string | null>("save_file_dialog", {
+      suggestedFilename: suggestedFilename ?? null,
+    });
 
     if (path) {
       return { cancelled: false, path };
