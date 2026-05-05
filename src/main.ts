@@ -59,8 +59,13 @@ import {
   updateThemeMenu,
   copyCorePlugins,
   copyDefaultThemes,
+  writeBinaryFile,
+  saveImageDialog,
+  ensureDirectory,
 } from "./lib/bridge";
 import type { ThemeEntry } from "./lib/bridge";
+import { handleImagePaste } from "./lib/clipboard-image-handler";
+import { extractImageItem } from "./lib/clipboard-image";
 import {
   loadSettings,
   applyWindowSettings,
@@ -1258,6 +1263,58 @@ async function initApp() {
       findWidget.open("replace");
     }
   });
+
+  // Clipboard image paste (FR-01 through FR-11, DC-01 through DC-05).
+  //
+  // Registered at the capture phase (third argument = true) so this listener
+  // fires before CM6's own DOM event handlers. When an image is detected the
+  // listener calls event.preventDefault() to prevent CM6 from treating the
+  // binary data as text paste.
+  //
+  // Guards 1–2 are evaluated synchronously here (before any async work).
+  // Guards 3–5 and all async logic are delegated to handleImagePaste() so the
+  // business logic is independently unit-testable (NFR-06).
+  document.addEventListener("paste", async (e: ClipboardEvent) => {
+    // Guard 1: clipboard must contain at least one image/* item (FR-01, EC-01).
+    // extractImageItem returns the first matching item (EC-21) or null.
+    const imageItem = extractImageItem(e.clipboardData?.items);
+    if (!imageItem) return; // No image data — fall through to CM6 (EC-01)
+
+    // Guard 2: editor must be initialised and focused (EC-06, EC-20, EC-22, EC-23).
+    // Checked at call time (not at registration time) so that a null editor at
+    // startup never causes a spurious intercept — editor is null until initApp()
+    // assigns it (EC-20). hasFocus is false when the command bar or find widget
+    // has keyboard focus (EC-22, EC-23).
+    if (!editor || !editor.hasFocus) return;
+
+    // Guard 5: item.getAsFile() must return a non-null Blob (EC-15).
+    // A DataTransferItem can report type "image/*" but still fail getAsFile().
+    const file = imageItem.getAsFile();
+    if (!file) return;
+
+    // All synchronous guards passed — take ownership of the event so CM6 does
+    // not attempt to paste binary bytes as text.
+    e.preventDefault();
+
+    // Capture the non-null editor reference at the point where guard 2 already
+    // confirmed editor !== null and editor.hasFocus. Using a local const avoids
+    // TypeScript's "possibly null" error inside the lambdas passed to handleImagePaste.
+    const liveEditor = editor;
+
+    // Delegate all async logic (Guards 3–4, vault/no-vault branching, write,
+    // snippet dispatch) to the testable handleImagePaste function.
+    await handleImagePaste({
+      imageBlob:        file,
+      activeTab:        tabManager.getActiveTab(),
+      getActiveVault:   () => vaultManager.getActiveVault(),
+      ensureDirectory,
+      writeBinaryFile,
+      saveImageDialog,
+      dispatch:         (tx) => liveEditor.dispatch(tx as Parameters<typeof liveEditor.dispatch>[0]),
+      getSelectionHead: () => liveEditor.state.selection.main.head,
+      now:              new Date(),
+    });
+  }, true /* capture phase — must fire before CM6 processes the event */);
 
   // EC-29: If the FindWidget is open when the window regains focus, do not
   // steal focus away from the find input. The browser restores focus to the

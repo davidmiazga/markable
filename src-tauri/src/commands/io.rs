@@ -158,6 +158,111 @@ pub fn write_file(path: String, content: String) -> Result<(), String> {
         }
     }
 }
+/// Write raw binary data to a file atomically.
+///
+/// Uses the same temp-file-swap pattern as `write_file`, substituting
+/// raw bytes (`Vec<u8>`) for the UTF-8 string content. All other logic —
+/// parent-dir guard, timestamp-based temp filename, `sync_all()`, atomic
+/// rename, and error messages — is identical to `write_file`.
+///
+/// JavaScript callers pass a `number[]` (array of unsigned bytes 0–255).
+/// Tauri's JSON deserialiser maps a `number[]` to `Vec<u8>` correctly.
+/// Do **not** pass a `Uint8Array` from JavaScript — it does not serialise
+/// reliably across the Tauri IPC boundary (DC-01 note in architecture spec).
+///
+/// # Arguments
+/// * `path` - Absolute path to the output file (created if doesn't exist)
+/// * `data` - Raw binary bytes; JavaScript callers supply `number[]`
+///
+/// # Returns
+/// * `Ok(())` - File written successfully
+/// * `Err(message)` - Descriptive error message
+///
+/// # Error messages (identical to `write_file` for consistent test assertions)
+/// - Parent directory missing → "File not found: {path} (parent dir missing)"
+/// - Permission denied        → "Permission denied: {path}"
+/// - Disk write failure       → "Failed to write to temp file: {path} ({e})"
+/// - Sync failure             → "Failed to sync file to disk: {path} ({e})"
+/// - Atomic rename failure    → "Write failed: atomic swap could not complete ({kind})"
+#[tauri::command]
+pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    let path = PathBuf::from(&path);
+
+    // Validate parent directory exists (same guard as write_file).
+    let parent = path.parent();
+    if let Some(parent_dir) = parent {
+        if !parent_dir.is_dir() && parent_dir != Path::new("") {
+            return Err(format!("File not found: {} (parent dir missing)", path.display()));
+        }
+    }
+
+    // Generate temp filename using a nanosecond timestamp for uniqueness.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let temp_filename = format!(
+        "{}.tmp.{}",
+        path.file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default(),
+        timestamp
+    );
+    let temp_path = temp_dir.join(&temp_filename);
+
+    // Write binary data to the temporary file.
+    let mut file = match fs::File::create(&temp_path) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = match e.kind() {
+                io::ErrorKind::PermissionDenied => {
+                    format!("Permission denied: {}", path.display())
+                }
+                _ => format!("Failed to create temp file: {} ({})", path.display(), e),
+            };
+            return Err(msg);
+        }
+    };
+
+    // Write raw bytes (not content.as_bytes() — the only difference from write_file).
+    if let Err(e) = file.write_all(&data) {
+        let _ = fs::remove_file(&temp_path); // Clean up temp file on failure
+        let msg = match e.kind() {
+            io::ErrorKind::PermissionDenied => {
+                format!("Permission denied: {}", path.display())
+            }
+            _ => format!("Failed to write to temp file: {} ({})", path.display(), e),
+        };
+        return Err(msg);
+    }
+
+    // Flush OS buffers to disk before renaming to prevent partial-write exposure.
+    if let Err(e) = file.sync_all() {
+        let _ = fs::remove_file(&temp_path); // Clean up temp file on failure
+        return Err(format!("Failed to sync file to disk: {} ({})", path.display(), e));
+    }
+
+    // Atomic rename: on POSIX systems `rename` is guaranteed to be atomic,
+    // so readers never see a partially-written file at the target path.
+    match fs::rename(&temp_path, &path) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&temp_path); // Clean up temp file on failure
+            let msg = match e.kind() {
+                io::ErrorKind::PermissionDenied => {
+                    format!("Permission denied: {}", path.display())
+                }
+                _ => format!(
+                    "Write failed: atomic swap could not complete ({})",
+                    e.kind()
+                ),
+            };
+            Err(msg)
+        }
+    }
+}
 
 
 #[cfg(test)]
@@ -258,6 +363,83 @@ mod tests {
         // Original file should still be intact
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, original_content);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    // ── write_binary_file tests ────────────────────────────────────────────
+    //
+    // Each test path includes both the PID and the current thread ID so that
+    // parallel test threads within the same process never share a file path.
+
+    #[test]
+    fn test_write_binary_file_success() {
+        // Use the PNG magic bytes as representative binary content.
+        // This verifies the file is written verbatim without encoding changes.
+        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        let path = std::env::temp_dir()
+            .join(format!("markable_binary_success_{}_{:?}.bin",
+                std::process::id(), std::thread::current().id()));
+
+        let result = write_binary_file(path.to_string_lossy().to_string(), bytes.clone());
+        assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result.err());
+
+        // Read back raw bytes and compare byte-for-byte.
+        let read_back = fs::read(&path).expect("File should be readable after write");
+        assert_eq!(read_back, bytes, "Read-back bytes must equal written bytes");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_binary_file_creates_new_file() {
+        let path = std::env::temp_dir()
+            .join(format!("markable_binary_creates_{}_{:?}.bin",
+                std::process::id(), std::thread::current().id()));
+
+        // Ensure the file does not exist before the test.
+        let _ = fs::remove_file(&path);
+        assert!(!path.exists(), "Pre-condition: file must not exist before write");
+
+        let result = write_binary_file(
+            path.to_string_lossy().to_string(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF],
+        );
+        assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result.err());
+        assert!(path.exists(), "File must exist after a successful write");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_binary_file_parent_missing() {
+        // A path whose parent directory does not exist must return the
+        // canonical "File not found" error message.
+        let result = write_binary_file(
+            "/nonexistent/test.bin".to_string(),
+            vec![0x00],
+        );
+        assert!(result.is_err(), "Expected Err for missing parent dir");
+        assert!(
+            result.unwrap_err().contains("File not found"),
+            "Error message must contain 'File not found'"
+        );
+    }
+
+    #[test]
+    fn test_write_binary_file_empty_data() {
+        // Writing zero bytes is a valid operation (e.g. an empty clipboard item).
+        let path = std::env::temp_dir()
+            .join(format!("markable_binary_empty_{}_{:?}.bin",
+                std::process::id(), std::thread::current().id()));
+        let _ = fs::remove_file(&path);
+
+        let result = write_binary_file(path.to_string_lossy().to_string(), vec![]);
+        assert!(result.is_ok(), "Expected Ok(()) for empty data, got: {:?}", result.err());
+
+        // File must exist and have zero length.
+        let metadata = fs::metadata(&path).expect("File must exist after write");
+        assert_eq!(metadata.len(), 0, "File must be empty (0 bytes)");
 
         let _ = fs::remove_file(&path);
     }

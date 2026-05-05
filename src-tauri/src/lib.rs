@@ -24,7 +24,7 @@ fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha
 
 pub use commands::{
     create_daily_note, check_paths_exist,
-    open_file_dialog, open_folder_dialog, read_file, save_file_dialog, save_html_dialog, write_file,
+    open_file_dialog, open_folder_dialog, read_file, save_file_dialog, save_html_dialog, save_image_dialog, write_file, write_binary_file,
     get_settings, save_settings,
     list_themes, read_theme_css, copy_default_themes,
     copy_core_plugins,
@@ -424,7 +424,9 @@ pub fn run() {
             read_resource_file,
             save_file_dialog,
             save_html_dialog,
+            save_image_dialog,
             write_file,
+            write_binary_file,
             get_settings,
             save_settings,
             list_themes,

@@ -12,7 +12,7 @@ import type { FileResult, DialogResult, TauriCommandError } from "./errors";
 import type { MarkableSettings } from "./settings";
 
 // Re-export dialog functions from dialogs.ts
-export { openFileDialog, openFolderDialog, saveFileDialog, saveHtmlDialog } from "./dialogs";
+export { openFileDialog, openFolderDialog, saveFileDialog, saveHtmlDialog, saveImageDialog } from "./dialogs";
 export type { DialogResult };
 
 /**
@@ -90,6 +90,52 @@ export async function writeFile(
       error: {
         message,
         command: "write_file",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Write raw binary data to a file atomically.
+ *
+ * Uses the same temp-file-swap pattern as `writeFile` (write → sync_all →
+ * rename). If the write fails, the original file at `path` is never modified.
+ *
+ * IMPORTANT — `data` must be `number[]`, not `Uint8Array`. Tauri's JSON
+ * serialiser correctly maps a JavaScript `number[]` (values 0–255) to Rust's
+ * `Vec<u8>`. `Uint8Array` is serialised differently and arrives on the Rust
+ * side as an object rather than a flat byte array, breaking the deserialization.
+ * Convert with: `Array.from(new Uint8Array(arrayBuffer))`.
+ *
+ * @param path - Absolute file path (file is created if it doesn't exist)
+ * @param data - Raw bytes as a plain array of unsigned integers (0–255)
+ * @returns Promise resolving to FileResult<void>
+ *
+ * @example
+ * ```typescript
+ * const buffer = await blob.arrayBuffer();
+ * const bytes = Array.from(new Uint8Array(buffer)); // NOT new Uint8Array directly
+ * const result = await writeBinaryFile("/vault/assets/20260505-143022.png", bytes);
+ * if (!result.ok) {
+ *   alert(`Write failed: ${result.error.message}`);
+ * }
+ * ```
+ */
+export async function writeBinaryFile(
+  path: string,
+  data: number[]
+): Promise<FileResult<void>> {
+  try {
+    await invoke("write_binary_file", { path, data });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "write_binary_file",
         path,
       } satisfies TauriCommandError,
     };
