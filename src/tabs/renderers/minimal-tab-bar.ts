@@ -22,6 +22,7 @@ import "../tabs.css";
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
 import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
+import { attachTabReorderDrag } from "../tab-reorder-drag";
 
 /** Delay in milliseconds before the hover tooltip appears (FR-3.1). */
 const TOOLTIP_DELAY_MS = 800;
@@ -46,6 +47,9 @@ export class MinimalTabBar implements ITabRenderer {
    * Provided by TabManager as `(id) => this.activateTab(id)`.
    */
   private readonly onActivate: (id: string) => void;
+
+  /** Optional callback fired when the user drag-reorders a tab. */
+  private readonly onReorder: ((fromId: string, insertBeforeId: string | null) => void) | undefined;
 
 
   /** Inner track element — dots are appended here so the track can be
@@ -73,6 +77,7 @@ export class MinimalTabBar implements ITabRenderer {
    *
    * @param onActivate  Called with the tab id when the user clicks a dot.
    * @param onClose     Optional; not used by MinimalTabBar (no close buttons).
+   * @param onReorder   Optional; called with (fromId, insertBeforeId) on drag-to-reorder.
    */
   constructor(
     onActivate: (id: string) => void,
@@ -80,8 +85,10 @@ export class MinimalTabBar implements ITabRenderer {
     // RegularTabBar (which does render close buttons) but is not stored or
     // used in MinimalTabBar because dot mode has no close button.
     _onClose?: (id: string) => void,
+    onReorder?: (fromId: string, insertBeforeId: string | null) => void,
   ) {
     this.onActivate = onActivate;
+    this.onReorder = onReorder;
   }
 
   // ── ITabRenderer interface ────────────────────────────────────────────────────
@@ -232,12 +239,21 @@ export class MinimalTabBar implements ITabRenderer {
     // aria-label gives screen readers the document name (NFR-3).
     btn.setAttribute("aria-label", tab.title);
 
+    // data-tab-id is used by drag hit-testing to identify which tab is under
+    // the cursor during a reorder gesture.
+    btn.dataset.tabId = tab.id;
+
     // Dirty indicator via CSS class; the ::after pseudo-element draws the dot.
     if (tab.isDirty) {
       btn.classList.add("is-dirty");
     }
     if (tab.pinned) {
       btn.classList.add("is-pinned");
+    }
+
+    // Drag-to-reorder: wire pointer drag when the callback is available.
+    if (this.onReorder) {
+      attachTabReorderDrag(btn, tab.id, ".tab-dot[data-tab-id]", this.onReorder);
     }
 
     // Wire the tooltip (800 ms delay, FR-3.1).

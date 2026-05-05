@@ -18,9 +18,9 @@ Before shifting into the deeper PKM layer (templates, graph intelligence, linkin
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | Reading time in Word Count | ✅ Done 2026-05-05 | Toggle in plugin detail view, default off |
-| 2 | Smart typography (curly quotes, dashes) | ⬜ Next | New `smart-typography` plugin |
-| 3 | Tab drag-to-reorder | ⬜ Pending | Core `tab-manager.ts` + renderers |
-| 4 | Clipboard image paste | ⬜ Pending | Into `markdown-toolbar` plugin + new Rust `write_binary_file` |
+| 2 | Smart typography (curly quotes, dashes) | ✅ Done 2026-05-05 | `typing-assist` plugin (extensible for future input behaviors) |
+| 3 | Tab drag-to-reorder | ✅ Done 2026-05-05 | `tab-reorder-drag.ts` helper + all three renderers |
+| 4 | Clipboard image paste | ⬜ Next | Into `markdown-toolbar` plugin + new Rust `write_binary_file` |
 
 ---
 

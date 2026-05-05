@@ -29,6 +29,7 @@ import "../tabs.css";
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
 import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
+import { attachTabReorderDrag } from "../tab-reorder-drag";
 
 export class RegularTabBar implements ITabRenderer {
   // ── Private state ────────────────────────────────────────────────────────────
@@ -71,6 +72,9 @@ export class RegularTabBar implements ITabRenderer {
    */
   private readonly onNew: () => void;
 
+  /** Optional callback fired when the user drag-reorders a tab. */
+  private readonly onReorder: ((fromId: string, insertBeforeId: string | null) => void) | undefined;
+
   // ── Constructor ───────────────────────────────────────────────────────────────
 
   /**
@@ -83,15 +87,18 @@ export class RegularTabBar implements ITabRenderer {
    * @param onActivate  Called with the tab id when the user clicks a tab label.
    * @param onClose     Called with the tab id when the user clicks a × close button.
    * @param onNew       Called when the user clicks the "+" new-tab button.
+   * @param onReorder   Optional; called with (fromId, insertBeforeId) on drag-to-reorder.
    */
   constructor(
     onActivate: (id: string) => void,
     onClose: (id: string) => void,
     onNew: () => void,
+    onReorder?: (fromId: string, insertBeforeId: string | null) => void,
   ) {
     this.onActivate = onActivate;
     this.onClose = onClose;
     this.onNew = onNew;
+    this.onReorder = onReorder;
   }
 
   // ── ITabRenderer interface ────────────────────────────────────────────────────
@@ -268,6 +275,10 @@ export class RegularTabBar implements ITabRenderer {
     // aria-label gives screen readers the document name (NFR-3).
     btn.setAttribute("aria-label", tab.title);
 
+    // data-tab-id is used by drag hit-testing to identify which tab is under
+    // the cursor during a reorder gesture.
+    btn.dataset.tabId = tab.id;
+
     // Toggle the is-dirty class on the outer button so CSS can control the
     // visibility of .tab-label-dirty via `.tab-label.is-dirty .tab-label-dirty`.
     btn.classList.toggle("is-dirty", tab.isDirty);
@@ -302,6 +313,11 @@ export class RegularTabBar implements ITabRenderer {
       this.onClose(tab.id);
     });
     btn.appendChild(closeBtn);
+
+    // Drag-to-reorder: wire pointer drag when the callback is available.
+    if (this.onReorder) {
+      attachTabReorderDrag(btn, tab.id, ".tab-label[data-tab-id]", this.onReorder);
+    }
 
     // Outer button click handler: activate the tab. Fires only when the user
     // clicks the tab label area, not the close button (stopPropagation guards).

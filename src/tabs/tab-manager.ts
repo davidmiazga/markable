@@ -515,6 +515,8 @@ export class TabManager {
           // Bind activateTab so the renderer callback is always in sync with
           // the current TabManager instance, not a stale closure.
           (id) => this.activateTab(id),
+          undefined,
+          (fromId, ins) => this.reorderTab(fromId, ins),
         );
         break;
 
@@ -527,6 +529,7 @@ export class TabManager {
           (id) => this.activateTab(id),
           (id) => void this.closeTab(id),
           () => this.openNewTab(),
+          (fromId, ins) => this.reorderTab(fromId, ins),
         );
         break;
 
@@ -540,6 +543,7 @@ export class TabManager {
         this.renderer = new VerticalTabStrip(
           (id) => this.activateTab(id),
           (id) => void this.closeTab(id),
+          (fromId, ins) => this.reorderTab(fromId, ins),
         );
         break;
     }
@@ -1086,6 +1090,46 @@ export class TabManager {
    *
    * @param oneBased  1-based tab position. 1 = leftmost, 9 = last tab.
    */
+  /**
+   * Moves the tab identified by fromId, inserting it before the tab identified
+   * by insertBeforeId. Pass null to append it at the end of the tab list.
+   *
+   * The active tab follows its id across the reorder: if the active tab is
+   * moved, it remains active; if a non-active tab is moved, the active index
+   * is recalculated to point at the same tab as before.
+   *
+   * @param fromId        ID of the tab being moved.
+   * @param insertBeforeId  ID of the tab to insert before, or null to append.
+   */
+  reorderTab(fromId: string, insertBeforeId: string | null): void {
+    const fromIdx = this.tabs.findIndex((t) => t.id === fromId);
+    if (fromIdx === -1) return;
+    if (fromId === insertBeforeId) return;
+
+    const activeId = this.tabs[this.activeIndex]?.id;
+    const [moved] = this.tabs.splice(fromIdx, 1);
+
+    if (insertBeforeId === null) {
+      this.tabs.push(moved);
+    } else {
+      // Re-locate insertBeforeId in the now-shorter array (index may have shifted).
+      const insertAt = this.tabs.findIndex((t) => t.id === insertBeforeId);
+      if (insertAt === -1) {
+        this.tabs.push(moved);
+      } else {
+        this.tabs.splice(insertAt, 0, moved);
+      }
+    }
+
+    if (activeId) {
+      const newIdx = this.tabs.findIndex((t) => t.id === activeId);
+      if (newIdx !== -1) this.activeIndex = newIdx;
+    }
+
+    this._notifyRenderer();
+    void this.saveSession();
+  }
+
   /** Activates the tab to the left of the active one, wrapping around. */
   activatePrevTab(): void {
     if (this.tabs.length < 2) return;

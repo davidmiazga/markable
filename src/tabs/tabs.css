@@ -643,3 +643,15 @@
   background: var(--border-color, rgba(128, 128, 128, 0.15));
   margin: 4px 0;
 }
+
+/* ── Drag-to-reorder ───────────────────────────────────────────────────────── */
+
+.tab-insert-line {
+  position: fixed;
+  z-index: 9998;
+  pointer-events: none;
+  width: 2px;
+  background: var(--accent, #0078d4);
+  border-radius: 1px;
+  box-shadow: 0 0 4px var(--accent, #0078d4);
+}

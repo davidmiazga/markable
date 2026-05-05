@@ -36,6 +36,7 @@ import "../tabs.css";
 import type { TabEntry, ITabRenderer } from "../tab-types";
 import { TAB_SOFT_WARNING_THRESHOLD } from "../tab-types";
 import { showTabContextMenu, closeTabContextMenu } from "../tab-context-menu";
+import { attachTabReorderDrag } from "../tab-reorder-drag";
 
 export const LEFT_STRIP_ID = "tab-vertical-left";
 export const RIGHT_STRIP_ID = "tab-vertical-right";
@@ -67,15 +68,18 @@ export class VerticalTabStrip implements ITabRenderer {
 
   private readonly onActivate: (id: string) => void;
   private readonly onClose: (id: string) => void;
+  private readonly onReorder: ((fromId: string, insertBeforeId: string | null) => void) | undefined;
 
   // ── Constructor ───────────────────────────────────────────────────────────────
 
   constructor(
     onActivate: (id: string) => void,
     onClose: (id: string) => void,
+    onReorder?: (fromId: string, insertBeforeId: string | null) => void,
   ) {
     this.onActivate = onActivate;
     this.onClose = onClose;
+    this.onReorder = onReorder;
   }
 
   // ── ITabRenderer interface ────────────────────────────────────────────────────
@@ -203,6 +207,7 @@ export class VerticalTabStrip implements ITabRenderer {
     col.setAttribute("aria-selected", String(isActive));
     col.setAttribute("aria-label", tab.title);
     col.setAttribute("tabindex", "0");
+    col.dataset.tabId = tab.id;
 
     // Close button. stopPropagation prevents the outer click from also firing
     // onActivate when the user closes a tab (FR-5.2).
@@ -221,6 +226,13 @@ export class VerticalTabStrip implements ITabRenderer {
     textSpan.className = "tab-vertical-text";
     textSpan.textContent = tab.title;
     col.appendChild(textSpan);
+
+    // Drag-to-reorder: wire pointer drag when the callback is available.
+    // Vertical strips span two separate DOM containers (left and right), so
+    // the selector matches columns in both strips via closest().
+    if (this.onReorder) {
+      attachTabReorderDrag(col, tab.id, ".tab-vertical-col[data-tab-id]", this.onReorder);
+    }
 
     // Clicking anywhere on the column (outside the close button) activates it.
     col.addEventListener("click", () => {
