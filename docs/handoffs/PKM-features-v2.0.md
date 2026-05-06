@@ -2,7 +2,7 @@
 
 > This is the implementation plan for FC3, built from `PKM-features.md` (original vision doc).  
 > Status: **Draft — not yet started**  
-> Last updated: 2026-05-05
+> Last updated: 2026-05-05 (B2/B3/B4 resolved)
 
 ---
 
@@ -18,16 +18,42 @@ These features build directly on what FC2 produced: vault index, tag browser, kn
 
 ## One-Time Infrastructure First
 
+Two plugin-system extensions needed before FC3 features begin.
+
+### Infra A — Custom Render Tab in Plugin API
+
 Several FC3 features (Shelves Grid, Notecards full-screen, Image Vaults, Boards) work best as plugins but need to render in the main content area. The plugin API today only supports sidebar panels.
 
-**Add `openCustomRenderTab` to the plugin API** — one PR, ~100 lines.
+**Add `openCustomRenderTab` to the plugin API.**
 
 - Add `kind: "custom"` to `TabKind` union in `src/tabs/tab-types.ts`
 - `TabEntry` gains `renderFn?: (container: HTMLElement) => void`
-- `TabManager._applyActiveTab()` calls `renderFn` for custom tabs (mirrors media-viewer pattern)
+- `TabManager._applyActiveTab()` hides the shared EditorView and calls `renderFn(container)` for custom tabs — same hide/show pattern as `#media-viewer`; `#custom-tab-host` is a permanent DOM fixture like `#media-viewer`
+- Custom tabs are **never serialised** to session (excluded from `saveSession`/`init` restore)
 - `markable-plugin-api.ts` exposes `openCustomRenderTab(title, renderFn, opts?)`
+- Every `switch (tab.kind)` across the codebase must handle `"custom"` (exhaustive check)
 
 This unlocks Notecards full-screen, Shelves Grid, Image Vaults, and Boards as pure plugins — no main-bundle changes per feature after this.
+
+### Infra B — Plugin Dependency System
+
+Smart Folders and Stacks are their own plugins (separate IIFE bundles) rather than code piled into the file browser monolith. They declare a parent dependency so the plugin panel can enforce ordering.
+
+**Add `dependsOn?: string[]` to `UnifiedPlugin` interface.**
+
+- `UnifiedPlugin.dependsOn?: string[]` — list of plugin IDs required to be enabled
+- `PluginManager.enable(id)` checks that all `dependsOn` plugins are enabled first; if not, it refuses and shows an error
+- `PluginManager.disable(id)` auto-disables any plugins whose `dependsOn` includes this id before disabling it
+- Plugin panel renders dependent plugins **indented under their parent** with a "Requires: File Browser" tooltip; they are greyed out and un-togglable while the parent is disabled
+
+Example:
+```typescript
+// smart-folders.plugin.ts
+readonly id = "smart-folders";
+readonly dependsOn = ["file-browser"];
+```
+
+This keeps the file browser plugin clean and lets users enable only what they want.
 
 ---
 
@@ -88,15 +114,15 @@ This unlocks Notecards full-screen, Shelves Grid, Image Vaults, and Boards as pu
 **Original vision:** "Small md files that can be pointers to other files. Visual style for quick yaml input, footnotes, shorter content."
 
 **Implementation plan:**
-- New plugin `src/plugins/notecards/`
-- Sidebar panel: search bar, tag filter chips, card grid
-- Each card: title, first ~80 words of content, tag chips, modified date — rendered from `VaultIndexEntry` (no extra file reads for the list)
+- New plugin `src/plugins/notecards/` — standalone, no `dependsOn`
+- Sidebar panel with: search/filter bar, tag filter chips, card grid
+- Each card is **metadata-only** (no body text preview — lightweight, no file reads on render): title, tags, modified date, and any single-value YAML fields present (e.g. `category`, `status`) sourced from `window.__MARKABLE_META__` universal field scanner results
 - Click card → `openFileInTab`
 - "Focused folder" mode: pin the panel to a specific folder subtree
 - Quick tag edit: hover a tag chip → popover with checkbox list from vault vocabulary, writes back via `write_file`
-- Full-screen button → `openCustomRenderTab` for an expanded notecards view
+- Full-screen button → `openCustomRenderTab` for an expanded grid view
 
-**Reuses:** `VaultIndexEntry`, tag vocabulary, `__MARKABLE_TAB_MANAGER__.openFileInTab`  
+**Reuses:** `VaultIndexEntry`, `window.__MARKABLE_META__` for YAML field values, tag vocabulary, `openFileInTab`  
 **Files:** New `src/plugins/notecards/notecards.plugin.ts`  
 **Complexity:** Medium
 
@@ -196,14 +222,14 @@ These issues were identified before any feature begins. Each one needs an explic
 **B1 — Custom render tab is more than "~100 lines"**  
 The infrastructure step needs to explicitly specify: (1) what happens to the shared EditorView when a custom tab is active (it must be hidden, same as the media viewer pattern), (2) the container lifecycle — when is `renderFn` called, when is the container destroyed, (3) session restore must explicitly skip custom tabs (they can't be serialised). Every Tier 2+ feature depends on this being right.
 
-**B2 — Smart Folders YAML field filtering: `VaultIndexEntry` has no arbitrary YAML fields**  
-`VaultIndexEntry` only stores `tags: string[]` from the `tags:` front-matter key. Filtering by `yamlField: "status"` / `yamlValue: "draft"` is impossible without either (a) extending the Rust index builder to store a fixed-field allowlist as `frontmatter: HashMap<String, String>`, or (b) restricting Smart Folders v1 to tags-only. Decision needed before Requirements.
+**B2 — Smart Folders YAML field filtering** ✅ *Resolved: tags-only for v1.*  
+Smart Folders v1 filters against `VaultIndexEntry.tags` only. No Rust index schema change needed.
 
-**B3 — Notecards "first ~80 words of content" cannot come from `VaultIndexEntry`**  
-The index stores no content preview. Options: (a) add a `preview: string` field to the Rust index builder (first ~200 chars of body, stripped of Markdown), or (b) lazy-read files on card render (slow for large vaults). Option (a) is the right call but it changes the index schema — all cached indexes on disk become stale on upgrade. Plan must pick one.
+**B3 — Notecards content preview** ✅ *Resolved: metadata-only cards, no body text.*  
+Cards show title + tags + modified date + common YAML field values (category, status, etc.) sourced from `window.__MARKABLE_META__`. Zero file reads on render. `VaultIndexEntry` schema unchanged.
 
-**B4 — File browser plugin decomposition decision needed before Tier 1 starts**  
-The file browser plugin is already a large monolith. Smart Folders and Stacks both add module-level state and render sections to it. Without an explicit architectural decision (keep monolith vs. extract to sub-modules), Tier 1 will compound the problem. This needs a call before `active_task.md` is written for Feature #1.
+**B4 — File browser plugin decomposition** ✅ *Resolved: plugin dependency system.*  
+Smart Folders and Stacks are separate plugins declaring `dependsOn: ["file-browser"]`. Plugin panel greys them out while file browser is disabled. File browser monolith stays clean. See Infra B above.
 
 ### 🟡 Gaps — address in Requirements for the relevant feature
 
