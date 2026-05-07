@@ -467,6 +467,7 @@ export function buildAutoRenderExtension(deps: LayoutDeps): Extension {
     const layoutField = yamlMatch[1].match(/^layout:\s*(.+)$/m);
     if (!layoutField) return;
     const layoutName = layoutField[1].trim().replace(/["']/g, "");
+    if (!layoutName || layoutName.toLowerCase() === "none") return;
 
     const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
     const target = all.find(
