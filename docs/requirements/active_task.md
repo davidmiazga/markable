@@ -1,167 +1,348 @@
 ---
-title: Clipboard Image Paste
-last-updated: "2026-05-05"
+title: Layouts Feature
+last-updated: "2026-05-06"
 review-cadence-days: 14
 status: active
 ---
 
-# Clipboard Image Paste
+# Layouts Feature
 
-## Context
+## Summary
 
-When a user copies an image (screenshot, image from a browser, copied from Finder, etc.) and presses Cmd-V while the Markable editor is focused, the app currently does nothing useful with image clipboard data. The text paste path falls through to CodeMirror's default paste handler, which ignores binary data.
-
-This feature intercepts the browser `paste` DOM event before CodeMirror's own paste handler runs, detects an image MIME type on the `ClipboardEvent.clipboardData`, writes the PNG bytes to disk via a new Rust command, and inserts a Markdown image reference at the caret.
+As a user I want to render vault content as rich styled HTML using Handlebars-style `.layout.md` templates so that I can create custom publication views (Wikipedia-style pages, book shelves, dashboards) without leaving Markable.
 
 ---
 
-## Functional Requirements
+## Part A — Custom Render Tab (Infrastructure Prerequisite)
 
-### FR-01 — Image detection and interception
+Part A adds a third tab kind (`"custom"`) to the tab system so that any plugin (including the Layouts plugin built in Part B) can render arbitrary HTML in the main content area without touching the CodeMirror editor.
 
-When Cmd-V is pressed:
-- The feature inspects `ClipboardEvent.clipboardData.items` for an item whose `type` starts with `image/`.
-- If such an item is found AND the editor is focused AND an active tab is open, the feature takes ownership of the event (`event.preventDefault()`).
-- If any of those three conditions is not met, the event is NOT intercepted and falls through to the browser/CM6 default paste handling.
+---
 
-### FR-02 — File naming
+### Functional Requirements
 
-The image filename is always `YYYYMMDD-HHmmss.png` where the timestamp is the local wall-clock time at the moment of paste, formatted as:
-- `YYYY` — 4-digit year
-- `MM`   — 2-digit month (zero-padded)
-- `DD`   — 2-digit day (zero-padded)
-- `HH`   — 2-digit 24-hour hour (zero-padded)
-- `mm`   — 2-digit minute (zero-padded)
-- `ss`   — 2-digit second (zero-padded)
+**FR-01 — Extend TabKind union**
 
-Example: `20260505-143022.png`.
-
-The extension is always `.png` regardless of the source MIME type (e.g. `image/jpeg` from the clipboard is still written as `.png`).
-
-### FR-03 — Vault-active path: write to `assets/`
-
-When a vault is active (`vaultManager.getActiveVault()` returns a non-null entry):
-- The destination path is `{vaultRoot}/assets/{filename}` where `vaultRoot` is `vault.rootPaths[0]`.
-- If the `assets/` subdirectory does not exist, it is created before writing (via the existing `ensure_directory` bridge call).
-- The PNG bytes are written atomically via the new `write_binary_file` Rust command (temp-file-swap, identical pattern to `write_file`).
-- The Markdown image snippet `![](assets/{filename})` is inserted at `view.state.selection.main.head` in the active CodeMirror view.
-
-### FR-04 — No-vault path: native Save dialog
-
-When no vault is active (`vaultManager.getActiveVault()` returns null):
-- A native save-file dialog is shown, pre-populated with `{filename}` and filtered to PNG files only.
-- If the user cancels the dialog, the operation is aborted silently — no insertion, no error shown.
-- If the user confirms a path, the PNG bytes are written atomically to the chosen absolute path.
-- The Markdown snippet to insert is computed as follows:
-  - If the active tab has a non-null `filePath` AND the chosen image path shares the same parent directory as the active file, the snippet is `![](assets/{filename})` using just the filename (relative, same-directory form).
-  - If the active tab has no `filePath` (Untitled), or if the image path is in a different directory, the snippet is `![]({absoluteImagePath})`.
-
-### FR-05 — CM6 insertion
-
-The Markdown snippet is inserted at the cursor position using:
+`TabKind` in `src/tabs/tab-types.ts` gains the value `"custom"`:
 
 ```
-view.dispatch({
-  changes: {
-    from: view.state.selection.main.head,
-    insert: "![](assets/YYYYMMDD-HHmmss.png)",
-  },
-  userEvent: "input.paste.image",
-  scrollIntoView: true,
-})
+export type TabKind = "editor" | "media" | "custom";
 ```
 
-The cursor is placed immediately after the closing `)` of the snippet.
+**FR-02 — renderFn field on TabEntry**
 
-### FR-06 — New Rust command: `write_binary_file`
+`TabEntry` in `src/tabs/tab-types.ts` gains an optional field:
 
-A new Tauri command `write_binary_file` is added to `src-tauri/src/commands/io.rs`:
-- Signature: `write_binary_file(path: String, data: Vec<u8>) -> Result<(), String>`
-- Uses the identical temp-file-swap atomic write pattern as `write_file`.
-- Registered in `tauri::generate_handler![]` in `src-tauri/src/lib.rs`.
-- Exported from `src-tauri/src/commands/mod.rs`.
+```
+renderFn?: (container: HTMLElement) => void;
+```
 
-### FR-07 — TypeScript bridge wrapper
+- Only present when `kind === "custom"`.
+- Never serialized to session storage.
+- `renderFn` is called once by `TabManager` immediately after the `#custom-tab-host` element is activated and cleared.
 
-A typed wrapper `writeBinaryFile(path: string, data: number[]) -> Promise<FileResult<void>>` is added to `src/lib/bridge.ts`. It calls `invoke("write_binary_file", { path, data })`.
+**FR-03 — Permanent #custom-tab-host DOM element**
 
-The `data` parameter is `number[]` (an array of unsigned byte values 0–255) because Tauri's `invoke()` serializes JavaScript `Uint8Array` as a JSON array of integers when the Rust side declares `Vec<u8>`.
+A `<div id="custom-tab-host">` element is added to `index.html` as a direct sibling of `#media-viewer`. It is always present in the DOM. Visibility is controlled exclusively via CSS (see FR-05). It is never removed or recreated.
 
-### FR-08 — Save dialog for no-vault path
+**FR-04 — openCustomRenderTab method on TabManager**
 
-A new `saveImageDialog` function is added to `src/lib/dialogs.ts` (or reuses `saveFileDialog` with an override filter). It:
-- Opens the native save dialog filtered to PNG files only.
-- Pre-populates the filename with the generated `YYYYMMDD-HHmmss.png` value.
-- Returns `DialogResult` (same discriminated union as other dialog functions).
+`TabManager` gains a public method:
 
-### FR-09 — Capability grant
+```
+openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void
+```
 
-`src-tauri/capabilities/default.json` must include any new permission entries required by `write_binary_file`. Because `write_binary_file` is a custom Tauri command (not a plugin permission), no new capability entry is required beyond those already present for `write_file`. However, if `tauri-plugin-clipboard-manager` is used to read image bytes (see Design Constraint DC-02), the capability entry `clipboard-manager:allow-read-image` must be added.
+Behaviour:
+- Creates a new `TabEntry` with `kind: "custom"`, the given `title`, `renderFn`, `isDirty: false`, `filePath: null`, `doc: ""`, `scrollTop: 0`.
+- Appends the entry to `this.tabs` and activates it.
+- Clears `#custom-tab-host` innerHTML, then calls `renderFn(hostEl)`.
+- If a custom tab with the identical `title` already exists, it is replaced in-place (same index, new `renderFn`); the tab strip updates but does not grow.
 
-### FR-10 — Listener location
+**FR-05 — CSS: has-custom-tab class**
 
-The `paste` listener is registered on `document` (not on the editor DOM node) at the capture phase inside `initApp()` in `src/main.ts`, placed immediately after the `document.addEventListener("keydown", ...)` block. It must be registered after `editor` is confirmed non-null and after `tabManager.init()` completes.
+When the active tab has `kind: "custom"`, `TabManager` adds the class `has-custom-tab` to `<body>` (or to `#app-root` — Architect to decide). CSS rules driven by this class:
 
-### FR-11 — Read-only tab guard
+- Hides `#editor` (the CodeMirror wrapper).
+- Hides `#media-viewer`.
+- Shows `#custom-tab-host` (default `display: none`).
 
-If the active tab is a read-only content tab (e.g. a Help file), the paste must not insert into it. Guard: check `tabManager.getActiveTab()?.kind === "editor"` before intercepting.
+When the active tab is not `"custom"`, the class is removed and the original layout is restored.
+
+**FR-06 — No session persistence for custom tabs**
+
+Custom tabs are never included in the tab session array written to `settings.json`. On session restore, any stale `"custom"` kind entries (should not exist, but defensively handled) are silently skipped.
+
+**FR-07 — No dirty-check on close**
+
+When a custom tab is closed, `TabManager.closeTab()` skips the unsaved-changes confirm dialog. Custom tabs are always considered clean.
+
+**FR-08 — openCustomRenderTab on MarkablePluginAPI**
+
+`MarkablePluginAPI` in `src/plugins/markable-plugin-api.ts` gains:
+
+```
+openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void;
+```
+
+The implementation delegates to `tabManager.openCustomRenderTab()`. The `tabManager` singleton is accessible from `markable-plugin-api.ts` (same import pattern as the existing sidebar delegation).
+
+**FR-09 — window.__MARKABLE_OPEN_CUSTOM_TAB__ global**
+
+`src/main.ts` (in the globals setup block, after `tabManager.init()`) sets:
+
+```
+window.__MARKABLE_OPEN_CUSTOM_TAB__ = (title, renderFn) => tabManager.openCustomRenderTab(title, renderFn);
+```
+
+This allows IIFE plugins (which cannot import `tabManager` from TypeScript) to open custom tabs via the window global.
+
+**FR-10 — window.__MARKABLE_RENDER_MD__ global**
+
+`src/main.ts` sets:
+
+```
+window.__MARKABLE_RENDER_MD__ = (md: string) => marked.parse(md);
+```
+
+`marked` is already imported in `live-preview.ts`. The Architect must determine whether to re-import it in `main.ts` or expose it from `live-preview.ts`. This gives IIFE plugins access to the same `marked` instance used by the editor so output is consistent.
+
+**FR-11 — window.__MARKABLE_ACTION_EXTENSIONS__ global**
+
+`src/main.ts` sets:
+
+```
+window.__MARKABLE_ACTION_EXTENSIONS__ = new Map<string, () => void>();
+```
+
+The `handleAction()` `default` branch is extended: after the existing `__MARKABLE_COMMANDS__` lookup, also check `__MARKABLE_ACTION_EXTENSIONS__`:
+
+```
+const ext = (window as any).__MARKABLE_ACTION_EXTENSIONS__;
+if (ext instanceof Map && ext.has(action)) {
+  ext.get(action)!();
+  return;
+}
+```
+
+This allows IIFE plugins to register arbitrary action IDs that `handleAction()` will dispatch to their callbacks without requiring changes to the switch statement.
 
 ---
 
-## Non-Functional Requirements
+## Part B — Layouts Engine + Plugin
 
-### NFR-01 — Performance
-
-The `Blob.arrayBuffer()` call and the Tauri `invoke` must not block the UI thread. Both are async; the paste handler returns a `Promise`. The editor remains interactive during the write (no spinner or blocking modal is shown for vault-active pastes).
-
-### NFR-02 — Error visibility
-
-On write failure (Rust returns an error string), a browser `alert()` is shown with a human-readable message. This is consistent with existing error handling in `tabManager.saveActiveTab()`.
-
-### NFR-03 — Filename collision handling
-
-If a file already exists at `{vaultRoot}/assets/YYYYMMDD-HHmmss.png`, the atomic rename (`fs::rename`) on Rust will silently overwrite it (POSIX semantics). This is acceptable because same-second collisions are astronomically unlikely and the overwritten file is another paste of the same session. No suffix counter is required at this stage.
-
-### NFR-04 — Non-PNG clipboard images
-
-If the clipboard item's MIME type is not `image/png` (e.g. `image/jpeg`, `image/gif`, `image/webp`), the image bytes are still written with a `.png` extension. The browser `Blob` API is used to read the raw bytes as-is; no transcoding is performed. The file extension is `.png` regardless of actual encoding. This is an explicit simplification — the Architect may revisit PNG-only transcoding in a follow-up.
-
-### NFR-05 — No plugin IIFE boundary
-
-This feature is implemented entirely in the main bundle (`src/main.ts` + `src/lib/bridge.ts` + `src-tauri/src/commands/io.rs`). It is NOT implemented as a plugin IIFE. Rationale: it needs direct access to the `editor` variable, `vaultManager`, and `tabManager`, all of which are main-bundle singletons.
-
-### NFR-06 — Tests
-
-Unit tests cover:
-- Filename generation (`YYYYMMDD-HHmmss.png`) for boundary times (midnight, end-of-month).
-- The relative vs. absolute path computation for the no-vault dialog path.
-- The fall-through guard (non-image clipboard item must not intercept).
-- Focus/tab guard (no active tab or read-only tab must not intercept).
-- Rust `write_binary_file` — success, parent-missing error, permission-denied error (mirroring `write_file` tests).
+Part B delivers the `.layout.md` template system and the `layouts.plugin.ts` IIFE plugin that drives it.
 
 ---
 
-## Design Constraints
+### Functional Requirements
 
-### DC-01 — No `invoke()` calls outside `bridge.ts`
+**FR-12 — Layout file location and format**
 
-All Tauri command calls must go through `src/lib/bridge.ts`. The paste handler in `main.ts` calls `writeBinaryFile(...)` from `bridge.ts`, not `invoke()` directly.
+Layout files are stored at `{vaultRoot}/VaultSettings/layouts/{name}.layout.md`.
 
-### DC-02 — Image bytes from `ClipboardEvent`, not Tauri clipboard plugin
+- `VaultSettings/` is already excluded from the vault index (no change needed to exclusion logic).
+- Each file has YAML frontmatter with required fields `name` (string), `description` (string), and `applies-to` (`"single"` | `"collection"` | `"any"`).
+- The file body is HTML with embedded `{{ }}` template expressions.
 
-The PNG bytes are read from `ClipboardEvent.clipboardData.items[n].getAsFile()` and converted to `Uint8Array` via `Blob.arrayBuffer()`. This is the standard browser Clipboard API and requires no new Tauri plugin permission for reading. The existing `tauri-plugin-clipboard-manager` handles text only and is not extended here.
+**FR-13 — Template engine: double-brace escaped output**
 
-### DC-03 — Interaction with `pasteURLHandler`
+`{{variable.path}}` resolves the dot-separated property path on the current data context and outputs HTML-escaped text. Missing paths resolve to `""` (empty string, not an error, not thrown).
 
-The existing `pasteURLHandler` CM6 extension (`src/editor/format.ts`, `Prec.highest`) intercepts paste of a URL-shaped text when text is selected. The new image paste listener is on `document` at the capture phase and fires before any CM6 DOM event handler. For an image-only clipboard (no `text/plain` item), `pasteURLHandler` will never see a text item and will return `false` harmlessly. For mixed clipboard data (image + text), the document-level listener takes ownership first if it detects an image. There is no conflict.
+**FR-14 — Template engine: triple-brace raw output**
 
-### DC-04 — Atomic write mandatory
+`{{{variable.path}}}` outputs the resolved value without HTML escaping (raw HTML pass-through). Missing paths resolve to `""`.
 
-`write_binary_file` must use the same temp-file-swap pattern as `write_file`. Direct `fs::write(path, data)` is prohibited.
+**FR-15 — Template engine: pipe filters**
 
-### DC-05 — `vaultRoot` definition
+Pipe filters are applied via `{{value | filterName}}` or `{{value | filterName:arg}}`:
 
-For a multi-root vault, `vault.rootPaths[0]` is always used as the single `assets/` parent. Multi-root vaults are an advanced edge case; this simplification is explicitly accepted for v1 of this feature.
+| Filter | Behaviour |
+|---|---|
+| `date` | Formats a unix-ms or ISO string as a human-readable local date |
+| `upper` | Converts string to uppercase |
+| `lower` | Converts string to lowercase |
+| `truncate:N` | Truncates string to N characters, appending `…` if truncated |
+| `join:", "` | Joins an array with the given separator string |
+
+An unknown filter name outputs the literal `[unknown filter: filterName]` inline (not an error thrown).
+
+**FR-16 — Template engine: #if block**
+
+`{{#if expr}}...{{/if}}` conditionally renders the block body. `expr` is a dot-path on the context. The block renders when the resolved value is truthy (non-empty string, non-zero number, non-empty array, non-null object).
+
+**FR-17 — Template engine: #each block**
+
+`{{#each collection}}...{{/each}}` iterates over arrays or plain objects.
+
+- For arrays: each iteration exposes `this` (the current item) and `@index` (zero-based integer).
+- For plain objects: each key-value pair exposes `@key` (string) and `this` (the value).
+- Nested field access within the block uses `this.field`.
+
+**FR-18 — Template engine: #where block**
+
+`{{#where collection field operator value}}...{{/where}}` filters a collection before iterating. Supported operators:
+
+| Operator | Matches when |
+|---|---|
+| `eq` | `item[field] === value` (string comparison) |
+| `neq` | `item[field] !== value` |
+| `contains` | `String(item[field]).includes(value)` |
+| `hasTag` | `item.tags` array includes `value` |
+
+**FR-19 — Template engine: embed helper**
+
+`{{embed "path/to/file.md"}}` reads the file at the given path relative to the vault root, renders it as HTML via `marked.parse`, and inlines the HTML output. On read failure, renders `<span class="layout-error">Failed to load: {path}</span>`.
+
+**FR-20 — Template engine: partial helper**
+
+`{{partial "partials/name.md"}}` loads and renders a sub-template from `VaultSettings/layouts/partials/`. Partials are themselves full `.md` layout files (same syntax, same data context). Recursive depth is capped at 3 levels. When the cap is reached, the partial call renders `<!-- partial depth limit reached -->`.
+
+**FR-21 — Template data context**
+
+The following top-level context object is available in every template render:
+
+| Key | Type | Description |
+|---|---|---|
+| `file` | object or null | Present when a single file triggered the render (see below) |
+| `vault` | object | Always present when a vault is active |
+| `meta` | object | Always present (may have empty arrays) |
+
+`file` sub-fields (when present):
+
+| Field | Source |
+|---|---|
+| `file.title` | `VaultIndexEntry.title` |
+| `file.content` | Raw Markdown string (read from disk) |
+| `file.rendered` | HTML string from `marked.parse(file.content)` |
+| `file.tags` | `VaultIndexEntry.tags` array |
+| `file.yaml` | Parsed YAML frontmatter object |
+| `file.path` | `VaultIndexEntry.path` (absolute) |
+| `file.name` | `VaultIndexEntry.name` (stem without extension) |
+| `file.modified` | `VaultIndexEntry.modified` (unix ms) |
+
+`vault` sub-fields:
+
+| Field | Source |
+|---|---|
+| `vault.files` | `VaultIndex.entries` (`VaultIndexEntry[]`) |
+| `vault.name` | `VaultEntry.name` |
+| `vault.directories` | `VaultIndex.directories` (string array) |
+
+`meta` sub-fields:
+
+| Field | Source |
+|---|---|
+| `meta.tags` | `MetaStore.tags` |
+| `meta.fields` | `MetaStore.fields` |
+
+**FR-22 — Sidebar panel: layout browser**
+
+The layouts plugin registers a sidebar panel (id `"layouts-panel"`) via `api.registerSidebarPanel()`. The panel contains:
+
+- A scrollable list of all discovered `.layout.md` files in `VaultSettings/layouts/` (display name from frontmatter `name` field, falling back to filename stem).
+- An "Apply to current file" button below the list. When clicked, renders the selected layout with the current active file as the `file` context and opens a custom render tab.
+- If no vault is active, the panel shows a placeholder message: "Open a vault to use layouts."
+- If no active file is open and the selected layout has `applies-to: single`, the button is disabled with tooltip "Open a file first."
+
+**FR-23 — Command bar integration**
+
+On `onEnable`, the plugin registers an action via `__MARKABLE_ACTION_EXTENSIONS__` with id `"layouts-open-picker"` and also pushes a command entry to `__MARKABLE_COMMANDS__`:
+
+```
+{ id: "layouts-open-picker", name: "Open with Layout…", action: () => { /* open picker modal */ } }
+```
+
+**FR-24 — Layout picker modal**
+
+The layout picker modal is a keyboard-navigable overlay (matching the visual style of the templates picker in `templates.plugin.ts`):
+
+- Lists all available layouts.
+- Supports ArrowUp/ArrowDown navigation, Enter to apply, Escape to dismiss.
+- Backdrop click dismisses.
+- Shows the layout `description` as a subtitle beneath the name.
+- Only one picker may be open at a time (singleton guard).
+
+**FR-25 — Auto-render on file open**
+
+The plugin registers a CM6 `updateListener` extension via `api.addExtensions()`. When the active file path changes (detected via `update.docChanged` + frontmatter re-parse, or TabManager activation event via `__MARKABLE_TAB_MANAGER__`) and the active file's YAML frontmatter contains a `layout: name` field, the plugin automatically opens the named layout in a custom render tab. If the named layout does not exist, the auto-render is silently skipped (not an error).
+
+**FR-26 — First-run: bundled starter layouts**
+
+On `onEnable`, if `VaultSettings/layouts/` does not exist or is empty, the plugin writes two bundled starter layout files:
+
+1. `wikipedia.layout.md` — Two-column layout: rendered body content on the left, YAML infobox on the right, title as `<h1>`, tag chips below the title, serif body font.
+2. `bookshelf.layout.md` — Responsive card grid showing all vault files as clickable cards (title + tags). `applies-to: collection`.
+
+Writing is best-effort: if the write fails (no vault active, permissions), the plugin continues without error.
+
+**FR-27 — Click-to-open via data-path attributes**
+
+The template engine's post-render hook scans the rendered HTML container for all elements with a `data-path` attribute and attaches click listeners that call `__MARKABLE_TAB_MANAGER__.openFileInTab(path)`. This is the only mechanism for in-layout file navigation. No `<script>` tags are executed in templates.
+
+---
+
+### Non-Functional Requirements
+
+**NFR-01 — Render performance**
+
+Template rendering (parse + substitute + DOM write) must complete in under 200 ms for a vault of up to 500 files. Embed file reads are performed in parallel (via `Promise.all`) rather than sequentially.
+
+**NFR-02 — No script injection**
+
+Template engine must never execute `<script>` tags found in template bodies or embed outputs. `innerHTML` assignment may be used for the final render output but `<script>` tags must be stripped from the rendered HTML before insertion. Stripping is performed by iterating `querySelectorAll("script")` on a detached `div` and removing all matches before appending to the live DOM.
+
+**NFR-03 — XSS from double-brace output**
+
+Double-brace (`{{ }}`) resolved values are HTML-escaped before insertion. Only triple-brace (`{{{ }}}`) bypasses escaping. This is a deliberate opt-in by the template author, not a default behaviour.
+
+**NFR-04 — Error visibility**
+
+Template engine errors (unknown filter, embed failure, partial depth exceeded) are rendered inline as visually distinct `<span class="layout-error">` elements so the user sees exactly which expression failed without the whole render aborting.
+
+**NFR-05 — Theme compatibility**
+
+All plugin CSS uses existing CSS custom properties (`--bg-primary`, `--text-primary`, `--border-color`, etc.) for colors. The two starter layouts embed their own minimal inline styles for structure (two-column, card grid) but use CSS variables for color.
+
+**NFR-06 — IIFE boundary**
+
+The layouts plugin is built as an IIFE `.js` file (`src/plugins/layouts/layouts.plugin.ts` compiled to `src-tauri/plugins/core/layouts.js`). It must not import from `@tauri-apps/api` directly — all Tauri commands go through `__TAURI_INTERNALS__.invoke`. It must not import TypeScript modules from the main bundle at runtime.
+
+**NFR-07 — No DOM leaks on disable**
+
+`onDisable` must close the picker modal if open, remove injected CSS, delete all window globals registered by the plugin, remove all `__MARKABLE_ACTION_EXTENSIONS__` entries registered by the plugin, and remove the command entry from `__MARKABLE_COMMANDS__`.
+
+---
+
+### Design Constraints
+
+**DC-01 — IIFE plugin boundary**
+
+The layouts plugin runs as a compiled IIFE. It accesses host state only via the documented window globals: `__MARKABLE_OPEN_CUSTOM_TAB__`, `__MARKABLE_RENDER_MD__`, `__MARKABLE_TAB_MANAGER__`, `__MARKABLE_ACTION_EXTENSIONS__`, `__MARKABLE_COMMANDS__`, `__TAURI_INTERNALS__`, `__MARKABLE_META__`. No direct imports from main-bundle TypeScript modules.
+
+**DC-02 — No inline script tags in templates**
+
+Template bodies and embed outputs must not execute JavaScript. The engine strips `<script>` elements post-parse. The `{{embed}}` and `{{partial}}` helpers inherit this constraint.
+
+**DC-03 — marked shared via window global**
+
+The plugin uses `window.__MARKABLE_RENDER_MD__(md)` to convert Markdown to HTML. It must not bundle a second copy of `marked`. This keeps the same slot-ID namespace and rendering behaviour as the editor's live preview.
+
+**DC-04 — Action extensions pattern**
+
+Plugin commands that need to be callable from `handleAction()` (e.g. via keybindings or future native menu items) are registered via `__MARKABLE_ACTION_EXTENSIONS__`. The plugin must not modify the `COMMANDS` array in `src/keybindings/keybindings-panel.ts` directly.
+
+**DC-05 — Template engine is pure TypeScript in the plugin**
+
+The template engine (parse, resolve, render) is implemented entirely within the IIFE plugin file. No server-side or Rust-side rendering. All file reads use `__TAURI_INTERNALS__.invoke("read_file", { path })`.
+
+**DC-06 — VaultSettings/ exclusion**
+
+Layout files live inside `VaultSettings/layouts/`. They must not appear in `vault.files` (the vault index). This exclusion is already implemented; no change to vault indexing is required.
+
+**DC-07 — Custom tab replace-by-title behaviour**
+
+`openCustomRenderTab` with a title that matches an existing custom tab replaces that tab in-place. This prevents the layouts plugin from accumulating duplicate render tabs when the user repeatedly applies the same layout.
 
 ---
 
@@ -169,16 +350,17 @@ For a multi-root vault, `vault.rootPaths[0]` is always used as the single `asset
 
 | Area | Change |
 |---|---|
-| `src-tauri/src/commands/io.rs` | Add `write_binary_file` command |
-| `src-tauri/src/commands/mod.rs` | Export `write_binary_file` |
-| `src-tauri/src/lib.rs` | Register `write_binary_file` in `generate_handler![]` |
-| `src/lib/bridge.ts` | Add `writeBinaryFile` typed wrapper |
-| `src/lib/dialogs.ts` | Add `saveImageDialog` function (or parameterise existing `saveFileDialog`) |
-| `src/main.ts` | Add `document` paste listener in `initApp()` |
-| `src-tauri/capabilities/default.json` | No change required (custom commands carry no capability entry) |
-| `tests/` | New test files for filename generation, path logic, Rust command |
+| `src/tabs/tab-types.ts` | Add `"custom"` to `TabKind`; add `renderFn?` to `TabEntry` |
+| `src/tabs/tab-manager.ts` | Add `openCustomRenderTab()`; CSS class toggle; skip dirty-check for custom tabs; exclude custom tabs from session persist |
+| `src/plugins/markable-plugin-api.ts` | Add `openCustomRenderTab()` to `MarkablePluginAPI` interface and `buildMarkablePluginAPI()` factory |
+| `src/main.ts` | Add `__MARKABLE_OPEN_CUSTOM_TAB__`, `__MARKABLE_RENDER_MD__`, `__MARKABLE_ACTION_EXTENSIONS__` globals; extend `handleAction()` default branch |
+| `index.html` | Add `<div id="custom-tab-host">` sibling to `#media-viewer` |
+| `src/styles.css` (or equivalent) | Add `body.has-custom-tab` rules hiding editor/media-viewer, showing host |
+| `src/plugins/layouts/layouts.plugin.ts` | New file — full IIFE plugin |
+| `src-tauri/plugins/core/layouts.js` | Compiled IIFE output (generated by build step) |
+| No Rust changes | All file I/O uses existing `read_file`, `write_file`, `ensure_directory` commands |
 
-No existing commands, extensions, or plugins are modified. `pasteURLHandler` is unaffected.
+No existing plugins are modified. `templates.plugin.ts` is used as a reference pattern only.
 
 ---
 
@@ -186,44 +368,65 @@ No existing commands, extensions, or plugins are modified. `pasteURLHandler` is 
 
 | # | Scenario | Expected behaviour |
 |---|---|---|
-| EC-01 | Clipboard contains only text (no image item) | Fall through to CM6 default paste. No interception. |
-| EC-02 | Clipboard contains an image AND selected text | Image path wins. Image is written; snippet is inserted at caret (not wrapping selection). The selection is not collapsed first — insertion happens at `selection.main.head`. |
-| EC-03 | No active tab (`tabManager.getActiveTab()` returns null) | Fall through to default paste. No interception. |
-| EC-04 | Active tab is a read-only content tab (Help file) | Fall through. No interception. Do not write any file. |
-| EC-05 | Active tab is a media tab (kind = "media") | Fall through. No interception. |
-| EC-06 | Editor does not have focus (`!view.hasFocus`) | Fall through. Do not intercept. |
-| EC-07 | Vault active but `assets/` directory creation fails (permissions) | `ensure_directory` rejects. Show `alert("Could not create assets directory: {error}")`. Do not insert snippet. |
-| EC-08 | Vault active but `write_binary_file` fails (disk full, permissions) | Rust returns `Err`. Show `alert("Could not save image: {error}")`. Do not insert snippet. |
-| EC-09 | No vault, user cancels the Save dialog | Silent abort. No file written, no snippet inserted, no error shown. |
-| EC-10 | No vault, `write_binary_file` fails after user picks a path | Show `alert("Could not save image: {error}")`. Do not insert snippet. |
-| EC-11 | No vault, active tab is Untitled (no `filePath`) | Absolute path from the dialog is inserted: `![]({absolutePath})`. |
-| EC-12 | No vault, chosen image path is in a different directory than the active file | Absolute path inserted: `![]({absolutePath})`. |
-| EC-13 | No vault, chosen image path is in the same directory as the active file | Relative filename inserted: `![](YYYYMMDD-HHmmss.png)` (no path prefix). |
-| EC-14 | Two pastes within the same second (same `YYYYMMDD-HHmmss`) | Second write atomically overwrites the first file. Both paste insertions reference the same filename. Accepted behaviour per NFR-03. |
-| EC-15 | Clipboard item `getAsFile()` returns null | The `ClipboardItem` reported type `image/*` but produced a null `File`. Treat as non-image. Fall through to default paste. |
-| EC-16 | `Blob.arrayBuffer()` rejects (memory, browser security) | Catch the rejection. Show `alert("Could not read clipboard image data.")`. Do not write or insert. |
-| EC-17 | Image is very large (>50 MB) | No size guard is imposed at this stage. The write proceeds. The Architect may add a size cap as a follow-up. |
-| EC-18 | Vault is active but `vault.rootPaths` is empty | Guard: if `vault.rootPaths.length === 0`, fall through to the no-vault Save dialog path instead. |
-| EC-19 | Active tab is dirty and unsaved | The paste proceeds normally. Dirty state is unaffected; the image file write does not interact with the tab save state. The CM6 insertion will mark the tab dirty via the existing `updateListener`. |
-| EC-20 | The `initApp()` paste listener fires before `editor` is assigned | The listener checks `if (!editor || !editor.hasFocus)` at call time (not at registration time), so a null `editor` causes a safe fall-through. |
-| EC-21 | Multiple image items in one `ClipboardEvent` (e.g. PNG + TIFF) | Use the first item whose `type.startsWith("image/")`. Ignore subsequent image items. |
-| EC-22 | User pastes while the Command Bar overlay is open | The Command Bar steals keyboard focus from the editor; `editor.hasFocus` will be false. The listener falls through to default paste. The overlay handles the event itself. |
-| EC-23 | User pastes while the Find/Replace widget is open | The widget has its own focused input; `editor.hasFocus` will be false. Fall through. |
+| EC-01 | No vault is active when user opens the layouts panel | Panel shows "Open a vault to use layouts." Apply button is absent or disabled. |
+| EC-02 | `VaultSettings/layouts/` directory does not exist | Plugin treats the directory as empty. First-run check writes bundled starters (FR-26). If write fails, no error is shown; panel shows empty state. |
+| EC-03 | Layouts directory exists but contains no `.layout.md` files | Sidebar panel shows empty list. "Apply to current file" button is disabled. Picker modal shows "No layouts found." |
+| EC-04 | A `.layout.md` file has missing or malformed YAML frontmatter | `name` falls back to filename stem; `description` falls back to empty string; `applies-to` defaults to `"any"`. Layout is still listed and selectable. |
+| EC-05 | No active file when user clicks "Apply to current file" for a `single` layout | Button is disabled when `applies-to === "single"` and no active editor file. For `collection` or `any` layouts the button remains enabled and `file` context is null. |
+| EC-06 | Active tab is a custom render tab (not an editor tab) when user triggers "Apply" | The `file` context is null. Layouts with `applies-to: single` show the button as disabled. `collection` layouts render with `file: null`. |
+| EC-07 | `{{embed "path"}}` targets a file outside the vault root | File is read via `read_file` regardless of vault membership. If read fails, inline error span is rendered. |
+| EC-08 | `{{embed}}` or `{{partial}}` reference forms a cycle (A includes B includes A) | Depth counter reaches 3; subsequent calls render `<!-- partial depth limit reached -->`. |
+| EC-09 | `{{partial}}` references a file that does not exist | Renders `<span class="layout-error">Failed to load partial: {path}</span>`. |
+| EC-10 | Template variable path resolves to a non-string value (object, array) | `JSON.stringify` is used for double-brace output of objects/arrays. Triple-brace passes the same string through. |
+| EC-11 | `{{#each}}` over a non-array, non-object value (e.g. a string or number) | Block is silently skipped (zero iterations). |
+| EC-12 | `{{value | join:", "}}` applied to a non-array | Output is the stringified value unchanged (filter is a no-op for non-arrays). |
+| EC-13 | `{{value | truncate:N}}` where N is not a valid integer | Filter is treated as unknown; renders `[unknown filter: truncate:N]`. |
+| EC-14 | Layout picker opened while a render is in progress | Singleton guard prevents duplicate overlays. Opening while the previous render is async is handled by the replace-by-title behaviour (FR-04 / DC-07). |
+| EC-15 | `renderFn` throws during `openCustomRenderTab` | Error is caught; `#custom-tab-host` displays a `<div class="layout-error">Render error: {message}</div>` fallback. The custom tab remains active. |
+| EC-16 | User closes a custom render tab while a file read inside the render is still in-flight | The `_enabled` flag and a per-render cancelled flag prevent stale callbacks from writing to the detached container. |
+| EC-17 | `openCustomRenderTab` called before `tabManager.init()` completes | Guarded by null-check on `this.editorView`; custom tab is queued and opened once init completes, mirroring the existing `addExtensions` queue pattern. |
+| EC-18 | `__MARKABLE_RENDER_MD__` global is not set when plugin enables | Plugin checks for the global and logs a warning; embed/partial rendering degrades to raw Markdown text rather than HTML. No throw. |
+| EC-19 | Layout file's `applies-to` field contains an unrecognised value | Treated as `"any"`. |
+| EC-20 | `{{date}}` filter receives a value that is neither a valid ISO string nor a unix ms number | Filter returns the original value unchanged. |
+| EC-21 | Vault has more than 500 files (index capped) | `vault.files` reflects only the capped set. Template renders what is available; no special error. |
+| EC-22 | Plugin is disabled while a layout render tab is open | The render tab remains in the tab strip (it is a DOM artifact). Clicking into it shows the already-rendered HTML unchanged. The plugin no longer listens for click-to-open events (listeners were added by the engine and remain on the DOM until the tab is closed). |
+| EC-23 | Two plugins both try to register `"layouts-open-picker"` in `__MARKABLE_ACTION_EXTENSIONS__` | Last registration wins (Map semantics). No error is thrown. |
+| EC-24 | `window.__MARKABLE_ACTION_EXTENSIONS__` is not a Map (set incorrectly) | `handleAction()` guards with `instanceof Map`; lookup is skipped and the action falls through to a no-op. |
+| EC-25 | `#custom-tab-host` element is missing from the DOM at render time | `openCustomRenderTab` logs a console error and does not open the tab. The error is non-fatal. |
+| EC-26 | User activates a non-custom tab after viewing a custom tab | `TabManager` removes `has-custom-tab` from body, hides `#custom-tab-host`, restores editor/media-viewer visibility. |
+| EC-27 | Auto-render triggered by frontmatter `layout:` field names a layout that exists but `applies-to: collection` | Auto-render proceeds with `file` context set to the current file's data. The template author is responsible for appropriate use. |
+| EC-28 | `ensureDirectory` for `VaultSettings/layouts/` fails on first-run starter write | Failure is swallowed silently. The plugin continues loading without starters. |
 
 ---
 
 ## Acceptance Criteria Checklist
 
-- [ ] AC-01: Pasting a PNG screenshot with an active vault writes `{vaultRoot}/assets/YYYYMMDD-HHmmss.png` and inserts `![](assets/YYYYMMDD-HHmmss.png)` at the caret.
-- [ ] AC-02: The `assets/` directory is created automatically if it does not exist.
-- [ ] AC-03: Pasting plain text with an active vault falls through to normal CM6 paste behaviour — no file is written.
-- [ ] AC-04: Pasting an image with no active vault shows the native Save dialog pre-populated with the generated filename.
-- [ ] AC-05: Cancelling the Save dialog leaves the editor and filesystem unchanged.
-- [ ] AC-06: Pasting an image in a no-vault scenario where the chosen path is in the same directory as the active file inserts a relative filename-only reference.
-- [ ] AC-07: Pasting an image in a no-vault scenario where the active tab is Untitled inserts the absolute path.
-- [ ] AC-08: Pasting an image when the editor does not have focus does not intercept the event.
-- [ ] AC-09: Pasting an image on a read-only content tab does not intercept the event.
-- [ ] AC-10: `write_binary_file` Rust command uses temp-file-swap and its tests pass.
-- [ ] AC-11: All EC-01 through EC-23 edge cases are covered by automated tests or manual test notes in the spec.
-- [ ] AC-12: `npm run test:run` passes with no regressions to existing tests.
-- [ ] AC-13: `cargo test` passes with new `write_binary_file` tests.
+- [ ] AC-01: `TabKind` includes `"custom"` and `TabEntry` has `renderFn?` field.
+- [ ] AC-02: `TabManager.openCustomRenderTab("My Title", fn)` opens a new tab, clears `#custom-tab-host`, calls `fn(hostEl)`, and adds `has-custom-tab` to body.
+- [ ] AC-03: `has-custom-tab` on body hides `#editor` and `#media-viewer` and shows `#custom-tab-host`.
+- [ ] AC-04: Activating any non-custom tab removes `has-custom-tab` and restores editor visibility.
+- [ ] AC-05: Custom tabs are excluded from session save; restarting the app does not restore them.
+- [ ] AC-06: Closing a custom tab bypasses the unsaved-changes dialog.
+- [ ] AC-07: `MarkablePluginAPI.openCustomRenderTab()` delegates to `tabManager.openCustomRenderTab()`.
+- [ ] AC-08: `window.__MARKABLE_OPEN_CUSTOM_TAB__` is set before plugins load and calls `openCustomRenderTab`.
+- [ ] AC-09: `window.__MARKABLE_RENDER_MD__(md)` returns HTML identical to `marked.parse(md)`.
+- [ ] AC-10: `window.__MARKABLE_ACTION_EXTENSIONS__` is a `Map`; entries registered by plugins are called by `handleAction()`.
+- [ ] AC-11: `openCustomRenderTab` with a duplicate title replaces the existing tab rather than appending a second one.
+- [ ] AC-12: Layout files at `VaultSettings/layouts/*.layout.md` are discovered by the plugin and listed in the sidebar panel.
+- [ ] AC-13: `{{escaped}}` output is HTML-escaped; `{{{raw}}}` is not escaped.
+- [ ] AC-14: All five pipe filters (`date`, `upper`, `lower`, `truncate:N`, `join:", "`) produce correct output.
+- [ ] AC-15: An unknown filter name renders `[unknown filter: X]` inline without throwing.
+- [ ] AC-16: `{{#each vault.files}}{{this.title}}{{/each}}` renders one line per indexed file.
+- [ ] AC-17: `{{#where vault.files tags hasTag "project"}}` correctly filters to tagged files only.
+- [ ] AC-18: `{{embed "relative/path.md"}}` inlines rendered HTML; embed failure renders the error span.
+- [ ] AC-19: `{{partial}}` depth beyond 3 renders the depth-limit comment and does not recurse.
+- [ ] AC-20: `<script>` tags in template output are stripped before DOM insertion.
+- [ ] AC-21: `data-path` attributes on rendered elements receive click handlers that open the file in a new tab.
+- [ ] AC-22: With no vault active, the sidebar panel shows the placeholder message and does not crash.
+- [ ] AC-23: First-run with empty layouts directory writes `wikipedia.layout.md` and `bookshelf.layout.md`.
+- [ ] AC-24: Active file with `layout: wikipedia` in frontmatter automatically opens the Wikipedia layout tab on file open.
+- [ ] AC-25: Disabling the layouts plugin removes `"layouts-open-picker"` from `__MARKABLE_ACTION_EXTENSIONS__` and cleans up DOM, CSS, and the command entry.
+- [ ] AC-26: `renderFn` that throws results in an error fallback in `#custom-tab-host`, not an uncaught exception.
+- [ ] AC-27: All EC-01 through EC-28 edge cases are covered by automated tests or documented manual test notes in the spec.
+- [ ] AC-28: `npm run test:run` passes with no regressions to existing tests.
+- [ ] AC-29: `npm run build:plugins && npm run sync:plugins` successfully compiles and copies `layouts.js`.

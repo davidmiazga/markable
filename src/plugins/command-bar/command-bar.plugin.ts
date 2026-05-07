@@ -3709,8 +3709,8 @@ function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
   if (!row.defined) {
     const addBtn = document.createElement("button");
     addBtn.className = "cb-tag-add-btn";
-    addBtn.textContent = "Add to meta";
-    addBtn.title = `Add "${row.tag}" to the tags vocabulary`;
+    addBtn.textContent = "Add to Properties";
+    addBtn.title = `Add "${row.tag}" to the Properties vocabulary`;
     addBtn.addEventListener("click", (e) => {
       // Prevent the click from also toggling the row expansion.
       e.stopPropagation();
@@ -3812,10 +3812,10 @@ async function handleAddToMeta(tag: string): Promise<void> {
   // eslint-disable-next-line no-control-regex
   const safeName: string = vault.name.replace(/[/:\x00]/g, "_");
   const root: string = vault.rootPaths[0];
-  const metaFilePath = `${root}/${safeName}_meta/${safeName}_tags.md`;
+  const metaFilePath = `${root}/VaultSettings/${safeName}_properties.md`;
 
   // Read existing content (or use initial heading if file doesn't exist yet).
-  let existingContent = "# Tags\n";
+  let existingContent = "## Tags\n";
   try {
     const readResult = await (window as any).__TAURI_INTERNALS__?.invoke?.(
       "read_file", { path: metaFilePath }
@@ -3836,9 +3836,9 @@ async function handleAddToMeta(tag: string): Promise<void> {
   }
 
   const newContent = existingContent.trimEnd() + "\n- " + tag + "\n";
-  const metaDirPath = `${root}/${safeName}_meta`;
+  const metaDirPath = `${root}/VaultSettings`;
 
-  // Ensure the meta folder exists before writing (FR-1: on-demand creation).
+  // Ensure VaultSettings folder exists before writing (on-demand creation).
   // write_file rejects missing parent directories, so ensure_directory must run first.
   try {
     await (window as any).__TAURI_INTERNALS__.invoke("ensure_directory", {
@@ -3898,8 +3898,8 @@ async function handleAddAllToMeta(tags: string[]): Promise<void> {
   // eslint-disable-next-line no-control-regex
   const safeName: string = vault.name.replace(/[/:\x00]/g, "_");
   const root: string = vault.rootPaths[0];
-  const metaDirPath = `${root}/${safeName}_meta`;
-  const metaFilePath = `${metaDirPath}/${safeName}_tags.md`;
+  const metaDirPath = `${root}/VaultSettings`;
+  const metaFilePath = `${metaDirPath}/${safeName}_properties.md`;
 
   try {
     await tauri.invoke("ensure_directory", { path: metaDirPath });
@@ -3908,7 +3908,7 @@ async function handleAddAllToMeta(tags: string[]): Promise<void> {
     return;
   }
 
-  let existingContent = "# Tags\n";
+  let existingContent = "## Tags\n";
   try {
     const readResult = await tauri.invoke("read_file", { path: metaFilePath });
     if (typeof readResult === "string") existingContent = readResult;

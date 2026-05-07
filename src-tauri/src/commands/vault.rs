@@ -742,10 +742,8 @@ pub async fn build_vault_index(
     let mut skipped_count: u32 = 0;
     let mut capped = false;
 
-    // Pre-compute the meta folder component name once (e.g. "Work Notes_meta").
-    // This avoids recomputing it on every file during the walk (FR-4).
-    let sanitised_name = sanitise_vault_name(&vault_name);
-    let meta_component = format!("{}_meta", sanitised_name);
+    // Fixed exclusion component: VaultSettings folder is not vault-name-specific.
+    let meta_component = "VaultSettings";
 
     let built_at = system_time_to_ms(SystemTime::now());
 
@@ -934,10 +932,8 @@ pub async fn list_vault_files(
     let max = max_count as usize;
     let mut results: Vec<FileEntry> = Vec::new();
 
-    // Pre-compute the meta folder component once, mirroring build_vault_index
-    // (H-1: list_vault_files must exclude the meta folder for the same reason).
-    let sanitised_name = sanitise_vault_name(&vault_name);
-    let meta_component = format!("{}_meta", sanitised_name);
+    // Fixed exclusion component: VaultSettings folder is not vault-name-specific.
+    let meta_component = "VaultSettings";
 
     for root in &root_paths {
         let root_path = Path::new(root);
@@ -1304,8 +1300,7 @@ pub fn scan_vault_tags(
 ) -> Result<Vec<TagEntry>, String> {
     use std::collections::HashMap;
 
-    let safe_name = sanitise_vault_name(&vault_name);
-    let meta_component = format!("{}_meta", safe_name);
+    let meta_component = "VaultSettings";
     let mut tag_files: HashMap<String, Vec<String>> = HashMap::new();
 
     for root_str in &root_paths {
@@ -1912,37 +1907,37 @@ mod tests {
     }
 
     #[test]
-    fn is_meta_folder_component_detects_meta_dir() {
-        let path = Path::new("Work Notes_meta/Work Notes_tags.md");
-        assert!(is_meta_folder_component(path, "Work Notes_meta"));
+    fn is_meta_folder_component_detects_vault_settings_dir() {
+        let path = Path::new("VaultSettings/Work Notes_properties.md");
+        assert!(is_meta_folder_component(path, "VaultSettings"));
     }
 
     #[test]
-    fn is_meta_folder_component_detects_meta_dir_nested() {
-        // File nested two levels inside the meta folder.
-        let path = Path::new("Work Notes_meta/subdir/file.md");
-        assert!(is_meta_folder_component(path, "Work Notes_meta"));
+    fn is_meta_folder_component_detects_vault_settings_nested() {
+        // File nested two levels inside VaultSettings.
+        let path = Path::new("VaultSettings/subdir/file.md");
+        assert!(is_meta_folder_component(path, "VaultSettings"));
     }
 
     #[test]
     fn is_meta_folder_component_does_not_match_regular_dir() {
-        let path = Path::new("notes/Work Notes_tags.md");
-        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+        let path = Path::new("notes/Work Notes_properties.md");
+        assert!(!is_meta_folder_component(path, "VaultSettings"));
     }
 
     #[test]
     fn is_meta_folder_component_does_not_match_partial_name() {
-        // A folder named "Work Notes_meta_old" must NOT match — exact component only.
-        let path = Path::new("Work Notes_meta_old/file.md");
-        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+        // A folder named "VaultSettingsOld" must NOT match — exact component only.
+        let path = Path::new("VaultSettingsOld/file.md");
+        assert!(!is_meta_folder_component(path, "VaultSettings"));
     }
 
     // ── list_vault_files ──────────────────────────────────────────────────────
 
-    /// H-1: list_vault_files with a vault that has a `{name}_meta/` folder must
+    /// H-1: list_vault_files with a VaultSettings/ folder must
     /// not include any files from inside that folder in its results.
     #[tokio::test]
-    async fn list_vault_files_excludes_meta_folder() {
+    async fn list_vault_files_excludes_vault_settings() {
         use std::fs;
         use tempfile::TempDir;
 
@@ -1952,10 +1947,10 @@ mod tests {
         // Regular note — must be included.
         fs::write(dir.path().join("visible.md"), "# Visible\n").unwrap();
 
-        // Meta folder and a file inside it — must be excluded.
-        let meta_dir = dir.path().join("Test Vault_meta");
-        fs::create_dir(&meta_dir).unwrap();
-        fs::write(meta_dir.join("Test Vault_tags.md"), "# Tags\n- alpha\n").unwrap();
+        // VaultSettings folder and a file inside it — must be excluded.
+        let settings_dir = dir.path().join("VaultSettings");
+        fs::create_dir(&settings_dir).unwrap();
+        fs::write(settings_dir.join("Test Vault_properties.md"), "## Tags\n- alpha\n").unwrap();
 
         let result = list_vault_files(
             vec![root],
@@ -1966,12 +1961,10 @@ mod tests {
         .await
         .unwrap();
 
-        // Only visible.md (and possibly the meta dir entry itself) should appear.
-        // No file whose path contains the meta folder name must appear.
-        let has_meta_file = result.iter().any(|e| e.path.contains("Test Vault_meta"));
+        let has_settings_file = result.iter().any(|e| e.path.contains("VaultSettings"));
         assert!(
-            !has_meta_file,
-            "list_vault_files must not return files inside the meta folder (H-1)"
+            !has_settings_file,
+            "list_vault_files must not return files inside VaultSettings (H-1)"
         );
 
         let has_visible = result.iter().any(|e| e.name == "visible.md");
@@ -1980,16 +1973,16 @@ mod tests {
 
     #[test]
     fn is_meta_folder_component_does_not_match_parent_dir_with_similar_name() {
-        // EC-11: a non-meta file whose path contains the meta folder name as a
-        // substring of a *different* component should not be excluded.
-        let path = Path::new("notes/Work Notes_meta_backup/file.md");
-        assert!(!is_meta_folder_component(path, "Work Notes_meta"));
+        // A non-settings file whose path contains "VaultSettings" as a substring
+        // of a *different* component should not be excluded.
+        let path = Path::new("notes/VaultSettingsOld/file.md");
+        assert!(!is_meta_folder_component(path, "VaultSettings"));
     }
 
-    // ── Integration: build_vault_index excludes meta folder ───────────────────
+    // ── Integration: build_vault_index excludes VaultSettings ─────────────────
 
     #[tokio::test]
-    async fn build_vault_index_excludes_meta_folder_files() {
+    async fn build_vault_index_excludes_vault_settings_files() {
         use std::fs;
         use tempfile::TempDir;
 
@@ -2000,11 +1993,11 @@ mod tests {
         let note_path = dir.path().join("my-note.md");
         fs::write(&note_path, "# My Note\n").unwrap();
 
-        // Meta folder file — must NOT be indexed (FR-4, NFR-6).
-        let meta_dir = dir.path().join("Test Vault_meta");
-        fs::create_dir(&meta_dir).unwrap();
-        let meta_file = meta_dir.join("Test Vault_tags.md");
-        fs::write(&meta_file, "# Tags\n- alpha\n").unwrap();
+        // VaultSettings folder file — must NOT be indexed (FR-4, NFR-6).
+        let settings_dir = dir.path().join("VaultSettings");
+        fs::create_dir(&settings_dir).unwrap();
+        let props_file = settings_dir.join("Test Vault_properties.md");
+        fs::write(&props_file, "## Tags\n- alpha\n").unwrap();
 
         let result = build_vault_index(
             "vault-1".to_string(),
@@ -2017,7 +2010,7 @@ mod tests {
         .unwrap();
 
         // Only my-note.md should appear.
-        assert_eq!(result.entries.len(), 1, "meta folder files must be excluded");
+        assert_eq!(result.entries.len(), 1, "VaultSettings files must be excluded");
         assert!(result.entries[0].path.ends_with("my-note.md"));
     }
 
@@ -2030,7 +2023,7 @@ mod tests {
         let root = dir.path().to_str().unwrap().to_string();
 
         // File in a dir that has a similar but non-exact name — must NOT be excluded.
-        let similar_dir = dir.path().join("Test Vault_meta_backup");
+        let similar_dir = dir.path().join("VaultSettingsOld");
         fs::create_dir(&similar_dir).unwrap();
         let file = similar_dir.join("note.md");
         fs::write(&file, "# Note\n").unwrap();
@@ -2045,7 +2038,7 @@ mod tests {
         .await
         .unwrap();
 
-        // The file in "Test Vault_meta_backup" must be indexed (not the exact meta dir).
+        // The file in "VaultSettingsOld" must be indexed (not the exact VaultSettings dir).
         assert_eq!(result.entries.len(), 1);
     }
 }
@@ -2473,12 +2466,12 @@ mod tag_scan_tests {
     }
 
     #[test]
-    fn scan_excludes_meta_folder() {
+    fn scan_excludes_vault_settings_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let meta_dir = dir.path().join("test_vault_meta");
-        fs::create_dir_all(&meta_dir).unwrap();
+        let settings_dir = dir.path().join("VaultSettings");
+        fs::create_dir_all(&settings_dir).unwrap();
         write_file(dir.path(), "note.md", "---\ntags:\n  - real-tag\n---");
-        write_file(&meta_dir, "test_vault_tags.md", "---\ntags:\n  - meta-only\n---");
+        write_file(&settings_dir, "test_vault_properties.md", "---\ntags:\n  - meta-only\n---");
         let result = scan_vault_tags(
             vec![dir.path().to_str().unwrap().to_string()],
             vec![],
@@ -2487,7 +2480,7 @@ mod tag_scan_tests {
         .unwrap();
         let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
         assert!(tags.contains(&"real-tag"), "real-tag must be found");
-        assert!(!tags.contains(&"meta-only"), "meta-only must not leak from meta folder");
+        assert!(!tags.contains(&"meta-only"), "meta-only must not leak from VaultSettings");
     }
 
     #[test]

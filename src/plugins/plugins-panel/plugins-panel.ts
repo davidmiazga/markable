@@ -272,7 +272,7 @@ function showListView(): void {
   const userDefs = definitions.filter((d) => d.kind === "user");
 
   bodyElement.appendChild(buildSection("core", "Core Plugins", coreDefs));
-  bodyElement.appendChild(buildSection("workflow", "Workflow Plugins", workflowDefs));
+  bodyElement.appendChild(buildSection("workflow", "Organization System Plugins", workflowDefs));
   bodyElement.appendChild(buildSection("user", "User Plugins", userDefs));
 
   /*
@@ -379,7 +379,7 @@ function buildSection(
     const placeholder = document.createElement("p");
     placeholder.className = "plugin-empty-placeholder";
     placeholder.textContent =
-      kind === "workflow" ? "No workflow plugins loaded." :
+      kind === "workflow" ? "No organization system plugins loaded." :
       kind === "core" ? "No core plugins loaded." :
       "No user plugins installed.";
     body.appendChild(placeholder);

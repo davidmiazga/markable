@@ -999,6 +999,26 @@ const YAML_PANE_CSS = `
   cursor: pointer;
   white-space: nowrap;
 }
+.yaml-pane-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  flex-shrink: 0;
+}
+.yaml-pane-edit-props-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.yaml-pane-edit-props-btn:hover {
+  color: var(--text-primary, #333);
+}
 .yaml-pane-field-row {
   display: flex;
   flex-direction: column;
@@ -1364,6 +1384,32 @@ function rebuildPanelDOM(): void {
     banner.appendChild(text);
     banner.appendChild(reloadBtn);
     wrapper.appendChild(banner);
+  }
+
+  // "Edit Properties file" quick-link — opens the vault's _properties.md in a tab.
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const activeVault = vm && typeof vm.getActiveVault === "function" ? vm.getActiveVault() : null;
+  if (activeVault) {
+    // eslint-disable-next-line no-control-regex
+    const safeName = activeVault.name.replace(/[/:\x00]/g, "_");
+    const propsPath = `${activeVault.rootPaths[0]}/VaultSettings/${safeName}_properties.md`;
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "yaml-pane-toolbar";
+
+    const editLink = document.createElement("button");
+    editLink.className = "yaml-pane-edit-props-btn";
+    editLink.textContent = "Edit Properties file";
+    editLink.title = "Open the vault properties vocabulary file";
+    editLink.addEventListener("click", () => {
+      const tm = (window as any).__MARKABLE_TAB_MANAGER__;
+      if (tm && typeof tm.openFileInTab === "function") {
+        void tm.openFileInTab(propsPath);
+      }
+    });
+
+    toolbar.appendChild(editLink);
+    wrapper.appendChild(toolbar);
   }
 
   const scrollEl = document.createElement("div");
@@ -1739,12 +1785,15 @@ export function getVocabularyForField(fieldKey: string): string[] | null {
   const meta: any = (window as any).__MARKABLE_META__;
   if (!meta) return null;
 
-  if (fieldKey === "tags") {
+  const key = fieldKey.toLowerCase();
+
+  if (key === "tags") {
     // FR-11: return null (not []) when tags vocabulary is empty — suppresses warnings.
     return meta.tags && meta.tags.length > 0 ? meta.tags : null;
   }
 
-  const vocab = meta.fields?.[fieldKey];
+  // Fields are stored with lowercase keys (parsePropertiesFile normalises them).
+  const vocab = meta.fields?.[key];
   // FR-11: same empty-check for non-tags fields.
   return vocab && vocab.length > 0 ? vocab : null;
 }
@@ -2712,7 +2761,7 @@ function renderSchemaPathSetting(container: HTMLElement): void {
  */
 export default {
   id: "yaml-pane",
-  name: "YAML Pane",
+  name: "File Properties",
   version: "1.0.0",
   description: "Display and edit document front matter as structured fields",
   detail:

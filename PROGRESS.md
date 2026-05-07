@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-05 (session 4)
+**Last Updated:** 2026-05-05 (session 8)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -79,18 +79,22 @@
 - **Tab drag-to-reorder** — All three tab modes (minimal dots, regular labels, vertical columns) now support drag-to-reorder. `TabManager.reorderTab(fromId, insertBeforeId: string | null)` splices the tab to the target position and recalculates `activeIndex`; `null` = append at end; no-op guard when `fromId === insertBeforeId`. Pointer-events drag via shared `src/tabs/tab-reorder-drag.ts` helper (`attachTabReorderDrag`): 6 px threshold, ghost label follows cursor, 2 px accent-colored insertion line with glow shows exact landing position, gap-based nearest-slot algorithm (forgiving target area — cursor just needs to be in the right half-space). Siblings grouped by `parentElement` before slot computation so cross-container midpoints are never generated — critical for VerticalTabStrip where left/right strips are on opposite sides of the editor. `pointercancel` never fires `onReorder`. `.tab-insert-line` CSS in `tabs.css`. 16 new Vitest tests; TypeScript clean. 2026-05-05.
 - **Clipboard image paste** — `Cmd-V` with an image on the clipboard writes it to `{vaultRoot}/assets/YYYYMMDD-HHmmss.png` and inserts `![](assets/filename.png)` at the caret. No vault → native Save dialog (PNG filter); snippet is relative when image and file share a directory, absolute otherwise. New Rust command `write_binary_file` (atomic temp-file-swap, `Vec<u8>`) in `io.rs`; `save_image_dialog` in `dialogs.rs`. TypeScript bridge: `writeBinaryFile(path, data: number[])` and `saveImageDialog` in `bridge.ts`/`dialogs.ts`. Pure helpers `generateImageFilename`, `computeImageSnippet`, `extractImageItem` in `src/lib/clipboard-image.ts`; injectable `handleImagePaste` in `src/lib/clipboard-image-handler.ts`. Document paste listener (capture phase) in `main.ts` guards: image MIME + editor focused + editor tab kind. `extractImageItem` extracted so Guard 1 (EC-01 text-only clipboard) is unit-tested. Guards 2 and 5 (editor focus, `getAsFile()` null) verified by manual smoke test — integration-boundary. 31 new Vitest tests + 4 Rust tests; code-reviewer approved. 2026-05-05.
 - **Auto Title plugin** — Core plugin that pre-fills `# ` in new untitled tabs with the cursor placed after it, then silently saves using the H1 text as the filename on first Cmd-S (no dialog). Falls back to the Save As dialog when no vault is active or H1 is absent; in fallback mode the H1-derived name is pre-populated in the dialog. Configurable filename style (Normal Spaces / CamelCase / kebab-case) via the plugin detail view (`renderDetailExtra` → `buildSelectRow`), stored in plugin-own settings JSON. Pure helpers `extractH1`, `h1ToFilename(h1, style?)`, `resolveConflictPath` in `auto-title-helpers.ts`. `tab-manager.ts` wired with 3 surgical edits: `_createUntitledTab` sets `doc: "# "`, `_applyActiveTab` places cursor at `doc.length` + resets dirty flag + calls `editorView.focus()`, `saveActiveTab` intercepts untitled save to call resolver or fall through to dialog. 35 Vitest tests covering all 3 filename styles; TypeScript clean. `scripts/build-plugins.mjs` updated. 2026-05-04.
+- **Properties system redesign + FC3 plan** — Full overhaul of the vault meta/vocabulary system. (1) Plugin panel section renamed from "Workflow Plugins" → "Organization System Plugins". (2) YAML Pane plugin display name renamed to "Properties". (3) New vault folder convention: `VaultSettings/` (fixed name, not vault-name-specific) instead of `{VaultName}_meta/`; single `{VaultName}_properties.md` file replaces `{VaultName}_tags.md`. (4) `MetaStore` extended with `dateFormat?: string`; `fields` map now populated from multi-section parser. (5) `parsePropertiesFile()` new multi-section parser: `## Tags` → `tags[]`, `## Date` → `dateFormat` from `[x] FORMAT` line, all other `## Section` → `fields[sectionLower][]`. (6) `buildMetaStore()` optional `io` param handles migration (silent delete of old `_meta/` folder) and auto-creation of starter vocabulary on first vault open. Starter vocabulary matches `docs/handoffs/sampleProperties.md` exactly (Tags, Source, Status, Classification, Area, Priority, Date). (7) Rust exclusion guard updated: `VaultSettings` fixed component instead of `{name}_meta`. (8) `getVocabularyForField` now case-insensitive on fieldKey. (9) YAML pane "Edit Properties file" quick-link button added to panel header. (10) Command-bar "Add to Properties" (was "Add to meta") with updated paths. (11) `bridge.ts` gains `deleteDirectory` wrapper. 56 new meta-manager Vitest tests; 78 TypeScript test files + 178 Rust tests all passing. FC3 feature build plan documented in `docs/handoffs/PKM-features-v2.0.md`. 2026-05-05.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-05 (session 7).**
+**Session ended 2026-05-05 (session 8).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **78 files, 3425 passing (3464 total, 39 skipped)**. Rust: 178 passing. TypeScript clean (`npx tsc --noEmit` exits 0).
-- No open branches. Working tree is clean.
+- Test suite: **78 files, 3442 passing (3481 total, 39 skipped)**. Rust: 178 passing.
+- Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
+- **Next step**: Run requirements-analyst for FC3 Smart Folders feature.
+- **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
+- **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.
 - **Auto Title window global contract**: `window.__MARKABLE_AUTO_TITLE__ = { resolveTargetPath(doc): Promise<string|null>, getFilenameStyle(): FilenameStyle }`. Set on `onEnable`, deleted on `onDisable`. Tab-manager reads `getFilenameStyle()` for the Save As dialog suggestion only; the resolver applies the style internally.
 - **Quick Capture keybinding**: `Ctrl-C` (macOS copy is `Cmd-C`, so `Ctrl-C` is free). Rebindable via Keybindings panel.
