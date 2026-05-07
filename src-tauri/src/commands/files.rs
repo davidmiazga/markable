@@ -143,9 +143,20 @@ pub fn ensure_directory(path: String) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
 }
 
+#[allow(dependency_on_unit_never_type_fallback)]
 #[tauri::command]
 pub fn get_home_dir() -> Result<String, String> {
     std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())
+}
+
+#[allow(dependency_on_unit_never_type_fallback)]
+#[tauri::command]
+pub fn get_app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))
 }
 
 #[cfg(test)]

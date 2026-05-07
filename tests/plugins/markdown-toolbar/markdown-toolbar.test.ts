@@ -2123,6 +2123,7 @@ function makeMockApi() {
     unregisterSidebarPanel: vi.fn(),
     focusSidebarPanel: vi.fn(),
     toggleSidebarPanel: vi.fn(),
+    openCustomRenderTab: vi.fn(),
     restartSelf: vi.fn().mockResolvedValue(undefined),
   } as unknown as import("../../../src/plugins/markable-plugin-api").MarkablePluginAPI;
 }
@@ -3659,6 +3660,7 @@ describe("Integration: context switching", () => {
       unregisterStatusBarDependent: vi.fn(),
       focusSidebarPanel: vi.fn(),
       toggleSidebarPanel: vi.fn(),
+      openCustomRenderTab: vi.fn(),
     };
   }
 

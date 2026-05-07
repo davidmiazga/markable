@@ -62,6 +62,8 @@ import {
   writeBinaryFile,
   saveImageDialog,
   ensureDirectory,
+  writeFile,
+  deleteDirectory,
 } from "./lib/bridge";
 import type { ThemeEntry } from "./lib/bridge";
 import { handleImagePaste } from "./lib/clipboard-image-handler";
@@ -97,6 +99,9 @@ import {
 import { tabManager } from "./tabs";
 import { createDragDropHandler } from "./tabs/drag-drop";
 import { openExportDialog, printDocument } from "./lib/export";
+// marked is already a project dependency (used by live-preview.ts).
+// The bundler deduplicates the import — no second copy is produced (D-02).
+import { marked } from "marked";
 import * as vaultManager from "./lib/vault-manager";
 import {
   buildMetaStore,
@@ -104,6 +109,14 @@ import {
   isMetaFolderEvent,
 } from "./lib/meta-manager";
 import type { MetaStore } from "./lib/meta-manager";
+import { getAppDataDir } from "./lib/bridge";
+import {
+  buildAutoRenderExtension,
+  openLayoutPicker,
+  ensureStarterLayouts,
+  injectLayoutsCSS,
+} from "./lib/layout-manager";
+import type { LayoutDeps } from "./lib/layout-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -119,6 +132,8 @@ let previewEnabled = true;
 let findWidget: FindWidget | null = null;
 /** Quick Capture overlay. Initialized in initApp(). */
 let quickCapture: QuickCaptureWidget | null = null;
+/** Layout system deps. Set in initApp() after tabManager.init(). */
+let _layoutDeps: LayoutDeps | null = null;
 
 async function refreshRecentFilesMenu(): Promise<void> {
   await updateRecentFilesMenu(getCurrentSettings().recentFiles);
@@ -783,6 +798,11 @@ function handleAction(action: string): void {
     case "help-quickstart": void openHelpFileInTab("quickstart.md", "Quickstart"); break;
     case "help-help":       void openHelpFileInTab("help.md", "Help");             break;
     case "help-cheatsheet": void openHelpFileInTab("markdown-cheatsheet.md", "Markdown Cheatsheet"); break;
+
+    case "layouts-open-picker":
+      if (_layoutDeps) void openLayoutPicker(_layoutDeps);
+      break;
+
     default: {
       if (action.startsWith("recent-file-")) {
         const idx = parseInt(action.replace("recent-file-", ""), 10);
@@ -796,7 +816,20 @@ function handleAction(action: string): void {
         // (e.g. daily-note-toggle-calendar) that are not wired into the switch above.
         const cmds = (window as unknown as Record<string, unknown>)["__MARKABLE_COMMANDS__"] as
           Array<{ id: string; action: () => void }> | undefined;
-        cmds?.find((c) => c.id === action)?.action();
+        const found = cmds?.find((c) => c.id === action);
+        if (found) {
+          found.action();
+        } else {
+          // FR-11: check plugin action extensions registered by IIFE plugins.
+          // This runs after the COMMANDS lookup so built-in commands always take
+          // priority over plugin-registered action extensions.
+          const ext = (window as unknown as Record<string, unknown>)[
+            "__MARKABLE_ACTION_EXTENSIONS__"
+          ];
+          if (ext instanceof Map && (ext as Map<string, () => void>).has(action)) {
+            (ext as Map<string, () => void>).get(action)!();
+          }
+        }
       }
       break;
     }
@@ -820,7 +853,11 @@ async function initMeta(vault: Parameters<typeof buildMetaStore>[0] | null): Pro
     return;
   }
   try {
-    const store: MetaStore = await buildMetaStore(vault, readFile);
+    const store: MetaStore = await buildMetaStore(vault, readFile, {
+      writeFileFn: async (path, content) => { await writeFile(path, content); },
+      ensureDirectoryFn: ensureDirectory,
+      deleteDirectoryFn: deleteDirectory,
+    });
     (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] = store;
   } catch (err) {
     // Defensive: buildMetaStore is designed to never reject, but we guard anyway.
@@ -979,6 +1016,11 @@ async function initApp() {
   (window as unknown as Record<string, unknown>)["__MARKABLE_HANDLE_ACTION__"] = handleAction;
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_IS_OPEN__"] = false;
   (window as unknown as Record<string, unknown>)["__MARKABLE_COMMAND_BAR_OPEN__"] = null;
+  // Action extensions map: plugins register callbacks keyed by action id so that
+  // handleAction() can dispatch to them. Must be set before loadPlugins() fires
+  // onEnable callbacks — plugins register their actions during onEnable.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_ACTION_EXTENSIONS__"] =
+    new Map<string, () => void>();
 
   // ── Meta system global — set before plugins load so IIFE reads are safe ────
   // emptyMetaStore() ensures the global is always a valid MetaStore shape even
@@ -1053,6 +1095,42 @@ async function initApp() {
   // #app-row) and after editor creation. TabManager reads settings to restore
   // the previous session and mounts the MinimalTabBar renderer into #tab-strip.
   await tabManager.init(editor);
+
+  // ── Layouts / custom-render-tab globals ─────────────────────────────────────
+  // Set after tabManager.init() so the tabManager singleton is fully initialised
+  // before IIFE plugins access these globals in their onEnable calls.
+
+  // FR-09: IIFE plugin access to openCustomRenderTab.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_CUSTOM_TAB__"] =
+    (title: string, renderFn: (container: HTMLElement) => void) =>
+      tabManager.openCustomRenderTab(title, renderFn);
+
+  // FR-10: expose marked.parse so IIFE plugins share the same renderer instance.
+  // Using the same marked instance avoids duplicate configuration (D-02).
+  (window as unknown as Record<string, unknown>)["__MARKABLE_RENDER_MD__"] =
+    (md: string) => marked.parse(md);
+
+  // ── Layouts system (core capability, not a plugin) ──────────────────────────
+  // Fetch app data dir once; build deps object with lazy getters so layout
+  // operations always read the live vault/meta state at the time of invocation.
+  {
+    let appDataDir = "";
+    try { appDataDir = await getAppDataDir(); } catch { /* non-fatal */ }
+    _layoutDeps = {
+      appDataDir,
+      getActiveVaultRoot: () => vaultManager.getActiveVault()?.rootPaths[0] ?? null,
+      getVaultIndex: () => vaultManager.getVaultIndex(),
+      getActiveVaultName: () => vaultManager.getActiveVault()?.name ?? "",
+      getMetaStore: () => (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] as MetaStore | null,
+      openCustomRenderTab: (title, renderFn) => tabManager.openCustomRenderTab(title, renderFn),
+      getCurrentFilePath: () => tabManager.getActiveFilePath(),
+    };
+    injectLayoutsCSS();
+    editor.dispatch({
+      effects: StateEffect.appendConfig.of(buildAutoRenderExtension(_layoutDeps)),
+    });
+    void ensureStarterLayouts(appDataDir);
+  }
 
   // Attach dirty-state tracking to the editor via updateListener.
   //

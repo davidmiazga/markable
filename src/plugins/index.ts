@@ -60,6 +60,7 @@ export const DEFAULT_ENABLED_PLUGINS: ReadonlySet<string> = new Set([
  */
 export const WORKFLOW_PLUGINS: readonly string[] = [
   "file-browser",
+  "yaml-pane",
   "knowledge-graph",
 ];
 

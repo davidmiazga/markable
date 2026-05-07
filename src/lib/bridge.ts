@@ -291,11 +291,28 @@ export async function ensureDirectory(path: string): Promise<void> {
 }
 
 /**
+ * Delete a directory and all its contents recursively.
+ *
+ * Wraps the Rust `delete_directory` command. No-op if the directory
+ * does not exist (caller should catch errors for missing paths).
+ * Throws on failure (permissions, path is a file, etc.).
+ *
+ * @param path - Absolute path to the directory to delete
+ */
+export async function deleteDirectory(path: string): Promise<void> {
+  await invoke("delete_directory", { path });
+}
+
+/**
  * Returns the user's home directory path (e.g. /Users/dave).
  * Used to expand "~/" prefixes in user-configured paths.
  */
 export async function getHomeDir(): Promise<string> {
   return invoke<string>("get_home_dir");
+}
+
+export async function getAppDataDir(): Promise<string> {
+  return invoke<string>("get_app_data_dir");
 }
 
 // ── Core plugin copy ──────────────────────────────────────────────────────────

@@ -11,11 +11,12 @@
  *
  * "editor" — a Markdown document managed by the shared CodeMirror 6 EditorView.
  * "media"  — an image, PDF, or other non-text asset rendered in #media-viewer.
+ * "custom" — arbitrary HTML rendered by a plugin-supplied renderFn into #custom-tab-host.
  *
  * All tabs created before this field was added default to "editor". No
  * migration is required because session restore only persists editor tabs.
  */
-export type TabKind = "editor" | "media";
+export type TabKind = "editor" | "media" | "custom";
 
 /**
  * All data needed to represent one open document tab.
@@ -78,6 +79,15 @@ export interface TabEntry {
    * tab auto-unpins it first rather than blocking the close.
    */
   pinned?: boolean;
+
+  /**
+   * Render callback for custom tabs. Called once by TabManager immediately
+   * after #custom-tab-host is activated and cleared.
+   *
+   * Only present when kind === "custom". Never serialized to session storage.
+   * Must not throw — TabManager wraps the call in try/catch (FR-04, EC-15).
+   */
+  renderFn?: (container: HTMLElement) => void;
 }
 
 /**

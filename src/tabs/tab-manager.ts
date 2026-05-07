@@ -89,6 +89,13 @@ export class TabManager {
   /** The #media-viewer DOM element injected by init(). Never removed from DOM. */
   private mediaViewerEl: HTMLElement | null = null;
 
+  /**
+   * The #custom-tab-host DOM element, located in init().
+   * Unlike #media-viewer (which is injected by init()), this element is
+   * static HTML declared in index.html (FR-03). Never removed from DOM.
+   */
+  private customTabHostEl: HTMLElement | null = null;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   /**
@@ -196,6 +203,16 @@ export class TabManager {
       this.editorContainer.appendChild(mv);
       this.mediaViewerEl = mv;
     }
+
+    // Locate #custom-tab-host (must exist in index.html — FR-03).
+    // Unlike #media-viewer which is created by init(), this element is static HTML.
+    this.customTabHostEl = document.getElementById("custom-tab-host");
+    if (!this.customTabHostEl) {
+      console.error(
+        "TabManager.init: #custom-tab-host element not found in DOM. " +
+        "Ensure index.html has been updated per step_01_custom-render-tab.md."
+      );
+    }
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────────
@@ -299,6 +316,7 @@ export class TabManager {
     // Zero-tab guard: last tab was closed. Show a blank screen.
     if (this.tabs.length === 0) {
       this.editorContainer?.classList.remove("has-media-tab");
+      document.body.classList.remove("has-custom-tab");
       if (this.mediaViewerEl) this.mediaViewerEl.innerHTML = "";
       // Clear the editor and lock it — blank, non-editable empty state.
       if (this.editorView) {
@@ -330,8 +348,21 @@ export class TabManager {
       return;
     }
 
+    if (tab.kind === "custom") {
+      // Hide the CM6 editor; show the custom tab host.
+      // Remove has-media-tab in case the previous tab was a media tab.
+      this.editorContainer?.classList.remove("has-media-tab");
+      document.body.classList.add("has-custom-tab");
+      this._updateTitleBar(tab);
+      // AD-6: custom tabs have no meaningful file path.
+      (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = null;
+      return;
+    }
+
     // Editor tab: hide the media viewer and restore the CM6 editor.
     this.editorContainer?.classList.remove("has-media-tab");
+    // Remove has-custom-tab class in case the previous tab was a custom tab.
+    document.body.classList.remove("has-custom-tab");
 
     // Set the file path BEFORE dispatching the document so that
     // buildDecorations() has the correct path on its first run.
@@ -385,9 +416,9 @@ export class TabManager {
     if (this.tabs.length === 0 || this.editorView === null) return;
 
     const tab = this.tabs[this.activeIndex];
-    // Media tabs have no document text or meaningful scroll position.
+    // Media and custom tabs have no document text or meaningful scroll position.
     // Capturing them would overwrite doc: "" with stale EditorView content.
-    if (tab.kind === "media") return;
+    if (tab.kind === "media" || tab.kind === "custom") return;
 
     tab.doc = this.editorView.state.doc.toString();
     tab.scrollTop = this.editorView.scrollDOM.scrollTop;
@@ -770,6 +801,76 @@ export class TabManager {
   }
 
   /**
+   * Open a custom render tab with the given title and render function.
+   *
+   * If a custom tab with the same title already exists it is replaced in-place
+   * (same array index, new renderFn) — prevents duplicate render tabs (DC-07).
+   *
+   * Clears #custom-tab-host, calls renderFn(hostEl), and activates the tab.
+   * If renderFn throws, a fallback error message is shown in #custom-tab-host
+   * and the tab remains active (EC-15).
+   *
+   * EC-25: if #custom-tab-host is absent from the DOM, logs a console error
+   * and returns without opening a tab.
+   *
+   * @param title     Display title shown in the tab strip.
+   * @param renderFn  Callback that populates the host element with HTML.
+   */
+  openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void {
+    // EC-25: always use a live getElementById lookup so that test cases that
+    // remove the element after init() is called are handled correctly. The
+    // stored reference is only used as a fast path when the element exists.
+    const hostEl = document.getElementById("custom-tab-host") ?? this.customTabHostEl;
+    if (!hostEl || !hostEl.isConnected) {
+      console.error("TabManager.openCustomRenderTab: #custom-tab-host not in DOM.");
+      return;
+    }
+
+    this._captureActiveTab();
+
+    // DC-07: replace an existing custom tab with the same title in-place so the
+    // tab strip does not accumulate duplicate entries for the same layout.
+    const existingIdx = this.tabs.findIndex(
+      (t) => t.kind === "custom" && t.title === title
+    );
+
+    if (existingIdx !== -1) {
+      // Update the renderFn in-place and activate the existing slot.
+      this.tabs[existingIdx].renderFn = renderFn;
+      this.activeIndex = existingIdx;
+    } else {
+      const tab: import("./tab-types").TabEntry = {
+        id: crypto.randomUUID(),
+        kind: "custom",
+        filePath: null,
+        title,
+        isDirty: false,
+        doc: "",
+        scrollTop: 0,
+        renderFn,
+      };
+      this.tabs.push(tab);
+      this.activeIndex = this.tabs.length - 1;
+    }
+
+    // Clear the host and invoke the render function.
+    hostEl.innerHTML = "";
+    try {
+      renderFn(hostEl);
+    } catch (err) {
+      // EC-15: renderFn errors produce a visible fallback rather than a silent crash.
+      const msg = err instanceof Error ? err.message : String(err);
+      hostEl.innerHTML = `<div class="layout-error">Render error: ${msg}</div>`;
+    }
+
+    // Show the custom tab host and hide the editor via body class.
+    document.body.classList.add("has-custom-tab");
+    this._updateTitleBar(this.tabs[this.activeIndex]);
+    this._notifyRenderer();
+    void this.saveSession();
+  }
+
+  /**
    * Closes the tab identified by id.
    *
    * Special cases:
@@ -796,8 +897,8 @@ export class TabManager {
 
     if (this.tabs.length === 1) {
       // This is the last tab.
-      // Media tabs are never dirty — skip the confirm dialog for them (FR-7).
-      if (tab.isDirty && tab.kind !== "media") {
+      // Media and custom tabs are never dirty — skip the confirm dialog for them (FR-7).
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -823,8 +924,8 @@ export class TabManager {
     }
 
     // Multiple tabs remain — closing this tab does not exit the app.
-    // Media tabs are never dirty — skip the confirm dialog for them (FR-7).
-    if (tab.isDirty && tab.kind !== "media") {
+    // Media and custom tabs are never dirty — skip the confirm dialog for them (FR-7).
+    if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
       const confirmed = confirm(
         `"${tab.title}" has unsaved changes. Close without saving?`
       );
@@ -879,8 +980,8 @@ export class TabManager {
     const others = this.getTabs().filter((t) => t.id !== id && !t.pinned);
 
     for (const tab of others) {
-      // Media tabs are never dirty — skip the confirm dialog for them.
-      if (tab.isDirty && tab.kind !== "media") {
+      // Media and custom tabs are never dirty — skip the confirm dialog for them.
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -955,8 +1056,8 @@ export class TabManager {
     for (const tab of snapshot) {
       // Pinned tabs survive batch-close operations.
       if (tab.pinned) continue;
-      // Media tabs are never dirty — close without dialog.
-      if (tab.isDirty && tab.kind !== "media") {
+      // Media and custom tabs are never dirty — close without dialog.
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -1245,7 +1346,7 @@ export class TabManager {
    */
   async saveActiveTab(): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab || tab.kind === "media") return;
+    if (!tab || tab.kind === "media" || tab.kind === "custom") return;
 
     if (tab.filePath === null) {
       const resolver = (window as unknown as Record<string, unknown>)["__MARKABLE_AUTO_TITLE__"] as
@@ -1308,7 +1409,7 @@ export class TabManager {
    */
   async saveActiveTabAs(suggestedFilename?: string): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab || tab.kind === "media") return;
+    if (!tab || tab.kind === "media" || tab.kind === "custom") return;
 
     const dialogResult = await saveFileDialog(suggestedFilename);
     if (dialogResult.cancelled) return; // User cancelled (EC-12).
@@ -1352,7 +1453,7 @@ export class TabManager {
    */
   markActiveTabDirty(): void {
     const tab = this.getActiveTab();
-    if (!tab || tab.isDirty || tab.kind === "media") return; // Idempotency and media guard (FR-7 / M-1).
+    if (!tab || tab.isDirty || tab.kind === "media" || tab.kind === "custom") return; // Idempotency and media/custom guard (FR-7 / M-1).
     tab.isDirty = true;
     this._updateTitleBar(tab);
     this._notifyRenderer();

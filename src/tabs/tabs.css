@@ -655,3 +655,48 @@
   border-radius: 1px;
   box-shadow: 0 0 4px var(--accent, #0078d4);
 }
+
+/* ── Custom render tab host ──────────────────────────────────────────────── */
+/*
+ * #custom-tab-host is a permanent child of #app, sibling to #editor.
+ * Default state: hidden. Shown by adding has-custom-tab to <body>.
+ * When visible, #editor is hidden (which also hides #media-viewer inside it).
+ *
+ * No hardcoded colors — all values use CSS variables from the active theme.
+ * position: absolute; inset: 0 positions the host relative to #app, which is
+ * the containing block for both #editor and #custom-tab-host.
+ */
+
+#custom-tab-host {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  background: var(--bg-primary, #1e1e2e);
+  padding: var(--content-padding, 24px);
+  box-sizing: border-box;
+  color: var(--text-primary, #eee);
+  font-family: var(--ui-font, system-ui, sans-serif);
+}
+
+/* Show host, hide editor when a custom tab is active. */
+body.has-custom-tab #editor {
+  display: none;
+}
+
+body.has-custom-tab #custom-tab-host {
+  display: block;
+}
+
+/* Error fallback rendered by TabManager when renderFn throws (EC-15). */
+.layout-error {
+  color: var(--error-fg, #f66);
+  background: var(--error-bg, rgba(255, 80, 80, 0.1));
+  border: 1px solid var(--error-fg, #f66);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: var(--ui-font, system-ui, sans-serif);
+  margin: 8px 0;
+}

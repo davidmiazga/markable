@@ -34,6 +34,10 @@ import {
   toggleSidebarPanel as _toggleSidebarPanel,
 } from "../sidebar";
 import type { SidebarPanelDescriptor } from "../sidebar";
+// tabManager import — used in openCustomRenderTab only. The import is at module
+// scope (not deferred to the method body) because there is no circular dependency:
+// tab-manager.ts does not import from markable-plugin-api.ts.
+import { tabManager } from "../tabs/tab-manager";
 
 // Re-export for plugin author convenience — plugins can import the type
 // directly from this module without knowing the internal sidebar/ path.
@@ -201,6 +205,21 @@ export interface MarkablePluginAPI {
    * @param panelId  The id from the original SidebarPanelDescriptor.
    */
   toggleSidebarPanel(panelId: string): void;
+
+  /**
+   * Open a custom render tab in the main content area.
+   *
+   * Delegates to tabManager.openCustomRenderTab(). If a custom tab with the
+   * same title already exists, it is replaced in-place (DC-07).
+   *
+   * renderFn is called synchronously within openCustomRenderTab — errors are
+   * caught by TabManager and displayed as a fallback message (EC-15).
+   *
+   * @param title     Display title for the tab strip entry.
+   * @param renderFn  Callback that receives the cleared host element and
+   *                  populates it with HTML content.
+   */
+  openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void;
 
   /**
    * Disable then re-enable this plugin in a single async call.
@@ -387,6 +406,14 @@ export function buildMarkablePluginAPI(
 
     toggleSidebarPanel(panelId: string): void {
       _toggleSidebarPanel(panelId);
+    },
+
+    /**
+     * Open a custom render tab by delegating to the TabManager singleton.
+     * The tabManager import is at module scope (no circular dependency).
+     */
+    openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void {
+      tabManager.openCustomRenderTab(title, renderFn);
     },
 
     /**
