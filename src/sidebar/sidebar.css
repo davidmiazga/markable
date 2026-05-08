@@ -133,22 +133,21 @@
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;            /* Firefox */
+  /* overflow must stay visible (default) — any non-visible value forces a scroll
+     container which clips the margin-bottom:-1px that makes folder-tabs work */
   border-bottom: 1px solid var(--border-color);
-}
-
-.sidebar-tab-bar::-webkit-scrollbar {
-  display: none;                    /* WebKit / Blink */
 }
 
 .sidebar-tab {
   flex-shrink: 0;
   background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 6px 12px;
+  /* Three-sided border for folder-tab style; bottom transparent by default */
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  /* Overlap the tab-bar's border-bottom so active tab erases it */
+  margin-bottom: -1px;
+  padding: 5px 12px 6px;
   font-family: var(--ui-font);
   font-size: 11px;
   font-weight: 500;
@@ -157,17 +156,26 @@
   cursor: pointer;
   white-space: nowrap;
   text-transform: uppercase;
-  transition: color 0.1s, border-color 0.1s;
+  transition: color 0.1s;
 }
 
 .sidebar-tab:hover {
-  background: var(--code-bg);
   color: var(--text-primary);
 }
 
 .sidebar-tab.sidebar-tab-active {
   color: var(--text-primary);
-  border-bottom-color: var(--link-color);
+  border-color: var(--border-color);
+  /* Bottom border matches sidebar background — paints over parent's border-bottom */
+  border-bottom: 1px solid var(--bg-titlebar);
+  background: var(--bg-titlebar);
+  position: relative;
+  z-index: 1;
+}
+
+/* Hide the redundant accordion title only when a tab bar is present */
+.has-tab-bar .sidebar-panel-title {
+  visibility: hidden;
 }
 
 /* ── Panel wrapper ───────────────────────────────────────────────────────────── */

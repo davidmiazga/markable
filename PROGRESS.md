@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-05 (session 8)
+**Last Updated:** 2026-05-07 (session 9)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -81,18 +81,32 @@
 - **Auto Title plugin** — Core plugin that pre-fills `# ` in new untitled tabs with the cursor placed after it, then silently saves using the H1 text as the filename on first Cmd-S (no dialog). Falls back to the Save As dialog when no vault is active or H1 is absent; in fallback mode the H1-derived name is pre-populated in the dialog. Configurable filename style (Normal Spaces / CamelCase / kebab-case) via the plugin detail view (`renderDetailExtra` → `buildSelectRow`), stored in plugin-own settings JSON. Pure helpers `extractH1`, `h1ToFilename(h1, style?)`, `resolveConflictPath` in `auto-title-helpers.ts`. `tab-manager.ts` wired with 3 surgical edits: `_createUntitledTab` sets `doc: "# "`, `_applyActiveTab` places cursor at `doc.length` + resets dirty flag + calls `editorView.focus()`, `saveActiveTab` intercepts untitled save to call resolver or fall through to dialog. 35 Vitest tests covering all 3 filename styles; TypeScript clean. `scripts/build-plugins.mjs` updated. 2026-05-04.
 - **Properties system redesign + FC3 plan** — Full overhaul of the vault meta/vocabulary system. (1) Plugin panel section renamed from "Workflow Plugins" → "Organization System Plugins". (2) YAML Pane plugin display name renamed to "Properties". (3) New vault folder convention: `VaultSettings/` (fixed name, not vault-name-specific) instead of `{VaultName}_meta/`; single `{VaultName}_properties.md` file replaces `{VaultName}_tags.md`. (4) `MetaStore` extended with `dateFormat?: string`; `fields` map now populated from multi-section parser. (5) `parsePropertiesFile()` new multi-section parser: `## Tags` → `tags[]`, `## Date` → `dateFormat` from `[x] FORMAT` line, all other `## Section` → `fields[sectionLower][]`. (6) `buildMetaStore()` optional `io` param handles migration (silent delete of old `_meta/` folder) and auto-creation of starter vocabulary on first vault open. Starter vocabulary matches `docs/handoffs/sampleProperties.md` exactly (Tags, Source, Status, Classification, Area, Priority, Date). (7) Rust exclusion guard updated: `VaultSettings` fixed component instead of `{name}_meta`. (8) `getVocabularyForField` now case-insensitive on fieldKey. (9) YAML pane "Edit Properties file" quick-link button added to panel header. (10) Command-bar "Add to Properties" (was "Add to meta") with updated paths. (11) `bridge.ts` gains `deleteDirectory` wrapper. 56 new meta-manager Vitest tests; 78 TypeScript test files + 178 Rust tests all passing. FC3 feature build plan documented in `docs/handoffs/PKM-features-v2.0.md`. 2026-05-05.
 
+- **Wikipedia layout redesign + sidebar codefence (session 9)** — Full visual overhaul of `wikipedia.layout.md` and the layout system's rendering pipeline. Changes committed 2026-05-07:
+  - **`sidebar` codefence** — ` ```sidebar ` fences in any `.md` file render as right-floating `<aside class="wiki-infobox">` blocks inline at their position in the content (multiple sidebars supported, each floats near its context). Also renders as a styled card in CM6 live-preview via `SidebarWidget extends WidgetType` using `__MARKABLE_RENDER_MD__`.
+  - **Auto-generated jump-link TOC** — `extractToc` parses `##`/`###` headings; `_markedWithIds` adds matching `id` attributes to rendered headings; `wireAnchorLinks` intercepts `<a href="#id">` clicks to scroll within `#custom-tab-host` (the actual overflow container). TOC renders as inline `<nav class="wiki-toc">` links between two `<hr>` lines; no box, no "Contents" label.
+  - **Serif heading styles** — H1 (title + body) and H2 use Georgia serif with `border-bottom`. H3–H6 use theme CSS variables (`--heading-h*-size/weight`). H2 corrected from `1.3em` → `var(--heading-h2-size)` (1.6em) so it's visibly larger than H3.
+  - **Title border removed** — `.wiki-h1` no longer has `border-bottom` (previously created triple-line with tab-strip borders).
+  - **`#custom-tab-host` layout fix** — Was `position:absolute; inset:0` on `#app`, covering sidebars. Now moved into `#app-row` by `sidebar-manager.init()` as a flex sibling of `#editor`; CSS changed to `flex:1; min-width:0`. Sidebars, titlebar, and statusbar are never obscured in layout view.
+  - **Live content updates** — `buildLayoutContext` gained optional `docContent?` param; `showLayoutForFile` passes `editor.state.doc.toString()` so layout reflects in-memory edits without requiring a disk save.
+  - **In-memory starter seeding** — `discoverLayouts` seeds from `STARTER_LAYOUTS` before scanning disk, so the bundled template is always current even if an older version exists on disk.
+  - **`marked` global config** — `marked.use({ breaks: true })` added in `main.ts` and `_markedWithIds`; single newlines in paragraphs render as `<br>` (matches Bear/Obsidian behavior).
+  - **Heading-after-paragraph spacing** — Two-rule fix in `styles.css` (scoped to `#custom-tab-host`) and wiki layout `<style>`: `h* + p { margin-top:0 }` removes paragraph top margin; `h*:has(+p) { margin-bottom:4px }` reduces heading bottom margin. Both sources of the gap addressed.
+  - **Sidebar H1/H2 margin** — `#sidebar-left/:is(h1,h2)` and wiki `.wiki-infobox-body :is(h1,h2)` get `margin-top:0`; infobox rule placed after `.wiki-body h2` rule to win the cascade.
+  - **TypeScript**: `Token` imported from `"marked"` to fix `marked.Tokens` namespace error. 80 test files, 3507 tests passing.
+
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-05 (session 8).**
+**Session ended 2026-05-07 (session 9).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **78 files, 3442 passing (3481 total, 39 skipped)**. Rust: 178 passing.
+- Test suite: **80 files, 3507 passing (3546 total, 39 skipped)**. Rust: 178 passing.
+- Wikipedia layout redesign complete and committed (see entry above).
 - Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
-- **Next step**: Run requirements-analyst for FC3 Smart Folders feature.
+- **Next step**: Continue FC3 features (Smart Folders, or next item from PKM plan).
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
 - **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.

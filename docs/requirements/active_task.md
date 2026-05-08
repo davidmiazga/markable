@@ -1,8 +1,8 @@
 ---
 title: Layouts Feature
-last-updated: "2026-05-06"
-review-cadence-days: 14
-status: active
+last-updated: "2026-05-07"
+review-cadence-days: 30
+status: reference
 ---
 
 # Layouts Feature

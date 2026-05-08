@@ -1101,6 +1101,7 @@ function _reconcileTabBar(side: "left" | "right"): void {
     // Remove tab bar; single-panel mode: header title serves as the label.
     runtime.tabBarEl?.remove();
     runtime.tabBarEl = null;
+    runtime.contentAreaEl?.classList.remove("has-tab-bar");
 
     // Null out stale tabEl references so we don't try to toggle classes
     // on detached buttons in _setActivePanel.
@@ -1115,6 +1116,7 @@ function _reconcileTabBar(side: "left" | "right"): void {
     }
   } else {
     // Ensure the tab bar element exists, prepended inside the content area.
+    runtime.contentAreaEl?.classList.add("has-tab-bar");
     if (!runtime.tabBarEl) {
       const bar = document.createElement("div");
       bar.className = "sidebar-tab-bar";
