@@ -1455,10 +1455,7 @@ function updateSelectedCell(): void {
 }
 
 /**
- * Register the calendar sidebar panel with the sidebar system.
- *
- * Uses `api.registerSidebarPanel()` (the canonical path from MarkablePluginAPI)
- * with a window global fallback for environments where the API is not available.
+ * Register the calendar sidebar panel via `_api.registerSidebarPanel()`.
  *
  * The header actions (previous month, today, next month) are rendered by the
  * sidebar infrastructure using the `headerActions` descriptor field.
@@ -1499,15 +1496,7 @@ function registerSidebarPanel(): void {
     },
   };
 
-  // Prefer the typed API method; fall back to the window global for test environments
-  // that do not supply a full MarkablePluginAPI mock.
-  if (_api && typeof _api.registerSidebarPanel === "function") {
-    _api.registerSidebarPanel(descriptor);
-  } else {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    (window as any).__MARKABLE_REGISTER_SIDEBAR_PANEL__?.(descriptor);
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  }
+  _api?.registerSidebarPanel?.(descriptor);
 }
 
 /**
@@ -1520,13 +1509,7 @@ function registerSidebarPanel(): void {
  * has already been torn down).
  */
 function unregisterSidebarPanel(): void {
-  if (_api && typeof _api.unregisterSidebarPanel === "function") {
-    _api.unregisterSidebarPanel("daily-note-calendar");
-  } else {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    (window as any).__MARKABLE_UNREGISTER_SIDEBAR_PANEL__?.("daily-note-calendar");
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  }
+  _api?.unregisterSidebarPanel?.("daily-note-calendar");
   _calContainer = null;
 }
 

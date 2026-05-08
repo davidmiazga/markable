@@ -1,8 +1,8 @@
 ---
 title: "Step 05 — Calendar Sidebar Panel"
-last-updated: "2026-04-23"
+last-updated: "2026-05-08"
 review-cadence-days: 7
-status: active
+status: reference
 ---
 
 # Step 05 — Calendar Sidebar Panel
@@ -90,13 +90,13 @@ function registerSidebarPanel(): void {
     },
   };
 
-  // Register with the sidebar system.
-  // Check for both the modern API (api.registerSidebarPanel) and the window global fallback.
-  if (_api && typeof (_api as any).registerSidebarPanel === 'function') {
-    (_api as any).registerSidebarPanel(descriptor);
-  } else {
-    (window as any).__MARKABLE_REGISTER_SIDEBAR_PANEL__?.(descriptor);
-  }
+  // Register with the sidebar system. NOTE (2026-05-08): the original spec
+  // included a `window.__MARKABLE_REGISTER_SIDEBAR_PANEL__` fallback. That
+  // global is never assigned anywhere in the codebase, and a stale reference
+  // to it caused a real bug where disabling the plugin left orphan calendar
+  // DOM in the sidebar (because `_api` was nulled before unregister). The
+  // fallback has been removed; production code uses `_api?.registerSidebarPanel?.()`.
+  _api?.registerSidebarPanel?.(descriptor);
 }
 ```
 
@@ -106,11 +106,10 @@ function registerSidebarPanel(): void {
 
 ```typescript
 function unregisterSidebarPanel(): void {
-  if (_api && typeof (_api as any).unregisterSidebarPanel === 'function') {
-    (_api as any).unregisterSidebarPanel('daily-note-calendar');
-  } else {
-    (window as any).__MARKABLE_UNREGISTER_SIDEBAR_PANEL__?.('daily-note-calendar');
-  }
+  // See note in registerSidebarPanel above re: removed window-global fallback.
+  // CAUTION: in onDisable, call this BEFORE setting `_api = null`, otherwise
+  // the call no-ops and the panel DOM stays in the sidebar.
+  _api?.unregisterSidebarPanel?.('daily-note-calendar');
   _calContainer = null;
 }
 ```
