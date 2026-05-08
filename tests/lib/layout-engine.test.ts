@@ -34,6 +34,7 @@ const baseCtx = {
     path: "/v/test.md",
     name: "test",
     modified: 1000,
+    toc: [],
   },
   vault: {
     files: [
@@ -549,6 +550,7 @@ describe("buildContext", () => {
       path: "/v/note.md",
       name: "note",
       modified: 0,
+      toc: [],
     };
     const vault = { name: "V", files: [], directories: [] };
     const meta = { tags: [], fields: {} };

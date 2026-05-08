@@ -112,9 +112,12 @@ import type { MetaStore } from "./lib/meta-manager";
 import { getAppDataDir } from "./lib/bridge";
 import {
   buildAutoRenderExtension,
+  checkAndApplyLayoutOnSave,
+  showLayoutForFile,
   openLayoutPicker,
   ensureStarterLayouts,
   injectLayoutsCSS,
+  injectSidebarCSS,
 } from "./lib/layout-manager";
 import type { LayoutDeps } from "./lib/layout-manager";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -403,6 +406,11 @@ async function openRecentFileByPath(path: string): Promise<void> {
 async function saveFile(): Promise<void> {
   await tabManager.saveActiveTab();
   await refreshRecentFilesMenu();
+  if (_layoutDeps && editor) {
+    const path = tabManager.getActiveFilePath();
+    const doc = editor.state.doc.toString();
+    void checkAndApplyLayoutOnSave(path, doc, _layoutDeps);
+  }
 }
 
 /**
@@ -669,7 +677,27 @@ function handleAction(action: string): void {
     case "file-export":     void openExportDialog(editor, tabManager.getActiveFilePath()); break;
     // file-print bypasses the sheet and goes directly to the system print dialog.
     case "file-print":      printDocument(editor); break;
-    case "view-toggle-preview":    togglePreview();      break;
+    case "view-toggle-preview": {
+      if (tabManager.isActiveTabInLayoutView()) {
+        // Layout view → code view: exit layout, ensure code view not live-preview.
+        tabManager.exitLayoutView();
+        if (previewEnabled) togglePreview();
+      } else if (editor && _layoutDeps) {
+        // Code/preview view → check if file has a layout; if so show layout, else toggle preview.
+        const filePath = tabManager.getActiveFilePath();
+        if (filePath) {
+          void (async () => {
+            const shown = await showLayoutForFile(filePath, editor.state.doc.toString(), _layoutDeps!);
+            if (!shown) togglePreview();
+          })();
+        } else {
+          togglePreview();
+        }
+      } else {
+        togglePreview();
+      }
+      break;
+    }
     case "view-toggle-statusbar":
       if (getStatusBarVisible()) {
         setStatusBarVisible(false);
@@ -1107,6 +1135,9 @@ async function initApp() {
 
   // FR-10: expose marked.parse so IIFE plugins share the same renderer instance.
   // Using the same marked instance avoids duplicate configuration (D-02).
+  // breaks:true converts a single newline within a paragraph to <br>, matching
+  // the user expectation in a note-taking app (same default as Bear / Obsidian).
+  marked.use({ breaks: true });
   (window as unknown as Record<string, unknown>)["__MARKABLE_RENDER_MD__"] =
     (md: string) => marked.parse(md);
 
@@ -1122,10 +1153,12 @@ async function initApp() {
       getVaultIndex: () => vaultManager.getVaultIndex(),
       getActiveVaultName: () => vaultManager.getActiveVault()?.name ?? "",
       getMetaStore: () => (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] as MetaStore | null,
-      openCustomRenderTab: (title, renderFn) => tabManager.openCustomRenderTab(title, renderFn),
+      showLayoutView: (renderFn) => tabManager.enterLayoutView(renderFn),
+      refreshLayoutView: (renderFn) => tabManager.refreshLayoutView(renderFn),
       getCurrentFilePath: () => tabManager.getActiveFilePath(),
     };
     injectLayoutsCSS();
+    injectSidebarCSS();
     editor.dispatch({
       effects: StateEffect.appendConfig.of(buildAutoRenderExtension(_layoutDeps)),
     });

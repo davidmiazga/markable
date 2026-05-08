@@ -287,6 +287,29 @@ body.tab-mode-vertical #titlebar {
 }
 
 /* ============================================================
+   Rendered HTML typography (layout view, exported HTML, sidebar widgets)
+   Scoped to #custom-tab-host so it doesn't bleed into CM editor or UI chrome.
+   ============================================================ */
+
+/* H1/H2 inside sidebar panels get no top margin — they're used as section labels,
+   not document titles, so the extra whitespace above them is unwanted. */
+#sidebar-left :is(h1,h2),
+#sidebar-right :is(h1,h2) {
+  margin-top: 0;
+}
+
+/* Close the gap between a heading and the paragraph immediately after it.
+   Two sources of space: the heading's margin-bottom AND the paragraph's margin-top.
+   Both must be zeroed; a 4px bottom on the heading keeps it from looking flush.
+   Spacing between p+p is intentionally kept via the browser/reset default. */
+#custom-tab-host :is(h1,h2,h3,h4,h5,h6) + p {
+  margin-top: 0;
+}
+#custom-tab-host :is(h1,h2,h3,h4,h5,h6):has(+ p) {
+  margin-bottom: 4px;
+}
+
+/* ============================================================
    Live Preview -- Heading Styles
    ============================================================ */
 .cm-live-h1 span,

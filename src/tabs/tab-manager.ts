@@ -317,6 +317,7 @@ export class TabManager {
     if (this.tabs.length === 0) {
       this.editorContainer?.classList.remove("has-media-tab");
       document.body.classList.remove("has-custom-tab");
+      document.body.classList.remove("has-layout-view");
       if (this.mediaViewerEl) this.mediaViewerEl.innerHTML = "";
       // Clear the editor and lock it — blank, non-editable empty state.
       if (this.editorView) {
@@ -340,6 +341,7 @@ export class TabManager {
     if (tab.kind === "media") {
       // Show the media viewer; hide the CM6 editor.
       this.editorContainer?.classList.add("has-media-tab");
+      document.body.classList.remove("has-layout-view");
       this._renderMediaViewer(tab.filePath!);
       this._updateTitleBar(tab);
       // AD-6: expose current file path for IIFE plugins.
@@ -352,6 +354,7 @@ export class TabManager {
       // Hide the CM6 editor; show the custom tab host.
       // Remove has-media-tab in case the previous tab was a media tab.
       this.editorContainer?.classList.remove("has-media-tab");
+      document.body.classList.remove("has-layout-view");
       document.body.classList.add("has-custom-tab");
       this._updateTitleBar(tab);
       // AD-6: custom tabs have no meaningful file path.
@@ -397,6 +400,20 @@ export class TabManager {
 
     // Restore the scroll position the user was at when they last left this tab.
     this.editorView.scrollDOM.scrollTop = tab.scrollTop;
+
+    // If this tab is in layout view, show the layout host instead of the editor.
+    if (tab.isInLayoutView && tab.layoutRenderFn) {
+      const hostEl = document.getElementById("custom-tab-host") ?? this.customTabHostEl;
+      if (hostEl?.isConnected) {
+        hostEl.innerHTML = "";
+        try { tab.layoutRenderFn(hostEl); } catch (err) {
+          hostEl.innerHTML = `<div class="layout-error">Render error: ${String(err)}</div>`;
+        }
+      }
+      document.body.classList.add("has-layout-view");
+    } else {
+      document.body.classList.remove("has-layout-view");
+    }
 
     // Update the chromeless title bar.
     this._updateTitleBar(tab);
@@ -868,6 +885,55 @@ export class TabManager {
     this._updateTitleBar(this.tabs[this.activeIndex]);
     this._notifyRenderer();
     void this.saveSession();
+  }
+
+  /** Enter layout view on the currently active editor tab. */
+  enterLayoutView(renderFn: (container: HTMLElement) => void): void {
+    const tab = this.getActiveTab();
+    if (!tab || tab.kind !== "editor") return;
+    tab.isInLayoutView = true;
+    tab.layoutRenderFn = renderFn;
+    const hostEl = document.getElementById("custom-tab-host") ?? this.customTabHostEl;
+    if (!hostEl?.isConnected) return;
+    hostEl.innerHTML = "";
+    try { renderFn(hostEl); } catch (err) {
+      hostEl.innerHTML = `<div class="layout-error">Render error: ${String(err)}</div>`;
+    }
+    document.body.classList.add("has-layout-view");
+    this._notifyRenderer();
+  }
+
+  /** Exit layout view — return to the CM6 editor on the active tab. */
+  exitLayoutView(): void {
+    const tab = this.getActiveTab();
+    if (!tab || tab.kind !== "editor") return;
+    tab.isInLayoutView = false;
+    tab.layoutRenderFn = undefined;
+    document.body.classList.remove("has-layout-view");
+    this._notifyRenderer();
+  }
+
+  /**
+   * Update layout content without switching into layout view.
+   * If layout view is already showing, re-renders immediately.
+   * If in code view, stores renderFn so the next Cmd-E shows fresh content.
+   */
+  refreshLayoutView(renderFn: (container: HTMLElement) => void): void {
+    const tab = this.getActiveTab();
+    if (!tab || tab.kind !== "editor") return;
+    tab.layoutRenderFn = renderFn;
+    if (!tab.isInLayoutView) return;
+    const hostEl = document.getElementById("custom-tab-host") ?? this.customTabHostEl;
+    if (!hostEl?.isConnected) return;
+    hostEl.innerHTML = "";
+    try { renderFn(hostEl); } catch (err) {
+      hostEl.innerHTML = `<div class="layout-error">Render error: ${String(err)}</div>`;
+    }
+  }
+
+  /** True when the active editor tab is currently showing a layout. */
+  isActiveTabInLayoutView(): boolean {
+    return this.getActiveTab()?.isInLayoutView === true;
   }
 
   /**

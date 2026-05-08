@@ -31,6 +31,13 @@ export interface TemplateContext {
   [key: string]: unknown;
 }
 
+export interface TocEntry {
+  level: number;    // 2 or 3
+  text: string;     // plain text (inline markdown stripped)
+  id: string;       // slug for anchor links
+  cssClass: string; // "toc-h3" for level-3, "" for level-2
+}
+
 export interface FileContext {
   title: string;
   content: string;        // raw Markdown
@@ -40,6 +47,7 @@ export interface FileContext {
   path: string;
   name: string;           // stem without extension
   modified: number;       // unix ms
+  toc: TocEntry[];        // auto-generated TOC from ## / ### headings
 }
 
 export interface VaultContext {
@@ -784,6 +792,23 @@ export function stripScripts(html: string): string {
  *
  * @param container  The rendered #custom-tab-host element.
  */
+/**
+ * Wire up `href="#id"` anchor links inside the layout container so they scroll
+ * within `#custom-tab-host` (which is the overflow:auto container) instead of
+ * navigating the Tauri webview's viewport.
+ */
+export function wireAnchorLinks(container: HTMLElement): void {
+  container.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = a.getAttribute("href")?.slice(1);
+      if (!id) return;
+      const target = container.querySelector(`#${CSS.escape(id)}`);
+      target?.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+}
+
 export function wireDataPathListeners(container: HTMLElement): void {
   // Access the tab manager global at call time so tests can inject it freely.
   const tm = (window as unknown as Record<string, unknown>)["__MARKABLE_TAB_MANAGER__"] as

@@ -213,8 +213,12 @@ export function init(): void {
   _createSlotElement("left");
   appRowEl.appendChild(slotRuntime.left.el!);
 
-  // #editor goes between the two sidebar slots.
+  // #editor and #custom-tab-host both occupy the center content slot.
+  // Moving #custom-tab-host here (out of #app) means it only fills the editor
+  // column — sidebars, titlebar, and statusbar are never covered.
   appRowEl.appendChild(editor);
+  const customTabHost = document.getElementById("custom-tab-host");
+  if (customTabHost) appRowEl.appendChild(customTabHost);
 
   _createSlotElement("right");
   appRowEl.appendChild(slotRuntime.right.el!);

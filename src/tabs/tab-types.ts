@@ -88,6 +88,11 @@ export interface TabEntry {
    * Must not throw — TabManager wraps the call in try/catch (FR-04, EC-15).
    */
   renderFn?: (container: HTMLElement) => void;
+
+  /** True when this editor tab is displaying layout HTML instead of the CM6 editor. */
+  isInLayoutView?: boolean;
+  /** Stored render fn for layout view — re-invoked when switching back to this tab. */
+  layoutRenderFn?: (container: HTMLElement) => void;
 }
 
 /**

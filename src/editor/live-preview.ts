@@ -760,6 +760,21 @@ class FencedCodeWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
+class SidebarWidget extends WidgetType {
+  constructor(readonly src: string) { super(); }
+  eq(other: SidebarWidget): boolean { return this.src === other.src; }
+  toDOM(): HTMLElement {
+    const wrap = document.createElement("aside");
+    wrap.className = "cm-sidebar-preview";
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    wrap.innerHTML = renderMd ? renderMd(this.src) : `<pre>${this.src}</pre>`;
+    return wrap;
+  }
+  ignoreEvent(): boolean { return false; }
+}
+
 function buildFencedCodeDecorations(state: EditorState): DecorationSet {
   const activeLines = getActiveLines(state);
   const decorations: Range<Decoration>[] = [];
@@ -796,6 +811,14 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
       if (diagramsActive && lang.toLowerCase() === "mermaid") return false;
 
       const code = codeFrom >= 0 ? state.doc.sliceString(codeFrom, codeTo) : "";
+
+      if (lang.toLowerCase() === "sidebar") {
+        decorations.push(
+          Decoration.replace({ widget: new SidebarWidget(code.trim()), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
 
       decorations.push(
         Decoration.replace({ widget: new FencedCodeWidget(lang, code), block: true })
