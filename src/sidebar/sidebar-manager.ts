@@ -20,6 +20,8 @@ import {
   DEFAULT_SIDEBAR_SLOT,
 } from "../lib/settings";
 import type { SidebarSettings, SidebarSlotState } from "../lib/settings";
+import { attachPanelReorderDrag } from "./panel-reorder-drag";
+import { PANEL_ICONS } from "./panel-icons";
 
 // ── Material icon SVGs ────────────────────────────────────────────────────────
 // Inline SVG paths sourced from the Material Symbols / Material Icons library
@@ -137,6 +139,8 @@ interface SlotRuntime {
   iconStripEl: HTMLDivElement | null;
   /** The content area element (flex:1, holds tab bar, panels, resize handle). Null until slot is created. */
   contentAreaEl: HTMLDivElement | null;
+  /** Cycle chevron button (right sidebar only). Re-appended to the tab bar on every reconcile. */
+  cycleBtnEl: HTMLButtonElement | null;
   /** Panel ids in registration order for this side. */
   panelIds: string[];
 }
@@ -153,8 +157,8 @@ const registeredPanels = new Map<string, RegisteredPanel>();
  * created in register() when the first panel for that side arrives.
  */
 const slotRuntime: Record<"left" | "right", SlotRuntime> = {
-  left:  { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] },
-  right: { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] },
+  left:  { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
+  right: { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
 };
 
 /** The #app-row flex row that contains #sidebar-left, #editor, #sidebar-right. */
@@ -290,6 +294,9 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
   };
   registeredPanels.set(descriptor.id, panelRecord);
   runtime.panelIds.push(descriptor.id);
+
+  // Honour any user-defined stack order from settings.
+  _applyPersistedOrder(effectiveSide);
 
   // Reconcile the tab bar for this side (creates tab bar if needed).
   _reconcileTabBar(effectiveSide);
@@ -722,8 +729,8 @@ function _buildSidebarSettings(
  */
 export function _resetForTests(): void {
   registeredPanels.clear();
-  slotRuntime.left  = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] };
-  slotRuntime.right = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, panelIds: [] };
+  slotRuntime.left  = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
+  slotRuntime.right = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
   appRowEl = null;
   initialized = false;
 }
@@ -782,6 +789,7 @@ function _createSlotElement(side: "left" | "right"): void {
   runtime.el = slotEl;
   runtime.iconStripEl = iconStripEl;
   runtime.contentAreaEl = contentAreaEl;
+  runtime.cycleBtnEl = null;
   runtime.resizeHandleEl = handle;
 }
 
@@ -811,13 +819,27 @@ function _buildPanelWrapper(
   wrapperEl.className = "sidebar-panel-wrapper";
   wrapperEl.dataset.panelId = descriptor.id;
 
-  // Accordion header row: title label + chevron toggle button.
+  // Accordion header row: drag-handle (icon + title) + chevron toggle button.
   const headerEl = document.createElement("div");
   headerEl.className = "sidebar-panel-header";
+
+  // Single drag handle wrapping both icon and title — grabbing either grabs both.
+  const dragHandleEl = document.createElement("span");
+  dragHandleEl.className = "sidebar-panel-drag-handle";
+
+  const iconSvg = PANEL_ICONS[descriptor.id];
+  if (iconSvg) {
+    const iconEl = document.createElement("span");
+    iconEl.className = "sidebar-panel-icon";
+    iconEl.setAttribute("aria-hidden", "true");
+    iconEl.innerHTML = iconSvg;
+    dragHandleEl.appendChild(iconEl);
+  }
 
   const titleEl = document.createElement("span");
   titleEl.className = "sidebar-panel-title";
   titleEl.textContent = descriptor.title;
+  dragHandleEl.appendChild(titleEl);
 
   // Move button — reassigns the panel to the opposite sidebar side when clicked.
   // Positioned between the title label and the accordion chevron so it is easy
@@ -834,7 +856,7 @@ function _buildPanelWrapper(
   // Start expanded; aria-expanded drives the CSS chevron rotation (step_03).
   toggleBtn.setAttribute("aria-expanded", "true");
 
-  headerEl.appendChild(titleEl);
+  headerEl.appendChild(dragHandleEl);
 
   // Optional header action buttons (e.g. "+" on the Properties panel).
   // Rendered after the title, before the move/toggle buttons.
@@ -882,6 +904,14 @@ function _buildPanelWrapper(
     e.preventDefault();
     _showPanelContextMenu(descriptor.id, e.clientX, e.clientY);
   });
+
+  // Drag the icon-or-title (the whole drag handle) to reorder this panel.
+  attachPanelReorderDrag(
+    dragHandleEl,
+    descriptor.id,
+    `#sidebar-${side} .sidebar-panel-wrapper[data-panel-id]`,
+    (fromId, insertBeforeId) => _reorderPanel(side, fromId, insertBeforeId),
+  );
 
   return { wrapperEl, contentEl };
 }
@@ -968,30 +998,6 @@ function _persistAfterUnregister(
       }),
     }));
   }
-}
-
-/**
- * Build a single tab button for the tab bar.
- *
- * Extracted from _reconcileTabBar to keep the rebuild loop readable and to
- * keep _reconcileTabBar under the 30-line limit.
- *
- * @param id     The panel id this tab button represents.
- * @param panel  The registered panel record (used for the button label).
- * @param side   The sidebar side (passed to the click handler).
- * @returns      The created tab button element.
- */
-function _buildTabButton(
-  id: string,
-  panel: RegisteredPanel,
-  side: "left" | "right"
-): HTMLButtonElement {
-  const tab = document.createElement("button");
-  tab.className = "sidebar-tab";
-  tab.dataset.panelId = id;
-  tab.textContent = panel.descriptor.title;
-  tab.addEventListener("click", () => _handleTabClick(side, id));
-  return tab;
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -1082,80 +1088,134 @@ function _attachResizeHandle(
 }
 
 /**
- * Reconcile the tab bar for a side after any registration or unregistration.
+ * Reconcile panel display for a side after registration / unregistration.
  *
- * Single-panel sides: no tab bar (tab bar removed if it existed).
- * Multi-panel sides: tab bar is created or rebuilt from scratch.
- *
- * "Rebuilt from scratch" means innerHTML = "" plus fresh button elements.
- * This is simple and safe: clicking an old button reference would be a no-op
- * because the element is detached from the DOM (EC-20).
+ * Stacked mode: no tab bar exists. All non-iconized panels are shown vertically.
+ * Each panel has its own accordion header (panel title + collapse chevron).
+ * Iconized panels are hidden — only their icon strip button remains.
  *
  * @param side  The sidebar side to reconcile.
  */
 function _reconcileTabBar(side: "left" | "right"): void {
   const runtime = slotRuntime[side];
-  const count = runtime.panelIds.length;
 
-  if (count <= 1) {
-    // Remove tab bar; single-panel mode: header title serves as the label.
-    runtime.tabBarEl?.remove();
-    runtime.tabBarEl = null;
-    runtime.contentAreaEl?.classList.remove("has-tab-bar");
+  // Strip any leftover tab bar (this build no longer uses one).
+  runtime.tabBarEl?.remove();
+  runtime.tabBarEl = null;
+  runtime.contentAreaEl?.classList.remove("has-tab-bar");
 
-    // Null out stale tabEl references so we don't try to toggle classes
-    // on detached buttons in _setActivePanel.
-    runtime.panelIds.forEach((id) => {
-      const p = registeredPanels.get(id);
-      if (p) p.tabEl = null;
-    });
+  // Null out stale tabEl refs so _setActivePanel never touches a detached node.
+  runtime.panelIds.forEach((id) => {
+    const p = registeredPanels.get(id);
+    if (p) p.tabEl = null;
+  });
 
-    // Show the single panel if there is one.
-    if (count === 1) {
-      _setActivePanel(side, runtime.panelIds[0], /* persist= */ false);
-    }
+  // Show all non-iconized panels.
+  runtime.panelIds.forEach((id) => {
+    const panel = registeredPanels.get(id);
+    if (!panel) return;
+    const isIconized = panel.wrapperEl.classList.contains("is-iconized");
+    panel.wrapperEl.style.display = isIconized ? "none" : "";
+  });
+}
+
+/**
+ * Reorder a panel within its side's stack. Updates `panelIds`, reorders DOM
+ * children of `contentAreaEl`, and persists the new order to settings.
+ *
+ * @param side            Sidebar side.
+ * @param fromId          Panel being moved.
+ * @param insertBeforeId  Panel id the moved panel should be inserted before;
+ *                        null means drop at the end of the stack.
+ */
+function _reorderPanel(
+  side: "left" | "right",
+  fromId: string,
+  insertBeforeId: string | null,
+): void {
+  const runtime = slotRuntime[side];
+  const fromIdx = runtime.panelIds.indexOf(fromId);
+  if (fromIdx < 0) return;
+
+  // Compute new index in the panelIds array.
+  let toIdx: number;
+  if (insertBeforeId === null) {
+    toIdx = runtime.panelIds.length - 1; // end of list (after removal)
   } else {
-    // Ensure the tab bar element exists, prepended inside the content area.
-    runtime.contentAreaEl?.classList.add("has-tab-bar");
-    if (!runtime.tabBarEl) {
-      const bar = document.createElement("div");
-      bar.className = "sidebar-tab-bar";
-      runtime.contentAreaEl!.prepend(bar);
-      runtime.tabBarEl = bar;
+    const beforeIdx = runtime.panelIds.indexOf(insertBeforeId);
+    if (beforeIdx < 0) return;
+    toIdx = beforeIdx > fromIdx ? beforeIdx - 1 : beforeIdx;
+  }
+  if (toIdx === fromIdx) return;
+
+  // Reorder panelIds: remove and re-insert.
+  runtime.panelIds.splice(fromIdx, 1);
+  runtime.panelIds.splice(toIdx, 0, fromId);
+
+  // Reorder DOM to match — both the stacked wrappers AND the icon strip buttons.
+  const movedPanel = registeredPanels.get(fromId);
+  if (movedPanel && runtime.contentAreaEl) {
+    const beforeEl = insertBeforeId
+      ? registeredPanels.get(insertBeforeId)?.wrapperEl ?? null
+      : runtime.resizeHandleEl;
+    runtime.contentAreaEl.insertBefore(movedPanel.wrapperEl, beforeEl);
+  }
+  if (movedPanel?.iconBtnEl && runtime.iconStripEl) {
+    const beforeBtn = insertBeforeId
+      ? registeredPanels.get(insertBeforeId)?.iconBtnEl ?? null
+      : null;
+    runtime.iconStripEl.insertBefore(movedPanel.iconBtnEl, beforeBtn);
+  }
+
+  // Persist the new order.
+  updateSettings((s) => ({
+    ...s,
+    sidebar: _buildSidebarSettings(s.sidebar, side, {
+      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      panelOrder: [...runtime.panelIds],
+    }),
+  }));
+}
+
+/**
+ * Apply the persisted panelOrder for a side to both `panelIds` and the DOM.
+ * Panels not in the persisted list keep their relative order at the end.
+ */
+function _applyPersistedOrder(side: "left" | "right"): void {
+  const runtime = slotRuntime[side];
+  const persisted = getCurrentSettings().sidebar?.[side]?.panelOrder;
+  if (!persisted || persisted.length === 0) return;
+
+  const known = new Set(runtime.panelIds);
+  const ordered = [
+    ...persisted.filter((id) => known.has(id)),
+    ...runtime.panelIds.filter((id) => !persisted.includes(id)),
+  ];
+  if (ordered.join("|") === runtime.panelIds.join("|")) return;
+
+  runtime.panelIds = ordered;
+
+  // Reorder DOM — both the stacked panel wrappers and the icon-strip buttons.
+  for (const id of ordered) {
+    const panel = registeredPanels.get(id);
+    if (!panel) continue;
+    if (runtime.contentAreaEl) {
+      runtime.contentAreaEl.insertBefore(panel.wrapperEl, runtime.resizeHandleEl);
     }
-
-    // Rebuild tab bar contents from scratch (simple, avoids stale listeners).
-    runtime.tabBarEl.innerHTML = "";
-    runtime.panelIds.forEach((id) => {
-      const panel = registeredPanels.get(id)!;
-      const tab = _buildTabButton(id, panel, side);
-      runtime.tabBarEl!.appendChild(tab);
-      panel.tabEl = tab;
-    });
-
-    // Determine active panel: honour persisted activeTabId if still valid,
-    // otherwise default to the first panel.
-    const currentActiveId = getCurrentSettings().sidebar?.[side]?.activeTabId;
-    const activeId =
-      currentActiveId && runtime.panelIds.includes(currentActiveId)
-        ? currentActiveId
-        : runtime.panelIds[0];
-
-    _setActivePanel(side, activeId, /* persist= */ false);
+    if (panel.iconBtnEl && runtime.iconStripEl) {
+      runtime.iconStripEl.appendChild(panel.iconBtnEl);
+    }
   }
 }
 
 /**
- * Show a specific panel and hide all other panels on the same side.
- *
- * For multi-panel sides: marks the tab button with the .sidebar-tab-active
- * class and sets display:none on inactive wrapper elements.
- *
- * For single-panel sides: tabEl is null, so the class toggle is skipped and
- * only the display logic applies.
+ * Update display of all panels on the side. In stacked mode every non-iconized
+ * panel is visible — `panelId` is no longer used to choose a single visible
+ * panel, but it is still persisted as `activeTabId` so other code paths that
+ * read it (e.g. focus restoration) keep working.
  *
  * @param side      The sidebar side.
- * @param panelId   The panel that should become active.
+ * @param panelId   The panel id to record as "active" in settings.
  * @param persist   If true, write activeTabId to settings immediately.
  */
 function _setActivePanel(
@@ -1168,13 +1228,8 @@ function _setActivePanel(
   runtime.panelIds.forEach((id) => {
     const panel = registeredPanels.get(id);
     if (!panel) return;
-
-    const isActive = id === panelId;
     const isIconized = panel.wrapperEl.classList.contains("is-iconized");
-    // Show only when active AND not iconized; hide otherwise.
-    panel.wrapperEl.style.display = (isActive && !isIconized) ? "" : "none";
-    // Toggle tab active class (no-op when tabEl is null — single-panel mode).
-    panel.tabEl?.classList.toggle("sidebar-tab-active", isActive);
+    panel.wrapperEl.style.display = isIconized ? "none" : "";
   });
 
   if (persist) {
@@ -1186,18 +1241,6 @@ function _setActivePanel(
       }),
     }));
   }
-}
-
-/**
- * Handle a click on a tab button.
- *
- * Switches to the clicked panel and persists the new activeTabId.
- *
- * @param side     The sidebar side that owns the tab bar.
- * @param panelId  The panel whose tab was clicked.
- */
-function _handleTabClick(side: "left" | "right", panelId: string): void {
-  _setActivePanel(side, panelId, /* persist= */ true);
 }
 
 /**
@@ -1370,8 +1413,14 @@ function _buildIconButton(
   const btn = document.createElement("button");
   btn.className = "sidebar-icon-btn";
   btn.dataset.panelId = panelId;
+
+  // Icon priority: shared PANEL_ICONS map → descriptor.icon (legacy emoji/SVG/letter)
+  // → first letter of title. PANEL_ICONS keeps the strip and panel header in sync.
+  const sharedSvg = PANEL_ICONS[panelId];
   const icon = panel.descriptor.icon;
-  if (icon && icon.trimStart().startsWith("<")) {
+  if (sharedSvg) {
+    btn.innerHTML = sharedSvg;
+  } else if (icon && icon.trimStart().startsWith("<")) {
     btn.innerHTML = icon;
   } else if (icon) {
     btn.textContent = icon;

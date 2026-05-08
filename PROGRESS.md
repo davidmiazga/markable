@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-07 (session 9)
+**Last Updated:** 2026-05-07 (session 9, continued)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -93,18 +93,23 @@
   - **Heading-after-paragraph spacing** — Two-rule fix in `styles.css` (scoped to `#custom-tab-host`) and wiki layout `<style>`: `h* + p { margin-top:0 }` removes paragraph top margin; `h*:has(+p) { margin-bottom:4px }` reduces heading bottom margin. Both sources of the gap addressed.
   - **Sidebar H1/H2 margin** — `#sidebar-left/:is(h1,h2)` and wiki `.wiki-infobox-body :is(h1,h2)` get `margin-top:0`; infobox rule placed after `.wiki-body h2` rule to win the cascade.
   - **TypeScript**: `Token` imported from `"marked"` to fix `marked.Tokens` namespace error. 80 test files, 3507 tests passing.
+- **Sidebar panel tab styling (session 9 cont.)** — Folder-tab style for sidebar panel tab bars. Changes committed 2026-05-07:
+  - **No active-tab underline** — Removed the blue underline on the active tab. Tab bar `border-bottom` is now visually "erased" by the active tab using the folder-tab technique.
+  - **Folder-tab CSS** — `margin-bottom: -1px` on all tabs pulls them 1px below the tab bar's bottom edge. Active tab: `border-bottom: 1px solid var(--bg-titlebar)` (background-match) + `position: relative; z-index: 1` paints over the parent's `border-bottom` in that region. **Root cause of prior failure**: `overflow-x: auto` on `.sidebar-tab-bar` forced `overflow-y` to `auto` by CSS spec (when one axis is non-`visible`, the other is coerced), creating a scroll container that clipped the `margin-bottom: -1px` extension. Fix: removed both `overflow-x: auto` and `overflow-y: hidden` from `.sidebar-tab-bar`.
+  - **No duplicate panel name** — When multiple panels share a sidebar (tab bar present), the accordion title text is hidden via `visibility: hidden` so only the tab label shows. `has-tab-bar` class added to `contentAreaEl` by `_reconcileTabBar` scopes the CSS rule: `.has-tab-bar .sidebar-panel-title { visibility: hidden }`. Single-panel sidebars (no tab bar) keep the accordion title as their only label.
 
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-07 (session 9).**
+**Session ended 2026-05-07 (session 9, continued).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
 - Test suite: **80 files, 3507 passing (3546 total, 39 skipped)**. Rust: 178 passing.
 - Wikipedia layout redesign complete and committed (see entry above).
+- Sidebar panel tab styling complete: folder-tab effect, no duplicate panel name, `has-tab-bar` conditional.
 - Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
 - **Next step**: Continue FC3 features (Smart Folders, or next item from PKM plan).
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
@@ -119,6 +124,7 @@ None.
 - **Drag reminder**: HTML5 drag (`draggable="true"`, `dragstart`) does NOT work in Tauri WKWebView on macOS. Always use pointer events (`pointerdown`/`pointermove`/`pointerup`) for any drag interaction in the file browser. Suppress text selection with `document.body.style.userSelect = "none"` on `pointerdown` (not after a threshold), restored in cleanup.
 - **Sidebar side reminder**: all panels default to the right sidebar. File browser is the sole left-side exception. User overrides persist in `settings.sidebar.panelSides`; clear that map if defaults need to take effect on an existing install.
 - **Sidebar structure reminder**: `#sidebar-left/right` are `flex-direction: row` — ghost icon rail (25 px collapsed / 44 px expanded, outer edge) + content area (flex:1). Panel wrappers, tab bar, and resize handle all live inside `.sidebar-content-area`, not the slot root. Tests querying inside a specific side must use `#sidebar-right .sidebar-content-area` etc. `toggleSidebarSide` always restores `contentAreaEl.style.display = ""` when opening — prevents panels being stuck hidden after an iconize session.
+- **Folder-tab CSS constraint**: `.sidebar-tab-bar` must NOT have `overflow-x: auto` or `overflow-y: hidden`. CSS spec coerces both overflow axes to `auto` when either is non-`visible`, creating a scroll container that clips the `margin-bottom: -1px` tabs need for the folder-tab effect. Leave `.sidebar-tab-bar` at default (`overflow: visible`). Active tab uses `border-bottom: 1px solid var(--bg-titlebar)` + `position: relative; z-index: 1` to paint over the parent's `border-bottom`.
 - **Pin color**: `#e05252` used consistently for pinned-state red dots on tabs (all three renderers), sidebar panel titles, sidebar rail icon buttons, and file browser pinned items. Exposed as `--tab-pin-color` CSS variable.
 
 #### How to resume

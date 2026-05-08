@@ -45,19 +45,19 @@
   padding: 4px 0;
   gap: 2px;
   background: var(--bg-titlebar);
-  opacity: 0;
+  opacity: 1;            /* strip always opaque — chevron visible at rest */
   overflow: hidden;
   cursor: pointer;
-  transition: opacity 0.15s ease, width 0.15s ease;
+  transition: width 0.15s ease;
 }
 
-.sidebar-icon-strip:hover:not(.is-expanded) {
-  opacity: 0.3;
+/* Expand to full width on hover or when locked open */
+.sidebar-icon-strip:hover:not(.is-expanded),
+.sidebar-icon-strip.is-expanded {
+  width: 44px;
 }
 
 .sidebar-icon-strip.is-expanded {
-  width: 44px;
-  opacity: 1;
   cursor: default;
   border-right: 1px solid var(--border-color, rgba(128,128,128,.15));
 }
@@ -71,9 +71,17 @@
   order: 1;
 }
 
-/* Buttons are non-interactive when strip is collapsed so clicks expand the strip */
-.sidebar-icon-strip:not(.is-expanded) .sidebar-icon-btn {
+/* Panel icon buttons: hidden at rest, shown on hover or when expanded */
+.sidebar-icon-strip .sidebar-icon-btn {
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.sidebar-icon-strip:hover .sidebar-icon-btn,
+.sidebar-icon-strip.is-expanded .sidebar-icon-btn {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .sidebar-icon-btn {
@@ -97,6 +105,13 @@
 .sidebar-icon-btn:hover {
   background: var(--code-bg);
   color: var(--text-primary);
+}
+
+/* SVG icons inside strip buttons: constrain to 18 px so the 32 px button has padding. */
+.sidebar-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .sidebar-icon-btn.is-active {
@@ -123,69 +138,25 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 6px;
   position: relative;     /* Contains the absolutely-positioned resize handle */
-  overflow: hidden;
-}
-
-/* ── Tab bar ─────────────────────────────────────────────────────────────────── */
-
-.sidebar-tab-bar {
-  display: flex;
-  flex-direction: row;
-  flex-shrink: 0;
-  /* overflow must stay visible (default) — any non-visible value forces a scroll
-     container which clips the margin-bottom:-1px that makes folder-tabs work */
-  border-bottom: 1px solid var(--border-color);
-}
-
-.sidebar-tab {
-  flex-shrink: 0;
-  background: none;
-  /* Three-sided border for folder-tab style; bottom transparent by default */
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 3px 3px 0 0;
-  /* Overlap the tab-bar's border-bottom so active tab erases it */
-  margin-bottom: -1px;
-  padding: 5px 12px 6px;
-  font-family: var(--ui-font);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-  text-transform: uppercase;
-  transition: color 0.1s;
-}
-
-.sidebar-tab:hover {
-  color: var(--text-primary);
-}
-
-.sidebar-tab.sidebar-tab-active {
-  color: var(--text-primary);
-  border-color: var(--border-color);
-  /* Bottom border matches sidebar background — paints over parent's border-bottom */
-  border-bottom: 1px solid var(--bg-titlebar);
-  background: var(--bg-titlebar);
-  position: relative;
-  z-index: 1;
-}
-
-/* Hide the redundant accordion title only when a tab bar is present */
-.has-tab-bar .sidebar-panel-title {
-  visibility: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;       /* Whole sidebar scrolls when stacked panels exceed height */
 }
 
 /* ── Panel wrapper ───────────────────────────────────────────────────────────── */
 
+/*
+ * Stacked accordion: each panel sizes to its content. flex-shrink:0 prevents
+ * panels from squishing to share space — they each take exactly the height
+ * of (header + content). The contentArea scrolls when totals overflow.
+ */
 .sidebar-panel-wrapper {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  flex-shrink: 0;
+  background-color: hsla(0, 0%, 100%, 0.025);
+  border-radius: 4px;
 }
 
 /* ── Panel header (accordion row) ────────────────────────────────────────────── */
@@ -196,9 +167,25 @@
   align-items: center;
   flex-shrink: 0;
   height: 32px;
-  padding: 0 8px 0 12px;
+  padding: 0 8px;
   border-bottom: none;
   cursor: default;
+}
+
+/* Drag handle wrapping the icon + title — both elements grab the cursor and
+   participate in the same reorder gesture as one logical unit. */
+.sidebar-panel-drag-handle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: 1;
+  min-width: 0;          /* allow title ellipsis to engage */
+  cursor: grab;
+  user-select: none;
+}
+
+.sidebar-panel-drag-handle:active {
+  cursor: grabbing;
 }
 
 /* Pinned panel: red dot before the title text */
@@ -216,6 +203,24 @@
   top: -1px;
 }
 
+/* Panel header icon — small Material/Lucide-style SVG before the title. */
+.sidebar-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  color: var(--text-secondary);
+}
+
+.sidebar-panel-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .sidebar-panel-title {
   flex: 1;
   font-family: var(--ui-font);
@@ -227,7 +232,23 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  user-select: none;
+}
+
+/* ── Drag-to-reorder feedback ────────────────────────────────────────────────── */
+
+/*
+ * Horizontal insertion line drawn at the gap where the dragged panel will land.
+ * Position-fixed so the page-relative coords from getBoundingClientRect() apply
+ * directly without container offsets.
+ */
+.panel-insert-line {
+  position: fixed;
+  z-index: 9998;
+  pointer-events: none;
+  height: 2px;
+  background: var(--accent, #0078d4);
+  border-radius: 1px;
+  box-shadow: 0 0 4px var(--accent, #0078d4);
 }
 
 /* ── Accordion toggle button ─────────────────────────────────────────────────── */
@@ -332,10 +353,10 @@
 /* ── Panel content area ───────────────────────────────────────────────────────── */
 
 .sidebar-panel-content {
-  flex: 1;
-  overflow-y: auto;
+  /* Stacked accordion: content sizes to its rendered output. The contentArea
+     above (`.sidebar-content-area`) is the single scroll container — individual
+     panels do not scroll internally. */
   overflow-x: hidden;
-  min-height: 0;
 }
 
 /* ── Error placeholder ────────────────────────────────────────────────────────── */

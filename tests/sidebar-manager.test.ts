@@ -221,27 +221,26 @@ describe("SidebarManager — register", () => {
     expect(tabBar).toBeNull();
   });
 
-  it("renders a tab bar when two panels are registered on the same side", () => {
+  it("does NOT render a tab bar when two panels are registered (stacked mode)", () => {
     init();
     register("plugin-a", makeDescriptor("panel-1", "right"));
     register("plugin-b", makeDescriptor("panel-2", "right"));
 
+    // Stacked mode: no shared tab bar — each panel shows its own header.
     const tabBar = document.querySelector(".sidebar-tab-bar");
-    expect(tabBar).not.toBeNull();
+    expect(tabBar).toBeNull();
   });
 
-  it("tab bar has one button per panel with correct title text", () => {
+  it("does NOT create tab buttons in stacked mode", () => {
     init();
     register("plugin-a", makeDescriptor("panel-1", "right", { title: "Alpha" }));
     register("plugin-b", makeDescriptor("panel-2", "right", { title: "Beta" }));
 
     const tabs = document.querySelectorAll(".sidebar-tab");
-    expect(tabs.length).toBe(2);
-    expect(tabs[0].textContent).toBe("Alpha");
-    expect(tabs[1].textContent).toBe("Beta");
+    expect(tabs.length).toBe(0);
   });
 
-  it("only the first panel is active (visible) when two panels are registered", () => {
+  it("shows ALL non-iconized panels stacked when multiple are registered", () => {
     init();
     register("plugin-a", makeDescriptor("panel-1", "right"));
     register("plugin-b", makeDescriptor("panel-2", "right"));
@@ -249,10 +248,9 @@ describe("SidebarManager — register", () => {
     const wrappers = document.querySelectorAll(".sidebar-panel-wrapper");
     expect(wrappers.length).toBe(2);
 
-    // First wrapper: active → display not "none".
+    // Stacked mode: both wrappers visible (display !== "none").
     expect((wrappers[0] as HTMLElement).style.display).not.toBe("none");
-    // Second wrapper: inactive → display "none".
-    expect((wrappers[1] as HTMLElement).style.display).toBe("none");
+    expect((wrappers[1] as HTMLElement).style.display).not.toBe("none");
   });
 
   it("logs a warning and rejects duplicate panel ids (EC-12)", () => {
@@ -400,17 +398,17 @@ describe("SidebarManager — unregister", () => {
     warnSpy.mockRestore();
   });
 
-  it("removes tab bar when panel count drops to 1 after unregistration", () => {
+  it("never has a tab bar in stacked mode regardless of panel count", () => {
     init();
     register("plugin-a", makeDescriptor("panel-1", "right"));
     register("plugin-b", makeDescriptor("panel-2", "right"));
 
-    // Verify tab bar exists with 2 panels.
-    expect(document.querySelector(".sidebar-tab-bar")).not.toBeNull();
+    // No tab bar with 2 panels (stacked mode).
+    expect(document.querySelector(".sidebar-tab-bar")).toBeNull();
 
-    // Unregister one panel — count drops to 1 → tab bar should disappear.
     unregister("plugin-b", "panel-2");
 
+    // Still no tab bar after dropping to 1 panel.
     expect(document.querySelector(".sidebar-tab-bar")).toBeNull();
   });
 });
@@ -634,7 +632,7 @@ describe("SidebarManager — restoreFromSettings", () => {
     expect(sidebarEl.style.display).toBe("");
   });
 
-  it("sets the active panel from persisted activeTabId", () => {
+  it("shows all non-iconized panels regardless of persisted activeTabId (stacked mode)", () => {
     mockGetCurrentSettings.mockReturnValue({
       sidebar: {
         right: {
@@ -652,11 +650,11 @@ describe("SidebarManager — restoreFromSettings", () => {
 
     restoreFromSettings();
 
-    // panel-2 should be active (visible), panel-1 hidden.
+    // Stacked mode: both panels visible, activeTabId is just a settings record.
     const w1 = document.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]') as HTMLElement;
     const w2 = document.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-2"]') as HTMLElement;
-    expect(w1.style.display).toBe("none");
-    expect(w2.style.display).toBe("");
+    expect(w1.style.display).not.toBe("none");
+    expect(w2.style.display).not.toBe("none");
   });
 });
 

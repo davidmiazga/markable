@@ -1046,18 +1046,17 @@ const YAML_PANE_CSS = `
 .yaml-pane-control {
   width: 100%;
   box-sizing: border-box;
-  background: transparent;
+  background-color: hsla(0, 0%, 100%, 0.025);
   color: var(--text-primary, #333);
   border: none;
-  border-bottom: 1px solid var(--border-color, #ccc);
-  border-radius: 0;
-  padding: 2px 0;
+  border-radius: 4px;
+  padding: 2px 6px;
   font-size: 12px;
   font-family: var(--ui-font, system-ui, sans-serif);
 }
 .yaml-pane-control:focus {
   outline: none;
-  border-bottom-color: var(--accent-color, #4a90e2);
+  background-color: hsla(0, 0%, 100%, 0.05);
 }
 .yaml-pane-delete-btn {
   visibility: hidden;

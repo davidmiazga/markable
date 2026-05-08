@@ -87,12 +87,15 @@ export interface SidebarPanelState {
  *                  were registered when the settings were last written.
  * width          — slot width in pixels (clamped 150–600 at write time).
  * panels         — per-panel accordion state map (key = panelId).
+ * panelOrder     — user-defined stack order (top-to-bottom). Panels not in
+ *                  this list fall back to registration order at the end.
  */
 export interface SidebarSlotState {
   open: boolean;
   activeTabId: string | null;
   width: number;
   panels: Record<string, SidebarPanelState>;
+  panelOrder?: string[];
 }
 
 /**
