@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-07 (session 9, continued)
+**Last Updated:** 2026-05-08 (session 10)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -98,18 +98,26 @@
   - **Folder-tab CSS** — `margin-bottom: -1px` on all tabs pulls them 1px below the tab bar's bottom edge. Active tab: `border-bottom: 1px solid var(--bg-titlebar)` (background-match) + `position: relative; z-index: 1` paints over the parent's `border-bottom` in that region. **Root cause of prior failure**: `overflow-x: auto` on `.sidebar-tab-bar` forced `overflow-y` to `auto` by CSS spec (when one axis is non-`visible`, the other is coerced), creating a scroll container that clipped the `margin-bottom: -1px` extension. Fix: removed both `overflow-x: auto` and `overflow-y: hidden` from `.sidebar-tab-bar`.
   - **No duplicate panel name** — When multiple panels share a sidebar (tab bar present), the accordion title text is hidden via `visibility: hidden` so only the tab label shows. `has-tab-bar` class added to `contentAreaEl` by `_reconcileTabBar` scopes the CSS rule: `.has-tab-bar .sidebar-panel-title { visibility: hidden }`. Single-panel sidebars (no tab bar) keep the accordion title as their only label.
 
+- **Sidebar refactor — stacked accordion + drag reorder + icons (session 10)** — Committed 2026-05-08 (`f2ca2f9 Side panels stacked, icons added`). Replaced the multi-panel tab bar / carousel approach with a single vertical stack:
+  - **No tab bar.** `_reconcileTabBar` always strips it; `has-tab-bar` class never added. Removed: `_buildTabButton`, `_handleTabClick`, `.sidebar-tab` and `.sidebar-tab-bar` CSS, `_cyclePanel`, `_cycleAnimating`, the cycle chevron button, and all dead frame-animation code.
+  - **All panels visible at once.** `.sidebar-panel-wrapper` lost `flex: 1` (now `flex-shrink: 0`, intrinsic content-height). `.sidebar-panel-content` lost `flex: 1` and internal `overflow-y: auto`. `.sidebar-content-area` becomes the single scroll container (`overflow-y: auto`) with `gap: 6px` between stacked panels. `_setActivePanel` simplified — no longer hides non-active panels (all non-iconized panels visible); `activeTabId` still persists for backward compat.
+  - **Per-panel visual treatment.** Each `.sidebar-panel-wrapper` has `background-color: hsla(0, 0%, 100%, 0.025)` and `border-radius: 4px`. `.yaml-pane-control` matches (no border-bottom, same background + radius, `:focus` brightens to `hsla(0,0%,100%,0.05)`).
+  - **Drag-to-reorder.** New `src/sidebar/panel-reorder-drag.ts` (vertical counterpart to `tab-reorder-drag.ts`). Drag handle wraps icon + title (`.sidebar-panel-drag-handle`, `cursor: grab`); 6 px movement threshold; horizontal `.panel-insert-line` (2 px accent) renders at the nearest gap. `_reorderPanel(side, fromId, insertBeforeId)` updates `panelIds`, reorders both `contentAreaEl` wrappers AND `iconStripEl` buttons in lockstep, and persists to `settings.sidebar.<side>.panelOrder` (new optional field on `SidebarSlotState`). `_applyPersistedOrder` restores the saved order on register and `restoreFromSettings`.
+  - **Panel icons.** New `src/sidebar/panel-icons.ts` exports `PANEL_ICONS` map (id → 24×24 stroke SVG). Lucide-style: TOC (3 lines), Backlinks (chain link), Outline (bullet list), Properties (sliders), Toolbar (pencil), Knowledge Graph (hub), File Browser (folder). Same map drives both the panel-header icon (14 px before title) and the icon-strip button (18 px). `_buildIconButton` priority: `PANEL_ICONS[id]` → `descriptor.icon` → first letter of title.
+  - **Tests updated.** Five tab-bar-era tests replaced with stacked-mode equivalents in `tests/sidebar-manager.test.ts`. Suite: 80 files, 3507 passing.
+
 ### Known Regressions 🔴
 None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-07 (session 9, continued).**
+**Session ended 2026-05-08 (session 10).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
 - Test suite: **80 files, 3507 passing (3546 total, 39 skipped)**. Rust: 178 passing.
-- Wikipedia layout redesign complete and committed (see entry above).
-- Sidebar panel tab styling complete: folder-tab effect, no duplicate panel name, `has-tab-bar` conditional.
+- Sidebar architecture replaced: tab bar/carousel removed; stacked accordion + drag-to-reorder + per-panel icons (header + icon strip), order persisted to `settings.sidebar.<side>.panelOrder`.
+- Wikipedia layout redesign complete and committed.
 - Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
 - **Next step**: Continue FC3 features (Smart Folders, or next item from PKM plan).
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.

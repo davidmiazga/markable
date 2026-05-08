@@ -182,6 +182,19 @@
   min-width: 0;          /* allow title ellipsis to engage */
   cursor: grab;
   user-select: none;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 -4px;        /* compensate so layout doesn't shift on hover */
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-panel-drag-handle:hover {
+  background: var(--code-bg);
+}
+
+.sidebar-panel-drag-handle:hover .sidebar-panel-title,
+.sidebar-panel-drag-handle:hover .sidebar-panel-icon {
+  color: var(--text-primary);
 }
 
 .sidebar-panel-drag-handle:active {

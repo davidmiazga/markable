@@ -2150,7 +2150,6 @@ async function onEnable(api: MarkablePluginAPI): Promise<void> {
 function onDisable(_unusedApi: MarkablePluginAPI): void {
   // Must be set first so that the EC-10 check in onEnable's continuation bails out.
   _active = false;
-  _api = null;
 
   // Cancel all in-flight async operations (EC-34, AD-D).
   _generation++;
@@ -2168,6 +2167,9 @@ function onDisable(_unusedApi: MarkablePluginAPI): void {
   detachTabChangeListener();
 
   // Unregister the calendar sidebar panel (calls descriptor.destroy → clears DOM).
+  // MUST happen before _api is nulled — otherwise unregisterSidebarPanel() falls
+  // through to a window global that is never assigned and silently no-ops,
+  // leaving orphaned calendar DOM in the sidebar.
   unregisterSidebarPanel();
 
   // Remove the document-level keydown listener (registered in onEnable).
@@ -2177,6 +2179,9 @@ function onDisable(_unusedApi: MarkablePluginAPI): void {
   unregisterCommands();
 
   removeCSS();
+
+  // Drop the API reference last, after all cleanup that uses it has completed.
+  _api = null;
 }
 
 /**

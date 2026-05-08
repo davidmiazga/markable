@@ -1,6 +1,6 @@
 ---
 title: "Sidebar Panel System — Architecture Index"
-last-updated: "2026-04-13"
+last-updated: "2026-05-08"
 review-cadence-days: 14
 status: reference
 ---
@@ -9,6 +9,22 @@ status: reference
 
 **Requirements source:** `docs/requirements/active_task.md`
 **Status:** ARCHITECTED — awaiting developer implementation
+
+> ## ⚠ Partially Superseded — 2026-05-08
+>
+> The **multi-panel UI portion** of this spec (shared tab bar, active-panel
+> selection, carousel/cycle button, `_setActivePanel` hide/show logic) is
+> obsolete. The sidebar now uses a **vertical stacked accordion** with
+> drag-to-reorder and per-panel icons. See:
+>
+> - `PROGRESS.md` — session-10 entry "Sidebar refactor — stacked accordion + drag reorder + icons"
+> - `~/.claude/projects/-Users-daveslaptop-work-LocalArea-markable-2-0/memory/project_sidebar_stacked.md`
+> - Live code: `src/sidebar/sidebar-manager.ts`, `src/sidebar/panel-reorder-drag.ts`, `src/sidebar/panel-icons.ts`
+>
+> Still authoritative in this spec: plugin API surface
+> (`registerSidebarPanel` / `unregisterSidebarPanel`), settings persistence
+> shape, panel descriptor fields, side-resolution rules, accordion toggle
+> mechanics, keyboard-shortcut bindings, icon strip / iconize semantics.
 
 ---
 
