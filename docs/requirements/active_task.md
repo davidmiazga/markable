@@ -1,148 +1,255 @@
 ---
-title: "Smart Folders (File Browser plugin)"
+title: "Folder View via _folder.md"
 last-updated: "2026-05-09"
 review-cadence-days: 90
-status: reference
+status: active
 ---
 
-# Active Task — Smart Folders (FC3 #1)
+# Active Task — Folder View via `_folder.md`
 
 ## Summary
 
-As a vault user, I want to define saved queries that appear in the file browser tree as virtual "Smart Folders," so that I can browse files matching dynamic criteria (tags, YAML field:value pairs, path, file type, modified date, link counts, filename text) without moving or duplicating any files. Smart Folders are pure views — expanding one shows a flat list of matching files, and clicking a file opens it in a tab the normal way.
+As a vault user, I want to place a `_folder.md` file inside any directory to give that directory a rich "Folder View" tab — a rendered card-grid of its immediate subfolders and files — so that I can navigate and visualize project structures without leaving the editor. Folders without `_folder.md` behave exactly as they do today. The feature is driven entirely by the file-browser plugin and the existing `openCustomRenderTab` mechanism; no Rust changes are required.
+
+---
 
 ## Functional Requirements
 
-### Definition & data model
+### Area 1 — File Browser Interaction (split click targets)
 
-- **FR-01** — A Smart Folder is a saved query. The persisted shape (`SmartFolderDef`) must contain at minimum: a stable id, a user-supplied name, an ordered list of rules, and the AND combinator (implicit in v1).
-- **FR-02** — Each rule has a `type` discriminator covering the six v1 filter types (see FR-03 through FR-08), an `operator` field whose allowed values depend on the rule type (FR-09), and a type-specific value payload.
-- **FR-03** — Rule type "tag" matches files whose tag set (sourced from `scan_vault_tags()`) contains the selected tag. The picker presents the list returned by `scan_vault_tags()`, including both plain tag values and `field:value` strings (e.g. `status:draft`). No free-form input — user must pick from the discovered list.
-- **FR-04** — Rule type "path" matches files whose vault-relative path either contains the entered substring or begins with the entered prefix. The rule must record which mode (substring vs prefix) was chosen.
-- **FR-05** — Rule type "extension" matches by file extension (e.g. `.md`, `.pdf`, `.png`). Evaluation uses `VaultIndex.entries` for `.md` files and the `nonMdFiles` collection for everything else.
-- **FR-06** — Rule type "modified" supports two presets: "in last N days" (N is a positive integer) and "before/after a specific date" (a calendar date and a direction). Both compare against `VaultIndexEntry.modified` (epoch ms).
-- **FR-07** — Rule type "links" supports two sub-rules: "outbound link count" and "inbound link count" (i.e. backlinks), each with a numeric comparator (`= 0`, `≥ 1`, `≥ N`). Inbound counts are computed by inverting `outboundLinks` across all entries — same approach the backlinks plugin uses.
-- **FR-08** — Rule type "title" matches when `VaultIndexEntry.title` OR `VaultIndexEntry.name` contains the entered substring (case-insensitive). It must check both because the title may be the H1 while the name is the filename stem.
-- **FR-09** — Negation is encoded in each rule's `operator` field, NOT as a separate boolean. Allowed operators per type:
-  - **tag**: `is` | `is not`
-  - **path**: `contains` | `does not contain` | `starts with` | `does not start with`
-  - **extension**: `is` | `is not`
-  - **modified**: `in last N days` | `not in last N days` | `before` | `after` (no negation needed for `before`/`after` — pick the opposite direction)
-  - **links**: `outbound = 0` | `outbound ≥ 1` | `outbound ≥ N` | `inbound = 0` | `inbound ≥ 1` | `inbound ≥ N`
-  - **title**: `contains` | `does not contain`
-- **FR-10** — All rules in a Smart Folder are combined with logical AND. v1 must NOT support OR or nested groups.
+- **FR-01** — When a directory node in the file tree does NOT contain a `_folder.md` file, both the expand arrow (chevron) click and the folder name label click behave as they do today: they toggle directory expansion/collapse. This is the unchanged fallback path.
 
-### Persistence & scope
+- **FR-02** — When a directory node contains a `_folder.md` file (detected per FR-10), the two click targets diverge:
+  - Clicking the **expand arrow (chevron span, `.tree-node-chevron`)** → toggles directory expansion/collapse (existing behavior, unchanged).
+  - Clicking the **folder name label (`.tree-node-label`)** → opens the Folder View tab for that directory (new behavior).
 
-- **FR-11** — Smart Folders are persisted in `FileBrowserSettings.smartFolders?: Record<vaultId, SmartFolderDef[]>`, mirroring the per-vault `pinnedPaths` pattern. Persistence flows through the existing settings save path; no new Tauri commands are introduced.
-- **FR-12** — Smart Folders are scoped per-vault. Switching vaults must show only that vault's Smart Folders. Deleting a vault must orphan (but not necessarily purge) its key in `smartFolders` — purging is a follow-up concern.
-- **FR-13** — Rust side gets NO schema changes for v1. Filter evaluation runs entirely in the frontend over the existing `VaultIndex.entries`, `nonMdFiles`, and `scan_vault_tags()` results.
+- **FR-03** — The chevron and label must be independently hittable. The current `<li>`-level click listener on `buildActivateHandler` must be refactored so that clicks on `.tree-node-chevron` are intercepted and routed to the expand/collapse path, while clicks on `.tree-node-label` (or the icon) are routed to the Folder View path — when `_folder.md` is present.
 
-### Tree placement & rendering
+- **FR-04** — Keyboard behavior for a `_folder.md`-enhanced folder:
+  - `Enter` (with the `<li>` focused) → opens the Folder View tab (mirrors label click).
+  - `ArrowRight` / `ArrowLeft` → expand/collapse as today (existing keyboard handler unchanged).
 
-- **FR-14** — Smart Folders render as virtual child nodes injected at the TOP of each vault root's `children` array, ABOVE real subdirectories. Implementation lives in `buildTreeFromIndex()` / `buildSubtree()` (`src/plugins/file-browser/file-tree.ts`).
-- **FR-15** — Each Smart Folder is rendered as `TreeNode { type: "directory", iconClass: "folder-smart", ... }`. Reusing the directory node type avoids touching `<li>` rendering — Smart Folders inherit standard expand/collapse, hover, and keyboard behavior automatically.
-- **FR-16** — Smart Folders MUST NOT use the pinned section's separate `<div>` pattern (`buildPinnedSection` at `file-browser.plugin.ts:826`). They are inline tree nodes.
-- **FR-17** — The Smart Folder icon is the Material Symbols `folder_managed` glyph. `scripts/fetch-material-icons.mjs` must be updated to fetch this icon, the script re-run, and the resulting SVG committed under `src/plugins/file-browser/icons/material/`.
-- **FR-18** — Expanding a Smart Folder reveals a flat list of matching files. The original directory hierarchy is NOT preserved inside the expanded view. Files render as standard file tree leaves (same icon/click/keyboard contract).
-- **FR-19** — Clicking a file inside a Smart Folder opens it in a tab using the normal file-open path. No drag-to-move, copy-to, or folder-relocation interactions involve Smart Folders as a destination.
-- **FR-20** — Clicking a Smart Folder's name expands or collapses it. There is no other primary-click action on the Smart Folder header.
+- **FR-05** — The file browser must determine at render time whether each directory contains `_folder.md`. Detection must use the existing `VaultIndex.entries` array (scan entries whose `path` begins with `<dirPath>/` and whose `name` equals `_folder`). No new Tauri commands are issued.
 
-### Filter editor & lifecycle
+- **FR-06** — Detection result (has `_folder.md` or not) must be computed once per `renderPanel` call and stored so that `buildActivateHandler`, `appendIconAndLabel`, and the context menu handler can all read from it without redundant scanning.
 
-- **FR-21** — Right-clicking a Smart Folder in the tree exposes at minimum: "Edit Filters," "Rename," and "Delete."
-- **FR-22** — A "+ New Smart Folder" entry point appears in **two** places: (i) a context-menu item "New Smart Folder" on right-click of the vault root in the tree, and (ii) a small button at the top of the file browser panel. Both open the same filter editor in empty state with the name field focused.
-- **FR-23 (Filter Editor — Mac Finder pattern)** — The filter editor opens **inline as an expandable form** anchored to the Smart Folder's row in the tree (or to the vault root when creating new). It must contain:
-  - A name input at the top (focused on open).
-  - A vertical stack of **rule rows**, each row laid out as: `[Type ▾] [Operator ▾] [Value control] [-] [+]` where:
-    - **Type** dropdown selects one of the six rule types (FR-03–FR-08).
-    - **Operator** dropdown shows only the operators valid for the chosen Type (FR-09). Switching Type resets Operator to that type's first valid value.
-    - **Value control** is type-specific:
-      - **tag** → searchable picker populated from `scan_vault_tags()` results (plain tags + `field:value` pairs).
-      - **path** / **title** → text input.
-      - **extension** → dropdown of distinct extensions present in the current vault index.
-      - **modified** → for "in last N days" / "not in last N days": numeric input + fixed "days" label; for "before" / "after": date picker.
-      - **links** → comparator+number is encoded in the operator itself; no separate value control needed.
-    - `[-]` removes that row. Hidden when there is exactly one row (cannot remove the last rule, since FR-26 requires at least one).
-    - `[+]` adds a new empty row directly below.
-  - Bottom-right action bar with **`Save`** and **`Cancel`** buttons. Save validates (FR-26) and commits; Cancel discards all unsaved changes and closes the editor.
-  - Clicking outside the editor without using Save or Cancel is treated as Cancel.
-- **FR-24** — Renaming a Smart Folder updates its `name` in place and preserves all rules and the synthesized id.
-- **FR-25** — Deleting a Smart Folder removes its entry from `smartFolders[vaultId]`. If the deleted folder was expanded, its expansion state must also be cleaned up.
-- **FR-26** — Save is disabled (or rejected with a visible message) when the Smart Folder has an empty name OR zero rules.
+- **FR-07** — A directory detected as having `_folder.md` receives an additional CSS class `tree-node-has-folder-view` on its `<li>`. This class is used for styling (optional visual affordance, e.g. a subtle indicator icon or underline on the label) and for reliable querySelectorAll lookups in tests.
 
-### Evaluation behavior
+### Area 2 — `_folder.md` Visibility and Editability
 
-- **FR-27** — Filter evaluation produces, for each Smart Folder, the list of matching `VaultIndexEntry` (and non-MD file paths if the rules permit). The list is then sorted (sort key per Open Ambiguity A-1) and rendered as the Smart Folder's children.
-- **FR-28** — Inverse maps used during evaluation (filePath → tag-and-field-value set; targetPath → inboundLinks count) must be built once per evaluation pass, not per-rule and not per-file.
-- **FR-29** — Evaluation cadence is governed by Open Ambiguity A-4 but at minimum must re-run when: (a) the vault index finishes (re)building, (b) the user saves an edited Smart Folder, (c) the user creates or deletes a Smart Folder, and (d) the active vault changes.
+- **FR-08** — `_folder.md` appears as a normal `.md` file in the file browser tree within its parent directory. It is not hidden, grayed out, or otherwise filtered. The user can click it to open it in the editor and edit the YAML front-matter and markdown body directly.
+
+- **FR-09** — `_folder.md` is subject to all standard file operations available to any `.md` file (rename, delete, move). Renaming or deleting it removes the Folder View behavior from that directory immediately upon the next vault index update.
+
+### Area 3 — `_folder.md` YAML Schema
+
+- **FR-10** — A `_folder.md` file is the trigger for Folder View behavior. The file MUST contain YAML front-matter. The front-matter fields are:
+
+  | Field | Required | Type | Description |
+  |---|---|---|---|
+  | `layout` | Yes | string | Identifies the folder layout renderer. `folder-cards` is the v1 starter value. |
+  | `title` | No | string | Custom tab title. Defaults to the folder's directory name (last path segment). |
+  | `sort` | No | string | Sort order for cards. Allowed values: `name-asc` (default), `name-desc`, `modified-asc`, `modified-desc`. |
+  | `columns` | No | integer | Number of card columns. Range: 2–6. Default: 3. Values outside range are clamped to [2, 6]. |
+  | `show-modified` | No | boolean | Whether to show the modified date on file cards. Default: `true`. |
+
+- **FR-11** — The markdown body of `_folder.md` (the content below the closing `---` of the YAML block) MAY be present. When present, it is rendered as a styled header block above the card grid in the Folder View tab. When absent or empty, no header block is rendered.
+
+- **FR-12** — The `layout:` field is mandatory. If it is absent or empty, the Folder View tab opens with a graceful fallback: renders the `_folder.md` body as plain markdown inside a minimal container, with a faint notice "No layout specified — showing raw content." This fallback does not crash and does not prevent the file from being edited.
+
+- **FR-13** — If `layout:` contains a value that does not match any registered folder layout renderer (e.g., `layout: unknown-thing`), the same graceful fallback as FR-12 applies, with the notice reading "Unknown layout 'unknown-thing' — showing raw content."
+
+- **FR-14** — YAML parsing for `_folder.md` reuses the existing `parseFileYaml` pattern already present in `layout-manager.ts`. No new YAML parser is introduced. Unknown YAML fields are silently ignored.
+
+### Area 4 — Folder Layout Rendering (card-grid starter)
+
+- **FR-15** — Opening a Folder View calls a folder-view-specific tab opener that passes the full folder path as the deduplication key and the display title separately. The tab mechanism is `window.__MARKABLE_OPEN_CUSTOM_TAB__` extended with an optional `key` parameter (the full absolute folder path). The display title is determined by FR-16; the dedup key is always the full path regardless of display title.
+
+- **FR-16** — The tab title for a Folder View tab is:
+  1. The value of the `title:` YAML field, if present and non-empty.
+  2. Otherwise, the directory's last path segment (folder name).
+  Example: `/vault/Projects/2026` → tab title `2026`.
+
+- **FR-17** — Folder View tabs deduplicate by **full folder path**, not by display title. Two folders with the same name in different parent directories (e.g. `/Work/Reports/` and `/Personal/Reports/`) each produce their own independent tab. Re-opening a Folder View for a path that already has a tab activates and re-renders that existing tab. No duplicate tabs accumulate for the same path.
+
+- **FR-18** — The `folder-cards` layout renders a two-section card grid:
+  1. **Subfolder section** (if any immediate subdirectories exist): a grid of folder cards. Each card shows: folder icon, folder name.
+  2. **File section** (if any immediate `.md` files other than `_folder.md` exist, plus any non-MD files): a grid of file cards. Each card shows: file-type badge (e.g. `.md`, `.pdf`, `.png`), file name (no extension for `.md`), modified date (if `show-modified: true`).
+
+- **FR-19** — "Immediate" means direct children of the folder only. Files and directories in nested subdirectories are NOT included in the card grid for this folder's view.
+
+- **FR-20** — The card grid is sorted according to the `sort` YAML field (FR-10). Within each section (subfolders then files), the sort applies independently. Subfolders always render before files regardless of sort order.
+
+- **FR-21** — Each subfolder card is clickable. Clicking a subfolder card:
+  1. Expands the file tree to that subfolder (calls the existing tree expansion API).
+  2. If that subfolder has its own `_folder.md`, opens the Folder View tab for it.
+  3. If that subfolder does not have `_folder.md`, only the tree expansion occurs.
+
+- **FR-22** — Each file card is clickable. Clicking a file card opens that file using the standard tab-open path (`window.__MARKABLE_TAB_MANAGER__.openFileInTab` for `.md`/`.txt`, `openMediaInTab` for all other types).
+
+- **FR-23** — The `_folder.md` file itself is excluded from the file section of the card grid. It is not shown as a card.
+
+- **FR-24** — If the description body (FR-11) is non-empty, it is rendered as HTML (via `window.__MARKABLE_RENDER_MD__`) above the card grid, inside a `<div class="folder-view-description">`. This div renders the full markdown body of `_folder.md`.
+
+- **FR-25** — The card grid container uses CSS custom properties for theming, consistent with the existing layout CSS conventions (`var(--bg-secondary)`, `var(--border-color)`, `var(--text-primary)`, `var(--text-secondary)`). Hard-coded colors are not used.
+
+- **FR-26** — If a folder is completely empty (no subfolders, no files other than `_folder.md`), the Folder View tab renders with only the description block (if any) and an empty-state message: "This folder is empty."
+
+### Area 5 — Layout Dispatch
+
+- **FR-27** — Layout dispatch in the folder view context is a simple string comparison: the `layout:` field value is compared case-insensitively against registered folder layout names. v1 registers exactly one: `folder-cards`.
+
+- **FR-28** — The dispatch map is defined as a plain module-level `Record<string, FolderLayoutRenderer>` inside the folder-view renderer module. Adding a new layout style in a future task requires only adding one entry to this map.
+
+- **FR-29** — Folder layout renderers are distinct from document layout renderers. The document layout system (`layout-manager.ts`, `.layout.md` files, `discoverLayouts()`) is NOT involved in folder view rendering. Folder layouts are registered directly in the file-browser plugin.
+
+- **FR-30** — If `layout:` is missing, empty, or unrecognized, the fallback renderer is invoked (per FR-12/FR-13). The fallback renderer is always available and cannot itself fail.
+
+### Area 6 — Live Update on Save
+
+- **FR-31** — When the user edits and saves `_folder.md`, the vault file-watcher fires an index update. The folder view tab for the containing folder must re-render automatically if the tab is currently the active (visible) tab. The re-render reads the updated `_folder.md` content from disk.
+
+- **FR-32** — If the Folder View tab is not the currently active tab at the time `_folder.md` is saved, the tab is marked stale. The next time the user activates that tab, the re-render fires. "Stale" state is a boolean flag stored in the tab's renderFn closure or alongside it.
+
+- **FR-33** — The stale-flag mechanism must not interfere with document layout tabs (which use `enterLayoutView`, a separate path). Only `openCustomRenderTab` tabs created by the folder view are subject to FR-31/FR-32.
+
+### Area 7 — Context Menu Integration
+
+- **FR-34** — Right-clicking a directory that has `_folder.md` adds "Open Folder View" as the first item in its context menu, above all other items. Selecting it opens the Folder View tab (same as label click).
+
+- **FR-35** — Right-clicking a directory that does NOT have `_folder.md` shows a new item "Create Folder View..." in the context menu. Its position in the menu is between "New Note" and "New Folder" (i.e., near the top of creation actions). Selecting it:
+  1. Creates `_folder.md` in that directory with a starter template (see FR-36).
+  2. Opens `_folder.md` in the editor tab so the user can customize immediately.
+  3. The vault index update then detects `_folder.md` and enables folder view behavior for that directory.
+
+- **FR-36** — The starter template written by "Create Folder View..." is:
+  ```
+  ---
+  layout: folder-cards
+  ---
+  ```
+  This is the minimum valid `_folder.md`. No extra YAML fields or body text are added to the starter; the user fills them in.
+
+- **FR-37** — After "Create Folder View..." creates `_folder.md` and opens it in the editor, the file browser tree updates on the next vault index refresh to reflect the new `_folder.md` presence (split-click behavior activates).
+
+---
 
 ## Non-Functional Requirements
 
-- **NFR-01** — Filter evaluation across a 1,000-file vault with all six rule types active across 10 Smart Folders must complete in under 100 ms on the developer reference machine. Build inverse maps once per pass (FR-28). If this budget cannot be met without caching, choose lazy-on-expand evaluation (Open Ambiguity A-4) and document the tradeoff.
-- **NFR-02** — Persisted `FileBrowserSettings.smartFolders` size must not balloon the settings JSON beyond what the existing settings save path comfortably handles. A soft limit of "tens of Smart Folders per vault, each with up to ~20 rules" is the v1 design target. No hard cap is enforced in v1, but the architect should call out if a cap is warranted.
-- **NFR-03** — All Smart Folder code must live inside `src/plugins/file-browser/` and ship as part of the file-browser plugin. No separate plugin, no `dependsOn` mechanism.
-- **NFR-04** — The plugin remains a single IIFE built by `npm run build:plugins`; Smart Folders must not require a new build target or external bundle.
-- **NFR-05** — Smart Folder UI must respect the existing file browser's keyboard navigation (arrow keys, expand/collapse) without regressing real-folder behavior.
-- **NFR-06** — Malformed `smartFolders` payloads in settings (wrong shape, unknown rule types, missing fields) MUST NOT crash the plugin. Recovery is "drop the malformed entry, log a warning, continue."
+- **NFR-01** — The `_folder.md` detection scan at render time must not add measurable latency to normal tree renders. A vault with 5,000 files must still render the file tree in under 50 ms. Detection must be O(N) over `VaultIndex.entries` once per render, with result cached for the render pass.
+
+- **NFR-02** — Folder view rendering (the card grid) must complete in under 100 ms for a folder with up to 500 direct children.
+
+- **NFR-03** — All folder-view code must live inside `src/plugins/file-browser/`. No new plugin, no change to `src/lib/layout-manager.ts`, no Rust changes.
+
+- **NFR-04** — The plugin must remain a single IIFE built by `npm run build:plugins`. No new bundle target, no new npm dependencies.
+
+- **NFR-05** — The split-click behavior must not regress keyboard navigation. `ArrowRight`/`ArrowLeft` must still expand/collapse. Focus management must remain correct after a Folder View tab is opened.
+
+- **NFR-06** — A malformed, unreadable, or YAML-less `_folder.md` must not crash the plugin or prevent the folder from being opened in the tree. The fallback from FR-12 always applies.
+
+- **NFR-07** — The Folder View tab must be accessible: card elements must have `role="button"` (or be `<button>` elements) with descriptive `aria-label` attributes. The card grid must be keyboard-navigable (Tab to reach cards, Enter to activate).
+
+---
 
 ## Edge Case Inventory
 
 This list is the Reviewer's mandatory test checklist. Every EC must have a corresponding test or be explicitly justified as untestable.
 
-- **EC-01** — Empty vault: vault index has zero entries. Smart Folders must render as empty (no children) without errors and the tree must still build.
-- **EC-02** — No Smart Folders defined yet for the active vault (`smartFolders[vaultId]` is undefined or `[]`). Tree must render exactly as it does today, with no virtual section, no header, no empty placeholder.
-- **EC-03** — A Smart Folder whose rules match zero files. Expanding it must show an empty body (or a subtle "No matches" hint — architect decides) and must not error.
-- **EC-04** — A tag or `field:value` referenced by a rule has been removed from every file in the vault. The rule remains defined but the Smart Folder simply matches nothing. No crash, no orphan-cleanup prompt in v1.
-- **EC-05** — Renaming a Smart Folder while it is expanded. Expansion state must survive the rename (since the synthesized id is stable, not the name).
-- **EC-06** — Deleting a Smart Folder while it is expanded. Children must collapse, expansion state must be purged for that id, and the tree must re-render without flicker or stale DOM.
-- **EC-07** — Vault switch while a Smart Folder is expanded. Expansion state belongs to the previous vault and must not bleed into the new vault's tree.
-- **EC-08** — Persistence corruption: `smartFolders` in settings is malformed (e.g. an object where an array is expected, an unknown `rule.type`, a missing `name`). The plugin must recover per NFR-06.
-- **EC-09** — Conflicting filter rules (e.g. `tag:research AND NOT tag:research`). Result is an empty match set — this is allowed and surfaces as EC-03 behavior. No special-case handling.
-- **EC-10** — Very large vault (1,000+ files) with many Smart Folders. Must meet NFR-01. If it doesn't, fall back to lazy-on-expand evaluation per A-4.
-- **EC-11** — User creates many Smart Folders (e.g. 50+). Settings size must remain serializable per NFR-02.
-- **EC-12** — Initial vault index is still building when the plugin first renders. Smart Folders should render as empty (zero children) until the index is ready, then re-evaluate per FR-29(a). No errors, no stuck spinners.
-- **EC-13** — A rule references a YAML field that no longer exists in any file (e.g. `status:draft` when nothing in the vault has `status` at all). Same as EC-04 — empty match, no error.
-- **EC-14** — A Smart Folder whose name collides with a real subdirectory at the vault root (e.g. user names it "research" and the vault has a `research/` folder). Both must coexist; the tree shows the Smart Folder above the real directory because Smart Folders sort first per FR-14.
-- **EC-15** — Rapid edits: user saves the filter editor, then immediately edits again. Re-evaluation must not race; the latest saved definition is the one rendered.
-- **EC-16** — Validation: user tries to save a Smart Folder with empty name or zero rules — save is blocked per FR-26 with a visible message.
-- **EC-17** — File system change while a Smart Folder is expanded (file added, deleted, or renamed externally). Vault index update triggers FR-29(a); the expanded list refreshes.
-- **EC-18** — Non-MD file rules: a rule with `extension = .pdf` must include `.pdf` files from `nonMdFiles` and exclude `.md` entries. `outboundLinks` rules cannot match non-MD files (they have none) — confirm this is the documented behavior, not a bug.
+- **EC-01** — Directory has `_folder.md` but the vault index has not yet finished building (loading state). Detection returns false (no `_folder.md` detected), so the folder behaves normally until the index is ready. No crash, no split-click activation before detection is possible.
+
+- **EC-02** — `_folder.md` is deleted externally while a Folder View tab for that directory is open. On the next vault index update, the file entry is gone. The existing open tab is NOT forcibly closed (it stays open showing stale data), but re-opening the folder view is no longer possible from the tree. The `<li>` reverts to normal single-click behavior on next render.
+
+- **EC-03** — `_folder.md` is renamed to something other than `_folder.md` (e.g., `_folder-backup.md`). Same behavior as EC-02: detection fails on next index update, folder view disabled.
+
+- **EC-04** — `_folder.md` contains no front-matter at all (empty file or body-only). Falls through to the FR-12 graceful fallback (no layout specified notice). No crash.
+
+- **EC-05** — `_folder.md` has valid front-matter but the YAML is malformed (e.g., unclosed quotes, duplicate keys). The simple line-by-line YAML parser (reused from `layout-manager.ts`) returns a partial or empty record. Result: `layout:` is treated as absent, fallback from FR-12 applies. No crash.
+
+- **EC-06** — `layout: folder-cards` is specified but the folder has zero immediate children (no subfolders, no files other than `_folder.md`). The Folder View tab renders with the description block (if any) and the empty-state message per FR-26.
+
+- **EC-07** — Folder contains only non-MD files (e.g., images), no `.md` files other than `_folder.md`. The subfolder section is empty; the file section shows the non-MD files. The card grid renders correctly.
+
+- **EC-08** — Folder contains only subdirectories, no files other than `_folder.md`. The subfolder section renders; the file section is omitted (or shows an empty state). No crash.
+
+- **EC-09** — A subfolder card is clicked for a subfolder that itself has `_folder.md`. The file tree expands to it AND its Folder View tab opens. The parent Folder View tab is replaced in the tab strip (same title) if the subfolder has the same name as a previously opened folder view.
+
+- **EC-10** — A subfolder card is clicked for a subfolder that does NOT have `_folder.md`. Only tree expansion occurs. No Folder View tab is opened for it.
+
+- **EC-11** — `_folder.md` uses `layout: folder-cards` and sets `columns: 0` (below minimum) or `columns: 100` (above maximum). Both values are clamped to [2, 6] per FR-10. The card grid renders with a valid column count.
+
+- **EC-12** — `_folder.md` sets `sort: invalid-value`. The value is unrecognized; the default sort (`name-asc`) is applied silently. No crash, no error displayed to the user.
+
+- **EC-13** — The folder name contains characters that would be invalid in a tab title (e.g., `<script>` injection attempt). Tab title must be HTML-escaped before insertion into the DOM. No XSS.
+
+- **EC-14** — The `_folder.md` body contains markdown with embedded HTML (e.g., `<script>` tags). The rendered description block must pass through the same `stripScripts` sanitization used by document layouts. No XSS.
+
+- **EC-15** — Two different directories have the same last path segment name (e.g., `/vault/Work/Reports/` and `/vault/Personal/Reports/`). Each has its own `_folder.md`. Opening both folder views must produce two separate tabs (per FR-17, dedup key is the full path). Both tabs may display `Reports` as their title but they are independent and do not interfere with each other.
+
+- **EC-16** — User clicks "Create Folder View..." on a directory that already contains `_folder.md` (race condition: the index update from an external creation has not yet propagated, so the context menu item was shown). The operation should be a no-op: detect `_folder.md` already exists before creating, open the existing file in the editor instead.
+
+- **EC-17** — `_folder.md` is saved (edited) while the Folder View tab is active. The vault index updates, triggering FR-31. The re-render reads the updated file content and redraws the card grid. No flicker beyond what a full re-render normally produces.
+
+- **EC-18** — `_folder.md` is saved while the Folder View tab is inactive (another tab is active). The tab is marked stale (FR-32). When the user later activates the Folder View tab, it re-renders with the updated content.
+
+- **EC-19** — Vault is switched while a Folder View tab is open. The custom tab created via `openCustomRenderTab` persists in the tab strip (this is existing behavior for custom tabs). The tab content is stale relative to the new vault. This is acceptable v1 behavior; no special handling required. Document it as a known limitation.
+
+- **EC-20** — The `_folder.md` file itself is clicked in the file tree (FR-08). It must open in the editor (normal file-open path), not trigger a Folder View. The file-open path is reached via the `type === "file"` branch of `buildActivateHandler`, which is not affected by the split-click change.
+
+- **EC-21** — A folder named `_folder.md` exists (a directory, not a file). Detection logic must check that the found entry is of type `file` (has a `.md` extension and is a `VaultIndexEntry`), not a directory. No incorrect detection.
+
+- **EC-22** — Large folder with 500 immediate children (subfolders + files). Card grid render must meet NFR-02 (under 100 ms). DOM nodes must be built efficiently; no O(N²) operations.
+
+- **EC-23** — Vault has no directories at all (flat vault, all `.md` files at root). Detection scan finds no directory entries; no folder view triggers. Tree renders normally.
+
+- **EC-24** — User right-clicks a Smart Folder (virtual node from the Smart Folders feature). Smart Folder nodes must not show "Create Folder View..." or "Open Folder View" because they are not real filesystem directories and cannot contain `_folder.md`. The context menu discriminator for smart folders (`isSmartFolderPath`) must be checked before injecting folder-view menu items.
+
+---
 
 ## Resolved Ambiguities
 
-All five A-N items have been resolved by the user; they are now locked alongside the eleven items below.
+All six open questions from the brief have been resolved. They are recorded here for traceability.
 
-- **A-1 (resolved) — Default sort: modified descending.** Files inside an expanded Smart Folder are sorted by `VaultIndexEntry.modified` descending (most recent first). Per-folder sort overrides are out of scope for v1.
-- **A-2 (resolved) — "+ New Smart Folder" placement: BOTH.** Right-click vault root menu item AND a small button at the top of the file browser panel. See FR-22.
-- **A-3 (resolved) — Expansion state key: `__smart__/<smartFolderId>`.** Stored in the existing `expandedPaths` Record using this synthetic key. The `__smart__/` prefix is reserved and cannot collide with real vault paths (real paths begin with a vault root absolute path).
-- **A-4 (resolved) — Eager evaluation.** Re-evaluate every Smart Folder when (a) the vault index finishes (re)building, (b) a Smart Folder is created/edited/deleted, (c) the active vault changes. The `scan_vault_tags()` result is cached for ~5 seconds within an evaluation pass to avoid redundant scans.
-- **A-5 (resolved) — Match count badge: YES.** Render the match count next to the Smart Folder name as a faint suffix (e.g. `Drafts (12)`). Compatible with eager evaluation (A-4).
+- **A (YAML schema)** — Minimum required field is `layout: folder-cards`. Optional fields: `title`, `sort` (name-asc default), `columns` (3 default, clamped to [2,6]), `show-modified` (true default). Absent/unrecognized `layout:` value triggers the graceful fallback (FR-12/FR-13), not an error.
+
+- **B (Live update)** — Re-render fires automatically when the active tab is the Folder View tab for the saved file. When the tab is inactive, a stale flag is set; re-render fires on next tab activation. Mirrors the precedent of `refreshLayoutView` in the existing layouts system (FR-31/FR-32).
+
+- **C (Nested folder views)** — Clicking a subfolder card expands the file tree to that subfolder. If the subfolder has `_folder.md`, its Folder View tab also opens. This delegates navigation authority to the file tree and avoids deep tab nesting (FR-21).
+
+- **D (Context menu)** — Right-clicking a `_folder.md`-enabled folder adds "Open Folder View" as the first context menu item. Right-clicking any folder without `_folder.md` adds "Create Folder View..." near the top of the creation actions (FR-34/FR-35).
+
+- **E (Creating `_folder.md`)** — "Create Folder View..." right-click option creates `_folder.md` with a minimal two-line starter template and opens it in the editor. No wizard or multi-step UI (FR-35/FR-36).
+
+- **F (Tab title)** — The folder's last path segment is the default. If YAML contains `title:`, that value is used instead. Tab title is HTML-escaped (EC-13). Deduplication is by full folder path (not display title), so same-name folders in different parent directories are always independent tabs (FR-16/FR-17/EC-15).
+
+---
 
 ## Decisions Locked (do NOT re-question)
 
-These decisions are fixed and travel with the feature through Architecture, Implementation, and Review.
+These decisions are fixed and travel through Architecture, Implementation, and Review without change.
 
-1. **Filter types (v1)**: tags + YAML `field:value` pairs (combined, sourced from `scan_vault_tags`); file path (substring or prefix); file type (extension via `VaultIndex.entries` for `.md` and `nonMdFiles` for everything else); modified date ("last N days" / "before|after date" against `VaultIndexEntry.modified`); has-links / has-backlinks (inverse map of `outboundLinks`); title/filename text contains.
-2. **Negation encoded in operators** (NOT a separate boolean). Per-type operator lists in FR-09. Mac Finder pattern.
-3. **Combinator**: AND across all rules. No OR, no nested groups in v1.
-4. **Plugin home**: lives inside the existing file-browser plugin (`src/plugins/file-browser/`). Not a separate plugin. No `dependsOn` system.
-5. **Persistence**: `FileBrowserSettings.smartFolders?: Record<vaultId, SmartFolderDef[]>`, same per-vault Record pattern as `pinnedPaths`.
-6. **Tree placement**: synthesized as virtual child nodes at the TOP of each vault root's children, above real subdirectories. Each Smart Folder is a regular `TreeNode` with `type: "directory"`.
-7. **Icon**: Material Symbols `folder_managed`. Add to `scripts/fetch-material-icons.mjs` and re-run.
-8. **Click behavior**: name click expands/collapses; file-inside click opens in a tab. No move/copy interactions involve Smart Folders.
-9. **Subfolder structure**: NONE. Smart Folder contents are a flat list. Original directory structure is not preserved.
-10. **Filter editor: inline expandable form, Mac Finder row pattern, explicit Save/Cancel.** See FR-23 for full row anatomy. Click-outside = Cancel.
-11. **No Rust schema changes for v1**: evaluation uses existing data — `VaultIndex.entries`, `nonMdFiles`, and `scan_vault_tags()`. Build inverse maps in the frontend.
-12. **Sort inside expanded Smart Folder**: modified descending (A-1).
-13. **"+ New Smart Folder" entry points**: right-click vault root menu item AND top-of-panel button (A-2).
-14. **Expansion state key**: `__smart__/<smartFolderId>` in `expandedPaths` (A-3).
-15. **Evaluation cadence**: eager, with ~5s `scan_vault_tags()` cache (A-4).
-16. **Match count badge**: render next to name, e.g. `Drafts (12)` (A-5).
+1. **`_folder.md` is the trigger.** Presence of a file named `_folder.md` in a directory enables Folder View for that directory. Absence means no change to existing behavior.
+2. **Split click targets.** Chevron click → expand/collapse always. Name-label click → Folder View tab if `_folder.md` exists, otherwise expand/collapse.
+3. **`_folder.md` is fully visible in the tree.** No hiding, no special styling beyond the parent folder gaining `tree-node-has-folder-view`.
+4. **YAML front-matter controls layout.** The `layout:` field dispatches to a renderer. The markdown body is optional description content.
+5. **Folder layouts are separate from document layouts.** `layout-manager.ts` is not involved. Folder layout renderers live in the file-browser plugin.
+6. **v1 delivers one layout style: `folder-cards`.** Multiple styles are a follow-on task.
+7. **Tab mechanism: `window.__MARKABLE_OPEN_CUSTOM_TAB__`.** Same as document layouts. Same deduplication-by-title behavior applies.
+8. **No Rust changes.** Detection uses `VaultIndex.entries`; creation uses the existing file-write bridge calls already available to the file-browser plugin.
+9. **All folder-view code lives in `src/plugins/file-browser/`.** Single IIFE, no new bundle target, no new npm dependencies.
+10. **Graceful fallback for absent/unrecognized `layout:`.** Renders the body as plain markdown with a notice. Never crashes.
+11. **Live update: auto-re-render when tab is active; stale-flag when inactive.**
+12. **Subfolder card click: expand tree + open that folder's view if it has `_folder.md`.**
+13. **"Create Folder View..." context menu item creates `_folder.md` with a minimal starter and opens it in the editor.**
+14. **Tab title: YAML `title:` field if present, otherwise folder's last path segment. HTML-escaped.**
+15. **Tab deduplication is by full folder path.** Two folders with the same name in different parent directories produce independent tabs. The display title and the dedup key are separate values.
+
+---
 
 ## Handoff Summary
 
-- Artifact: docs/requirements/active_task.md
-- Status: **Validated** — all open ambiguities resolved.
-- Edge cases to verify in tests: 18 items in Edge Case Inventory (EC-01 through EC-18).
-- Next step: software-architect produces `docs/specs/smart-folders/00_index.md` + step files.
+- Artifact: `docs/requirements/active_task.md`
+- Status: Requirements Validated
+- Edge cases to verify in tests: 24 items in Edge Case Inventory (EC-01 through EC-24)
+
+Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

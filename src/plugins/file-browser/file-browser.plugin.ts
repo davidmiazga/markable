@@ -69,6 +69,16 @@ import {
   showInlineError,
 } from "./file-browser-ops";
 
+// Folder View — bundled inline by Rollup.
+import { buildFolderViewSet } from "./folder-view/detection";
+import { FOLDER_VIEW_CSS } from "./folder-view/folder-view-css";
+import {
+  openFolderViewTab as _openFolderViewTab,
+  notifyFolderViewTabs,
+  checkStaleFolderViewTabs,
+  clearFolderViewRegistry,
+} from "./folder-view/tab";
+
 // Smart Folders — bundled inline by Rollup (step_01 & step_02).
 import type { SmartFolderDef } from "./smart-folders/types";
 import {
@@ -704,7 +714,7 @@ const FILE_BROWSER_CSS = `
   background: #e05252;
 }
 
-`;
+` + FOLDER_VIEW_CSS;
 
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
@@ -881,6 +891,29 @@ let _selectedFolderPath: string | null = null;
  */
 let _activeDragPath: string | null = null;
 
+/**
+ * Last computed folder-view set, updated each renderTreeContent call. FR-06.
+ *
+ * Stored at module level so context menu handlers (handleContextMenu,
+ * buildPinnedSection) can read it without needing folderViewSet threaded
+ * through every call path (step_06).
+ */
+let _lastFolderViewSet: Set<string> = new Set();
+
+/**
+ * Module-level wrapper for openFolderViewTab from tab.ts.
+ *
+ * Kept as a function reference (not a direct import call) so that
+ * buildActivateHandler and attachNodeListeners can close over it without
+ * needing the import at their declaration sites. This lets us avoid a
+ * circular dependency while still using the real implementation (AD-1).
+ *
+ * @param path - Absolute path of the folder to open.
+ */
+const openFolderViewTab = (path: string): void => {
+  _openFolderViewTab(path);
+};
+
 // ── Settings persistence ──────────────────────────────────────────────────────
 
 /**
@@ -1046,7 +1079,7 @@ function buildPinnedSection(activeFile: string | null, vaultId: string): HTMLEle
       e.preventDefault();
       e.stopPropagation();
       const normalItems = isDir
-        ? buildDirContextMenuItems(li, pinnedPath, vaultId)
+        ? buildDirContextMenuItems(li, pinnedPath, vaultId, _lastFolderViewSet.has(pinnedPath))
         : buildFileContextMenuItems(li, pinnedPath, vaultId);
       const unpinItem = { label: "Unpin", handler: () => unpinPath(pinnedPath, vaultId) };
       showContextMenu(
@@ -1576,16 +1609,20 @@ function buildCapNotice(wrapper: HTMLElement, vaultIndex: VaultIndex): void {
  * Sets the module-level _treeEl reference so keyboard nav and highlight
  * update functions can find the list without re-querying the DOM.
  *
- * @param wrapper       - The panel wrapper to append the <ul> into.
- * @param displayNodes  - Pre-filtered/sorted tree nodes to render.
- * @param activeFile    - Currently open file path for active highlighting.
- * @param vaultId       - The active vault's ID for listener context.
+ * @param wrapper        - The panel wrapper to append the <ul> into.
+ * @param displayNodes   - Pre-filtered/sorted tree nodes to render.
+ * @param activeFile     - Currently open file path for active highlighting.
+ * @param vaultId        - The active vault's ID for listener context.
+ * @param folderViewSet  - Set of directory paths that contain _folder.md
+ *                         (FR-06). Defaults to empty set when not provided
+ *                         (safe for callers that pre-date this parameter).
  */
 function buildTreeUl(
   wrapper: HTMLElement,
   displayNodes: TreeNode[],
   activeFile: string | null,
   vaultId: string,
+  folderViewSet: Set<string> = new Set(),
 ): void {
   const card = document.createElement("div");
   card.className = "file-tree-card";
@@ -1601,7 +1638,14 @@ function buildTreeUl(
     ul.appendChild(el);
     // Skip listener wiring for the empty-hint sentinel (non-interactive row, EC-03).
     if (el.classList.contains("smart-folder-empty-hint")) continue;
-    attachNodeListeners(el, vaultId);
+    // Determine whether this directory node has _folder.md (FR-07, step_02).
+    const path = el.getAttribute("data-path") ?? "";
+    const hasFolderView =
+      el.getAttribute("data-type") === "directory" &&
+      folderViewSet.has(path);
+    // FR-07: apply CSS class to directories with _folder.md for styling & DOM queries.
+    if (hasFolderView) el.classList.add("tree-node-has-folder-view");
+    attachNodeListeners(el, vaultId, hasFolderView);
   }
 
   card.appendChild(ul);
@@ -1768,6 +1812,12 @@ function renderTreeContent(wrapper: HTMLElement): void {
   sortNodes(tree);
   _currentTree = tree;
 
+  // FR-05/FR-06: compute the folder-view set once per render pass.
+  // Store in module-level _lastFolderViewSet so context menu handlers can
+  // read it without re-scanning the index (step_06).
+  const folderViewSet = buildFolderViewSet(vaultIndex);
+  _lastFolderViewSet = folderViewSet;
+
   /* Apply search filter (returns original tree reference when query is empty) */
   const displayNodes = _searchQuery.trim() ? filterTree(tree, _searchQuery) : tree;
 
@@ -1777,7 +1827,7 @@ function renderTreeContent(wrapper: HTMLElement): void {
   }
 
   const activeFile = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
-  buildTreeUl(wrapper, displayNodes, activeFile, activeVault.id);
+  buildTreeUl(wrapper, displayNodes, activeFile, activeVault.id, folderViewSet);
 }
 
 /**
@@ -1843,19 +1893,25 @@ function renderLoadingState(wrapper: HTMLElement): void {
 // ── Node event listeners ──────────────────────────────────────────────────────
 
 /**
- * Build the activate handler (click / Enter) for a tree node.
+ * Build the click activation handler for a tree node.
  *
- * Extracted from attachNodeListeners to keep each function ≤30 lines.
- * Routes activation to the appropriate action based on the node type:
+ * Handles three node types:
  *   file      → open in tab manager
  *   vault     → switch vault (no-op when already active)
- *   directory → toggle expand/collapse
+ *   directory → toggle expand/collapse, OR open Folder View when hasFolderView is true
  *
- * @param el      - The <li> element being activated.
- * @param vaultId - Active vault ID for directory toggle persistence.
+ * FR-02: When hasFolderView is true, a label click (or row click) routes to
+ * openFolderViewTab instead of toggleDirectoryNode. The chevron click is
+ * intercepted separately in attachNodeListeners before this handler fires.
+ *
+ * FR-01: When hasFolderView is false, directory clicks behave as before.
+ *
+ * @param el            - The <li> element being activated.
+ * @param vaultId       - Active vault ID for directory toggle persistence.
+ * @param hasFolderView - Whether this directory has _folder.md (FR-02/FR-03).
  * @returns The event handler function.
  */
-function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => void {
+function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = false): (e: Event) => void {
   return (e: Event): void => {
     e.stopPropagation();
     const type = el.getAttribute("data-type") as "vault" | "directory" | "file" | null;
@@ -1899,11 +1955,14 @@ function buildActivateHandler(el: HTMLElement, vaultId: string): (e: Event) => v
         new CustomEvent("markable-folder-selected", { detail: { path } })
       );
     } else if (type === "directory") {
-      toggleDirectoryNode(el, path, vaultId);
-      /*
-       * Directory node activated: update folder selection so the find widget
-       * can offer a "Folder" scope option scoped to this directory.
-       */
+      if (hasFolderView) {
+        // FR-02: label click on a _folder.md-enhanced directory opens Folder View.
+        // The chevron click is intercepted in attachNodeListeners (FR-03).
+        openFolderViewTab(path);
+      } else {
+        // FR-01: no _folder.md — toggle expand/collapse as before.
+        toggleDirectoryNode(el, path, vaultId);
+      }
       _selectedFolderPath = path;
       window.dispatchEvent(
         new CustomEvent("markable-folder-selected", { detail: { path } })
@@ -2243,11 +2302,36 @@ function attachSmartFolderReorderDrag(el: HTMLElement, vaultId: string): void {
  * attachDragDropListeners (drag-and-drop), so each responsibility lives in a
  * helper ≤30 lines.
  *
- * @param el      - The <li> element to wire up.
- * @param vaultId - The active vault's ID (used for settings persistence on expand/collapse).
+ * @param el           - The <li> element to wire up.
+ * @param vaultId      - The active vault's ID (used for settings persistence on expand/collapse).
+ * @param hasFolderView - Whether this directory node has _folder.md (FR-02/FR-03).
+ *                        Defaults to false to remain backward-compatible with callers
+ *                        that pre-date the folder-view feature (e.g. pinned section).
  */
-function attachNodeListeners(el: HTMLElement, vaultId: string): void {
-  const handleActivate = buildActivateHandler(el, vaultId);
+function attachNodeListeners(el: HTMLElement, vaultId: string, hasFolderView = false): void {
+  const handleActivate = buildActivateHandler(el, vaultId, hasFolderView);
+
+  // FR-03: When the directory has _folder.md, intercept chevron clicks so they
+  // only expand/collapse and do NOT propagate to the row's handleActivate handler
+  // (which would open the Folder View tab). The chevron listener must be registered
+  // BEFORE the row listener so stopPropagation() prevents the row click from firing.
+  if (hasFolderView) {
+    const chevron = el.querySelector<HTMLElement>(".tree-node-chevron");
+    if (chevron) {
+      chevron.addEventListener("click", (e: MouseEvent) => {
+        // Stop the click from reaching the row's handleActivate listener.
+        e.stopPropagation();
+        const path = el.getAttribute("data-path") ?? "";
+        // Always toggle expand/collapse — chevron never opens Folder View (FR-03).
+        toggleDirectoryNode(el, path, vaultId);
+        _selectedFolderPath = path;
+        window.dispatchEvent(
+          new CustomEvent("markable-folder-selected", { detail: { path } })
+        );
+      });
+    }
+  }
+
   el.addEventListener("click", handleActivate);
   attachKeyboardHandler(el, vaultId, handleActivate);
 
@@ -2601,6 +2685,8 @@ function onTabChanged(): void {
     _lastKnownFile = currentFile;
     updateActiveFileHighlight();
   }
+  // FR-32: check for stale Folder View tabs that are now active.
+  checkStaleFolderViewTabs();
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -2795,18 +2881,39 @@ function buildFileContextMenuItems(
 /**
  * Build the context menu items for a directory node.
  *
- * @param el      - The node <li> element.
- * @param path    - Absolute path of the directory.
- * @param vaultId - Active vault ID.
+ * When hasFolderView is true, injects "Open Folder View" as the first item
+ * above all others (FR-34).
+ *
+ * When hasFolderView is false, injects "Create Folder View…" between "New Note"
+ * and "New Folder" (FR-35).
+ *
+ * EC-24: Smart Folder nodes never reach this function — they are handled by
+ * buildSmartFolderContextMenuItems in the sfId !== null branch of handleContextMenu.
+ *
+ * @param el           - The node <li> element.
+ * @param path         - Absolute path of the directory.
+ * @param vaultId      - Active vault ID.
+ * @param hasFolderView - Whether this directory currently has _folder.md (FR-34/FR-35).
  */
 function buildDirContextMenuItems(
   el: HTMLElement,
   path: string,
   vaultId: string,
+  hasFolderView = false,
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
   const container = _panelContainer;
 
+  // FR-34: "Open Folder View" injected at the very top when hasFolderView=true.
+  const openFolderViewItems: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> =
+    hasFolderView
+      ? [
+          { label: "Open Folder View", handler: () => openFolderViewTab(path) },
+          { separator: true, label: "", handler: null },
+        ]
+      : [];
+
   return [
+    ...openFolderViewItems,
     {
       label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
@@ -2819,6 +2926,16 @@ function buildDirContextMenuItems(
         showInlineCreateInput(path, container, vaultId);
       },
     },
+    // FR-35: "Create Folder View…" injected between "New Note" and "New Folder"
+    // only when the directory does NOT already have _folder.md.
+    ...(!hasFolderView ? [
+      {
+        label: "Create Folder View…",
+        handler: () => {
+          void createFolderViewFile(path, container, vaultId);
+        },
+      } as { label: string; handler: (() => void) | null },
+    ] : []),
     {
       label: "New Folder",
       handler: () => {
@@ -2848,6 +2965,72 @@ function buildDirContextMenuItems(
       },
     },
   ];
+}
+
+/**
+ * Create _folder.md in the given directory with a minimal starter template.
+ *
+ * FR-35, FR-36, EC-16.
+ *
+ * EC-16 guard: if _folder.md already exists in the vault index (race condition
+ * where the context menu was shown before the index updated), open the existing
+ * file in the editor instead of creating a duplicate.
+ *
+ * Length justification: the function contains three distinct execution paths
+ * (EC-16 existing file, write failure with error display, and success with
+ * editor open) all sharing the same folderMdPath variable. Extracting the
+ * write path would require threading folderMdPath, container, and the Tauri
+ * invoke reference — net increase in complexity without clarity gain.
+ *
+ * @param dirPath   - Absolute path of the target directory.
+ * @param container - Panel container element (for error display on failure).
+ * @param _vaultId  - Active vault ID (reserved for future settings persistence).
+ */
+async function createFolderViewFile(
+  dirPath: string,
+  container: HTMLElement | null,
+  _vaultId: string,
+): Promise<void> {
+  const folderMdPath = dirPath + "/_folder.md";
+
+  // EC-16: check vault index for an existing _folder.md before writing.
+  // This guards against the race where the user right-clicked before the
+  // index reflected an externally-created _folder.md.
+  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vaultIndex = vaultManager?.getVaultIndex?.();
+  const existingEntry = (vaultIndex?.entries ?? []).find(
+    (e: any) => e.path === folderMdPath
+  );
+
+  if (existingEntry) {
+    // EC-16: already exists — open it in the editor rather than creating a duplicate.
+    void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(folderMdPath);
+    return;
+  }
+
+  // FR-36: write the minimal starter template.
+  const STARTER = "---\nlayout: folder-cards\n---\n";
+  try {
+    await (window as any).__TAURI_INTERNALS__?.invoke?.(
+      "write_file",
+      { path: folderMdPath, content: STARTER },
+    );
+  } catch (err) {
+    if (container) {
+      showInlineError(
+        container,
+        `Could not create _folder.md: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return;
+  }
+
+  // FR-35: open _folder.md in the editor tab so the user can customize immediately.
+  void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(folderMdPath);
+
+  // FR-37: the vault FS watcher fires automatically after write_file; no manual
+  // index reload is needed here. The watcher triggers _indexUpdatedCb which
+  // calls renderPanel() and detects the new _folder.md on the next render pass.
 }
 
 /**
@@ -2999,7 +3182,7 @@ function handleContextMenu(e: MouseEvent, el: HTMLElement, vaultId: string): voi
   } else if (type === "file") {
     items = buildFileContextMenuItems(el, path, vaultId);
   } else if (type === "directory") {
-    items = buildDirContextMenuItems(el, path, vaultId);
+    items = buildDirContextMenuItems(el, path, vaultId, _lastFolderViewSet.has(path));
   } else {
     items = buildVaultContextMenuItems(el, path, vaultId);
   }
@@ -3616,6 +3799,15 @@ function setupVaultSubscriptions(vaultManager: any): void {
     // FR-29 Trigger B — FS change: fire-and-forget re-evaluation so smart
     // folder children update when a file is added, renamed, or deleted (EC-17).
     void triggerEvaluation();
+
+    // FR-31/FR-32: notify folder-view tabs when _folder.md may have changed.
+    // The VaultFileChangedEvent may carry the changed file path. If available,
+    // pass it to notifyFolderViewTabs so active tabs re-render immediately and
+    // inactive tabs are marked stale for re-render on next activation.
+    const changedPath = (_event as any)?.path as string | undefined;
+    if (changedPath) {
+      notifyFolderViewTabs(changedPath);
+    }
   };
 
   vaultManager?.onVaultChanged?.(_vaultChangedCb);
@@ -3724,7 +3916,31 @@ const plugin = {
       getSelectedFolderPath(): string | null {
         return _selectedFolderPath;
       },
+
+      /**
+       * Expand a directory in the file tree and re-render the panel.
+       *
+       * Called by subfolder cards in Folder View tabs (FR-21 / AD-10).
+       * The path is added to _expandedPaths so the re-render shows the
+       * directory as expanded.
+       *
+       * @param path - Absolute path of the directory to expand.
+       */
+      expandDirectory(path: string): void {
+        if (!_enabled) return;
+        _expandedPaths.add(path);
+        // Persist the updated expanded state on the debounce timer.
+        const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+        const activeVault = vaultManager?.getActiveVault?.();
+        if (activeVault?.id) scheduleSettingsSave(activeVault.id);
+        renderPanel();
+      },
     };
+
+    // Register __MARKABLE_OPEN_FOLDER_VIEW_TAB__ so renderer.ts can call
+    // openFolderViewTab without a direct import (breaks the circular dep: tab.ts
+    // imports renderer.ts; renderer.ts must NOT import tab.ts — AD-10).
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFolderViewTab;
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
 
@@ -3850,6 +4066,9 @@ const plugin = {
     _fsUnlisten = null;
     _fsDebounceTimer = null;
     _activeDragPath = null;
+    _lastFolderViewSet = new Set();
+    clearFolderViewRegistry();
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = null;
     /* _selectedFolderPath is already cleared above (after nulling the global). */
   },
 };
@@ -3958,6 +4177,20 @@ export const _testing = {
   buildVaultContextMenuItems,
   /** Expose buildFileContextMenuItems for testing. */
   buildFileContextMenuItems,
+  /** Expose buildDirContextMenuItems for context-menu integration tests (step_06). */
+  buildDirContextMenuItems,
+  /** Expose handleContextMenu for EC-24 (smart folder exclusion) tests (step_06). */
+  handleContextMenu,
+  /** Expose createFolderViewFile for context-menu integration tests (step_06). */
+  createFolderViewFile,
+  /** Set _lastFolderViewSet for context-menu integration tests (step_06). */
+  setLastFolderViewSet(s: Set<string>): void {
+    _lastFolderViewSet = s;
+  },
+  /** Get _lastFolderViewSet for context-menu integration tests (step_06). */
+  getLastFolderViewSet(): Set<string> {
+    return _lastFolderViewSet;
+  },
   /** Expose showInlineCreateInput for testing. */
   showInlineCreateInput,
   /** Expose showInlineFolderCreateInput for testing. */
@@ -3970,6 +4203,10 @@ export const _testing = {
   buildNodeEl,
   /** Expose attachVaultUnmountListener for testing (step_02). */
   attachVaultUnmountListener,
+  /** Expose attachNodeListeners for split-click tests (step_03). */
+  attachNodeListeners,
+  /** Expose buildActivateHandler for split-click tests (step_03). */
+  buildActivateHandler,
   /** Expose handleFsEvent for watcher debounce testing. */
   handleFsEvent,
   // ── Step 01 — Smart Folders settings helpers (exposed for unit tests) ─────
