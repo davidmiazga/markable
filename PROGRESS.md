@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-09 (session 11)
+**Last Updated:** 2026-05-09 (session 12)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -112,6 +112,8 @@
 
 - **Plugin panel two-column layout (session 11 cont.)** — `.plugin-section-body` now uses `display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px`. Section headers remain full-width (outside the body grid). Halves the panel scroll height with no JS changes — pure CSS.
 
+- **Folder View via `_folder.md` (session 12)** — A directory containing `_folder.md` gets enhanced file-browser behavior: clicking the **folder name** opens a Folder View tab (card grid of immediate children); clicking the **expand arrow** still toggles the tree. `_folder.md` is fully visible and editable in the tree. YAML front-matter drives the layout (`layout: folder-cards` is the v1 starter). Tab deduplication is by full folder path (`__fv__:<path>` synthetic key) so same-name siblings in different parent directories are always independent tabs. Live update re-renders when `_folder.md` is saved (immediately if the tab is active; stale-flag deferred re-render otherwise). Right-click on any folder adds "Open Folder View" (when `_folder.md` exists) or "Create Folder View…" (when it doesn't, creating a minimal starter template). All 24 ECs covered; `stripScripts` extracted to `folder-view/shared.ts`; tab.title stored unescaped (textContent rendering). 3745 Vitest tests passing; code-reviewer approved 2026-05-09.
+
 - **Plugin disable trap audit — removed dead `window.__MARKABLE_*_SIDEBAR_PANEL__` fallbacks (session 10 cont.)** — Committed 2026-05-08 (`f91292d Window commands trimmed.`). Repo-wide grep confirmed only `daily-note.plugin.ts` had the dead-fallback anti-pattern (`if (_api) {...} else { window.__MARKABLE_*?.() }`). Both `registerSidebarPanel()` and `unregisterSidebarPanel()` helpers reduced to plain `_api?.method?.(...)` calls. `docs/specs/daily-note/step_05_calendar_sidebar.md` updated (status active → reference) with a note explaining why the fallback was removed and the disable-order trap (`_api` must be cleared LAST in `onDisable`). No tests relied on the window globals — they mock `_api` directly. 3507 Vitest tests passing.
 
 - **Sidebar polish — header hover affordance, full icon coverage, daily-note disable bug (session 10 cont.)** — Committed 2026-05-08 (`88716a9 Icons added. Daily Note fixed.`):
@@ -133,14 +135,14 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-09 (session 11).**
+**Session ended 2026-05-09 (session 12).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Smart Folders: complete — evaluation, expansion, all filter types, dblclick/gear-to-edit, drag-to-reorder, filter modal layout, visual row styling, plugin panel two-column layout.
-- `docs/requirements/active_task.md` status set to `reference` (Smart Folders closed).
-- Test suite: **80 files, 3507 passing**. Rust: 178 passing.
-- **Next step**: Layouts feature — planning/requirements pass first before any implementation.
+- Folder View: complete — `_folder.md` detection, split-click, card-grid renderer, tab dedup by path, live update, context menu, all 24 ECs, code-reviewer approved.
+- `docs/requirements/active_task.md` — Folder View active task. Mark `reference` when closing.
+- Test suite: **94 files, 3745 passing**. Rust: 178 passing.
+- **Next step**: Continue Layouts feature — unified YAML-driven system for `.md` files and folders. Requirements pass first.
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
 - **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.
@@ -150,6 +152,10 @@ None.
 - **Titlebar height**: `--titlebar-height: 30px` (was 38 px). If this value ever needs to change, update the single CSS variable in `src/styles.css` `:root`.
 - **Minimal tab strip**: `position: absolute`, overlays top of content. Dots interactive (`pointer-events: auto` on `.tab-dot-track`); empty strip area passes clicks through (`pointer-events: none` on `#tab-strip.tab-mode-minimal`).
 - **Build reminder**: after any plugin TypeScript change, run `npm run build:plugins && npm run sync:plugins`.
+- **Folder View tab key**: synthetic title `__fv__:<absoluteFolderPath>` used for dedup; after tab opens, `tab.title` is patched to the human-readable display title. `tab.title` is rendered via `textContent` (not `innerHTML`) in the tab strip — store raw string, never HTML-escaped.
+- **Folder View detection**: `buildFolderViewSet(vaultIndex)` scans `vaultIndex.entries` once per `renderPanel` call; result stored as `_lastFolderViewSet`. Smart folder synthetic paths (`__smart__/*`) can never appear in the set.
+- **Folder View stale update**: `notifyFolderViewTabs(savedFilePath)` called from `_indexUpdatedCb`. `checkStaleFolderViewTabs()` called from `onTabChanged`. Registry in `folder-view/tab.ts`; GC'd when tab is closed.
+- **Folder View live index**: `rerender` and `renderFn` fetch `__MARKABLE_VAULT_MANAGER__.getVaultIndex()` at call time — never use the index captured at tab-open time.
 - **Drag reminder**: HTML5 drag (`draggable="true"`, `dragstart`) does NOT work in Tauri WKWebView on macOS. Always use pointer events (`pointerdown`/`pointermove`/`pointerup`) for any drag interaction in the file browser. Suppress text selection with `document.body.style.userSelect = "none"` on `pointerdown` (not after a threshold), restored in cleanup.
 - **Sidebar side reminder**: all panels default to the right sidebar. File browser is the sole left-side exception. User overrides persist in `settings.sidebar.panelSides`; clear that map if defaults need to take effect on an existing install.
 - **Sidebar structure reminder**: `#sidebar-left/right` are `flex-direction: row` — ghost icon rail (25 px collapsed / 44 px expanded, outer edge) + content area (flex:1). Panel wrappers, tab bar, and resize handle all live inside `.sidebar-content-area`, not the slot root. Tests querying inside a specific side must use `#sidebar-right .sidebar-content-area` etc. `toggleSidebarSide` always restores `contentAreaEl.style.display = ""` when opening — prevents panels being stuck hidden after an iconize session.
