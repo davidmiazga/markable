@@ -1,8 +1,8 @@
 ---
 title: "Smart Folders (File Browser plugin)"
-last-updated: "2026-05-08"
-review-cadence-days: 14
-status: active
+last-updated: "2026-05-09"
+review-cadence-days: 90
+status: reference
 ---
 
 # Active Task — Smart Folders (FC3 #1)

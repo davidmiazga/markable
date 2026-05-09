@@ -1,7 +1,7 @@
 ---
 title: Smart Folders — Master Blueprint
-last-updated: "2026-05-08"
-review-cadence-days: 30
+last-updated: "2026-05-09"
+review-cadence-days: 90
 status: reference
 ---
 

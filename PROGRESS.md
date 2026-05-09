@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-08 (session 11)
+**Last Updated:** 2026-05-09 (session 11)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -104,6 +104,14 @@
   - **Filter correctness**: (1) Tag rule: Rust stores tags without `#`; stripped leading `#` from user input before lookup. (2) Path rule: added case-insensitive comparison and empty-value guard (`p.includes("")` is always true — returns false for "contains" when value is empty). (3) Extension rule: switched from `<select>` (auto-picks first option visually but `onChange` never fires for auto-selection → value always `""`) to text+datalist — text input explicitly holds the value. (4) Title rule: same empty-value guard as path. (5) Number inputs: added `step="1"` and `Math.round()` coercion.
   - **Filter modal layout**: `.sf-value { display: contents }` made the wrapper transparent to CSS Grid, exposing datalist children as grid items and displacing the `+` button into the value field's visual area. Fixed to `display: flex; align-items: center; gap: 4px; min-width: 0` — wrapper becomes a proper grid cell; input fills it via `flex: 1; min-width: 0`.
 
+- **Smart Folders — visual polish and UX (session 11 cont.)** — Four polish passes after the core feature landed:
+  - **Row styling**: `.tree-node-smart-folder` gets `padding-left: 0 !important` (overrides depth-based inline style), `border-top/bottom: 1px solid hsla(0,0%,100%,.1)`, and 2px vertical padding — visually separates SF rows from the regular tree without a separate section container.
+  - **Gear button**: A settings gear icon (Material Symbols, 16×16) is appended to each SF `<li>`. Always visible at 12% opacity (matching the vault unmount button pattern); row hover raises it to 50%; button hover raises to 100% with accent color. Clicking opens the filter editor in edit mode — identical to dblclick. `pointerdown` on the button is stopped so it doesn't start a drag. SVG `fill` wired through the shared global `fill: currentColor` rule alongside `vault-row-unmount-btn svg`.
+  - **Drag-to-reorder**: `attachSmartFolderReorderDrag` adds pointer-events drag on SF root nodes. Ghost label follows cursor; 2px accent insert line shows drop position between SF rows. On release, `_smartFolders` is spliced to the new order, saved, and re-rendered. Regular file-move drag (`attachDragDropListeners`) is skipped for SF nodes.
+  - **Filter modal layout**: Fixed `display: flex` → `display: grid` on `.smart-folder-rule-row` (flex silently ignores `grid-template-columns`), removed stray `justify-content: space-evenly`. Added `width: 100%` to both `.smart-folder-rules` and `.smart-folder-rule-row` so the grid expands to the full modal width and the `+` button aligns with the right edge. Added `padding-bottom: 2px` to `±` buttons for optical vertical centering of the glyphs.
+
+- **Plugin panel two-column layout (session 11 cont.)** — `.plugin-section-body` now uses `display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px`. Section headers remain full-width (outside the body grid). Halves the panel scroll height with no JS changes — pure CSS.
+
 - **Plugin disable trap audit — removed dead `window.__MARKABLE_*_SIDEBAR_PANEL__` fallbacks (session 10 cont.)** — Committed 2026-05-08 (`f91292d Window commands trimmed.`). Repo-wide grep confirmed only `daily-note.plugin.ts` had the dead-fallback anti-pattern (`if (_api) {...} else { window.__MARKABLE_*?.() }`). Both `registerSidebarPanel()` and `unregisterSidebarPanel()` helpers reduced to plain `_api?.method?.(...)` calls. `docs/specs/daily-note/step_05_calendar_sidebar.md` updated (status active → reference) with a note explaining why the fallback was removed and the disable-order trap (`_api` must be cleared LAST in `onDisable`). No tests relied on the window globals — they mock `_api` directly. 3507 Vitest tests passing.
 
 - **Sidebar polish — header hover affordance, full icon coverage, daily-note disable bug (session 10 cont.)** — Committed 2026-05-08 (`88716a9 Icons added. Daily Note fixed.`):
@@ -125,16 +133,14 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-08 (session 11).**
+**Session ended 2026-05-09 (session 11).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Smart Folders: evaluation, expansion, all filter types, double-click-to-edit, and filter modal layout all working.
+- Smart Folders: complete — evaluation, expansion, all filter types, dblclick/gear-to-edit, drag-to-reorder, filter modal layout, visual row styling, plugin panel two-column layout.
+- `docs/requirements/active_task.md` status set to `reference` (Smart Folders closed).
 - Test suite: **80 files, 3507 passing**. Rust: 178 passing.
-- Sidebar architecture replaced: tab bar/carousel removed; stacked accordion + drag-to-reorder + per-panel icons (header + icon strip), order persisted to `settings.sidebar.<side>.panelOrder`.
-- Wikipedia layout redesign complete and committed.
-- Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
-- **Next step**: Continue FC3 features (next item from PKM plan).
+- **Next step**: Layouts feature — planning/requirements pass first before any implementation.
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
 - **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.
