@@ -192,7 +192,7 @@ const FILE_BROWSER_CSS = `
   justify-content: center;
   opacity: .9;
 }
-.vault-icon svg, .folder-icon svg, .file-icon svg, .vault-row-unmount-btn svg { display: block; fill: currentColor; }
+.vault-icon svg, .folder-icon svg, .file-icon svg, .vault-row-unmount-btn svg, .sf-gear-btn svg { display: block; fill: currentColor; }
 .tree-node-source-file { opacity: 0.5; }
 .tree-node-label {
   flex: 1;
@@ -322,12 +322,54 @@ const FILE_BROWSER_CSS = `
 /* ── Smart Folders (step_03) ──────────────────────────────────────────────── */
 /* tree-node-smart-folder: class added to <li> elements for Smart Folder roots;
    used by context-menu dispatcher to distinguish from real directories (step_06). */
-.tree-node-smart-folder { /* structural marker — no additional visual treatment */ }
+.tree-node-smart-folder {
+  padding-left: 0 !important; /* override depth-based inline style — SF roots are always top-level */
+  border-top: 1px solid hsla(0,0%,100%,.1);
+  border-bottom: 1px solid hsla(0,0%,100%,.1);
+  padding-top: 2px;
+  padding-bottom: 2px;
+  cursor: grab;
+}
+.tree-node-smart-folder.is-sf-dragging { opacity: .45; }
+/* Horizontal insertion line for SF drag-reorder */
+.sf-drag-insert-line {
+  position: fixed;
+  height: 2px;
+  background: var(--accent-color, #7c83f5);
+  box-shadow: 0 0 4px var(--accent-color, #7c83f5);
+  pointer-events: none;
+  z-index: 9998;
+  border-radius: 1px;
+}
 
 /* Smart Folder icon: slightly tinted with the accent colour so it stands out
    from regular folder icons (step_04 / FR-17). Falls back to currentColor when
    the theme does not define --accent-color. */
 .folder-icon-smart svg { fill: var(--accent-color, currentColor); opacity: .85; }
+
+/* Gear button — always in layout at 12% opacity (matches vault unmount button pattern). */
+.sf-gear-btn {
+  display: flex;
+  opacity: 0.12;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  margin-right: 2px;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.tree-node-smart-folder:hover .sf-gear-btn,
+.tree-node-smart-folder:focus-visible .sf-gear-btn { opacity: 0.5; }
+.sf-gear-btn:hover { opacity: 1 !important; color: var(--accent-color, #7c83f5) !important; }
 
 /* ── Smart Folder filter editor modal (step_05) ───────────────────────────── */
 /* The modal reuses .settings-overlay / .settings-panel / .btn from the global
@@ -341,12 +383,14 @@ const FILE_BROWSER_CSS = `
 .sf-filters-label { margin-top: 4px; margin-bottom: 8px; }
 
 /* Rule rows */
-.smart-folder-rules { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.smart-folder-rules { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .smart-folder-rule-row {
-  display: grid;
+  display: flex;
   grid-template-columns: 110px minmax(130px, auto) 1fr 28px 28px;
   gap: 6px;
+  justify-content: space-evenly;
   align-items: center;
+  width: 100%;
 }
 .smart-folder-rule-row .settings-select,
 .smart-folder-rule-row .settings-input { font-size: 12px; padding: 4px 8px; }
@@ -360,6 +404,7 @@ const FILE_BROWSER_CSS = `
 .sf-row-remove, .sf-row-add {
   width: 26px; height: 26px;
   display: flex; align-items: center; justify-content: center;
+  padding-bottom: 4px; /* optical correction: + and − glyphs sit low in their em square */
   border: 1px solid var(--border-color, rgba(128,128,128,.25));
   background: transparent; border-radius: 4px; cursor: pointer;
   font-size: 15px; color: var(--text-secondary);
@@ -1350,10 +1395,22 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
     li.setAttribute("data-vault-id", node.vaultId);
   }
 
-  // Smart Folder: add identifying class and attribute for context-menu dispatcher (step_06).
+  // Smart Folder: add identifying class, attribute, and gear button.
   if (node.smartFolderId) {
     li.classList.add("tree-node-smart-folder");
     li.setAttribute("data-smart-folder-id", node.smartFolderId);
+
+    const gearBtn = document.createElement("button");
+    gearBtn.className = "sf-gear-btn";
+    gearBtn.setAttribute("aria-label", "Edit Smart Folder filters");
+    gearBtn.setAttribute("title", "Edit filters");
+    gearBtn.setAttribute("data-sf-gear", "");
+    // Material Symbols: settings (gear)
+    gearBtn.innerHTML = wrapSvg(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="m388-80-20-126q-19-7-40-19t-37-25l-118 54-93-164 108-81q-2-9-2.5-20.5T185-482q0-11 .5-21.5T188-523L80-604l93-164 118 54q16-13 37-25t40-18l20-127h184l20 126q19 7 40.5 18.5T669-714l118-54 93 164-108 81q2 10 2.5 21.5t.5 21.5q0 10-.5 21t-2.5 21l108 81-93 164-118-54q-16 13-37.5 25T592-206L572-80H388Zm92-270q54 0 92-38t38-92q0-54-38-92t-92-38q-54 0-92 38t-38 92q0 54 38 92t92 38Z"/></svg>`,
+      16,
+    );
+    li.appendChild(gearBtn);
   }
 
   return li;
@@ -2038,6 +2095,146 @@ export async function startVaultInlineRename(el: HTMLElement): Promise<void> {
 }
 
 /**
+ * Attach pointer-events drag-to-reorder for Smart Folder root nodes.
+ *
+ * Smart folders form a contiguous block at the top of the tree. Dragging one
+ * SF node above or below another reorders `_smartFolders`, persists the new
+ * order, and re-renders. Regular file-move drag is intentionally NOT triggered
+ * for SF nodes — their paths are synthetic and meaningless to the vault FS.
+ *
+ * @param el      - The SF <li> element.
+ * @param vaultId - Active vault id (needed for settings save).
+ */
+function attachSmartFolderReorderDrag(el: HTMLElement, vaultId: string): void {
+  const sfId = el.getAttribute("data-smart-folder-id");
+  if (!sfId) return;
+
+  let startX = 0;
+  let startY = 0;
+  let dragActive = false;
+  let activePointerId = -1;
+  let ghostEl: HTMLElement | null = null;
+  let insertLine: HTMLElement | null = null;
+
+  const cleanup = (): void => {
+    ghostEl?.remove(); ghostEl = null;
+    insertLine?.remove(); insertLine = null;
+    el.classList.remove("is-sf-dragging");
+    dragActive = false;
+    activePointerId = -1;
+    document.body.style.userSelect = "";
+    (document.body.style as any).webkitUserSelect = "";
+    document.body.style.cursor = "";
+  };
+
+  el.addEventListener("pointerdown", (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    startX = e.clientX; startY = e.clientY;
+    dragActive = false;
+    activePointerId = e.pointerId;
+    try { el.setPointerCapture(e.pointerId); } catch { /* JSDOM */ }
+    document.body.style.userSelect = "none";
+    (document.body.style as any).webkitUserSelect = "none";
+    window.getSelection()?.removeAllRanges();
+    e.stopPropagation();
+  });
+
+  el.addEventListener("pointermove", (e: PointerEvent) => {
+    if (e.pointerId !== activePointerId) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (!dragActive) {
+      if (Math.hypot(dx, dy) < 6) return;
+      dragActive = true;
+      el.classList.add("is-sf-dragging");
+      document.body.style.cursor = "grabbing";
+
+      ghostEl = document.createElement("div");
+      ghostEl.className = "sf-drag-ghost";
+      ghostEl.textContent = el.querySelector(".tree-node-label")?.textContent ?? "";
+      ghostEl.style.cssText = "position:fixed;pointer-events:none;z-index:9999;opacity:.8;" +
+        "background:var(--bg-secondary,#2a2a3c);border-radius:4px;padding:3px 10px;" +
+        "font-size:12px;color:var(--text-primary);white-space:nowrap;";
+      document.body.appendChild(ghostEl);
+
+      insertLine = document.createElement("div");
+      insertLine.className = "sf-drag-insert-line";
+      document.body.appendChild(insertLine);
+    }
+
+    if (!ghostEl || !insertLine) return;
+    ghostEl.style.left = `${e.clientX + 12}px`;
+    ghostEl.style.top  = `${e.clientY - 10}px`;
+
+    // Find all SF row rects (excluding self) to determine insertion point
+    const sfEls = _treeEl
+      ? Array.from(_treeEl.querySelectorAll<HTMLElement>(".tree-node-smart-folder"))
+          .filter((n) => n !== el)
+      : [];
+
+    let bestIdx = _smartFolders.length; // default: append at end
+    let lineY = -1;
+    let lineX = 0;
+    let lineW = 0;
+
+    for (let i = 0; i < sfEls.length; i++) {
+      const r = sfEls[i].getBoundingClientRect();
+      lineX = r.left; lineW = r.width;
+      if (e.clientY < r.top + r.height / 2) {
+        // Insert before this element
+        const targetId = sfEls[i].getAttribute("data-smart-folder-id");
+        bestIdx = targetId ? _smartFolders.findIndex(d => d.id === targetId) : i;
+        lineY = r.top;
+        break;
+      }
+      // Insert after this element
+      const targetId = sfEls[i].getAttribute("data-smart-folder-id");
+      bestIdx = targetId ? _smartFolders.findIndex(d => d.id === targetId) + 1 : i + 1;
+      lineY = r.bottom;
+    }
+
+    if (lineY < 0 && sfEls.length === 0) {
+      const r = el.getBoundingClientRect();
+      lineY = r.bottom; lineX = r.left; lineW = r.width;
+    }
+    if (lineY >= 0) {
+      insertLine.style.left  = `${lineX}px`;
+      insertLine.style.top   = `${lineY - 1}px`;
+      insertLine.style.width = `${lineW}px`;
+      insertLine.style.display = "";
+      (insertLine as any)._bestIdx = bestIdx;
+    }
+  });
+
+  const commit = (e: PointerEvent): void => {
+    if (e.pointerId !== activePointerId) return;
+    if (!dragActive) { cleanup(); return; }
+
+    const bestIdx: number = (insertLine as any)?._bestIdx ?? _smartFolders.length;
+    cleanup();
+
+    const fromIdx = _smartFolders.findIndex(d => d.id === sfId);
+    if (fromIdx < 0) return;
+
+    // No-op if position unchanged
+    const adjustedIdx = bestIdx > fromIdx ? bestIdx - 1 : bestIdx;
+    if (adjustedIdx === fromIdx) return;
+
+    const reordered = [..._smartFolders];
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(adjustedIdx, 0, moved);
+    _smartFolders = reordered;
+
+    scheduleSettingsSave(vaultId);
+    void renderPanel();
+  };
+
+  el.addEventListener("pointerup", commit);
+  el.addEventListener("pointercancel", cleanup);
+}
+
+/**
  * Attach click, keyboard, context menu, and drag-and-drop event listeners to a
  * rendered tree node <li>.
  *
@@ -2096,14 +2293,25 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
    * Smart folder nodes open the filter editor in edit mode on dblclick. */
   const isSfNode = !!el.getAttribute("data-smart-folder-id");
   if (isSfNode) {
-    el.addEventListener("dblclick", (e: MouseEvent) => {
+    const openSfEditor = (e: Event): void => {
       e.preventDefault();
       e.stopPropagation();
       const sfId = el.getAttribute("data-smart-folder-id")!;
       const def = _smartFolders.find(d => d.id === sfId);
       if (!def) return;
       openFilterEditor({ mode: "edit", anchorPath: el.getAttribute("data-path") ?? "", def });
-    });
+    };
+    el.addEventListener("dblclick", openSfEditor);
+    // Gear button click — prevent it from also triggering expand/collapse on the row.
+    const gearBtn = el.querySelector<HTMLElement>("[data-sf-gear]");
+    if (gearBtn) {
+      gearBtn.addEventListener("click", (e: MouseEvent) => {
+        e.stopPropagation();
+        openSfEditor(e);
+      });
+      // Prevent drag starting from the gear button.
+      gearBtn.addEventListener("pointerdown", (e: PointerEvent) => e.stopPropagation());
+    }
   } else if (el.getAttribute("data-type") === "file" || el.getAttribute("data-type") === "directory") {
     el.addEventListener("dblclick", (e: MouseEvent) => {
       e.preventDefault();
@@ -2119,8 +2327,12 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
     attachVaultDblClickListener(el, vaultId);
   }
 
-  /* Drag-and-drop (Step 02b) */
-  attachDragDropListeners(el, vaultId);
+  /* Smart folder reorder drag; regular file drag skipped for SF nodes. */
+  if (isSfNode) {
+    attachSmartFolderReorderDrag(el, vaultId);
+  } else {
+    attachDragDropListeners(el, vaultId);
+  }
 }
 
 /**

@@ -231,6 +231,14 @@
   word-break: break-word;
 }
 
+/* ── Section body ── */
+
+.plugin-section-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 24px;
+}
+
 /* ── Section body collapsed state ── */
 
 .plugin-section-body--collapsed {

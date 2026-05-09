@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-08 (session 10)
+**Last Updated:** 2026-05-08 (session 11)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -98,6 +98,12 @@
   - **Folder-tab CSS** — `margin-bottom: -1px` on all tabs pulls them 1px below the tab bar's bottom edge. Active tab: `border-bottom: 1px solid var(--bg-titlebar)` (background-match) + `position: relative; z-index: 1` paints over the parent's `border-bottom` in that region. **Root cause of prior failure**: `overflow-x: auto` on `.sidebar-tab-bar` forced `overflow-y` to `auto` by CSS spec (when one axis is non-`visible`, the other is coerced), creating a scroll container that clipped the `margin-bottom: -1px` extension. Fix: removed both `overflow-x: auto` and `overflow-y: hidden` from `.sidebar-tab-bar`.
   - **No duplicate panel name** — When multiple panels share a sidebar (tab bar present), the accordion title text is hidden via `visibility: hidden` so only the tab label shows. `has-tab-bar` class added to `contentAreaEl` by `_reconcileTabBar` scopes the CSS rule: `.has-tab-bar .sidebar-panel-title { visibility: hidden }`. Single-panel sidebars (no tab bar) keep the accordion title as their only label.
 
+- **Smart Folders — evaluation, expansion, filter fixes, and editor UX (session 11)** — Virtual filtered folders in the file browser tree. Four distinct bug categories fixed:
+  - **Expansion**: `applyDescendantVisibility` used path-prefix matching (`sibPath.startsWith(path + "/")`). Smart folder paths (`"__smart__/<id>"`) are synthetic and never match real file paths as prefixes, so expansion showed the count badge but never revealed children. Fixed with `data-depth` attribute on every `<li>` node; smart folder paths now use depth-based sibling scan (`sibDepth > parentDepth`) instead of path comparison.
+  - **Double-click UX**: All `data-type="directory"` nodes triggered `startInlineRename` on dblclick, exposing the UUID path as a rename input. Smart folder nodes now open the filter editor in edit mode (`openFilterEditor({ mode: "edit", def })`) on dblclick; F2 and Delete key handlers also gained `isSfNode` guards.
+  - **Filter correctness**: (1) Tag rule: Rust stores tags without `#`; stripped leading `#` from user input before lookup. (2) Path rule: added case-insensitive comparison and empty-value guard (`p.includes("")` is always true — returns false for "contains" when value is empty). (3) Extension rule: switched from `<select>` (auto-picks first option visually but `onChange` never fires for auto-selection → value always `""`) to text+datalist — text input explicitly holds the value. (4) Title rule: same empty-value guard as path. (5) Number inputs: added `step="1"` and `Math.round()` coercion.
+  - **Filter modal layout**: `.sf-value { display: contents }` made the wrapper transparent to CSS Grid, exposing datalist children as grid items and displacing the `+` button into the value field's visual area. Fixed to `display: flex; align-items: center; gap: 4px; min-width: 0` — wrapper becomes a proper grid cell; input fills it via `flex: 1; min-width: 0`.
+
 - **Plugin disable trap audit — removed dead `window.__MARKABLE_*_SIDEBAR_PANEL__` fallbacks (session 10 cont.)** — Committed 2026-05-08 (`f91292d Window commands trimmed.`). Repo-wide grep confirmed only `daily-note.plugin.ts` had the dead-fallback anti-pattern (`if (_api) {...} else { window.__MARKABLE_*?.() }`). Both `registerSidebarPanel()` and `unregisterSidebarPanel()` helpers reduced to plain `_api?.method?.(...)` calls. `docs/specs/daily-note/step_05_calendar_sidebar.md` updated (status active → reference) with a note explaining why the fallback was removed and the disable-order trap (`_api` must be cleared LAST in `onDisable`). No tests relied on the window globals — they mock `_api` directly. 3507 Vitest tests passing.
 
 - **Sidebar polish — header hover affordance, full icon coverage, daily-note disable bug (session 10 cont.)** — Committed 2026-05-08 (`88716a9 Icons added. Daily Note fixed.`):
@@ -119,15 +125,16 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-08 (session 10).**
+**Session ended 2026-05-08 (session 11).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Test suite: **80 files, 3507 passing (3546 total, 39 skipped)**. Rust: 178 passing.
+- Smart Folders: evaluation, expansion, all filter types, double-click-to-edit, and filter modal layout all working.
+- Test suite: **80 files, 3507 passing**. Rust: 178 passing.
 - Sidebar architecture replaced: tab bar/carousel removed; stacked accordion + drag-to-reorder + per-panel icons (header + icon strip), order persisted to `settings.sidebar.<side>.panelOrder`.
 - Wikipedia layout redesign complete and committed.
 - Properties system redesign complete. FC3 plan documented in `docs/handoffs/PKM-features-v2.0.md`.
-- **Next step**: Continue FC3 features (Smart Folders, or next item from PKM plan).
+- **Next step**: Continue FC3 features (next item from PKM plan).
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
 - **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.

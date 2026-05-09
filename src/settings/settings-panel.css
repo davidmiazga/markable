@@ -23,7 +23,7 @@
 
 .settings-panel {
   position: relative;
-  width: 440px;
+  width: 525px;
   max-width: 90vw;
   max-height: 80vh;
   background: var(--bg-primary);
