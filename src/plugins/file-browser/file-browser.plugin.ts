@@ -34,6 +34,7 @@ import {
   ICON_VAULT,
   ICON_FOLDER,
   ICON_FOLDER_OPEN,
+  ICON_FOLDER_MANAGED,
   ICON_FILE,
   ICON_FILE_MD,
   ICON_FILE_IMAGE,
@@ -67,6 +68,32 @@ import {
   getBasename,
   showInlineError,
 } from "./file-browser-ops";
+
+// Smart Folders — bundled inline by Rollup (step_01 & step_02).
+import type { SmartFolderDef } from "./smart-folders/types";
+import {
+  sanitizeDef,
+  sanitizeAll,
+  generateSmartFolderId,
+  loadSmartFolders,
+  saveSmartFolders,
+} from "./smart-folders/settings";
+import {
+  evaluateAllSmartFolders,
+  clearEvaluationCache,
+  getAllEvaluationResults,
+  removeEvaluationResult,
+  openFilterEditor,
+  registerCommitDraftCallback,
+} from "./smart-folders/index";
+import {
+  buildSmartFolderContextMenuItems,
+} from "./smart-folders/context-menu";
+import {
+  buildSmartFolderNode,
+  smartFolderPath,
+  isSmartFolderPath,
+} from "./smart-folders/tree-injection";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -290,6 +317,77 @@ const FILE_BROWSER_CSS = `
   color: var(--muted-text, var(--text-secondary));
   background: var(--hover-bg, rgba(128,128,128,.06));
   border-bottom: 1px solid var(--border-color, rgba(128,128,128,.15));
+}
+
+/* ── Smart Folders (step_03) ──────────────────────────────────────────────── */
+/* tree-node-smart-folder: class added to <li> elements for Smart Folder roots;
+   used by context-menu dispatcher to distinguish from real directories (step_06). */
+.tree-node-smart-folder { /* structural marker — no additional visual treatment */ }
+
+/* Smart Folder icon: slightly tinted with the accent colour so it stands out
+   from regular folder icons (step_04 / FR-17). Falls back to currentColor when
+   the theme does not define --accent-color. */
+.folder-icon-smart svg { fill: var(--accent-color, currentColor); opacity: .85; }
+
+/* ── Smart Folder filter editor modal (step_05) ───────────────────────────── */
+/* The modal reuses .settings-overlay / .settings-panel / .btn from the global
+   settings-panel.css. Only smart-folder-specific overrides live here. */
+
+/* Wider than the settings panel (440px) to fit the 5-column rule grid. */
+.sf-modal { width: 580px; }
+
+.sf-name-row { margin-bottom: 12px; }
+
+.sf-filters-label { margin-top: 4px; margin-bottom: 8px; }
+
+/* Rule rows */
+.smart-folder-rules { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.smart-folder-rule-row {
+  display: grid;
+  grid-template-columns: 110px minmax(130px, auto) 1fr 28px 28px;
+  gap: 6px;
+  align-items: center;
+}
+.smart-folder-rule-row .settings-select,
+.smart-folder-rule-row .settings-input { font-size: 12px; padding: 4px 8px; }
+.sf-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sf-value .settings-input,
+.sf-value .settings-select { flex: 1; min-width: 0; }
+.sf-value-number { flex: 0 0 72px !important; width: 72px; }
+.sf-days-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+
+/* +/- buttons */
+.sf-row-remove, .sf-row-add {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-color, rgba(128,128,128,.25));
+  background: transparent; border-radius: 4px; cursor: pointer;
+  font-size: 15px; color: var(--text-secondary);
+  transition: background 0.1s, color 0.1s;
+}
+.sf-row-remove:hover { background: var(--code-bg); color: var(--error-color, #c44); }
+.sf-row-add:hover    { background: var(--code-bg); color: var(--text-primary); }
+
+/* Footer layout */
+.sf-modal-footer { display: flex; align-items: center; gap: 8px; }
+.smart-folder-validation-msg { color: var(--error-color, #c44); font-size: 12px; flex: 1; }
+
+/* Empty-hint row shown when a Smart Folder has zero matches (EC-03, AD-12). */
+.smart-folder-empty-hint {
+  cursor: default;
+  opacity: .55;
+  font-style: italic;
+  padding-left: 36px;
+  user-select: none;
+}
+.smart-folder-empty-hint:hover { background: transparent; }
+
+/* Count badge suffix rendered next to Smart Folder name (A-5, step_07). */
+.tree-node-smart-suffix {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: .5;
+  font-weight: normal;
 }
 
 /* ── Context menu ──────────────────────────────────────────────────────────── */
@@ -659,6 +757,15 @@ let _expandedPaths: Set<string> = new Set();
 let _pinnedPaths: Set<string> = new Set();
 
 /**
+ * Smart Folder definitions for the currently active vault (step_01).
+ *
+ * Loaded from settings on vault change. An empty array means no smart
+ * folders are defined for this vault (EC-02). Populated by loadSmartFolders
+ * inside loadExpandedPaths. Persisted via saveSmartFolders.
+ */
+let _smartFolders: SmartFolderDef[] = [];
+
+/**
  * Cached plugin API reference so we can call saveSettings from event handlers
  * without threading the api object through every function call.
  */
@@ -736,10 +843,15 @@ let _activeDragPath: string | null = null;
  *
  * expandedPaths maps each vault ID to an array of expanded directory paths,
  * preserving the user's open/close state across panel open/close cycles.
+ *
+ * smartFolders is optional (undefined = no smart folders defined yet for any vault).
+ * This keeps existing settings files valid without migration (EC-02, AD-2).
  */
 interface FileBrowserSettings {
   expandedPaths: Record<string, string[]>;
   pinnedPaths?: Record<string, string[]>;
+  /** Per-vault Smart Folder definitions. Optional so legacy settings files stay valid. */
+  smartFolders?: Record<string, SmartFolderDef[]>;
 }
 
 /**
@@ -752,15 +864,30 @@ interface FileBrowserSettings {
  */
 async function loadExpandedPaths(vaultId: string): Promise<void> {
   if (!_api) return;
+
+  /*
+   * EC-07: Clear the evaluation cache before loading the new vault's
+   * smart folders. This prevents stale results from a previous vault
+   * from bleeding into the new vault's tree (clearEvaluationCache also
+   * resets the tag-scan cache so the new vault's scan runs fresh).
+   */
+  clearEvaluationCache();
+
   try {
     const saved = await _api.loadSettings() as FileBrowserSettings | null;
     const paths = saved?.expandedPaths?.[vaultId] ?? [];
     _expandedPaths = new Set(paths);
     const pinned = saved?.pinnedPaths?.[vaultId] ?? [];
     _pinnedPaths = new Set(pinned);
+    // Load smart folders for this vault (step_01). sanitizeAll inside
+    // loadSmartFolders prunes corruption silently (EC-08, NFR-06).
+    _smartFolders = await loadSmartFolders(_api, vaultId);
   } catch {
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
+    // Cleanup #4: defensively reset _smartFolders on load failure so
+    // a previous vault's definitions never persist into a new vault.
+    _smartFolders = [];
   }
 }
 
@@ -785,7 +912,11 @@ function scheduleSettingsSave(vaultId: string): void {
       expandedPaths[vaultId] = Array.from(_expandedPaths);
       const pinnedPaths = existing?.pinnedPaths ?? {};
       pinnedPaths[vaultId] = Array.from(_pinnedPaths);
-      await _api.saveSettings({ expandedPaths, pinnedPaths });
+      // Persist smart folders alongside expanded/pinned state (step_01).
+      // We spread the existing record to avoid overwriting other vaults' smart folders.
+      const smartFolders = existing?.smartFolders ?? {};
+      smartFolders[vaultId] = _smartFolders;
+      await _api.saveSettings({ expandedPaths, pinnedPaths, smartFolders });
     } catch {
       /* Save failure is non-critical — expanded state is in-memory until next open. */
     }
@@ -1096,18 +1227,26 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
   }
   li.appendChild(chevron);
 
-  /* Icon — resolved through the active icon set */
+  /* Icon — resolved through the active icon set.
+     Smart Folder nodes use the folder_managed Material Symbol (FR-17 / step_04).
+     All other node types use the regular icon set. */
   const icon = document.createElement("span");
-  icon.className = `tree-node-icon ${
-    node.type === "vault" ? "vault-icon" :
-    node.type === "directory" ? "folder-icon" : "file-icon"
-  }`;
-  if (node.type === "vault") {
-    icon.innerHTML = _iconSet.vault();
-  } else if (node.type === "directory") {
-    icon.innerHTML = _iconSet.folder(node.name, node.expanded);
+  if (node.iconClass === "folder-smart") {
+    // Smart Folder: use folder_managed icon with a distinct modifier class.
+    icon.className = "tree-node-icon folder-icon folder-icon-smart";
+    icon.innerHTML = wrapSvg(ICON_FOLDER_MANAGED, 16);
   } else {
-    icon.innerHTML = _iconSet.file(node.name);
+    icon.className = `tree-node-icon ${
+      node.type === "vault" ? "vault-icon" :
+      node.type === "directory" ? "folder-icon" : "file-icon"
+    }`;
+    if (node.type === "vault") {
+      icon.innerHTML = _iconSet.vault();
+    } else if (node.type === "directory") {
+      icon.innerHTML = _iconSet.folder(node.name, node.expanded);
+    } else {
+      icon.innerHTML = _iconSet.file(node.name);
+    }
   }
   li.appendChild(icon);
 
@@ -1119,6 +1258,16 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
     : node.name;
   label.title = node.path;
   li.appendChild(label);
+
+  /* Match-count badge for Smart Folder nodes (A-5 / step_04 forward-declaration).
+     Rendered as a faint `(12)` suffix. Fires only when both fields are defined
+     so regular directory nodes are unaffected. */
+  if (node.smartFolderId !== undefined && node.matchCount !== undefined) {
+    const suffix = document.createElement("span");
+    suffix.className = "tree-node-smart-suffix";
+    suffix.textContent = ` (${node.matchCount})`;
+    label.appendChild(suffix);
+  }
 }
 
 /**
@@ -1138,9 +1287,24 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
  */
 function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
   const li = document.createElement("li");
+
+  // Empty-hint sentinel: a non-interactive placeholder inside an expanded empty
+  // Smart Folder. Rendered with a distinct class and no keyboard/click wiring.
+  // The caller (attachNodeListeners) must check for this class and skip wiring.
+  if (node.path.endsWith("/__empty__") && isSmartFolderPath(node.path)) {
+    li.className = "tree-node smart-folder-empty-hint";
+    // No tabIndex — this row is not keyboard-navigable
+    const span = document.createElement("span");
+    span.className = "tree-node-label";
+    span.textContent = "No matches";
+    li.appendChild(span);
+    return li;
+  }
+
   li.className = `tree-node tree-node-${node.type}`;
   li.setAttribute("data-path", node.path);
   li.setAttribute("data-type", node.type);
+  li.setAttribute("data-depth", String(node.depth ?? 0));
   li.tabIndex = 0;
 
   appendIconAndLabel(li, node);
@@ -1184,6 +1348,12 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
 
   if (node.vaultId) {
     li.setAttribute("data-vault-id", node.vaultId);
+  }
+
+  // Smart Folder: add identifying class and attribute for context-menu dispatcher (step_06).
+  if (node.smartFolderId) {
+    li.classList.add("tree-node-smart-folder");
+    li.setAttribute("data-smart-folder-id", node.smartFolderId);
   }
 
   return li;
@@ -1372,6 +1542,8 @@ function buildTreeUl(
   renderNodes(displayNodes, activeFile, nodeEls);
   for (const el of nodeEls) {
     ul.appendChild(el);
+    // Skip listener wiring for the empty-hint sentinel (non-interactive row, EC-03).
+    if (el.classList.contains("smart-folder-empty-hint")) continue;
     attachNodeListeners(el, vaultId);
   }
 
@@ -1430,6 +1602,13 @@ function buildAddRow(vaultId: string): HTMLElement {
           handler: () => {
             if (!container || !rootPath) return;
             showInlineFolderCreateInput(rootPath, container, vaultId);
+          },
+        },
+        // FR-22: "New Smart Folder" entry point from the Add row's menu.
+        {
+          label: "New Smart Folder",
+          handler: () => {
+            openFilterEditor({ mode: "create", anchorPath: rootPath });
           },
         },
         { separator: true, label: "", handler: null },
@@ -1505,13 +1684,29 @@ function renderTreeContent(wrapper: HTMLElement): void {
     })),
   ];
 
-  /* Build, sort, and cache the tree */
+  /* Build smart-folder virtual nodes to inject into the tree (step_03).
+     Each SmartFolderDef is mapped to a pre-built TreeNode whose children
+     are already sorted by modified desc from the evaluator. */
+  const entriesByPath = new Map(vaultIndex.entries.map((e) => [e.path, e]));
+  const evalResults   = getAllEvaluationResults();
+  const sfNodes: TreeNode[] = _smartFolders
+    .map((def) => {
+      const r = evalResults.get(def.id);
+      if (!r) return null;
+      // rootDepth=1: smart folder nodes sit at the same level as real subdirs
+      return buildSmartFolderNode(def, r, entriesByPath, _expandedPaths, 1);
+    })
+    .filter((n): n is TreeNode => n !== null);
+
+  /* Build, sort, and cache the tree. Smart folder injections are prepended
+     inside buildTreeFromIndex; sortNodes then keeps them at the top (AD-6). */
   const tree = buildTreeFromIndex(
     allEntries,
     activeVault.rootPaths,
     _expandedPaths,
     activeVault,
     vaultIndex.directories,
+    sfNodes,
   );
   sortNodes(tree);
   _currentTree = tree;
@@ -1869,8 +2064,10 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
     const type = el.getAttribute("data-type");
     const path = el.getAttribute("data-path") ?? "";
 
-    /* F2: inline rename for file and directory nodes (FR-3) */
-    if (e.key === "F2" && (type === "file" || type === "directory")) {
+    /* F2: inline rename for file and directory nodes (FR-3).
+     * Smart folder nodes are excluded — they use context-menu Rename instead. */
+    const isSf = !!el.getAttribute("data-smart-folder-id");
+    if (!isSf && e.key === "F2" && (type === "file" || type === "directory")) {
       e.preventDefault();
       startInlineRename(el, path, vaultId);
       return; // Explicit return prevents fall-through into Delete handling.
@@ -1881,14 +2078,12 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
      * both call reloadVaultIndex internally, which triggers renderPanel via the
      * vault-changed event. A chained reloadAndRender would cause a second redundant
      * reload (NFR Finding 9 / FR-15). */
-    if (e.key === "Delete") {
+    if (e.key === "Delete" && !isSf) {
       if (type === "file") {
         e.preventDefault();
-        // Pass _panelContainer so deleteFile can surface Rust errors inline (M2).
         void deleteFile(path, _panelContainer ?? document.createElement("div"));
       } else if (type === "directory") {
         e.preventDefault();
-        // Pass _panelContainer so deleteDirectory can surface Rust errors inline (M2).
         void deleteDirectory(path, _panelContainer ?? document.createElement("div"));
       }
     }
@@ -1897,12 +2092,21 @@ function attachNodeListeners(el: HTMLElement, vaultId: string): void {
   /* FR-1: Double-click triggers inline rename for file and directory nodes.
    * Single-click opens the file (handled by buildActivateHandler via click).
    * dblclick fires as a separate browser event — no timer or click-count guard needed.
-   * EC-15: the guard explicitly excludes vault nodes so vault root rows are not affected. */
-  if (el.getAttribute("data-type") === "file" || el.getAttribute("data-type") === "directory") {
+   * EC-15: the guard excludes vault nodes.
+   * Smart folder nodes open the filter editor in edit mode on dblclick. */
+  const isSfNode = !!el.getAttribute("data-smart-folder-id");
+  if (isSfNode) {
     el.addEventListener("dblclick", (e: MouseEvent) => {
       e.preventDefault();
-      // stopPropagation prevents the rename input from being immediately dismissed
-      // by a container-level click handler that may receive the bubbled event.
+      e.stopPropagation();
+      const sfId = el.getAttribute("data-smart-folder-id")!;
+      const def = _smartFolders.find(d => d.id === sfId);
+      if (!def) return;
+      openFilterEditor({ mode: "edit", anchorPath: el.getAttribute("data-path") ?? "", def });
+    });
+  } else if (el.getAttribute("data-type") === "file" || el.getAttribute("data-type") === "directory") {
+    el.addEventListener("dblclick", (e: MouseEvent) => {
+      e.preventDefault();
       e.stopPropagation();
       const path = el.getAttribute("data-path") ?? "";
       startInlineRename(el, path, vaultId);
@@ -1940,6 +2144,21 @@ function applyDescendantVisibility(
   path: string,
   newExpanded: boolean,
 ): void {
+  // Smart folder nodes use depth-based child detection: their children have
+  // real absolute paths that don't share the synthetic "__smart__/<id>/" prefix.
+  if (isSmartFolderPath(path)) {
+    const parentDepth = parseInt(allNodes[elIndex].getAttribute("data-depth") ?? "0", 10);
+    let i = elIndex + 1;
+    while (i < allNodes.length) {
+      const sibling = allNodes[i];
+      const sibDepth = parseInt(sibling.getAttribute("data-depth") ?? "0", 10);
+      if (sibDepth <= parentDepth) break;
+      sibling.style.display = newExpanded ? "" : "none";
+      i++;
+    }
+    return;
+  }
+
   let i = elIndex + 1;
   while (i < allNodes.length) {
     const sibling = allNodes[i];
@@ -2090,6 +2309,9 @@ export async function refreshVaultData(): Promise<void> {
   const existing = vaultManager?.getVaultIndex?.();
   if (existing) {
     _isLoading = false;
+    // FR-29 Trigger A (fast path): vault loaded with cached index — evaluate now.
+    // Fire-and-forget: renderPanel will re-run when evaluation resolves.
+    void triggerEvaluation().then(() => { if (_enabled) renderPanel(); });
     renderPanel();
     return;
   }
@@ -2116,6 +2338,38 @@ export async function refreshVaultData(): Promise<void> {
 
   _isLoading = false;
   if (_enabled) renderPanel();
+}
+
+// ── Smart Folders: eager evaluation trigger ───────────────────────────────────
+
+/**
+ * Single entry point for all FR-29 eager evaluation triggers.
+ *
+ * All three trigger sources (vault changed, index updated, smart folder
+ * CRUD) call this function. It is idempotent within the tag-scan TTL (5 s)
+ * because scanVaultTagsCached coalesces concurrent calls into a shared
+ * Promise (EC-15 / AD-4).
+ *
+ * EC-12 guard: exits silently when the vault index is not yet available
+ * (index still building). The next onIndexUpdated event will succeed.
+ *
+ * NFR-01 soft warning: logs a console.warn when evaluation exceeds 250 ms.
+ */
+async function triggerEvaluation(): Promise<void> {
+  if (!_enabled) return;
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vault: VaultEntry | null = vm?.getActiveVault?.() ?? null;
+  if (!vault) return;
+  const vaultIndex = vm?.getVaultIndex?.() as VaultIndex | null;
+  // EC-12: index still building — skip this pass; next trigger will succeed.
+  if (!vaultIndex) return;
+
+  const t0 = performance.now();
+  await evaluateAllSmartFolders(_smartFolders, vaultIndex, vault);
+  const dt = performance.now() - t0;
+  if (dt > 250) {
+    console.warn(`[smart-folders] evaluation pass took ${dt.toFixed(0)}ms`);
+  }
 }
 
 // ── Tab-change detection ──────────────────────────────────────────────────────
@@ -2426,6 +2680,11 @@ function buildVaultContextMenuItems(
         showInlineFolderCreateInput(rootPath, container, vaultId);
       },
     },
+    // FR-22: "New Smart Folder" entry point from vault-root right-click.
+    {
+      label: "New Smart Folder",
+      handler: () => openFilterEditor({ mode: "create", anchorPath: rootPath }),
+    },
     { separator: true, label: "", handler: null },
     {
       label: "Unmount",
@@ -2470,6 +2729,8 @@ function handleContextMenu(e: MouseEvent, el: HTMLElement, vaultId: string): voi
 
   const type = el.getAttribute("data-type") as "vault" | "directory" | "file" | null;
   const path = el.getAttribute("data-path") ?? "";
+  // Smart-folder rows carry this attribute (set in buildNodeEl, step_04).
+  const sfId = el.getAttribute("data-smart-folder-id");
 
   /*
    * Update the selected folder path when a context menu is invoked.
@@ -2489,7 +2750,41 @@ function handleContextMenu(e: MouseEvent, el: HTMLElement, vaultId: string): voi
 
   let items: Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }>;
 
-  if (type === "file") {
+  if (sfId !== null) {
+    /*
+     * Smart Folder row — branch checked BEFORE directory branch because
+     * smart-folder rows have data-type="directory" (FR-15 / AD-9).
+     */
+    const def = _smartFolders.find(d => d.id === sfId);
+    if (!def) return;
+    const vaultRoot = (window as any).__MARKABLE_VAULT_MANAGER__
+      ?.getActiveVault?.()?.rootPaths?.[0] ?? "";
+
+    items = buildSmartFolderContextMenuItems(
+      el,
+      def,
+      vaultRoot,
+      // onDelete: purges module state and re-renders (EC-06, FR-25).
+      (id: string) => {
+        _smartFolders = _smartFolders.filter(d => d.id !== id);
+        // Purge expansion state so the synthetic path is not re-created.
+        _expandedPaths.delete(smartFolderPath(id));
+        // Purge stale evaluation result to prevent phantom node on next render.
+        removeEvaluationResult(id);
+        // Persist the updated state and re-render.
+        scheduleSettingsSave(vaultId);
+        renderPanel();
+      },
+      // onRename: updates name in-place without changing the id (EC-05, FR-24).
+      (id: string, newName: string) => {
+        const idx = _smartFolders.findIndex(d => d.id === id);
+        if (idx < 0) return;
+        _smartFolders[idx] = { ..._smartFolders[idx], name: newName };
+        scheduleSettingsSave(vaultId);
+        renderPanel();
+      },
+    );
+  } else if (type === "file") {
     items = buildFileContextMenuItems(el, path, vaultId);
   } else if (type === "directory") {
     items = buildDirContextMenuItems(el, path, vaultId);
@@ -3105,6 +3400,10 @@ function setupVaultSubscriptions(vaultManager: any): void {
       _currentTree = newTree;
       renderPanel();
     }
+
+    // FR-29 Trigger B — FS change: fire-and-forget re-evaluation so smart
+    // folder children update when a file is added, renamed, or deleted (EC-17).
+    void triggerEvaluation();
   };
 
   vaultManager?.onVaultChanged?.(_vaultChangedCb);
@@ -3216,6 +3515,35 @@ const plugin = {
     };
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
+
+    /*
+     * FR-29 Trigger C — Smart folder created/edited via the filter editor.
+     *
+     * Registers the commit-draft callback so that when the user saves the
+     * filter editor, the new or updated SmartFolderDef is persisted and an
+     * eager re-evaluation is triggered. Uses the registerCommitDraftCallback
+     * pattern (decouples index.ts from the plugin's module-level state).
+     */
+    registerCommitDraftCallback(async (mode, draft) => {
+      const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+      const activeVault: VaultEntry | null = vaultManager?.getActiveVault?.() ?? null;
+      if (!activeVault) return;
+      if (mode === "create") {
+        _smartFolders = [..._smartFolders, draft];
+      } else {
+        const idx = _smartFolders.findIndex(d => d.id === draft.id);
+        if (idx >= 0) {
+          _smartFolders = [..._smartFolders];
+          _smartFolders[idx] = draft;
+        } else {
+          _smartFolders = [..._smartFolders, draft];
+        }
+      }
+      scheduleSettingsSave(activeVault.id);
+      await triggerEvaluation();
+      renderPanel();
+    });
+
     api.registerSidebarPanel(makePanelDescriptor());
 
     /* Capture the search toggle button reference after the sidebar renders it */
@@ -3299,6 +3627,7 @@ const plugin = {
     _searchEl = null;
     _searchQuery = "";
     _currentTree = [];
+    _smartFolders = [];
     _isLoading = false;
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
@@ -3431,6 +3760,21 @@ export const _testing = {
   attachVaultUnmountListener,
   /** Expose handleFsEvent for watcher debounce testing. */
   handleFsEvent,
+  // ── Step 01 — Smart Folders settings helpers (exposed for unit tests) ─────
+  /** Validate a single raw SmartFolderDef (EC-08, NFR-06). */
+  sanitizeDef,
+  /** Validate the full raw smartFolders record. */
+  sanitizeAll,
+  /** Generate a unique sf-prefixed Smart Folder ID (AD-3). */
+  generateSmartFolderId,
+  /** Load Smart Folders for a vault from settings (EC-02). */
+  loadSmartFolders,
+  /** Persist Smart Folders for a vault, preserving sibling keys. */
+  saveSmartFolders,
+  /** Get the current _smartFolders array (for testing step_01 wiring). */
+  getSmartFolders(): SmartFolderDef[] {
+    return _smartFolders;
+  },
   /** Get the current context menu element (null when none is open). */
   getContextMenu(): HTMLElement | null {
     return _contextMenu;
@@ -3468,6 +3812,41 @@ export const _testing = {
   getSelectedFolderPath(): string | null {
     return _selectedFolderPath;
   },
+
+  // ── Step 07 — Eager evaluation trigger & testing helpers ──────────────────
+
+  /**
+   * Expose triggerEvaluation for integration tests.
+   *
+   * Allows tests to manually trigger a re-evaluation pass without simulating
+   * vault events. Returns the same Promise as the production function.
+   */
+  triggerEvaluation,
+
+  /**
+   * Directly seed the module-level _smartFolders array.
+   *
+   * Used by integration tests to set up smart folder state without going
+   * through the full loadSmartFolders → settings persistence path.
+   *
+   * @param defs - The SmartFolderDef[] to set as the active smart folders.
+   */
+  seedSmartFolders(defs: SmartFolderDef[]): void {
+    _smartFolders = defs;
+  },
+
+  /**
+   * Directly set the module-level _panelContainer for testing.
+   *
+   * Allows integration tests to set a container before calling renderPanel()
+   * without having to go through the full sidebar panel lifecycle.
+   *
+   * @param container - The HTMLElement to use as the panel container.
+   */
+  setContainer(container: HTMLElement | null): void {
+    _panelContainer = container;
+  },
+
 };
 
 export default plugin;

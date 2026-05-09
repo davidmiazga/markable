@@ -19,16 +19,18 @@ const BASE  = "https://unpkg.com/@material-symbols/svg-400@0.44.4/outlined";
 
 /** Icons to download. Key = export name, value = Material Symbols icon name. */
 const ICONS = {
-  VAULT:        "inventory_2",
-  FOLDER:       "folder",
-  FOLDER_OPEN:  "folder_open",
-  FILE:         "description",
-  FILE_MD:      "article",
-  FILE_IMAGE:   "image",
-  FILE_JSON:    "data_object",
-  FILE_CODE:    "code",
-  CHEVRON:      "chevron_right",
-  EXPAND:       "keyboard_arrow_down",
+  VAULT:           "inventory_2",
+  FOLDER:          "folder",
+  FOLDER_OPEN:     "folder_open",
+  FOLDER_MANAGED:  "folder_managed",    // Smart Folders icon — FR-17 / Locked #7
+  FILE:            "description",
+  FILE_MD:         "article",
+  FILE_IMAGE:      "image",
+  FILE_JSON:       "data_object",
+  FILE_CODE:       "code",
+  CHEVRON:         "chevron_right",
+  EXPAND:          "keyboard_arrow_down",
+  UNMOUNT:         "chip_extraction",   // Vault unmount button
 };
 
 /** Strip width/height attributes so we can set them per-use-site. */

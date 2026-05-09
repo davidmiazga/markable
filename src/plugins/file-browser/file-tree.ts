@@ -62,6 +62,17 @@ export interface TreeNode {
    * path changing (e.g. an in-place edit). Absent on directory and vault nodes.
    */
   modified?: number;
+  /**
+   * Set only when this node is a virtual Smart Folder root (step_03).
+   * Contains the SmartFolderId used to look up expansion state via the
+   * synthetic key `__smart__/<smartFolderId>` (AD-3, Locked #14).
+   */
+  smartFolderId?: string;
+  /**
+   * Match count for Smart Folder nodes, populated by the evaluator (step_03).
+   * Rendered as a faint suffix `Drafts (12)` next to the folder name (A-5).
+   */
+  matchCount?: number;
 }
 
 // ── Icon class mapping ────────────────────────────────────────────────────────
@@ -185,6 +196,7 @@ export function buildTreeFromIndex(
   expandedPaths: Set<string>,
   vault: VaultEntry,
   directories?: string[],
+  smartFolderInjections?: TreeNode[],
 ): TreeNode[] {
   /*
    * Build a map from absolute path → TreeNode for all directory nodes so we
@@ -221,6 +233,16 @@ export function buildTreeFromIndex(
       : buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 0);
 
     rootChildren.push(...container);
+  }
+
+  /*
+   * Inject Smart Folder virtual nodes at the TOP of the vault root's children
+   * (step_03 / FR-14). This must happen BEFORE sortNodes runs so that the smart
+   * folder nodes are present in rootChildren. sortNodes will then keep them at
+   * the front because it recognises __smart__/ paths (AD-6, EC-14).
+   */
+  if (smartFolderInjections && smartFolderInjections.length > 0) {
+    rootChildren.unshift(...smartFolderInjections);
   }
 
   /*
@@ -364,11 +386,32 @@ function buildSubtree(
  * top level. This ensures that a deeply nested folder's children are also
  * sorted correctly.
  *
+ * Smart Folder nodes (path starts with "__smart__/") are treated specially:
+ *   - They are separated out before sorting so they always appear ABOVE real
+ *     directories, regardless of their name (FR-14, EC-14).
+ *   - Their children are pre-sorted by the evaluator (modified desc) and MUST
+ *     NOT be recursed into or re-sorted here (AD-6).
+ *
+ * The sort is done by separating smart-folder roots from real nodes, sorting
+ * only the real subset, then prepending the smart-folder roots. This is the
+ * "inject-after-sort" approach recommended by the Architect in AD-6.
+ *
  * @param nodes - The array of TreeNode objects to sort (mutated in-place).
  * @returns The same array reference after sorting (for chaining convenience).
  */
 export function sortNodes(nodes: TreeNode[]): TreeNode[] {
-  nodes.sort((a, b) => {
+  // Separate smart-folder roots from real nodes so smart folders sort first.
+  const smart: TreeNode[] = [];
+  const real:  TreeNode[] = [];
+  for (const n of nodes) {
+    if (n.path.startsWith("__smart__/")) {
+      smart.push(n);
+    } else {
+      real.push(n);
+    }
+  }
+
+  real.sort((a, b) => {
     const aIsDir = a.type === "directory" || a.type === "vault";
     const bIsDir = b.type === "directory" || b.type === "vault";
 
@@ -380,12 +423,17 @@ export function sortNodes(nodes: TreeNode[]): TreeNode[] {
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 
-  /* Recurse into each directory's children */
-  for (const node of nodes) {
+  /* Recurse into REAL directory nodes only — smart-folder children are
+     evaluator-sorted (modified desc) and must not be disturbed (AD-6). */
+  for (const node of real) {
     if (node.children.length > 0) {
       sortNodes(node.children);
     }
   }
+
+  /* Mutate the input array in-place so all existing references stay valid. */
+  nodes.length = 0;
+  nodes.push(...smart, ...real);
 
   return nodes;
 }
