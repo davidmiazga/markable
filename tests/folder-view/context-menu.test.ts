@@ -12,7 +12,7 @@
  *   EC-24: Smart Folder nodes never reach buildDirContextMenuItems.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { _testing } from "../../src/plugins/file-browser/file-browser.plugin";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -151,8 +151,8 @@ describe("EC-24: Smart Folder nodes", () => {
 
 describe("createFolderViewFile", () => {
 
-  let openFileInTabSpy: ReturnType<typeof vi.fn>;
-  let writeFileSpy: ReturnType<typeof vi.fn>;
+  let openFileInTabSpy: Mock;
+  let writeFileSpy: Mock;
 
   beforeEach(() => {
     openFileInTabSpy = vi.fn();
