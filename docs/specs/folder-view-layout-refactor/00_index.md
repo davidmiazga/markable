@@ -2,7 +2,7 @@
 title: "Folder View Layout Refactor — Master Blueprint"
 last-updated: "2026-05-09"
 review-cadence-days: 90
-status: active
+status: reference
 ---
 
 # Folder View Layout Refactor — Master Blueprint

@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-09 (session 12)
+**Last Updated:** 2026-05-09 (session 13)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -114,6 +114,11 @@
 
 - **Folder View via `_folder.md` (session 12)** — A directory containing `_folder.md` gets enhanced file-browser behavior: clicking the **folder name** opens a Folder View tab (card grid of immediate children); clicking the **expand arrow** still toggles the tree. `_folder.md` is fully visible and editable in the tree. YAML front-matter drives the layout (`layout: folder-cards` is the v1 starter). Tab deduplication is by full folder path (`__fv__:<path>` synthetic key) so same-name siblings in different parent directories are always independent tabs. Live update re-renders when `_folder.md` is saved (immediately if the tab is active; stale-flag deferred re-render otherwise). Right-click on any folder adds "Open Folder View" (when `_folder.md` exists) or "Create Folder View…" (when it doesn't, creating a minimal starter template). All 24 ECs covered; `stripScripts` extracted to `folder-view/shared.ts`; tab.title stored unescaped (textContent rendering). 3745 Vitest tests passing; code-reviewer approved 2026-05-09.
 
+- **Folder View — visual indicator + card preview (session 13)** — Polish pass on the Folder View feature. Three changes committed:
+  1. **Tree indicator** — Replaced the faint underline on folder-view directory labels with: accent-color applied to the folder icon AND label text, plus a 20×20 px `preview` (eye) Material Symbol badge pinned to the right of the row (same position as the vault unmount button). Badge appended in `buildTreeUl` loop; `ICON_PREVIEW` added to `icons/material/index.ts`. CSS in `.tree-node-fv-badge`.
+  2. **Card layout — preview rectangle** — Cards now show a 90 px preview rectangle at the top (edge-to-edge) followed by the filename label below. Preview content per type: **images** (`.png/.jpg/.jpeg/.gif/.webp/.svg/.avif/.bmp/.ico`) rendered via `__MARKABLE_CONVERT_FILE_SRC__` as a cover-fill `<img>`; **text/markdown** (`.md/.txt/.markdown`) async-loaded via `invoke("read_file")`, YAML frontmatter stripped, first 300 chars shown as clamped text; **directories** — centred folder icon; **all other files** — centred file-type icon. `buildCardPreview` helper added to `renderer.ts`; `IMAGE_EXTS` / `TEXT_EXTS` module-level sets replace inline array literals in icon lookup.
+  3. **"Files" section title removed** — `buildSection` now accepts `title: string | null`; passing `null` skips the `<h3>` heading. The files section passes `null`; the "Folders" heading is preserved for mixed-content folders. 2026-05-09.
+
 - **Plugin disable trap audit — removed dead `window.__MARKABLE_*_SIDEBAR_PANEL__` fallbacks (session 10 cont.)** — Committed 2026-05-08 (`f91292d Window commands trimmed.`). Repo-wide grep confirmed only `daily-note.plugin.ts` had the dead-fallback anti-pattern (`if (_api) {...} else { window.__MARKABLE_*?.() }`). Both `registerSidebarPanel()` and `unregisterSidebarPanel()` helpers reduced to plain `_api?.method?.(...)` calls. `docs/specs/daily-note/step_05_calendar_sidebar.md` updated (status active → reference) with a note explaining why the fallback was removed and the disable-order trap (`_api` must be cleared LAST in `onDisable`). No tests relied on the window globals — they mock `_api` directly. 3507 Vitest tests passing.
 
 - **Sidebar polish — header hover affordance, full icon coverage, daily-note disable bug (session 10 cont.)** — Committed 2026-05-08 (`88716a9 Icons added. Daily Note fixed.`):
@@ -135,14 +140,23 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-09 (session 12).**
+**Session ended 2026-05-09 (session 13).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Folder View: complete — `_folder.md` detection, split-click, card-grid renderer, tab dedup by path, live update, context menu, all 24 ECs, code-reviewer approved.
-- `docs/requirements/active_task.md` — Folder View active task. Mark `reference` when closing.
+- Folder View: complete including session-13 polish — split-click, card-grid with per-file preview rectangles, tree visual indicator (accent color + preview badge), live update, context menu, all ECs covered.
+- `docs/requirements/active_task.md` — Folder View layout refactor task. Status set to `reference`.
+- `docs/specs/folder-view-layout-refactor/00_index.md` — Status set to `reference`.
 - Test suite: **94 files, 3745 passing**. Rust: 178 passing.
-- **Next step**: Continue Layouts feature — unified YAML-driven system for `.md` files and folders. Requirements pass first.
+- **Next step**: Continue refining the Folder View card layout (user wants to refine before adding new layout types). Then consider Layouts feature or other PKM features.
+
+#### Key technical state
+- **Folder View card preview**: `buildCardPreview` in `renderer.ts`. `IMAGE_EXTS` and `TEXT_EXTS` module-level Sets drive the branching. Image preview uses `window.__MARKABLE_CONVERT_FILE_SRC__`. Text preview uses `window.__TAURI_INTERNALS__?.invoke("read_file", {path})` async, strips frontmatter, clamps to 300 chars via `-webkit-line-clamp: 5`. Other files and directories get a centred icon.
+- **Folder View tree indicator**: `hasFolderView=true` nodes get `.tree-node-has-folder-view` (accent color on icon + label) and a `.tree-node-fv-badge` `<span>` (20×20 px `ICON_PREVIEW` SVG, `opacity: 0.75`, accent color). Badge is `aria-hidden`.
+- **Folder View tab mechanism**: `openFolderViewTab(folderPath)` → `openFileInTab(_folder.md).then(() => enterLayoutView(buildFolderViewRenderFn(folderPath)))`. No custom-tab registry. `isInLayoutView` + `layoutRenderFn` on `TabEntry` handle deferred re-render.
+- **Folder View live refresh**: `_indexUpdatedCb` inline FR-13 logic — checks `changedPath.endsWith("/_folder.md")`, `activeTab.filePath === changedPath`, `isActiveTabInLayoutView()` → `refreshLayoutView(buildFolderViewRenderFn(parentDir))`.
+- **`_folder.md` click**: `buildActivateHandler` file branch — `exitLayoutView()` + `__MARKABLE_ENSURE_CODE_VIEW__()` force code view. Cmd-E on `_folder.md` → `__MARKABLE_OPEN_FOLDER_VIEW_TAB__` (bypasses `showLayoutForFile` which can't find plugin-registered renderers).
+- **`__MARKABLE_ENSURE_CODE_VIEW__`**: global set in `main.ts`; calls `togglePreview()` if preview mode is currently on. Ensures `_folder.md` always opens in raw code view, not Typora preview.
 - **VaultSettings path**: `{vaultRoot}/VaultSettings/{safe}_properties.md`. Fixed folder name — not vault-name-specific.
 - **Properties vocab format**: Multi-section `## Heading` Markdown. `## Tags` → tag vocabulary. `## Date` → `[x] FORMAT` selects date format. All other `## Section` → `fields[lowercase]` vocabulary.
 - **Auto Title plugin settings**: style preference stored in plugin-own settings (`plugins/auto-title/settings.json`), not in main `MarkableSettings`. UI lives in the plugin detail view (Plugins panel → Auto Title → "Filename style" dropdown). `_style` module var defaults to `"spaces"` until `onEnable` loads saved settings.
@@ -152,10 +166,7 @@ None.
 - **Titlebar height**: `--titlebar-height: 30px` (was 38 px). If this value ever needs to change, update the single CSS variable in `src/styles.css` `:root`.
 - **Minimal tab strip**: `position: absolute`, overlays top of content. Dots interactive (`pointer-events: auto` on `.tab-dot-track`); empty strip area passes clicks through (`pointer-events: none` on `#tab-strip.tab-mode-minimal`).
 - **Build reminder**: after any plugin TypeScript change, run `npm run build:plugins && npm run sync:plugins`.
-- **Folder View tab key**: synthetic title `__fv__:<absoluteFolderPath>` used for dedup; after tab opens, `tab.title` is patched to the human-readable display title. `tab.title` is rendered via `textContent` (not `innerHTML`) in the tab strip — store raw string, never HTML-escaped.
 - **Folder View detection**: `buildFolderViewSet(vaultIndex)` scans `vaultIndex.entries` once per `renderPanel` call; result stored as `_lastFolderViewSet`. Smart folder synthetic paths (`__smart__/*`) can never appear in the set.
-- **Folder View stale update**: `notifyFolderViewTabs(savedFilePath)` called from `_indexUpdatedCb`. `checkStaleFolderViewTabs()` called from `onTabChanged`. Registry in `folder-view/tab.ts`; GC'd when tab is closed.
-- **Folder View live index**: `rerender` and `renderFn` fetch `__MARKABLE_VAULT_MANAGER__.getVaultIndex()` at call time — never use the index captured at tab-open time.
 - **Drag reminder**: HTML5 drag (`draggable="true"`, `dragstart`) does NOT work in Tauri WKWebView on macOS. Always use pointer events (`pointerdown`/`pointermove`/`pointerup`) for any drag interaction in the file browser. Suppress text selection with `document.body.style.userSelect = "none"` on `pointerdown` (not after a threshold), restored in cleanup.
 - **Sidebar side reminder**: all panels default to the right sidebar. File browser is the sole left-side exception. User overrides persist in `settings.sidebar.panelSides`; clear that map if defaults need to take effect on an existing install.
 - **Sidebar structure reminder**: `#sidebar-left/right` are `flex-direction: row` — ghost icon rail (25 px collapsed / 44 px expanded, outer edge) + content area (flex:1). Panel wrappers, tab bar, and resize handle all live inside `.sidebar-content-area`, not the slot root. Tests querying inside a specific side must use `#sidebar-right .sidebar-content-area` etc. `toggleSidebarSide` always restores `contentAreaEl.style.display = ""` when opening — prevents panels being stuck hidden after an iconize session.

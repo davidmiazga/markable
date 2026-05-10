@@ -2,7 +2,7 @@
 title: "Folder View Refactor — Layout View Migration"
 last-updated: "2026-05-09"
 review-cadence-days: 90
-status: active
+status: reference
 ---
 
 # Active Task — Folder View Refactor: Migrate from Custom Tab to Layout View
