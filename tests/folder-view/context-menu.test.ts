@@ -155,11 +155,15 @@ describe("createFolderViewFile", () => {
   let writeFileSpy: Mock;
 
   beforeEach(() => {
-    openFileInTabSpy = vi.fn();
+    // The new openFolderViewTab calls tabMgr.openFileInTab + enterLayoutView
+    // (layout-view refactor). Spy on openFileInTab to verify the folder-view
+    // tab is opened for the directory after createFolderViewFile completes.
+    openFileInTabSpy = vi.fn(() => Promise.resolve());
     writeFileSpy = vi.fn().mockResolvedValue(undefined);
 
     (window as any).__MARKABLE_TAB_MANAGER__ = {
       openFileInTab: openFileInTabSpy,
+      enterLayoutView: vi.fn(),
     };
     (window as any).__TAURI_INTERNALS__ = {
       invoke: vi.fn((cmd: string, args: Record<string, unknown>) => {
@@ -170,6 +174,7 @@ describe("createFolderViewFile", () => {
     // Default: vault index has no existing _folder.md.
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getVaultIndex: vi.fn().mockReturnValue({ entries: [], directories: [], nonMdFiles: [] }),
+      reloadVaultIndex: vi.fn(),
     };
   });
 
@@ -188,7 +193,9 @@ describe("createFolderViewFile", () => {
     expect(writeFileSpy).not.toHaveBeenCalled();
   });
 
-  it("EC-16: when _folder.md already exists, openFileInTab IS called with the existing path", async () => {
+  it("EC-16: when _folder.md already exists, folder-view tab IS opened for the directory", async () => {
+    // The refactored openFolderViewTab calls openFileInTab with the _folder.md
+    // path (not __MARKABLE_OPEN_CUSTOM_TAB__ with a synthetic key).
     (window as any).__MARKABLE_VAULT_MANAGER__.getVaultIndex.mockReturnValue({
       entries: [{ path: "/vault/A/_folder.md", name: "_folder" }],
       directories: [],
@@ -212,14 +219,16 @@ describe("createFolderViewFile", () => {
     );
   });
 
-  it("FR-35: after successful create, openFileInTab is called with _folder.md path", async () => {
+  it("FR-35: after successful create, folder-view tab is opened for the directory", async () => {
+    // The refactored openFolderViewTab calls openFileInTab with the _folder.md
+    // path (not __MARKABLE_OPEN_CUSTOM_TAB__ with a synthetic key).
     const container = document.createElement("div");
     await _testing.createFolderViewFile("/vault/A", container, "vault-1");
 
     expect(openFileInTabSpy).toHaveBeenCalledWith("/vault/A/_folder.md");
   });
 
-  it("error handling: write_file throws → openFileInTab is NOT called", async () => {
+  it("error handling: write_file throws → folder-view tab is NOT opened", async () => {
     // Make write_file reject.
     writeFileSpy.mockRejectedValueOnce(new Error("disk full"));
     (window as any).__TAURI_INTERNALS__.invoke = vi.fn((cmd: string, args: Record<string, unknown>) => {

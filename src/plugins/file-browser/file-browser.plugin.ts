@@ -42,6 +42,7 @@ import {
   ICON_FILE_CODE,
   ICON_CHEVRON,
   ICON_UNMOUNT,
+  ICON_PREVIEW,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
@@ -74,9 +75,7 @@ import { buildFolderViewSet } from "./folder-view/detection";
 import { FOLDER_VIEW_CSS } from "./folder-view/folder-view-css";
 import {
   openFolderViewTab as _openFolderViewTab,
-  notifyFolderViewTabs,
-  checkStaleFolderViewTabs,
-  clearFolderViewRegistry,
+  buildFolderViewRenderFn,
 } from "./folder-view/tab";
 
 // Smart Folders — bundled inline by Rollup (step_01 & step_02).
@@ -1644,7 +1643,14 @@ function buildTreeUl(
       el.getAttribute("data-type") === "directory" &&
       folderViewSet.has(path);
     // FR-07: apply CSS class to directories with _folder.md for styling & DOM queries.
-    if (hasFolderView) el.classList.add("tree-node-has-folder-view");
+    if (hasFolderView) {
+      el.classList.add("tree-node-has-folder-view");
+      const badge = document.createElement("span");
+      badge.className = "tree-node-fv-badge";
+      badge.setAttribute("aria-hidden", "true");
+      badge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
+      el.appendChild(badge);
+    }
     attachNodeListeners(el, vaultId, hasFolderView);
   }
 
@@ -1896,20 +1902,27 @@ function renderLoadingState(wrapper: HTMLElement): void {
  * Build the click activation handler for a tree node.
  *
  * Handles three node types:
- *   file      → open in tab manager
+ *   file      → open in tab manager.
+ *              Special case (FR-05): if path ends with /_folder.md, open in
+ *              code view (openFileInTab + exitLayoutView) instead of the
+ *              normal file-open path.
  *   vault     → switch vault (no-op when already active)
- *   directory → toggle expand/collapse, OR open Folder View when hasFolderView is true
+ *   directory → FR-02: if hasFolderView=true, call
+ *              __MARKABLE_OPEN_FOLDER_VIEW_TAB__ to open the layout view tab.
+ *              Otherwise (FR-01/hasFolderView=false): toggle expand/collapse.
  *
- * FR-02: When hasFolderView is true, a label click (or row click) routes to
- * openFolderViewTab instead of toggleDirectoryNode. The chevron click is
- * intercepted separately in attachNodeListeners before this handler fires.
+ * The `hasFolderView` param (previously underscore-prefixed as unused) is now
+ * an active branch condition.
  *
- * FR-01: When hasFolderView is false, directory clicks behave as before.
- *
- * @param el            - The <li> element being activated.
- * @param vaultId       - Active vault ID for directory toggle persistence.
- * @param hasFolderView - Whether this directory has _folder.md (FR-02/FR-03).
+ * @param el           - The <li> element being activated.
+ * @param vaultId      - Active vault ID for directory toggle persistence.
+ * @param hasFolderView - Whether this directory node has _folder.md (FR-02).
  * @returns The event handler function.
+ *
+ * Length justification: three mutually exclusive node-type branches (file /
+ *   vault / directory) each require internal guards and side-effects that
+ *   cannot be shared — extracting per-type helpers would not reduce overall
+ *   line count and would obscure the single decision point.
  */
 function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = false): (e: Event) => void {
   return (e: Event): void => {
@@ -1918,19 +1931,27 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = 
     const path = el.getAttribute("data-path") ?? "";
 
     if (type === "file") {
+      // FR-05: _folder.md clicked directly → open in code view.
+      // exitLayoutView is called synchronously (not in .then()) to force code
+      // view immediately, regardless of whether the tab was previously in layout view.
+      if (path.endsWith("/_folder.md") || path.endsWith("\\_folder.md")) {
+        void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+        (window as any).__MARKABLE_TAB_MANAGER__?.exitLayoutView?.();
+        // Ensure code view: _folder.md has no Typora preview state.
+        (window as any).__MARKABLE_ENSURE_CODE_VIEW__?.();
+        _selectedFolderPath = null;
+        window.dispatchEvent(
+          new CustomEvent("markable-folder-selected", { detail: { path: null } })
+        );
+        return;
+      }
+      // Normal file open path.
       const lpath = path.toLowerCase();
       if (lpath.endsWith(".md") || lpath.endsWith(".txt")) {
-        /* Text files (.md, .txt): open in editor tab. */
         void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
       } else {
-        /* Non-text assets (images, PDFs, etc.): open in the media viewer. */
         void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
       }
-      /*
-       * File node activated: clear folder selection. The find widget's
-       * "Folder" scope option will hide itself when getSelectedFolderPath()
-       * returns null (EC-5).
-       */
       _selectedFolderPath = null;
       window.dispatchEvent(
         new CustomEvent("markable-folder-selected", { detail: { path: null } })
@@ -1940,27 +1961,27 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = 
       const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
       const active: VaultEntry | null = vm?.getActiveVault?.() ?? null;
       if (active?.id === nodeVaultId) {
-        /* Already-active vault: toggle expand/collapse like a directory. */
         toggleDirectoryNode(el, path, vaultId);
       } else {
-        /* Inactive vault: switch to it (vault-manager fires onVaultChanged → re-render). */
         void vm?.switchVault?.(nodeVaultId);
       }
-      /*
-       * Vault root node activated: treat as a directory for folder scope
-       * purposes. The vault root is a valid scope for "Folder" search.
-       */
       _selectedFolderPath = path;
       window.dispatchEvent(
         new CustomEvent("markable-folder-selected", { detail: { path } })
       );
     } else if (type === "directory") {
       if (hasFolderView) {
-        // FR-02: label click on a _folder.md-enhanced directory opens Folder View.
-        // The chevron click is intercepted in attachNodeListeners (FR-03).
-        openFolderViewTab(path);
+        // FR-02: row click on a folder-view directory → open the layout view.
+        // Also expand the node if it is currently collapsed, so the tree
+        // visually "enters" the folder (row click never collapses — use the
+        // chevron for that).  The chevron's own listener calls stopPropagation
+        // so this branch is never reached from a chevron click (FR-03).
+        if (el.getAttribute("aria-expanded") !== "true") {
+          toggleDirectoryNode(el, path, vaultId);
+        }
+        (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(path);
       } else {
-        // FR-01: no _folder.md — toggle expand/collapse as before.
+        // FR-01: no _folder.md present → always toggle expand/collapse.
         toggleDirectoryNode(el, path, vaultId);
       }
       _selectedFolderPath = path;
@@ -2311,29 +2332,24 @@ function attachSmartFolderReorderDrag(el: HTMLElement, vaultId: string): void {
 function attachNodeListeners(el: HTMLElement, vaultId: string, hasFolderView = false): void {
   const handleActivate = buildActivateHandler(el, vaultId, hasFolderView);
 
-  // FR-03: When the directory has _folder.md, intercept chevron clicks so they
-  // only expand/collapse and do NOT propagate to the row's handleActivate handler
-  // (which would open the Folder View tab). The chevron listener must be registered
-  // BEFORE the row listener so stopPropagation() prevents the row click from firing.
+  el.addEventListener("click", handleActivate);
+  attachKeyboardHandler(el, vaultId, handleActivate);
+
+  // FR-03: for nodes with _folder.md, add a dedicated chevron listener that
+  // ONLY toggles expand/collapse and stops propagation so the click never
+  // reaches the row activate handler (which would open the folder view tab).
+  // This listener is added only when hasFolderView=true (EC-17).
   if (hasFolderView) {
     const chevron = el.querySelector<HTMLElement>(".tree-node-chevron");
     if (chevron) {
       chevron.addEventListener("click", (e: MouseEvent) => {
-        // Stop the click from reaching the row's handleActivate listener.
+        // Stop the event here so the row's activate handler is not reached.
         e.stopPropagation();
         const path = el.getAttribute("data-path") ?? "";
-        // Always toggle expand/collapse — chevron never opens Folder View (FR-03).
         toggleDirectoryNode(el, path, vaultId);
-        _selectedFolderPath = path;
-        window.dispatchEvent(
-          new CustomEvent("markable-folder-selected", { detail: { path } })
-        );
       });
     }
   }
-
-  el.addEventListener("click", handleActivate);
-  attachKeyboardHandler(el, vaultId, handleActivate);
 
   /* Right-click context menu (Step 02b) */
   el.addEventListener("contextmenu", (e: MouseEvent) => {
@@ -2685,8 +2701,6 @@ function onTabChanged(): void {
     _lastKnownFile = currentFile;
     updateActiveFileHighlight();
   }
-  // FR-32: check for stale Folder View tabs that are now active.
-  checkStaleFolderViewTabs();
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -3003,8 +3017,8 @@ async function createFolderViewFile(
   );
 
   if (existingEntry) {
-    // EC-16: already exists — open it in the editor rather than creating a duplicate.
-    void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(folderMdPath);
+    // EC-16: already exists — open the folder-view layout directly.
+    openFolderViewTab(dirPath);
     return;
   }
 
@@ -3025,12 +3039,11 @@ async function createFolderViewFile(
     return;
   }
 
-  // FR-35: open _folder.md in the editor tab so the user can customize immediately.
-  void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(folderMdPath);
+  // Force immediate index rebuild so hasFolderView is detected before the next render.
+  void vaultManager?.reloadVaultIndex?.();
 
-  // FR-37: the vault FS watcher fires automatically after write_file; no manual
-  // index reload is needed here. The watcher triggers _indexUpdatedCb which
-  // calls renderPanel() and detects the new _folder.md on the next render pass.
+  // Open the folder-view layout immediately (not the _folder.md editor).
+  openFolderViewTab(dirPath);
 }
 
 /**
@@ -3764,6 +3777,11 @@ function handleFsEvent(payload: { vaultId?: string; eventType?: string; path?: s
  * they can be removed by onDisable.
  *
  * @param vaultManager - The vault manager instance from the window global.
+ *
+ * Length justification: two closures (_vaultChangedCb / _indexUpdatedCb)
+ *   must be assigned to module-level refs so onDisable can unsubscribe them.
+ *   _indexUpdatedCb carries the FR-13 layout-refresh logic which closes over
+ *   _enabled and cannot be split out without duplicating that guard.
  */
 function setupVaultSubscriptions(vaultManager: any): void {
   _vaultChangedCb = (_vault: VaultEntry | null) => {
@@ -3800,13 +3818,28 @@ function setupVaultSubscriptions(vaultManager: any): void {
     // folder children update when a file is added, renamed, or deleted (EC-17).
     void triggerEvaluation();
 
-    // FR-31/FR-32: notify folder-view tabs when _folder.md may have changed.
-    // The VaultFileChangedEvent may carry the changed file path. If available,
-    // pass it to notifyFolderViewTabs so active tabs re-render immediately and
-    // inactive tabs are marked stale for re-render on next activation.
+    // FR-13: refresh layout view when the active _folder.md tab matches the
+    // changed file.  Only acts on _folder.md saves (the path guard below).
+    // When the active tab is not in layout view, or its filePath does not match
+    // the changed _folder.md, we do nothing — the layoutRenderFn stored on the
+    // tab reflects the latest index when the tab is next activated via Cmd-E.
     const changedPath = (_event as any)?.path as string | undefined;
-    if (changedPath) {
-      notifyFolderViewTabs(changedPath);
+    if (
+      changedPath &&
+      (changedPath.endsWith("/_folder.md") || changedPath.endsWith("\\_folder.md"))
+    ) {
+      const lastSlash = Math.max(
+        changedPath.lastIndexOf("/"),
+        changedPath.lastIndexOf("\\"),
+      );
+      if (lastSlash > 0) {
+        const parentDir = changedPath.slice(0, lastSlash);
+        const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+        const activeTab = tabMgr?.getActiveTab?.();
+        if (activeTab?.filePath === changedPath && tabMgr?.isActiveTabInLayoutView?.()) {
+          tabMgr.refreshLayoutView(buildFolderViewRenderFn(parentDir));
+        }
+      }
     }
   };
 
@@ -4067,7 +4100,8 @@ const plugin = {
     _fsDebounceTimer = null;
     _activeDragPath = null;
     _lastFolderViewSet = new Set();
-    clearFolderViewRegistry();
+    // EC-15: null out the global so renderer card handlers become no-ops after
+    // disable. The registry no longer exists (deleted in tab.ts refactor).
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = null;
     /* _selectedFolderPath is already cleared above (after nulling the global). */
   },
@@ -4209,6 +4243,19 @@ export const _testing = {
   buildActivateHandler,
   /** Expose handleFsEvent for watcher debounce testing. */
   handleFsEvent,
+  /**
+   * Return the current _indexUpdatedCb closure so tests can invoke it directly
+   * (EC-06 positive path, EC-12 null-guard).  Null until setupVaultSubscriptions
+   * has been called.
+   */
+  getIndexUpdatedCb(): ((event: VaultFileChangedEvent) => void) | null {
+    return _indexUpdatedCb;
+  },
+  /**
+   * Expose setupVaultSubscriptions so tests can populate _indexUpdatedCb
+   * without triggering the full onEnable lifecycle.
+   */
+  setupVaultSubscriptions,
   // ── Step 01 — Smart Folders settings helpers (exposed for unit tests) ─────
   /** Validate a single raw SmartFolderDef (EC-08, NFR-06). */
   sanitizeDef,

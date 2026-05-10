@@ -1,154 +1,178 @@
 ---
-title: "Folder View via _folder.md"
+title: "Folder View Refactor — Layout View Migration"
 last-updated: "2026-05-09"
 review-cadence-days: 90
 status: active
 ---
 
-# Active Task — Folder View via `_folder.md`
+# Active Task — Folder View Refactor: Migrate from Custom Tab to Layout View
 
 ## Summary
 
-As a vault user, I want to place a `_folder.md` file inside any directory to give that directory a rich "Folder View" tab — a rendered card-grid of its immediate subfolders and files — so that I can navigate and visualize project structures without leaving the editor. Folders without `_folder.md` behave exactly as they do today. The feature is driven entirely by the file-browser plugin and the existing `openCustomRenderTab` mechanism; no Rust changes are required.
+As a Markable developer, I want to remove the bespoke `__MARKABLE_OPEN_CUSTOM_TAB__` / `kind="custom"` mechanism from the Folder View feature and replace it with the standard `enterLayoutView` / `exitLayoutView` / `refreshLayoutView` API that the tab manager already exposes — so that a folder-view folder (`_folder.md`) behaves exactly like any other document that has a layout: clicking the folder name opens `_folder.md` in an editor tab and enters layout view, and clicking `_folder.md` directly in the tree opens it in code (editor) view.
+
+---
+
+## Background and Motivation
+
+The Folder View feature was originally implemented using a custom-tab mechanism (`openCustomRenderTab` / `__MARKABLE_OPEN_CUSTOM_TAB__`). This creates a `kind="custom"` tab that is entirely detached from any real file. The tab manager exposes a separate, superior API — `enterLayoutView` / `exitLayoutView` / `refreshLayoutView` — that attaches a rendered layout to a real editor tab (a `kind="editor"` tab backed by an actual file path). This is the same mechanism used by every other layout-enabled document in the app.
+
+The custom-tab approach has the following concrete deficiencies:
+1. A "custom" tab has no `filePath`, so "save", "dirty", and session-restore semantics cannot apply to it.
+2. The custom-tab registry (`_registry`, `FolderViewTabEntry`, `notifyFolderViewTabs`, `checkStaleFolderViewTabs`, `clearFolderViewRegistry`) is bespoke state management that duplicates what `isInLayoutView` / `layoutRenderFn` on a `TabEntry` already provides.
+3. The split-click design (chevron = expand/collapse, label = open folder view) was intentionally implemented in an earlier step but was accidentally regressed — `buildActivateHandler` currently ignores `hasFolderView` and always calls `toggleDirectoryNode` for directory clicks, and the special chevron-only `stopPropagation` listener for `hasFolderView=true` nodes was also removed.
+
+This refactoring task corrects all three deficiencies.
 
 ---
 
 ## Functional Requirements
 
-### Area 1 — File Browser Interaction (split click targets)
+### Area 1 — Core Interaction Model
 
-- **FR-01** — When a directory node in the file tree does NOT contain a `_folder.md` file, both the expand arrow (chevron) click and the folder name label click behave as they do today: they toggle directory expansion/collapse. This is the unchanged fallback path.
+- **FR-01** — When a directory node does NOT have `_folder.md`, clicking the node (label, icon, or anywhere on the row) toggles directory expansion/collapse. This is unchanged.
 
-- **FR-02** — When a directory node contains a `_folder.md` file (detected per FR-10), the two click targets diverge:
-  - Clicking the **expand arrow (chevron span, `.tree-node-chevron`)** → toggles directory expansion/collapse (existing behavior, unchanged).
-  - Clicking the **folder name label (`.tree-node-label`)** → opens the Folder View tab for that directory (new behavior).
+- **FR-02** — When a directory node has `_folder.md`, clicking the **folder label** (`.tree-node-label`) or **icon** — anything that is NOT the chevron — calls `openFolderViewTab(folderPath)`, which opens `_folder.md` in an editor tab and enters layout view. This was the originally designed behavior; it must be restored in `buildActivateHandler`.
 
-- **FR-03** — The chevron and label must be independently hittable. The current `<li>`-level click listener on `buildActivateHandler` must be refactored so that clicks on `.tree-node-chevron` are intercepted and routed to the expand/collapse path, while clicks on `.tree-node-label` (or the icon) are routed to the Folder View path — when `_folder.md` is present.
+- **FR-03** — When a directory node has `_folder.md`, clicking the **chevron** (`.tree-node-chevron`) ONLY toggles directory expansion/collapse; it does NOT open the folder view. `attachNodeListeners` must add a `click` listener on the chevron itself that calls `e.stopPropagation()` then `toggleDirectoryNode`, so the chevron click never propagates to the row's activate handler.
 
 - **FR-04** — Keyboard behavior for a `_folder.md`-enhanced folder:
-  - `Enter` (with the `<li>` focused) → opens the Folder View tab (mirrors label click).
-  - `ArrowRight` / `ArrowLeft` → expand/collapse as today (existing keyboard handler unchanged).
+  - `Enter` (with the `<li>` focused) — calls `openFolderViewTab` (mirrors label click). This was the original design; restore it.
+  - `ArrowRight` / `ArrowLeft` — toggles expand/collapse, unchanged.
 
-- **FR-05** — The file browser must determine at render time whether each directory contains `_folder.md`. Detection must use the existing `VaultIndex.entries` array (scan entries whose `path` begins with `<dirPath>/` and whose `name` equals `_folder`). No new Tauri commands are issued.
+- **FR-05** — Clicking `_folder.md` **directly** in the file tree (the `type="file"` branch of `buildActivateHandler`, where `path` ends with `/_folder.md`) opens it in the editor via `openFileInTab` AND immediately calls `tabMgr.exitLayoutView()`. This guarantees the user sees the raw YAML/Markdown source (code view), regardless of whether that tab was previously in layout view.
 
-- **FR-06** — Detection result (has `_folder.md` or not) must be computed once per `renderPanel` call and stored so that `buildActivateHandler`, `appendIconAndLabel`, and the context menu handler can all read from it without redundant scanning.
+- **FR-06** — All other file-click behavior (non-`_folder.md` files) is unchanged.
 
-- **FR-07** — A directory detected as having `_folder.md` receives an additional CSS class `tree-node-has-folder-view` on its `<li>`. This class is used for styling (optional visual affordance, e.g. a subtle indicator icon or underline on the label) and for reliable querySelectorAll lookups in tests.
+### Area 2 — `openFolderViewTab` Rewrite
 
-### Area 2 — `_folder.md` Visibility and Editability
+- **FR-07** — `openFolderViewTab(folderPath: string): void` in `src/plugins/file-browser/folder-view/tab.ts` must be rewritten to:
+  1. Derive `folderMdPath = folderPath + "/_folder.md"`.
+  2. Call `tabMgr.openFileInTab(folderMdPath)` (returns a Promise; fire-and-forget with `void`).
+  3. After `openFileInTab` resolves (or in its `.then()` callback), call `tabMgr.enterLayoutView(buildFolderViewRenderFn(folderPath))`.
 
-- **FR-08** — `_folder.md` appears as a normal `.md` file in the file browser tree within its parent directory. It is not hidden, grayed out, or otherwise filtered. The user can click it to open it in the editor and edit the YAML front-matter and markdown body directly.
+  The intent is: one tab, backed by the real file, showing the layout view.
 
-- **FR-09** — `_folder.md` is subject to all standard file operations available to any `.md` file (rename, delete, move). Renaming or deleting it removes the Folder View behavior from that directory immediately upon the next vault index update.
+- **FR-08** — `buildFolderViewRenderFn(folderPath: string): (container: HTMLElement) => void` must be exported from `tab.ts`. It returns a synchronous render function that:
+  1. Writes a `<div class="folder-view-loading">Loading…</div>` placeholder into the container immediately.
+  2. Fires `renderFolderViewTabAsync(folderPath, folderPath + "/_folder.md", liveIndex, container)` as a fire-and-forget async call (the async result overwrites the placeholder).
 
-### Area 3 — `_folder.md` YAML Schema
+  This render function is passed to both `enterLayoutView` (initial open) and `refreshLayoutView` (on save).
 
-- **FR-10** — A `_folder.md` file is the trigger for Folder View behavior. The file MUST contain YAML front-matter. The front-matter fields are:
+- **FR-09** — `renderFolderViewTabAsync` is simplified: the "Step 4: update tab.title" block (lines that find the tab by `syntheticKey` and patch `thisTab.title`) must be **removed**. With the layout-view approach the tab title is the filename (`_folder.md`), managed entirely by the tab manager from the real file path. No synthetic title patching is needed.
 
-  | Field | Required | Type | Description |
-  |---|---|---|---|
-  | `layout` | Yes | string | Identifies the folder layout renderer. `folder-cards` is the v1 starter value. |
-  | `title` | No | string | Custom tab title. Defaults to the folder's directory name (last path segment). |
-  | `sort` | No | string | Sort order for cards. Allowed values: `name-asc` (default), `name-desc`, `modified-asc`, `modified-desc`. |
-  | `columns` | No | integer | Number of card columns. Range: 2–6. Default: 3. Values outside range are clamped to [2, 6]. |
-  | `show-modified` | No | boolean | Whether to show the modified date on file cards. Default: `true`. |
+- **FR-10** — The `syntheticKey` / `__fv__:` prefix mechanism is entirely removed. There is no longer any need for a synthetic key, because tab deduplication is handled by the tab manager's existing `openFileInTab` path-based deduplication.
 
-- **FR-11** — The markdown body of `_folder.md` (the content below the closing `---` of the YAML block) MAY be present. When present, it is rendered as a styled header block above the card grid in the Folder View tab. When absent or empty, no header block is rendered.
+### Area 3 — Registry and Stale-Flag Removal
 
-- **FR-12** — The `layout:` field is mandatory. If it is absent or empty, the Folder View tab opens with a graceful fallback: renders the `_folder.md` body as plain markdown inside a minimal container, with a faint notice "No layout specified — showing raw content." This fallback does not crash and does not prevent the file from being edited.
+- **FR-11** — The following exports from `tab.ts` must be deleted entirely:
+  - `_registry` (module-level array)
+  - `FolderViewTabEntry` (interface)
+  - `notifyFolderViewTabs` (function)
+  - `checkStaleFolderViewTabs` (function)
+  - `clearFolderViewRegistry` (function)
 
-- **FR-13** — If `layout:` contains a value that does not match any registered folder layout renderer (e.g., `layout: unknown-thing`), the same graceful fallback as FR-12 applies, with the notice reading "Unknown layout 'unknown-thing' — showing raw content."
+  These are replaced by the tab manager's native `isInLayoutView` / `layoutRenderFn` fields on `TabEntry`.
 
-- **FR-14** — YAML parsing for `_folder.md` reuses the existing `parseFileYaml` pattern already present in `layout-manager.ts`. No new YAML parser is introduced. Unknown YAML fields are silently ignored.
+- **FR-12** — The corresponding call sites in `file-browser.plugin.ts` must be updated:
+  - Remove import of `notifyFolderViewTabs`, `checkStaleFolderViewTabs`, `clearFolderViewRegistry` from `tab.ts`.
+  - In `_indexUpdatedCb`: replace `notifyFolderViewTabs(changedPath)` with inline refresh logic (see FR-13).
+  - In `onTabChanged`: remove `checkStaleFolderViewTabs()` call.
+  - In `onDisable`: remove `clearFolderViewRegistry()` call.
 
-### Area 4 — Folder Layout Rendering (card-grid starter)
+- **FR-13** — The inline refresh logic in `_indexUpdatedCb`, replacing `notifyFolderViewTabs`, must:
+  1. Check whether `changedPath` ends with `/_folder.md` (or `\_folder.md` for Windows). If not, return early.
+  2. Derive `parentDir` = `changedPath.slice(0, lastSlashIndex)`.
+  3. Get the active tab via `tabMgr.getActiveTab()`.
+  4. If `activeTab.filePath === changedPath` AND `tabMgr.isActiveTabInLayoutView()`, call `tabMgr.refreshLayoutView(buildFolderViewRenderFn(parentDir))`.
+  5. No stale-flag tracking; the layout view mechanism on `TabEntry` handles deferred re-render automatically when the tab is next activated (the `layoutRenderFn` is stored on the tab).
 
-- **FR-15** — Opening a Folder View calls a folder-view-specific tab opener that passes the full folder path as the deduplication key and the display title separately. The tab mechanism is `window.__MARKABLE_OPEN_CUSTOM_TAB__` extended with an optional `key` parameter (the full absolute folder path). The display title is determined by FR-16; the dedup key is always the full path regardless of display title.
+### Area 4 — `createFolderViewFile` Update
 
-- **FR-16** — The tab title for a Folder View tab is:
-  1. The value of the `title:` YAML field, if present and non-empty.
-  2. Otherwise, the directory's last path segment (folder name).
-  Example: `/vault/Projects/2026` → tab title `2026`.
+- **FR-14** — `createFolderViewFile` in `file-browser.plugin.ts` currently calls `openFolderViewTab(dirPath)` at the end. This call remains valid because `openFolderViewTab` is being rewritten (not removed). No change to the call site is needed, but the behavior changes: instead of creating a custom tab, it now opens `_folder.md` in an editor tab with layout view.
 
-- **FR-17** — Folder View tabs deduplicate by **full folder path**, not by display title. Two folders with the same name in different parent directories (e.g. `/Work/Reports/` and `/Personal/Reports/`) each produce their own independent tab. Re-opening a Folder View for a path that already has a tab activates and re-renders that existing tab. No duplicate tabs accumulate for the same path.
+- **FR-15** — The "Create Folder View..." context menu action behavior from the user's perspective: creates `_folder.md`, opens it in layout view (showing the card grid). The user can then right-click `_folder.md` in the tree or click it directly to switch to code view to edit the YAML.
 
-- **FR-18** — The `folder-cards` layout renders a two-section card grid:
-  1. **Subfolder section** (if any immediate subdirectories exist): a grid of folder cards. Each card shows: folder icon, folder name.
-  2. **File section** (if any immediate `.md` files other than `_folder.md` exist, plus any non-MD files): a grid of file cards. Each card shows: file-type badge (e.g. `.md`, `.pdf`, `.png`), file name (no extension for `.md`), modified date (if `show-modified: true`).
+### Area 5 — `__MARKABLE_OPEN_FOLDER_VIEW_TAB__` Global
 
-- **FR-19** — "Immediate" means direct children of the folder only. Files and directories in nested subdirectories are NOT included in the card grid for this folder's view.
+- **FR-16** — The `window.__MARKABLE_OPEN_FOLDER_VIEW_TAB__` global (set in `onEnable`, cleared in `onDisable`) must be retained. Other parts of the app (e.g., card click handlers inside `renderer.ts`) use this global to call `openFolderViewTab` without a direct import. Its value is still `openFolderViewTab`, which now has the new layout-view implementation.
 
-- **FR-20** — The card grid is sorted according to the `sort` YAML field (FR-10). Within each section (subfolders then files), the sort applies independently. Subfolders always render before files regardless of sort order.
+### Area 6 — Preserved Behavior
 
-- **FR-21** — Each subfolder card is clickable. Clicking a subfolder card:
-  1. Expands the file tree to that subfolder (calls the existing tree expansion API).
-  2. If that subfolder has its own `_folder.md`, opens the Folder View tab for it.
-  3. If that subfolder does not have `_folder.md`, only the tree expansion occurs.
+The following behaviors from the original requirements are unaffected by this refactoring and must be preserved:
 
-- **FR-22** — Each file card is clickable. Clicking a file card opens that file using the standard tab-open path (`window.__MARKABLE_TAB_MANAGER__.openFileInTab` for `.md`/`.txt`, `openMediaInTab` for all other types).
-
-- **FR-23** — The `_folder.md` file itself is excluded from the file section of the card grid. It is not shown as a card.
-
-- **FR-24** — If the description body (FR-11) is non-empty, it is rendered as HTML (via `window.__MARKABLE_RENDER_MD__`) above the card grid, inside a `<div class="folder-view-description">`. This div renders the full markdown body of `_folder.md`.
-
-- **FR-25** — The card grid container uses CSS custom properties for theming, consistent with the existing layout CSS conventions (`var(--bg-secondary)`, `var(--border-color)`, `var(--text-primary)`, `var(--text-secondary)`). Hard-coded colors are not used.
-
-- **FR-26** — If a folder is completely empty (no subfolders, no files other than `_folder.md`), the Folder View tab renders with only the description block (if any) and an empty-state message: "This folder is empty."
-
-### Area 5 — Layout Dispatch
-
-- **FR-27** — Layout dispatch in the folder view context is a simple string comparison: the `layout:` field value is compared case-insensitively against registered folder layout names. v1 registers exactly one: `folder-cards`.
-
-- **FR-28** — The dispatch map is defined as a plain module-level `Record<string, FolderLayoutRenderer>` inside the folder-view renderer module. Adding a new layout style in a future task requires only adding one entry to this map.
-
-- **FR-29** — Folder layout renderers are distinct from document layout renderers. The document layout system (`layout-manager.ts`, `.layout.md` files, `discoverLayouts()`) is NOT involved in folder view rendering. Folder layouts are registered directly in the file-browser plugin.
-
-- **FR-30** — If `layout:` is missing, empty, or unrecognized, the fallback renderer is invoked (per FR-12/FR-13). The fallback renderer is always available and cannot itself fail.
-
-### Area 6 — Live Update on Save
-
-- **FR-31** — When the user edits and saves `_folder.md`, the vault file-watcher fires an index update. The folder view tab for the containing folder must re-render automatically if the tab is currently the active (visible) tab. The re-render reads the updated `_folder.md` content from disk.
-
-- **FR-32** — If the Folder View tab is not the currently active tab at the time `_folder.md` is saved, the tab is marked stale. The next time the user activates that tab, the re-render fires. "Stale" state is a boolean flag stored in the tab's renderFn closure or alongside it.
-
-- **FR-33** — The stale-flag mechanism must not interfere with document layout tabs (which use `enterLayoutView`, a separate path). Only `openCustomRenderTab` tabs created by the folder view are subject to FR-31/FR-32.
-
-### Area 7 — Context Menu Integration
-
-- **FR-34** — Right-clicking a directory that has `_folder.md` adds "Open Folder View" as the first item in its context menu, above all other items. Selecting it opens the Folder View tab (same as label click).
-
-- **FR-35** — Right-clicking a directory that does NOT have `_folder.md` shows a new item "Create Folder View..." in the context menu. Its position in the menu is between "New Note" and "New Folder" (i.e., near the top of creation actions). Selecting it:
-  1. Creates `_folder.md` in that directory with a starter template (see FR-36).
-  2. Opens `_folder.md` in the editor tab so the user can customize immediately.
-  3. The vault index update then detects `_folder.md` and enables folder view behavior for that directory.
-
-- **FR-36** — The starter template written by "Create Folder View..." is:
-  ```
-  ---
-  layout: folder-cards
-  ---
-  ```
-  This is the minimum valid `_folder.md`. No extra YAML fields or body text are added to the starter; the user fills them in.
-
-- **FR-37** — After "Create Folder View..." creates `_folder.md` and opens it in the editor, the file browser tree updates on the next vault index refresh to reflect the new `_folder.md` presence (split-click behavior activates).
+- **FR-17** — `_folder.md` is visible as a normal file in the tree. Clicking it opens it in code view (FR-05 covers this).
+- **FR-18** — The `folder-cards` renderer (`renderer.ts`), `parser.ts`, `detection.ts`, `fallback.ts`, and the `LAYOUT_RENDERERS` dispatch map are unchanged.
+- **FR-19** — Card grid content (subfolders, files, exclusion of `_folder.md` itself, sort, columns) is unchanged.
+- **FR-20** — Subfolder card click behavior (expand tree + open folder view for that subfolder if it has `_folder.md`) is unchanged.
+- **FR-21** — File card click behavior is unchanged.
+- **FR-22** — Context menu items "Open Folder View" (FR-34 from original) and "Create Folder View..." (FR-35) are unchanged in label and position. The handlers call the updated `openFolderViewTab`.
+- **FR-23** — `escapeHtml`, `collectChildren`, `LAYOUT_RENDERERS`, and `renderFolderViewTabAsync` (minus the title-patch step) are retained in `tab.ts`.
 
 ---
 
 ## Non-Functional Requirements
 
-- **NFR-01** — The `_folder.md` detection scan at render time must not add measurable latency to normal tree renders. A vault with 5,000 files must still render the file tree in under 50 ms. Detection must be O(N) over `VaultIndex.entries` once per render, with result cached for the render pass.
+- **NFR-01** — After the refactor, `npm run test:run` must pass with zero failures. All existing passing tests must continue to pass.
+- **NFR-02** — After any change to plugin source, `npm run build:plugins && npm run sync:plugins` must be run. The IIFE bundle must compile cleanly with no TypeScript errors.
+- **NFR-03** — No new npm dependencies. No new Rollup bundle targets. No Rust changes.
+- **NFR-04** — `tab.ts` must not import anything from the tab manager directly. All tab manager interaction happens through `window.__MARKABLE_TAB_MANAGER__` at runtime (IIFE boundary constraint).
+- **NFR-05** — The refactored `openFolderViewTab` must be safe to call when no tab manager is available (i.e., `window.__MARKABLE_TAB_MANAGER__` is undefined). In that case, both `openFileInTab` and `enterLayoutView` calls are no-ops.
 
-- **NFR-02** — Folder view rendering (the card grid) must complete in under 100 ms for a folder with up to 500 direct children.
+---
 
-- **NFR-03** — All folder-view code must live inside `src/plugins/file-browser/`. No new plugin, no change to `src/lib/layout-manager.ts`, no Rust changes.
+## Test Requirements
 
-- **NFR-04** — The plugin must remain a single IIFE built by `npm run build:plugins`. No new bundle target, no new npm dependencies.
+### `tests/folder-view/tab.test.ts` — Full Rewrite
 
-- **NFR-05** — The split-click behavior must not regress keyboard navigation. `ArrowRight`/`ArrowLeft` must still expand/collapse. Focus management must remain correct after a Folder View tab is opened.
+The existing test file tests the custom-tab mechanism exclusively. It must be completely rewritten to test the new layout-view behavior.
 
-- **NFR-06** — A malformed, unreadable, or YAML-less `_folder.md` must not crash the plugin or prevent the folder from being opened in the tree. The fallback from FR-12 always applies.
+**Tests that must exist after the rewrite:**
 
-- **NFR-07** — The Folder View tab must be accessible: card elements must have `role="button"` (or be `<button>` elements) with descriptive `aria-label` attributes. The card grid must be keyboard-navigable (Tab to reach cards, Enter to activate).
+- **T-01** — `openFolderViewTab("/vault/A")` calls `tabMgr.openFileInTab("/vault/A/_folder.md")`.
+- **T-02** — `openFolderViewTab("/vault/A")` calls `tabMgr.enterLayoutView(...)` after `openFileInTab` resolves.
+- **T-03** — `openFolderViewTab` called twice for the same path: `openFileInTab` is called both times (deduplication is the tab manager's responsibility, not `tab.ts`'s). No custom registry needed.
+- **T-04** — `buildFolderViewRenderFn("/vault/A")` returns a function; calling it with a container element renders a loading placeholder and then calls `renderFolderViewTabAsync` asynchronously.
+- **T-05** — When `_folder.md` is saved and the active tab's `filePath === "/vault/A/_folder.md"` and `isActiveTabInLayoutView() === true`, `_indexUpdatedCb` logic calls `tabMgr.refreshLayoutView(...)`.
+- **T-06** — When `_folder.md` is saved but the active tab is NOT the `_folder.md` tab, `tabMgr.refreshLayoutView` is NOT called (no stale tracking needed — the layout render fn is stored on the tab).
+- **T-07** — When a non-`_folder.md` path changes, the refresh logic is a no-op.
+- **T-08** — `escapeHtml` still escapes `<`, `>`, `"`, `&` correctly (this test survives unchanged).
+- **T-09** — `LAYOUT_RENDERERS` still contains the `"folder-cards"` entry (this test survives unchanged).
+
+**Tests that must be removed (they test deleted behavior):**
+- Any test importing or asserting on `_registry`, `notifyFolderViewTabs`, `checkStaleFolderViewTabs`, `clearFolderViewRegistry`, or `FolderViewTabEntry`.
+- Any test asserting on the `__fv__:` synthetic key prefix.
+- Any test asserting on `staleRef`.
+
+### `tests/folder-view/split-click.test.ts` — Partial Rewrite
+
+The existing test file tests the current (wrong) implementation. Several tests must be corrected or added:
+
+- **T-10** — **Restore FR-02**: `hasFolderView=true`, row click on the label → `openFolderViewTab` is called (the test stub must spy on the module-level `openFolderViewTab` wrapper or `window.__MARKABLE_OPEN_FOLDER_VIEW_TAB__`). The current test (line 83–94) asserts `aria-expanded` flips, which was written for the wrong implementation.
+- **T-11** — **Restore FR-03**: chevron click with `hasFolderView=true` → `toggleDirectoryNode` fires (aria-expanded flips), `openFolderViewTab` does NOT fire.
+- **T-12** — **Restore FR-04**: Enter key with `hasFolderView=true` → `openFolderViewTab` is called. The current test (line 120–130) asserts `aria-expanded` flips.
+- **T-13** — **FR-05**: File node where `path` ends with `/_folder.md` → `openFileInTab` called, `tabMgr.exitLayoutView()` called.
+- **T-14** — **FR-01**: `hasFolderView=false`, row click → `toggleDirectoryNode` fires (aria-expanded flips), `openFolderViewTab` NOT called. (This test is already present and should continue to pass.)
+
+---
+
+## Files to Change
+
+| File | Action | Summary |
+|---|---|---|
+| `src/plugins/file-browser/folder-view/tab.ts` | Rewrite core | Remove registry/stale exports; rewrite `openFolderViewTab`; add `buildFolderViewRenderFn`; simplify `renderFolderViewTabAsync` (remove title-patch step) |
+| `src/plugins/file-browser/file-browser.plugin.ts` | Targeted edits | Update imports from `tab.ts`; restore FR-02/FR-03/FR-04 in `buildActivateHandler` + `attachNodeListeners`; add FR-05 (`exitLayoutView` on `_folder.md` file click); replace `notifyFolderViewTabs` call in `_indexUpdatedCb` with inline FR-13 logic; remove `checkStaleFolderViewTabs` from `onTabChanged`; remove `clearFolderViewRegistry` from `onDisable` |
+| `tests/folder-view/tab.test.ts` | Full rewrite | Tests for new layout-view behavior (T-01 through T-09) |
+| `tests/folder-view/split-click.test.ts` | Partial rewrite | Restore T-10, T-11, T-12; add T-13; preserve T-14 |
+
+**Files that must NOT be changed:**
+- `src/plugins/file-browser/folder-view/renderer.ts`
+- `src/plugins/file-browser/folder-view/parser.ts`
+- `src/plugins/file-browser/folder-view/detection.ts`
+- `src/plugins/file-browser/folder-view/fallback.ts`
+- `src/plugins/file-browser/folder-view/types.ts`
+- `src/tabs/tab-manager.ts`
+- Any Rust source files
 
 ---
 
@@ -156,93 +180,53 @@ As a vault user, I want to place a `_folder.md` file inside any directory to giv
 
 This list is the Reviewer's mandatory test checklist. Every EC must have a corresponding test or be explicitly justified as untestable.
 
-- **EC-01** — Directory has `_folder.md` but the vault index has not yet finished building (loading state). Detection returns false (no `_folder.md` detected), so the folder behaves normally until the index is ready. No crash, no split-click activation before detection is possible.
+- **EC-01** — `openFolderViewTab` is called when `window.__MARKABLE_TAB_MANAGER__` is undefined (plugin loaded before tab manager initializes). Both `openFileInTab` and `enterLayoutView` calls are silently skipped. No crash.
 
-- **EC-02** — `_folder.md` is deleted externally while a Folder View tab for that directory is open. On the next vault index update, the file entry is gone. The existing open tab is NOT forcibly closed (it stays open showing stale data), but re-opening the folder view is no longer possible from the tree. The `<li>` reverts to normal single-click behavior on next render.
+- **EC-02** — `openFileInTab` is called but the file `_folder.md` does not exist on disk. The tab manager opens a blank/error editor tab. `enterLayoutView` is still called; `renderFolderViewTabAsync` receives a read failure and shows the fallback notice. No crash.
 
-- **EC-03** — `_folder.md` is renamed to something other than `_folder.md` (e.g., `_folder-backup.md`). Same behavior as EC-02: detection fails on next index update, folder view disabled.
+- **EC-03** — `enterLayoutView` is called on an active tab that is `kind="media"` or `kind="custom"` (edge case where file opened as media). The tab manager's `enterLayoutView` guards against non-editor tabs and returns early. No crash.
 
-- **EC-04** — `_folder.md` contains no front-matter at all (empty file or body-only). Falls through to the FR-12 graceful fallback (no layout specified notice). No crash.
+- **EC-04** — User clicks the folder label, folder view opens in layout view. User then clicks `_folder.md` directly in the tree. `exitLayoutView` is called; the tab switches to code view showing the raw YAML. The tab's `layoutRenderFn` is cleared. No stale render occurs.
 
-- **EC-05** — `_folder.md` has valid front-matter but the YAML is malformed (e.g., unclosed quotes, duplicate keys). The simple line-by-line YAML parser (reused from `layout-manager.ts`) returns a partial or empty record. Result: `layout:` is treated as absent, fallback from FR-12 applies. No crash.
+- **EC-05** — User is in code view on `_folder.md`. User presses Cmd-E (layout toggle). The tab manager enters layout view using the stored `layoutRenderFn`. This must work correctly because `enterLayoutView` was called with the render fn when the folder was first opened. (This is automatic — `layoutRenderFn` is stored on the tab; Cmd-E re-uses it. No special handling required, but must not regress.)
 
-- **EC-06** — `layout: folder-cards` is specified but the folder has zero immediate children (no subfolders, no files other than `_folder.md`). The Folder View tab renders with the description block (if any) and the empty-state message per FR-26.
+- **EC-06** — `_folder.md` is saved while layout view is active. `_indexUpdatedCb` fires with `changedPath = folderMdPath`. `refreshLayoutView(buildFolderViewRenderFn(parentDir))` is called. The card grid re-renders with fresh content. No duplicate or stale renders.
 
-- **EC-07** — Folder contains only non-MD files (e.g., images), no `.md` files other than `_folder.md`. The subfolder section is empty; the file section shows the non-MD files. The card grid renders correctly.
+- **EC-07** — `_folder.md` is saved while a different tab is active (not `_folder.md`). `_indexUpdatedCb` fires. The `activeTab.filePath !== changedPath` check prevents `refreshLayoutView` from being called. The `layoutRenderFn` stored on the `_folder.md` tab is already current (it was set when the tab was opened). When the user next activates the tab and enters layout view (Cmd-E), the layout renders fresh. No explicit stale-flag mechanism needed.
 
-- **EC-08** — Folder contains only subdirectories, no files other than `_folder.md`. The subfolder section renders; the file section is omitted (or shows an empty state). No crash.
+- **EC-08** — Vault is switched while `_folder.md` is open in layout view. The tab persists (existing tab-manager behavior). The content is stale relative to the new vault — same as EC-19 in the original spec. Acceptable v1 behavior. No special handling required.
 
-- **EC-09** — A subfolder card is clicked for a subfolder that itself has `_folder.md`. The file tree expands to it AND its Folder View tab opens. The parent Folder View tab is replaced in the tab strip (same title) if the subfolder has the same name as a previously opened folder view.
+- **EC-09** — `buildFolderViewRenderFn` is called with a `folderPath` that has no `_folder.md`. The render fn is returned; when called, `renderFolderViewTabAsync` fires and the Tauri `read_file` call fails. The fallback notice "Could not read _folder.md." is shown. No crash.
 
-- **EC-10** — A subfolder card is clicked for a subfolder that does NOT have `_folder.md`. Only tree expansion occurs. No Folder View tab is opened for it.
+- **EC-10** — Two directories have the same `_folder.md` path segment but different absolute paths (e.g., `/Work/Reports/_folder.md` and `/Personal/Reports/_folder.md`). Each call to `openFolderViewTab` calls `openFileInTab` with the distinct absolute path. The tab manager deduplicates by file path — two separate tabs exist. Each has its own `layoutRenderFn`. No interference.
 
-- **EC-11** — `_folder.md` uses `layout: folder-cards` and sets `columns: 0` (below minimum) or `columns: 100` (above maximum). Both values are clamped to [2, 6] per FR-10. The card grid renders with a valid column count.
+- **EC-11** — `openFolderViewTab` is called while the same `_folder.md` is already open in code view (the user clicked `_folder.md` directly to edit it). `openFileInTab` activates the existing tab (no duplicate). `enterLayoutView` is then called, switching it back to layout view. The code-view edits the user made are visible in the editor state; layout view shows the rendered version of the current on-disk content (which may differ from unsaved edits).
 
-- **EC-12** — `_folder.md` sets `sort: invalid-value`. The value is unrecognized; the default sort (`name-asc`) is applied silently. No crash, no error displayed to the user.
+- **EC-12** — `_indexUpdatedCb` fires but `changedPath` is undefined or null (event carries no path). The early-return check `if (!changedPath)` prevents any further logic. No crash.
 
-- **EC-13** — The folder name contains characters that would be invalid in a tab title (e.g., `<script>` injection attempt). Tab title must be HTML-escaped before insertion into the DOM. No XSS.
+- **EC-13** — `escapeHtml` is still called when inserting user-controlled folder names into DOM attributes inside the card renderer. XSS prevention is unaffected by this refactoring (the renderer is not changed).
 
-- **EC-14** — The `_folder.md` body contains markdown with embedded HTML (e.g., `<script>` tags). The rendered description block must pass through the same `stripScripts` sanitization used by document layouts. No XSS.
+- **EC-14** — The `checkStaleFolderViewTabs` call is removed from `onTabChanged`. This must not regress any other behavior. `onTabChanged` still updates the active file highlight; only the stale-check side effect is removed.
 
-- **EC-15** — Two different directories have the same last path segment name (e.g., `/vault/Work/Reports/` and `/vault/Personal/Reports/`). Each has its own `_folder.md`. Opening both folder views must produce two separate tabs (per FR-17, dedup key is the full path). Both tabs may display `Reports` as their title but they are independent and do not interfere with each other.
+- **EC-15** — `clearFolderViewRegistry` is removed from `onDisable`. The disable path must still clean up correctly. Since there is no registry, nothing to clear. The `window.__MARKABLE_OPEN_FOLDER_VIEW_TAB__` global is still set to `null` in `onDisable` (this line must be preserved).
 
-- **EC-16** — User clicks "Create Folder View..." on a directory that already contains `_folder.md` (race condition: the index update from an external creation has not yet propagated, so the context menu item was shown). The operation should be a no-op: detect `_folder.md` already exists before creating, open the existing file in the editor instead.
+- **EC-16** — `createFolderViewFile` calls `openFolderViewTab(dirPath)` after creating `_folder.md`. With the new implementation, this opens `_folder.md` in layout view. If `openFileInTab` is called before the vault index rebuild completes (async gap), the file may not yet be in the index. The call is still correct — `openFileInTab` reads from disk, not from the index. No regression.
 
-- **EC-17** — `_folder.md` is saved (edited) while the Folder View tab is active. The vault index updates, triggering FR-31. The re-render reads the updated file content and redraws the card grid. No flicker beyond what a full re-render normally produces.
+- **EC-17** — The `attachNodeListeners` chevron `stopPropagation` listener must be added inside the `if (hasFolderView)` branch only. For `hasFolderView=false` nodes, the chevron must NOT have an extra listener (no regression to normal expand/collapse behavior).
 
-- **EC-18** — `_folder.md` is saved while the Folder View tab is inactive (another tab is active). The tab is marked stale (FR-32). When the user later activates the Folder View tab, it re-renders with the updated content.
-
-- **EC-19** — Vault is switched while a Folder View tab is open. The custom tab created via `openCustomRenderTab` persists in the tab strip (this is existing behavior for custom tabs). The tab content is stale relative to the new vault. This is acceptable v1 behavior; no special handling required. Document it as a known limitation.
-
-- **EC-20** — The `_folder.md` file itself is clicked in the file tree (FR-08). It must open in the editor (normal file-open path), not trigger a Folder View. The file-open path is reached via the `type === "file"` branch of `buildActivateHandler`, which is not affected by the split-click change.
-
-- **EC-21** — A folder named `_folder.md` exists (a directory, not a file). Detection logic must check that the found entry is of type `file` (has a `.md` extension and is a `VaultIndexEntry`), not a directory. No incorrect detection.
-
-- **EC-22** — Large folder with 500 immediate children (subfolders + files). Card grid render must meet NFR-02 (under 100 ms). DOM nodes must be built efficiently; no O(N²) operations.
-
-- **EC-23** — Vault has no directories at all (flat vault, all `.md` files at root). Detection scan finds no directory entries; no folder view triggers. Tree renders normally.
-
-- **EC-24** — User right-clicks a Smart Folder (virtual node from the Smart Folders feature). Smart Folder nodes must not show "Create Folder View..." or "Open Folder View" because they are not real filesystem directories and cannot contain `_folder.md`. The context menu discriminator for smart folders (`isSmartFolderPath`) must be checked before injecting folder-view menu items.
+- **EC-18** — Enter key on a `hasFolderView=true` node calls `openFolderViewTab`. `openFolderViewTab` calls `openFileInTab` (async). The `openFileInTab` Promise is fire-and-forgotten (`void`). The keyboard event handler returns synchronously. No blocking.
 
 ---
 
-## Resolved Ambiguities
+## Resolved Design Decisions
 
-All six open questions from the brief have been resolved. They are recorded here for traceability.
+- **RD-01** — `openFileInTab` returns a Promise. `enterLayoutView` must be called in the `.then()` of that Promise (or with `await` inside an async wrapper), not synchronously after `openFileInTab`. This ensures the tab is active and its `kind` is `"editor"` before `enterLayoutView` inspects `getActiveTab()`. If called synchronously, `enterLayoutView` may fire before the tab manager has finished activating the new tab.
 
-- **A (YAML schema)** — Minimum required field is `layout: folder-cards`. Optional fields: `title`, `sort` (name-asc default), `columns` (3 default, clamped to [2,6]), `show-modified` (true default). Absent/unrecognized `layout:` value triggers the graceful fallback (FR-12/FR-13), not an error.
+- **RD-02** — No stale-flag mechanism is needed. The `layoutRenderFn` on `TabEntry` serves as the "most recent render function." When the user activates a tab that is in layout view (`isInLayoutView === true`), the renderer checks `layoutRenderFn` and re-renders automatically. The `_indexUpdatedCb` refresh path (FR-13) only needs to fire `refreshLayoutView` when the tab is currently active and in layout view.
 
-- **B (Live update)** — Re-render fires automatically when the active tab is the Folder View tab for the saved file. When the tab is inactive, a stale flag is set; re-render fires on next tab activation. Mirrors the precedent of `refreshLayoutView` in the existing layouts system (FR-31/FR-32).
+- **RD-03** — Tab title for the folder view is the filename `_folder.md`, as set by the tab manager from the file path. This is a deliberate change from the original spec (which wanted the folder name as the title). The folder name as title was only achievable through the synthetic-key patching approach (which is being removed). The correct long-term fix (custom tab title) is deferred to a follow-on task.
 
-- **C (Nested folder views)** — Clicking a subfolder card expands the file tree to that subfolder. If the subfolder has `_folder.md`, its Folder View tab also opens. This delegates navigation authority to the file tree and avoids deep tab nesting (FR-21).
-
-- **D (Context menu)** — Right-clicking a `_folder.md`-enabled folder adds "Open Folder View" as the first context menu item. Right-clicking any folder without `_folder.md` adds "Create Folder View..." near the top of the creation actions (FR-34/FR-35).
-
-- **E (Creating `_folder.md`)** — "Create Folder View..." right-click option creates `_folder.md` with a minimal two-line starter template and opens it in the editor. No wizard or multi-step UI (FR-35/FR-36).
-
-- **F (Tab title)** — The folder's last path segment is the default. If YAML contains `title:`, that value is used instead. Tab title is HTML-escaped (EC-13). Deduplication is by full folder path (not display title), so same-name folders in different parent directories are always independent tabs (FR-16/FR-17/EC-15).
-
----
-
-## Decisions Locked (do NOT re-question)
-
-These decisions are fixed and travel through Architecture, Implementation, and Review without change.
-
-1. **`_folder.md` is the trigger.** Presence of a file named `_folder.md` in a directory enables Folder View for that directory. Absence means no change to existing behavior.
-2. **Split click targets.** Chevron click → expand/collapse always. Name-label click → Folder View tab if `_folder.md` exists, otherwise expand/collapse.
-3. **`_folder.md` is fully visible in the tree.** No hiding, no special styling beyond the parent folder gaining `tree-node-has-folder-view`.
-4. **YAML front-matter controls layout.** The `layout:` field dispatches to a renderer. The markdown body is optional description content.
-5. **Folder layouts are separate from document layouts.** `layout-manager.ts` is not involved. Folder layout renderers live in the file-browser plugin.
-6. **v1 delivers one layout style: `folder-cards`.** Multiple styles are a follow-on task.
-7. **Tab mechanism: `window.__MARKABLE_OPEN_CUSTOM_TAB__`.** Same as document layouts. Same deduplication-by-title behavior applies.
-8. **No Rust changes.** Detection uses `VaultIndex.entries`; creation uses the existing file-write bridge calls already available to the file-browser plugin.
-9. **All folder-view code lives in `src/plugins/file-browser/`.** Single IIFE, no new bundle target, no new npm dependencies.
-10. **Graceful fallback for absent/unrecognized `layout:`.** Renders the body as plain markdown with a notice. Never crashes.
-11. **Live update: auto-re-render when tab is active; stale-flag when inactive.**
-12. **Subfolder card click: expand tree + open that folder's view if it has `_folder.md`.**
-13. **"Create Folder View..." context menu item creates `_folder.md` with a minimal starter and opens it in the editor.**
-14. **Tab title: YAML `title:` field if present, otherwise folder's last path segment. HTML-escaped.**
-15. **Tab deduplication is by full folder path.** Two folders with the same name in different parent directories produce independent tabs. The display title and the dedup key are separate values.
+- **RD-04** — `renderFolderViewTabAsync`'s `syntheticKey` parameter is removed. The function no longer needs to know the tab key to patch the title. Update the function signature accordingly.
 
 ---
 
@@ -250,6 +234,6 @@ These decisions are fixed and travel through Architecture, Implementation, and R
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 24 items in Edge Case Inventory (EC-01 through EC-24)
+- Edge cases to verify in tests: 18 items in Edge Case Inventory (EC-01 through EC-18)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

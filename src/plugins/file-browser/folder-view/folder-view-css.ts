@@ -83,13 +83,13 @@ export const FOLDER_VIEW_CSS = `
 
 /*
  * .folder-view-card: base card element.
- * Cards are keyboard-reachable (tabindex=0, role=button) for NFR-07.
+ * No padding at the card level — the preview rectangle fills the top
+ * edge-to-edge; the name label has its own padding below.
  */
 .folder-view-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 12px 10px 10px;
+  align-items: stretch;
   border: 1px solid var(--border-color, rgba(128,128,128,.2));
   border-radius: 6px;
   background: var(--bg-secondary, rgba(128,128,128,.04));
@@ -97,9 +97,6 @@ export const FOLDER_VIEW_CSS = `
   user-select: none;
   transition: background 0.1s ease, box-shadow 0.1s ease;
   overflow: hidden;
-  min-height: 72px;
-  justify-content: flex-start;
-  text-align: center;
 }
 .folder-view-card:hover {
   background: var(--hover-bg, rgba(128,128,128,.08));
@@ -109,85 +106,75 @@ export const FOLDER_VIEW_CSS = `
   box-shadow: inset 0 0 0 2px var(--accent-color);
 }
 
-/* .folder-view-card-dir: directory (subfolder) card variant */
-.folder-view-card-dir { /* no extra overrides needed in v1 */ }
-
-/* .folder-view-card-file: file card variant */
-.folder-view-card-file { /* no extra overrides needed in v1 */ }
-
-/* ── Card icon ────────────────────────────────────────────────────────── */
+/* ── Card preview rectangle ───────────────────────────────────────────── */
 
 /*
- * .folder-view-card-icon: icon area at the top of each card.
- * SVG icons fill currentColor so they respect the theme.
+ * .folder-view-card-preview: content-preview area at the top of each card.
+ * Images fill the rectangle; text files show an excerpt; other files show
+ * a centred icon.
  */
-.folder-view-card-icon {
-  width: 28px;
-  height: 28px;
-  margin-bottom: 6px;
+.folder-view-card-preview {
+  width: 100%;
+  height: 90px;
+  overflow: hidden;
+  background: var(--bg-tertiary, rgba(128,128,128,.07));
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  opacity: 0.8;
 }
-.folder-view-card-icon svg {
+
+/* Image: cover-fill the rectangle. */
+.folder-view-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Icon: centred and muted for non-image, non-text files. */
+.folder-view-preview-icon {
+  width: 36px;
+  height: 36px;
+  opacity: 0.45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.folder-view-preview-icon svg {
   display: block;
   fill: currentColor;
   width: 100%;
   height: 100%;
 }
 
+/* Text excerpt: small, muted, clamped. */
+.folder-view-preview-text {
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── Card name ────────────────────────────────────────────────────────── */
 
-/*
- * .folder-view-card-name: the card's primary label text.
- * Truncates with ellipsis when the name is too long for the card.
- */
 .folder-view-card-name {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
-  max-width: 100%;
+  padding: 6px 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  width: 100%;
-}
-
-/* ── Card meta (extension badge + date) ────────────────────────────────── */
-
-/* .folder-view-card-meta: secondary info row below the card name. */
-.folder-view-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 4px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-/*
- * .folder-view-card-ext: file extension badge (e.g. ".pdf").
- * Styled as a small chip for scanability.
- */
-.folder-view-card-ext {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-secondary, rgba(128,128,128,.55));
-  background: var(--bg-secondary, rgba(128,128,128,.06));
-  border: 1px solid var(--border-color, rgba(128,128,128,.15));
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-
-/* .folder-view-card-date: modified date text. */
-.folder-view-card-date {
-  font-size: 10px;
-  color: var(--text-secondary, rgba(128,128,128,.55));
 }
 
 /* ── Empty / loading / fallback states ─────────────────────────────────── */
@@ -240,13 +227,30 @@ export const FOLDER_VIEW_CSS = `
 
 /*
  * .tree-node-has-folder-view: applied to directory <li> nodes that contain
- * _folder.md. Provides a subtle visual affordance (underline on the label).
+ * _folder.md. Accent-colors the folder icon and label; adds a preview badge
+ * on the right (same pattern as the vault unmount button).
  * The class is also used for querySelectorAll lookups in tests.
  */
+.tree-node-has-folder-view .tree-node-icon,
 .tree-node-has-folder-view .tree-node-label {
-  text-decoration: underline;
-  text-decoration-color: var(--accent-color, rgba(92,107,192,.4));
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
+  color: var(--accent-color);
+}
+
+.tree-node-fv-badge {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.75;
+  color: var(--accent-color);
+}
+.tree-node-fv-badge svg {
+  display: block;
+  fill: currentColor;
+  width: 100%;
+  height: 100%;
 }
 `;

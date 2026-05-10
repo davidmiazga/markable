@@ -1,18 +1,29 @@
 /**
  * tests/folder-view/split-click.test.ts
  *
- * Unit tests for split-click behavior introduced in step_03.
+ * Unit tests for split-click behavior introduced in step_03, now updated to
+ * reflect the layout-view refactor from step_02_plugin-edits.md.
  *
- * Tests FR-01 (no folder-view → toggle), FR-02 (label click opens FV tab),
- * FR-03 (chevron click toggles only), FR-04 (Enter key), NFR-05 (ArrowRight/Left).
+ * Tests:
+ *   T-10 — hasFolderView=true, label click → openFolderViewTab called
+ *           (uses __MARKABLE_OPEN_FOLDER_VIEW_TAB__ spy; aria-expanded NOT toggled)
+ *   T-11 — chevron click on hasFolderView=true → toggleDirectoryNode fires
+ *           (aria-expanded flips); openFolderViewTab NOT called
+ *   T-12 — Enter key on hasFolderView=true → openFolderViewTab called
+ *   T-13 — _folder.md file click → openFileInTab + exitLayoutView called (FR-05)
+ *   T-14 — hasFolderView=false, row click → toggleDirectoryNode (aria-expanded flips);
+ *           openFolderViewTab NOT called (preserved from original FR-01 test)
  *
- * Strategy: we use the _testing accessor to reach internal functions and
- * exercise them against JSDOM elements. We stub the window globals that
- * buildActivateHandler / attachNodeListeners depend on.
+ * Arrow key tests (NFR-05) are preserved unchanged.
+ *
+ * Strategy: use the _testing accessor to reach internal functions and exercise
+ * them against JSDOM elements. Window globals are stubbed in beforeEach.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { _testing } from "../../src/plugins/file-browser/file-browser.plugin";
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 /** Create a minimal directory <li> with chevron + label child elements. */
 function makeDirectoryNode(path = "/vault/A", expanded = false): HTMLLIElement {
@@ -44,24 +55,27 @@ describe("split-click behavior", () => {
 
     // Stub window globals used by buildActivateHandler / toggleDirectoryNode.
     (window as any).__MARKABLE_TAB_MANAGER__ = {
-      openFileInTab: vi.fn(),
+      openFileInTab: vi.fn(() => Promise.resolve()),
       openMediaInTab: vi.fn(),
+      exitLayoutView: vi.fn(),
+      enterLayoutView: vi.fn(),
     };
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getActiveVault: vi.fn(() => ({ id: "vault-1", rootPaths: ["/vault"] })),
       getVaultIndex: vi.fn(() => null),
     };
+    // Default: openFolderViewTab global is a spy (overridden per test as needed).
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = vi.fn();
   });
 
-  // ── FR-01: No folder-view → toggle on any click ───────────────────────────
+  // ── T-14 (FR-01): No folder-view → toggle on any click ───────────────────
+  // Preserved unchanged from the original test.
 
-  it("FR-01: hasFolderView=false, clicking directory → does NOT route to openFolderViewTab", () => {
+  it("T-14 (FR-01): hasFolderView=false, clicking directory → does NOT route to openFolderViewTab", () => {
     const li = makeDirectoryNode("/vault/A");
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
 
-    // The module-level stub openFolderViewTab is a no-op; confirm aria-expanded
-    // flips when hasFolderView=false (toggleDirectoryNode is called instead).
     const ul = document.createElement("ul");
     ul.appendChild(li);
     _testing.setTreeEl(ul as HTMLElement);
@@ -71,30 +85,61 @@ describe("split-click behavior", () => {
 
     // With hasFolderView=false, toggleDirectoryNode runs and flips aria-expanded.
     expect(li.getAttribute("aria-expanded")).toBe("true");
-    // The global openFolderViewTab stub was NOT invoked for this path.
-    // (The module stub replaces the global, not this spy — the spy would only
-    // be called if the module explicitly checked the global, which it does not
-    // in the stub path. The key signal is that aria-expanded flipped.)
+    // The global openFolderViewTab spy was NOT invoked.
     expect(openFVSpy).not.toHaveBeenCalled();
   });
 
-  // ── FR-02: hasFolderView=true, row click → does NOT toggle (routes to FV) ─
+  // ── T-10 (FR-02): hasFolderView=true, label click → openFolderViewTab ────
 
-  it("FR-02: hasFolderView=true, buildActivateHandler invoked → aria-expanded does NOT change (stub openFolderViewTab runs instead)", () => {
+  it("T-10 (FR-02): hasFolderView=true, label/row click → __MARKABLE_OPEN_FOLDER_VIEW_TAB__ called AND node expands if collapsed", () => {
+    // Row click on a folder-view folder should both expand the node (if collapsed)
+    // and open the folder view.  The chevron has stopPropagation so it is the
+    // exclusive toggle target — the row only expands, never collapses.
+    const openFVSpy = vi.fn();
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+
     const li = makeDirectoryNode("/vault/A", false);
-    const beforeExpanded = li.getAttribute("aria-expanded");
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    _testing.setTreeEl(ul as HTMLElement);
 
-    // Call the handler — with hasFolderView=true it routes to openFolderViewTab stub.
-    const handler = _testing.buildActivateHandler(li, "vault-1", true);
-    handler(new MouseEvent("click"));
+    _testing.attachNodeListeners(li, "vault-1", true);
 
-    // The stub openFolderViewTab is a no-op, so aria-expanded should NOT have flipped.
-    expect(li.getAttribute("aria-expanded")).toBe(beforeExpanded);
+    // Dispatch click directly on the row (not the chevron).
+    li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // openFolderViewTab must have been called with the folder path.
+    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
+    // aria-expanded flips to "true" — row click expands a collapsed node.
+    expect(li.getAttribute("aria-expanded")).toBe("true");
   });
 
-  // ── FR-03: hasFolderView=true, chevron click → stopPropagation, row not fired
+  it("T-10b (FR-02): hasFolderView=true, row click on already-expanded node → NOT collapsed", () => {
+    // Row click never collapses a folder-view node — use the chevron for that.
+    const openFVSpy = vi.fn();
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
 
-  it("FR-03: chevron click with hasFolderView=true → row click listener is NOT called", () => {
+    const li = makeDirectoryNode("/vault/A", true);  // already expanded
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    _testing.setTreeEl(ul as HTMLElement);
+
+    _testing.attachNodeListeners(li, "vault-1", true);
+
+    li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // aria-expanded stays "true" — row click does not collapse.
+    expect(li.getAttribute("aria-expanded")).toBe("true");
+    // openFolderViewTab still called.
+    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
+  });
+
+  // ── T-11 (FR-03): chevron click → toggleDirectoryNode fires, openFolderViewTab NOT ──
+
+  it("T-11 (FR-03): chevron click on hasFolderView=true node → aria-expanded flips; openFolderViewTab NOT called", () => {
+    const openFVSpy = vi.fn();
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+
     const li = makeDirectoryNode("/vault/A", false);
     const ul = document.createElement("ul");
     ul.appendChild(li);
@@ -105,31 +150,63 @@ describe("split-click behavior", () => {
 
     _testing.attachNodeListeners(li, "vault-1", true);
 
-    // Spy on the row's activation by observing aria-expanded.
-    // If the chevron stopPropagation works, the row's click (which would call
-    // openFolderViewTab stub and NOT flip aria-expanded) fires via the row handler.
-    // The chevron's own listener SHOULD call toggleDirectoryNode and flip aria-expanded.
-    const beforeExpanded = li.getAttribute("aria-expanded");
     const chevron = li.querySelector<HTMLElement>(".tree-node-chevron")!;
+    // The chevron listener added by attachNodeListeners calls stopPropagation
+    // so the click never reaches the row activate handler.
     chevron.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    // Chevron listener fires toggleDirectoryNode → aria-expanded flips.
-    expect(li.getAttribute("aria-expanded")).not.toBe(beforeExpanded);
+    // toggleDirectoryNode fired → aria-expanded flipped.
+    expect(li.getAttribute("aria-expanded")).toBe("true");
+    // openFolderViewTab was NOT called.
+    expect(openFVSpy).not.toHaveBeenCalled();
 
     document.body.removeChild(treeWrapper);
   });
 
-  // ── FR-04: Enter key on hasFolderView=true → routes to openFolderViewTab ──
+  // ── T-12 (FR-04): Enter key on hasFolderView=true → openFolderViewTab ────
 
-  it("FR-04: Enter key on hasFolderView=true node → aria-expanded does NOT change (FV route taken)", () => {
+  it("T-12 (FR-04): Enter key on hasFolderView=true node → __MARKABLE_OPEN_FOLDER_VIEW_TAB__ called", () => {
+    const openFVSpy = vi.fn();
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+
     const li = makeDirectoryNode("/vault/A", false);
-    const beforeExpanded = li.getAttribute("aria-expanded");
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    _testing.setTreeEl(ul as HTMLElement);
 
     _testing.attachNodeListeners(li, "vault-1", true);
+
+    // The Enter key delegates to onActivate (handleActivate), which after the
+    // FR-02 fix calls __MARKABLE_OPEN_FOLDER_VIEW_TAB__ for hasFolderView=true.
     li.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    // openFolderViewTab (stub) is a no-op → aria-expanded stays the same.
-    expect(li.getAttribute("aria-expanded")).toBe(beforeExpanded);
+    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
+  });
+
+  // ── T-13 (FR-05): _folder.md file click → openFileInTab + exitLayoutView ─
+
+  it("T-13 (FR-05): clicking a _folder.md file node → openFileInTab called + exitLayoutView called", async () => {
+    const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+
+    // Create a file node (type=file) whose path ends with /_folder.md.
+    const li = document.createElement("li");
+    li.setAttribute("data-type", "file");
+    li.setAttribute("data-path", "/vault/A/_folder.md");
+
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    _testing.setTreeEl(ul as HTMLElement);
+
+    // Build the activate handler and invoke it (simulates a click).
+    const handleActivate = _testing.buildActivateHandler(li, "vault-1", false);
+    handleActivate(new MouseEvent("click"));
+
+    // openFileInTab is called synchronously (fire-and-forget void).
+    expect(tabMgr.openFileInTab).toHaveBeenCalledWith("/vault/A/_folder.md");
+
+    // exitLayoutView is called synchronously immediately after openFileInTab
+    // (not in a .then()) — it ensures code view regardless of current tab state.
+    expect(tabMgr.exitLayoutView).toHaveBeenCalledOnce();
   });
 
   // ── NFR-05: ArrowRight on hasFolderView=true → expands ────────────────────
@@ -159,5 +236,90 @@ describe("split-click behavior", () => {
     li.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
 
     expect(li.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+// ── _indexUpdatedCb — EC-06 (positive path) / EC-12 (null guard) ──────────────
+
+describe("_indexUpdatedCb — layout-view refresh logic", () => {
+  let refreshLayoutViewSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    refreshLayoutViewSpy = vi.fn();
+
+    // Minimal tab manager: active tab is in layout view for the target file.
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn(() => Promise.resolve()),
+      enterLayoutView: vi.fn(),
+      exitLayoutView: vi.fn(),
+      refreshLayoutView: refreshLayoutViewSpy,
+      getActiveTab: vi.fn(() => ({ filePath: "/vault/A/_folder.md" })),
+      isActiveTabInLayoutView: vi.fn(() => true),
+    };
+
+    // Vault manager: active vault with empty index (tree diff will be empty,
+    // so renderPanel is effectively a no-op).
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => ({ id: "vault-1", rootPaths: ["/vault"] })),
+      getVaultIndex: vi.fn(() => ({ entries: [], directories: [], nonMdFiles: [] })),
+      onVaultChanged: vi.fn(),
+      onIndexUpdated: vi.fn(),
+    };
+
+    _testing.setEnabled(true);
+    _testing.setPanelContainer(null);  // no container → renderPanel no-ops
+    _testing.setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
+  });
+
+  afterEach(() => {
+    _testing.setEnabled(false);
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+  });
+
+  // ── EC-06: positive path ──────────────────────────────────────────────────
+
+  it("EC-06: _indexUpdatedCb with matching active tab + isInLayoutView → refreshLayoutView called", () => {
+    const cb = _testing.getIndexUpdatedCb();
+    expect(cb).not.toBeNull();
+
+    cb!({ vaultId: "vault-1", eventType: "modified", path: "/vault/A/_folder.md" });
+
+    expect(refreshLayoutViewSpy).toHaveBeenCalledOnce();
+    // The argument must be a function (the render fn returned by buildFolderViewRenderFn).
+    const [arg] = refreshLayoutViewSpy.mock.calls[0];
+    expect(typeof arg).toBe("function");
+  });
+
+  // ── EC-12: null/undefined changedPath → early return, no throw ───────────
+
+  it("EC-12: _indexUpdatedCb with undefined changedPath → refreshLayoutView NOT called, no throw", () => {
+    const cb = _testing.getIndexUpdatedCb();
+    expect(cb).not.toBeNull();
+
+    // Simulate an event with no path field.
+    expect(() => cb!({ vaultId: "vault-1", eventType: "modified", path: undefined as any })).not.toThrow();
+    expect(refreshLayoutViewSpy).not.toHaveBeenCalled();
+  });
+
+  it("EC-12: _indexUpdatedCb with non-_folder.md path → refreshLayoutView NOT called", () => {
+    const cb = _testing.getIndexUpdatedCb();
+    expect(cb).not.toBeNull();
+
+    cb!({ vaultId: "vault-1", eventType: "modified", path: "/vault/A/some-note.md" });
+
+    expect(refreshLayoutViewSpy).not.toHaveBeenCalled();
+  });
+
+  it("EC-06 (negative): active tab path mismatch → refreshLayoutView NOT called", () => {
+    // Active tab is a different file.
+    (window as any).__MARKABLE_TAB_MANAGER__.getActiveTab.mockReturnValue({
+      filePath: "/vault/B/other.md",
+    });
+
+    const cb = _testing.getIndexUpdatedCb();
+    cb!({ vaultId: "vault-1", eventType: "modified", path: "/vault/A/_folder.md" });
+
+    expect(refreshLayoutViewSpy).not.toHaveBeenCalled();
   });
 });

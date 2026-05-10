@@ -29,6 +29,9 @@ import {
 
 // ── Icon mapping ──────────────────────────────────────────────────────────────
 
+const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"]);
+const TEXT_EXTS  = new Set([".md", ".txt", ".markdown"]);
+
 /**
  * Return the SVG icon string for a file card based on its extension.
  *
@@ -40,8 +43,8 @@ import {
  */
 function getFileIconForCard(ext: string): string {
   const lower = ext.toLowerCase();
-  if (lower === ".md" || lower === ".txt") return ICON_FILE_MD;
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"].includes(lower)) return ICON_FILE_IMAGE;
+  if (TEXT_EXTS.has(lower)) return ICON_FILE_MD;
+  if (IMAGE_EXTS.has(lower)) return ICON_FILE_IMAGE;
   if ([".json", ".yaml", ".yml", ".toml"].includes(lower)) return ICON_FILE_JSON;
   if ([".ts", ".js", ".tsx", ".jsx", ".py", ".rs", ".go", ".sh"].includes(lower)) return ICON_FILE_CODE;
   return ICON_FILE;
@@ -128,45 +131,98 @@ function handleCardClick(card: FolderCard): void {
   }
 }
 
-// ── Card meta builder ─────────────────────────────────────────────────────────
+// ── Card preview builder ──────────────────────────────────────────────────────
 
 /**
- * Build the meta row element (extension badge + modified date) for a file card.
+ * Build the preview rectangle shown at the top of each card.
  *
- * Only file cards have a meta row. Directory cards have no meta (no extension,
- * modified date not meaningful for the current v1 use case).
+ * - Images: rendered as <img> via asset:// URL (synchronous).
+ * - Text / Markdown: async read_file; shows first ~300 chars stripped of
+ *   frontmatter. Falls back to the file icon if the read fails.
+ * - Directories: large folder icon centred in rectangle.
+ * - All other files: centred file-type icon.
  *
- * @param card         - The file FolderCard.
- * @param showModified - Whether to render the modified date (from config).
- * @returns The `.folder-view-card-meta` div element.
+ * EC-13: no innerHTML on user-supplied text; textContent is used throughout.
  */
-function buildCardMeta(card: FolderCard, showModified: boolean): HTMLElement {
-  const meta = document.createElement("div");
-  meta.className = "folder-view-card-meta";
+function buildCardPreview(card: FolderCard): HTMLElement {
+  const preview = document.createElement("div");
+  preview.className = "folder-view-card-preview";
 
-  // Extension badge (e.g. ".pdf").
-  if (card.ext) {
-    const ext = document.createElement("span");
-    ext.className = "folder-view-card-ext";
-    ext.textContent = card.ext;
-    meta.appendChild(ext);
+  if (card.kind === "directory") {
+    const wrap = document.createElement("div");
+    wrap.className = "folder-view-preview-icon";
+    wrap.innerHTML = ICON_FOLDER;
+    preview.appendChild(wrap);
+    return preview;
   }
 
-  // Modified date (only when showModified=true and modified > 0).
-  if (showModified && card.modified > 0) {
-    const date = document.createElement("span");
-    date.className = "folder-view-card-date";
-    date.textContent = formatModified(card.modified);
-    meta.appendChild(date);
+  const extLower = card.ext.toLowerCase();
+
+  if (IMAGE_EXTS.has(extLower)) {
+    const convertFileSrc = (window as any).__MARKABLE_CONVERT_FILE_SRC__;
+    if (convertFileSrc) {
+      const img = document.createElement("img");
+      img.src = convertFileSrc(card.path);
+      img.alt = card.name;
+      img.className = "folder-view-preview-img";
+      img.addEventListener("error", () => {
+        img.remove();
+        const wrap = document.createElement("div");
+        wrap.className = "folder-view-preview-icon";
+        wrap.innerHTML = getFileIconForCard(extLower);
+        preview.appendChild(wrap);
+      });
+      preview.appendChild(img);
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "folder-view-preview-icon";
+      wrap.innerHTML = getFileIconForCard(extLower);
+      preview.appendChild(wrap);
+    }
+    return preview;
   }
 
-  return meta;
+  if (TEXT_EXTS.has(extLower)) {
+    const textWrap = document.createElement("div");
+    textWrap.className = "folder-view-preview-text";
+    preview.appendChild(textWrap);
+    const invoke = (window as any).__TAURI_INTERNALS__?.invoke;
+    if (invoke) {
+      void (invoke as (cmd: string, args: object) => Promise<string>)(
+        "read_file", { path: card.path },
+      ).then((raw) => {
+        let text = raw;
+        // Strip YAML frontmatter so code isn't the first thing displayed.
+        if (text.startsWith("---")) {
+          const end = text.indexOf("\n---", 4);
+          if (end !== -1) text = text.slice(end + 4);
+        }
+        textWrap.textContent = text.trim().slice(0, 300) || "—";
+      }).catch(() => {
+        textWrap.remove();
+        const wrap = document.createElement("div");
+        wrap.className = "folder-view-preview-icon";
+        wrap.innerHTML = getFileIconForCard(extLower);
+        preview.appendChild(wrap);
+      });
+    }
+    return preview;
+  }
+
+  // Fallback: centred file-type icon.
+  const wrap = document.createElement("div");
+  wrap.className = "folder-view-preview-icon";
+  wrap.innerHTML = getFileIconForCard(extLower);
+  preview.appendChild(wrap);
+  return preview;
 }
 
 // ── Card builder ──────────────────────────────────────────────────────────────
 
 /**
  * Build one card element for the grid.
+ *
+ * Structure: preview rectangle (top) → name label (bottom).
  *
  * Accessibility (NFR-07):
  *   - role="button" so screen readers announce it as interactive.
@@ -177,13 +233,8 @@ function buildCardMeta(card: FolderCard, showModified: boolean): HTMLElement {
  * EC-13 XSS note: card.name is set via .textContent (not .innerHTML) so
  * characters like < and > are rendered as text, never as HTML.
  *
- * Length justification: five responsibilities (icon, name, meta, click,
- * keyboard) all operate on the same `el` element and share `card`/`config`.
- * Extracting them into sub-functions would require passing `el` as a parameter
- * to each, producing no clarity gain.
- *
  * @param card   - The FolderCard to render.
- * @param config - Config for showModified flag.
+ * @param config - Config for showModified flag (retained for forward compatibility).
  * @returns The card `<div>` element with all wiring attached.
  */
 function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
@@ -203,25 +254,15 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
       : `Open file ${card.name}`,
   );
 
-  // Icon area.
-  const iconEl = document.createElement("div");
-  iconEl.className = "folder-view-card-icon";
-  iconEl.innerHTML = card.kind === "directory"
-    ? ICON_FOLDER
-    : getFileIconForCard(card.ext);
-  el.appendChild(iconEl);
+  // Preview rectangle (image / text excerpt / icon).
+  el.appendChild(buildCardPreview(card));
 
   // Name text — set via .textContent to prevent XSS (EC-13).
   const nameEl = document.createElement("div");
   nameEl.className = "folder-view-card-name";
   nameEl.textContent = card.name;
-  nameEl.title = card.path; // tooltip shows full path on hover
+  nameEl.title = card.path;
   el.appendChild(nameEl);
-
-  // Meta row for file cards (extension badge + modified date).
-  if (card.kind === "file") {
-    el.appendChild(buildCardMeta(card, config.showModified));
-  }
 
   // Click handler (FR-21/FR-22).
   el.addEventListener("click", () => handleCardClick(card));
@@ -233,6 +274,9 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
       handleCardClick(card);
     }
   });
+
+  // Suppress unused-variable warning — config is kept for the API contract.
+  void config;
 
   return el;
 }
@@ -252,17 +296,19 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
  * @returns The `.folder-view-section` div element.
  */
 function buildSection(
-  title: string,
+  title: string | null,
   cards: FolderCard[],
   config: FolderViewConfig,
 ): HTMLElement {
   const section = document.createElement("div");
   section.className = "folder-view-section";
 
-  const heading = document.createElement("h3");
-  heading.className = "folder-view-section-title";
-  heading.textContent = title;
-  section.appendChild(heading);
+  if (title) {
+    const heading = document.createElement("h3");
+    heading.className = "folder-view-section-title";
+    heading.textContent = title;
+    section.appendChild(heading);
+  }
 
   const grid = document.createElement("div");
   grid.className = "folder-view-grid";
@@ -357,7 +403,7 @@ export function renderFolderCards(
   }
 
   if (fileCards.length > 0) {
-    host.appendChild(buildSection("Files", fileCards, config));
+    host.appendChild(buildSection(null, fileCards, config));
   }
 
   container.appendChild(host);

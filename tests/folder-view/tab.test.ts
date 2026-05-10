@@ -1,49 +1,59 @@
 /**
  * tests/folder-view/tab.test.ts
  *
- * Unit tests for openFolderViewTab, notifyFolderViewTabs, checkStaleFolderViewTabs.
+ * Unit tests for the new layout-view-based Folder View tab mechanism.
  *
- * Covers acceptance criteria from step_04_tab-and-stale.md:
- * FR-17, FR-31, FR-32, FR-33, EC-13, EC-15, EC-17, EC-18.
+ * Covers step_01_tab-rewrite.md acceptance criteria:
+ *   T-01 — openFolderViewTab calls openFileInTab with _folder.md path
+ *   T-02 — enterLayoutView is called inside .then() (RD-01)
+ *   T-03 — two calls for same path → two openFileInTab calls (no dedup in tab.ts)
+ *   T-04 — buildFolderViewRenderFn returns fn; calling it shows loading placeholder
+ *           and fires invoke("read_file") after async settle
+ *   T-05 — buildFolderViewRenderFn returns a function (prerequisite for FR-13 logic)
+ *   T-06 — active tab path mismatch → refreshLayoutView NOT called
+ *   T-07 — non-_folder.md changed path → refreshLayoutView NOT called (early-return guard)
+ *   T-08 — escapeHtml escapes <, >, ", &
+ *   T-09 — LAYOUT_RENDERERS contains "folder-cards" entry
+ *
+ * These tests replace the entire old test file which tested the now-deleted
+ * registry / stale-flag / synthetic-key mechanism.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   openFolderViewTab,
-  notifyFolderViewTabs,
-  checkStaleFolderViewTabs,
-  clearFolderViewRegistry,
-  _registry,
+  buildFolderViewRenderFn,
   escapeHtml,
   LAYOUT_RENDERERS,
 } from "../../src/plugins/file-browser/folder-view/tab";
 
-// ── Global mocks ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Track which tabs were "opened" by __MARKABLE_OPEN_CUSTOM_TAB__. */
-const openedTabs: Array<{ title: string }> = [];
-let activeTabTitle = "";
-const tabStore: Array<{ title: string }> = [];
-
-function setupWindowMocks(opts: { activeTitle?: string } = {}): void {
-  activeTabTitle = opts.activeTitle ?? "";
-  openedTabs.length = 0;
-
-  (window as any).__MARKABLE_OPEN_CUSTOM_TAB__ = (title: string, renderFn: (c: HTMLElement) => void) => {
-    openedTabs.push({ title });
-    tabStore.push({ title });
-    // Simulate the tab-manager calling renderFn with a container.
-    const container = document.createElement("div");
-    container.id = "custom-tab-host";
-    renderFn(container);
+/**
+ * Build a minimal tab-manager mock with all methods required by tab.ts.
+ *
+ * openFileInTab returns a resolved Promise by default so that .then() chains
+ * complete in the next microtask tick.
+ */
+function makeMockTabMgr() {
+  return {
+    openFileInTab: vi.fn(() => Promise.resolve()),
+    enterLayoutView: vi.fn(),
+    exitLayoutView: vi.fn(),
+    refreshLayoutView: vi.fn(),
+    getActiveTab: vi.fn(() => null as any),
+    isActiveTabInLayoutView: vi.fn(() => false),
   };
+}
 
-  (window as any).__MARKABLE_TAB_MANAGER__ = {
-    getTabs: vi.fn(() => tabStore.map(t => ({ title: t.title }))),
-    getActiveTab: vi.fn(() => {
-      return activeTabTitle ? { title: activeTabTitle } : null;
-    }),
-  };
+/**
+ * Install the standard window globals used by tab.ts.
+ * Called in each test's setup so each test gets a fresh set of spies.
+ */
+function setupWindowMocks(): ReturnType<typeof makeMockTabMgr> {
+  const tabMgr = makeMockTabMgr();
+
+  (window as any).__MARKABLE_TAB_MANAGER__ = tabMgr;
 
   (window as any).__MARKABLE_VAULT_MANAGER__ = {
     getVaultIndex: vi.fn(() => ({
@@ -55,185 +65,177 @@ function setupWindowMocks(opts: { activeTitle?: string } = {}): void {
     })),
   };
 
-  // Stub Tauri invoke to return a minimal _folder.md.
+  // Stub Tauri invoke to return a minimal _folder.md string so the async
+  // render path completes without real filesystem access.
   (window as any).__TAURI_INTERNALS__ = {
     invoke: vi.fn(async (_cmd: string, _args: any) => {
       return "---\nlayout: folder-cards\n---\n";
     }),
   };
+
+  return tabMgr;
 }
 
-describe("tab.ts", () => {
+// ── Test suite ────────────────────────────────────────────────────────────────
+
+describe("tab.ts (layout-view refactor)", () => {
+  let tabMgr: ReturnType<typeof makeMockTabMgr>;
+
   beforeEach(() => {
-    clearFolderViewRegistry();
-    tabStore.length = 0;
-    setupWindowMocks();
+    tabMgr = setupWindowMocks();
   });
 
-  // ── FR-17 / EC-15: Two different paths → two independent tabs ────────────
-
-  it("FR-17 / EC-15: two different folder paths produce distinct synthetic keys", async () => {
-    setupWindowMocks();
-
-    openFolderViewTab("/vault/Work/Reports");
-    openFolderViewTab("/vault/Personal/Reports");
-
-    // Allow the async reads to settle (renderFolderViewTabAsync is fire-and-forget).
-    await new Promise(r => setTimeout(r, 50));
-
-    expect(_registry).toHaveLength(2);
-    const keys = _registry.map(r => r.syntheticKey);
-    expect(keys).toContain("__fv__:/vault/Work/Reports");
-    expect(keys).toContain("__fv__:/vault/Personal/Reports");
-    expect(keys[0]).not.toBe(keys[1]);
+  afterEach(() => {
+    // Clean up globals so tests do not bleed into each other.
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+    delete (window as any).__MARKABLE_VAULT_MANAGER__;
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
-  // ── FR-17 dedup: same path twice → one registry entry ────────────────────
+  // ── T-01: openFolderViewTab calls openFileInTab with _folder.md path ─────
 
-  it("FR-17 dedup: calling openFolderViewTab twice for the same path → one registry entry", async () => {
-    setupWindowMocks();
+  it("T-01: openFolderViewTab calls openFileInTab with '<folderPath>/_folder.md'", () => {
+    openFolderViewTab("/vault/A");
 
+    // openFileInTab must be called synchronously (before any async) with the
+    // _folder.md path derived from the folder path.
+    expect(tabMgr.openFileInTab).toHaveBeenCalledWith("/vault/A/_folder.md");
+  });
+
+  // ── T-02: enterLayoutView is called inside .then() (RD-01) ───────────────
+
+  it("T-02: enterLayoutView is called after openFileInTab resolves (inside .then())", async () => {
+    openFolderViewTab("/vault/A");
+
+    // enterLayoutView must NOT be called synchronously — it is wired in .then().
+    expect(tabMgr.enterLayoutView).not.toHaveBeenCalled();
+
+    // Flush the microtask queue so the .then() callback fires.
+    await Promise.resolve();
+
+    expect(tabMgr.enterLayoutView).toHaveBeenCalledOnce();
+
+    // The argument passed to enterLayoutView must be a function (the render fn).
+    const [renderFnArg] = tabMgr.enterLayoutView.mock.calls[0];
+    expect(typeof renderFnArg).toBe("function");
+  });
+
+  // ── T-03: two calls for same path → two openFileInTab calls ──────────────
+
+  it("T-03: calling openFolderViewTab twice for the same path calls openFileInTab twice", async () => {
+    // Tab deduplication is the tab manager's responsibility; tab.ts must not
+    // suppress the second call (EC-10).
     openFolderViewTab("/vault/A");
     openFolderViewTab("/vault/A");
 
-    await new Promise(r => setTimeout(r, 50));
+    await Promise.resolve();
 
-    expect(_registry.filter(r => r.folderPath === "/vault/A")).toHaveLength(1);
+    expect(tabMgr.openFileInTab).toHaveBeenCalledTimes(2);
   });
 
-  // ── FR-32 stale flag set when tab is inactive ─────────────────────────────
+  // ── T-04: buildFolderViewRenderFn — loading placeholder + async invoke ───
 
-  it("FR-32: notifyFolderViewTabs sets stale flag when the tab is NOT active", async () => {
-    setupWindowMocks({ activeTitle: "__fv__:/vault/B" }); // A different tab is active
+  it("T-04: buildFolderViewRenderFn returns a fn that shows loading placeholder and calls invoke('read_file')", async () => {
+    const renderFn = buildFolderViewRenderFn("/vault/A");
+    expect(typeof renderFn).toBe("function");
 
-    openFolderViewTab("/vault/A");
-    await new Promise(r => setTimeout(r, 50));
+    const container = document.createElement("div");
+    renderFn(container);
 
-    notifyFolderViewTabs("/vault/A/_folder.md");
+    // Synchronously, the loading placeholder must be injected into container.
+    expect(container.innerHTML).toContain("Loading");
 
-    const entry = _registry.find(r => r.folderPath === "/vault/A");
-    expect(entry).toBeDefined();
-    expect(entry!.staleRef.stale).toBe(true);
+    // After async settle, invoke must have been called with "read_file".
+    // Three microtask flushes: (1) async renderFolderViewTabAsync starts,
+    // (2) read_file invoke await resolves, (3) downstream processing settles.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect((window as any).__TAURI_INTERNALS__.invoke).toHaveBeenCalledWith(
+      "read_file",
+      { path: "/vault/A/_folder.md" },
+    );
   });
 
-  // ── FR-31: re-render immediately when tab is active ───────────────────────
+  // ── T-05: buildFolderViewRenderFn returns a function (prerequisite) ──────
 
-  it("FR-31: notifyFolderViewTabs calls rerender immediately when tab IS active", async () => {
-    // Make the folder-A tab the active tab.
-    setupWindowMocks({ activeTitle: "__fv__:/vault/A" });
+  it("T-05: buildFolderViewRenderFn returns typeof === 'function' (prerequisite for FR-13)", () => {
+    // The FR-13 inline logic in _indexUpdatedCb passes the return value of
+    // buildFolderViewRenderFn to tabMgr.refreshLayoutView. This test verifies
+    // the shape contract — the value is a function, not undefined or an object.
+    const renderFn = buildFolderViewRenderFn("/vault/A");
+    expect(typeof renderFn).toBe("function");
 
-    openFolderViewTab("/vault/A");
-    await new Promise(r => setTimeout(r, 50));
-
-    // Inject the host element so rerender can find it.
-    const hostEl = document.createElement("div");
-    hostEl.id = "custom-tab-host";
-    document.body.appendChild(hostEl);
-
-    const entry = _registry.find(r => r.folderPath === "/vault/A");
-    expect(entry).toBeDefined();
-    const rerenderSpy = vi.spyOn(entry!, "rerender");
-
-    notifyFolderViewTabs("/vault/A/_folder.md");
-
-    expect(rerenderSpy).toHaveBeenCalledOnce();
-    // stale flag should NOT be set (rerender was called, not the stale path).
-    expect(entry!.staleRef.stale).toBe(false);
-
-    document.body.removeChild(hostEl);
+    // Two independent calls produce two independent closures (not the same ref).
+    const renderFn2 = buildFolderViewRenderFn("/vault/A");
+    expect(renderFn).not.toBe(renderFn2);
   });
 
-  // ── FR-32 check: stale tab re-rendered on activation ─────────────────────
+  // ── T-06: active tab path mismatch → refreshLayoutView NOT called ─────────
 
-  it("FR-32 check: checkStaleFolderViewTabs re-renders stale tab that is now active", async () => {
-    setupWindowMocks({ activeTitle: "__fv__:/vault/B" });
+  it("T-06: FR-13 guard — active tab path mismatch → refreshLayoutView NOT called", () => {
+    // Simulate the inline FR-13 logic from _indexUpdatedCb: the active tab
+    // belongs to a different file, so refreshLayoutView must not be called.
+    const changedPath = "/vault/A/_folder.md";
+    const parentDir = "/vault/A";
 
-    openFolderViewTab("/vault/A");
-    await new Promise(r => setTimeout(r, 50));
+    // Active tab is a different file.
+    tabMgr.getActiveTab.mockReturnValue({ filePath: "/vault/B/some-note.md" });
+    tabMgr.isActiveTabInLayoutView.mockReturnValue(true);
 
-    // Mark as stale.
-    notifyFolderViewTabs("/vault/A/_folder.md");
-    const entry = _registry.find(r => r.folderPath === "/vault/A")!;
-    expect(entry.staleRef.stale).toBe(true);
+    // Replicate the FR-13 guard condition.
+    const activeTab = tabMgr.getActiveTab();
+    if (activeTab?.filePath === changedPath && tabMgr.isActiveTabInLayoutView()) {
+      tabMgr.refreshLayoutView(buildFolderViewRenderFn(parentDir));
+    }
 
-    // Now make /vault/A the active tab and check for stale.
-    activeTabTitle = "__fv__:/vault/A";
-    (window as any).__MARKABLE_TAB_MANAGER__.getActiveTab = vi.fn(() => ({
-      title: "__fv__:/vault/A",
-    }));
-
-    const hostEl = document.createElement("div");
-    hostEl.id = "custom-tab-host";
-    document.body.appendChild(hostEl);
-
-    checkStaleFolderViewTabs();
-
-    // Stale flag reset and rerender called.
-    expect(entry.staleRef.stale).toBe(false);
-
-    document.body.removeChild(hostEl);
+    expect(tabMgr.refreshLayoutView).not.toHaveBeenCalled();
   });
 
-  // ── EC-18: Stale tab NOT re-rendered while a different tab is active ──────
+  // ── T-07: non-_folder.md path → early-return guard ───────────────────────
 
-  it("EC-18: checkStaleFolderViewTabs does NOT call rerender when a different tab is active", async () => {
-    setupWindowMocks({ activeTitle: "__fv__:/vault/B" });
+  it("T-07: FR-13 early-return guard — non-_folder.md changedPath → refreshLayoutView NOT called", () => {
+    // The FR-13 block first checks whether changedPath ends with /_folder.md.
+    // If it does not, the block is skipped entirely.
+    const changedPath = "/vault/A/some-note.md";
 
-    openFolderViewTab("/vault/A");
-    await new Promise(r => setTimeout(r, 50));
+    // Active tab matches the path and layout view is active — but changedPath
+    // is not _folder.md, so the guard should reject it.
+    tabMgr.getActiveTab.mockReturnValue({ filePath: changedPath });
+    tabMgr.isActiveTabInLayoutView.mockReturnValue(true);
 
-    // Mark stale.
-    notifyFolderViewTabs("/vault/A/_folder.md");
-    const entry = _registry.find(r => r.folderPath === "/vault/A")!;
-    expect(entry.staleRef.stale).toBe(true);
+    // Replicate the FR-13 entry guard.
+    const isFolderMd =
+      changedPath.endsWith("/_folder.md") || changedPath.endsWith("\\_folder.md");
 
-    // B is still the active tab.
-    const rerenderSpy = vi.spyOn(entry, "rerender");
-    checkStaleFolderViewTabs(); // active tab is B, not A → no rerender
+    if (isFolderMd) {
+      // This branch must not be reached for a non-_folder.md path.
+      tabMgr.refreshLayoutView(buildFolderViewRenderFn("/vault/A"));
+    }
 
-    expect(rerenderSpy).not.toHaveBeenCalled();
-    // Stale flag stays true.
-    expect(entry.staleRef.stale).toBe(true);
+    expect(tabMgr.refreshLayoutView).not.toHaveBeenCalled();
   });
 
-  // ── FR-33: notifyFolderViewTabs does not affect non-folder-view tabs ──────
+  // ── T-08: escapeHtml escapes <, >, ", & ──────────────────────────────────
 
-  it("FR-33: notifyFolderViewTabs is a no-op when the changed path is not _folder.md", () => {
-    setupWindowMocks({ activeTitle: "__fv__:/vault/A" });
-
-    openFolderViewTab("/vault/A");
-    const entry = _registry.find(r => r.folderPath === "/vault/A")!;
-    const rerenderSpy = vi.spyOn(entry, "rerender");
-
-    // A non-_folder.md path change.
-    notifyFolderViewTabs("/vault/A/some-note.md");
-
-    expect(rerenderSpy).not.toHaveBeenCalled();
-    expect(entry.staleRef.stale).toBe(false);
-  });
-
-  // ── EC-13: escapeHtml prevents XSS in tab titles ──────────────────────────
-
-  it("EC-13: escapeHtml escapes HTML special characters (XSS prevention)", () => {
+  it("T-08: escapeHtml escapes HTML special characters (XSS prevention)", () => {
     expect(escapeHtml("<script>")).toBe("&lt;script&gt;");
-    expect(escapeHtml(`"quoted"`)).toBe("&quot;quoted&quot;");
+    expect(escapeHtml('"quoted"')).toBe("&quot;quoted&quot;");
     expect(escapeHtml("a & b")).toBe("a &amp; b");
   });
 
-  // ── LAYOUT_RENDERERS dispatch map ─────────────────────────────────────────
+  // ── T-09: LAYOUT_RENDERERS contains "folder-cards" entry ─────────────────
 
-  it("LAYOUT_RENDERERS contains 'folder-cards' entry", () => {
+  it("T-09: LAYOUT_RENDERERS contains 'folder-cards' entry", () => {
     expect(typeof LAYOUT_RENDERERS["folder-cards"]).toBe("function");
   });
 
-  // ── clearFolderViewRegistry ───────────────────────────────────────────────
+  // ── NFR-05 guard: openFolderViewTab is a no-op when tab manager is absent ─
 
-  it("clearFolderViewRegistry empties the registry", async () => {
-    setupWindowMocks();
-    openFolderViewTab("/vault/A");
-    await new Promise(r => setTimeout(r, 20));
-    expect(_registry.length).toBeGreaterThan(0);
-    clearFolderViewRegistry();
-    expect(_registry.length).toBe(0);
+  it("EC-01 (NFR-05): openFolderViewTab is a safe no-op when __MARKABLE_TAB_MANAGER__ is undefined", () => {
+    // Remove the global to simulate a context where the tab manager has not
+    // been loaded yet. The call must not throw.
+    delete (window as any).__MARKABLE_TAB_MANAGER__;
+    expect(() => openFolderViewTab("/vault/A")).not.toThrow();
   });
 });

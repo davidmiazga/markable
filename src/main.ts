@@ -683,9 +683,17 @@ function handleAction(action: string): void {
         tabManager.exitLayoutView();
         if (previewEnabled) togglePreview();
       } else if (editor && _layoutDeps) {
-        // Code/preview view → check if file has a layout; if so show layout, else toggle preview.
         const filePath = tabManager.getActiveFilePath();
-        if (filePath) {
+        if (filePath && (filePath.endsWith("/_folder.md") || filePath.endsWith("\\_folder.md"))) {
+          // _folder.md: Cmd-E always means "show folder view" — never regular preview.
+          // The folder view is the layout view for this file; regular Typora preview
+          // is not a valid state for _folder.md.
+          const sep = filePath.includes("/") ? "/" : "\\";
+          const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : sep;
+          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir);
+        } else if (filePath) {
+          // Normal file: check for a layout field; if found enter layout view, else toggle preview.
           void (async () => {
             const shown = await showLayoutForFile(filePath, editor.state.doc.toString(), _layoutDeps!);
             if (!shown) togglePreview();
@@ -1010,6 +1018,13 @@ async function initApp() {
   // Expose preview mode state so IIFE plugins know whether to render decorations.
   // Plugins must check this before decorating — source/raw mode must show no widgets.
   (window as unknown as Record<string, unknown>)["__MARKABLE_PREVIEW_ENABLED__"] = true;
+
+  // Expose a helper so plugins can force code/source view (disabling Typora preview).
+  // Used by the file-browser plugin when opening _folder.md directly — that file has
+  // no markdown preview mode; only code view and folder-view (layout view) are valid.
+  (window as unknown as Record<string, unknown>)["__MARKABLE_ENSURE_CODE_VIEW__"] = () => {
+    if (previewEnabled) togglePreview();
+  };
 
   // Apply editor settings (content width + font size)
   applyEditorSettings(migratedSettings.editor);
