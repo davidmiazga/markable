@@ -9,11 +9,36 @@
 
 // ── Front-matter field types ──────────────────────────────────────────────────
 
-/** Allowed sort order values for the card grid. */
-export type FolderSortOrder = "name-asc" | "name-desc" | "modified-asc" | "modified-desc";
+/** The four built-in sort orders for the card grid and table. */
+export type BuiltinSortOrder =
+  | "name-asc"
+  | "name-desc"
+  | "modified-asc"
+  | "modified-desc";
+
+/**
+ * Sort order for a Folder View section.
+ *
+ * Includes the four built-in orders plus any arbitrary string, which is
+ * interpreted as an extra-field key for the folder-table layout (FR-08).
+ */
+export type FolderSortOrder = BuiltinSortOrder | string;
 
 /** Layout mode for the card grid. */
 export type FolderLayoutMode = "grid" | "flex";
+
+/**
+ * One declared extra YAML frontmatter column for the folder-table layout.
+ *
+ * Produced by parseFolderMd() from the extra-fields sequence in _folder.md.
+ * Consumed by table-renderer.ts to add sortable columns.
+ */
+export interface ExtraField {
+  /** The YAML frontmatter key to read from child files. */
+  key: string;
+  /** Column header label shown in the table. */
+  label: string;
+}
 
 /**
  * Parsed YAML front-matter of a _folder.md file.
@@ -58,6 +83,11 @@ export interface FolderMdFrontMatter {
   exclude?: string[];
   /** "false" constrains the view to the editor content-area max-width. Default: "true" (full width). */
   "content-area-override"?: string;
+  /**
+   * Raw YAML value for the extra-fields sequence (string[] or object[]).
+   * Extracted before normalizeFm() and processed into ExtraField[] by parseFolderMd().
+   */
+  "extra-fields"?: unknown;
 }
 
 /**
@@ -126,6 +156,11 @@ export interface FolderViewConfig {
   exclude: string[];
   /** When false, the view respects the editor content-area max-width (--settings-content-max-width). Default: true (full width). */
   contentAreaOverride: boolean;
+  /**
+   * Declared extra frontmatter columns for the folder-table layout.
+   * Default: []. Present for all layouts; ignored outside folder-table.
+   */
+  extraFields: ExtraField[];
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────
@@ -162,6 +197,14 @@ export interface FolderCard {
   tags?: string[];
   /** Number of immediate children (files + dirs). Present for directories only. FVB-09 */
   childCount?: number;
+  /**
+   * Frontmatter values keyed by ExtraField.key.
+   * Set by the enrichment phase in renderFolderViewTabAsync().
+   * Present only for .md file cards after enrichment, and for all cards
+   * when extraFields is non-empty (non-.md and directory cards get {}).
+   * Absent when extraFields is empty (no enrichment phase runs).
+   */
+  meta?: Record<string, string>;
 }
 
 // ── Renderer interface ─────────────────────────────────────────────────────────

@@ -75,6 +75,7 @@ export const FOLDER_TABLE_CSS = `
 .fv-td-modified { color: var(--text-secondary); font-size: 12px; }
 .fv-td-count { color: var(--text-secondary); font-size: 12px; text-align: right; }
 .fv-td-tags { padding-top: 4px; padding-bottom: 4px; }
+.fv-td-extra { color: var(--text-primary); font-size: 12px; }
 
 /* ── Lazy-load sentinel row ───────────────────────────────────────────── */
 

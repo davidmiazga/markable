@@ -3012,6 +3012,10 @@ const FOLDER_VIEW_STARTER = [
   "  folders-title: Folders",
   "  files-title:",
   "  # set files-title: Notes to show a heading above the Files section",
+  "# extra-fields:",
+  "#   - key: status",
+  "#     label: Status",
+  "# uncomment and add any frontmatter key to show it as a sortable column (folder-table only)",
   "---",
   "",
 ].join("\n");
@@ -3116,7 +3120,15 @@ async function resetFolderViewFile(
   const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
   void vaultManager?.reloadVaultIndex?.();
 
-  openFolderViewTab(dirPath);
+  // If the _folder.md tab is already the active tab in layout view, refresh it in
+  // place so the new STARTER content renders immediately. Otherwise open it fresh.
+  const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+  const activeTab = tabMgr?.getActiveTab?.();
+  if (activeTab?.filePath === folderMdPath && tabMgr?.isActiveTabInLayoutView?.()) {
+    tabMgr.refreshLayoutView(buildFolderViewRenderFn(dirPath));
+  } else {
+    openFolderViewTab(dirPath);
+  }
 }
 
 /**

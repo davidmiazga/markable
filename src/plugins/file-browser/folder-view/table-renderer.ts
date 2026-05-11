@@ -16,7 +16,7 @@
  * @module folder-view/table-renderer
  */
 
-import type { FolderViewConfig, FolderCard, FolderSortOrder } from "./types";
+import type { FolderViewConfig, FolderCard, FolderSortOrder, ExtraField } from "./types";
 import { sortCards, getFileIconForCard, formatModified } from "./renderer";
 import { ICON_FOLDER } from "../icons/material/index";
 import { stripScripts } from "./shared";
@@ -127,7 +127,11 @@ function buildFolderRow(card: FolderCard, config: FolderViewConfig): HTMLTableRo
   return tr;
 }
 
-function buildFileRow(card: FolderCard, config: FolderViewConfig): HTMLTableRowElement {
+function buildFileRow(
+  card: FolderCard,
+  config: FolderViewConfig,
+  extraFields: ExtraField[],
+): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.className = "fv-row";
   tr.setAttribute("role", "row");
@@ -182,6 +186,17 @@ function buildFileRow(card: FolderCard, config: FolderViewConfig): HTMLTableRowE
     tr.appendChild(tagsTd);
   }
 
+  // Extra-field cells (FR-11, FR-16). Values are inserted via .textContent to
+  // prevent HTML injection (EC-11). Missing values display as an em-dash.
+  for (const field of extraFields) {
+    const td = document.createElement("td");
+    td.className = "fv-td fv-td-extra";
+    td.setAttribute("data-extra-key", field.key);
+    const value = card.meta?.[field.key] ?? "";
+    td.textContent = value === "" ? "—" : value;  // "—" = U+2014 em-dash
+    tr.appendChild(td);
+  }
+
   tr.addEventListener("click", () => handleRowClick(card));
   tr.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleRowClick(card); }
@@ -229,8 +244,9 @@ function buildSectionTable(
 ): HTMLElement {
   const { col: initCol, dir: initDir } = parseSortOrder(config.sort);
   // Folders only sort by name; if config had a modified sort, default to asc-name.
-  let sortCol = (isFiles ? initCol : "name") as "name" | "modified" | "ext";
-  let sortDir: "asc" | "desc"              = isFiles ? initDir : (initCol === "name" ? initDir : "asc");
+  // sortCol is typed as string to accommodate extra-field keys alongside builtins.
+  let sortCol: string = isFiles ? initCol : "name";
+  let sortDir: "asc" | "desc" = isFiles ? initDir : (initCol === "name" ? initDir : "asc");
 
   const section = document.createElement("div");
   section.className = "folder-view-section";
@@ -262,6 +278,9 @@ function buildSectionTable(
 
   let extTh: HTMLTableCellElement | null = null;
   let modTh: HTMLTableCellElement | null = null;
+  // Array of extra-field <th> elements, built during isFiles thead construction.
+  // Captured here so clearIndicators() and click handlers can reference them.
+  const extraThs: HTMLTableCellElement[] = [];
 
   if (isFiles) {
     if (config.showExtensions) {
@@ -284,6 +303,26 @@ function buildSectionTable(
       tagsTh.textContent = "Tags";
       headerRow.appendChild(tagsTh);
     }
+
+    // Extra-field column headers (FR-11, FR-13). Built after Tags so extra
+    // columns appear to the right of Tags (T-24, AD-05).
+    for (const field of config.extraFields) {
+      const extraTh = document.createElement("th");
+      extraTh.className = "fv-th fv-th-extra";
+      extraTh.textContent = field.label;
+      // Pre-select this column when config.sort matches the field key (FR-11 AC-07).
+      // parseSortOrder() falls back to "name-asc" for unknown sort values, so we
+      // override sortCol here after the fact.
+      if (config.sort === field.key) {
+        extraTh.classList.add("fv-sorted-asc");
+        sortCol = field.key;
+        sortDir = "asc";
+        // Remove the pre-selected indicator from the Name column to avoid dual indicators.
+        nameTh.classList.remove("fv-sorted-asc", "fv-sorted-desc");
+      }
+      headerRow.appendChild(extraTh);
+      extraThs.push(extraTh);
+    }
   } else {
     if (config.showCount) {
       const countTh = document.createElement("th");
@@ -305,24 +344,47 @@ function buildSectionTable(
 
   const applySort = (): void => {
     if (sortCol === "ext") {
+      // Sort by file extension, tie-break by name.
       const dir = sortDir === "asc" ? 1 : -1;
       workingCards.sort((a, b) => {
         const cmp = dir * a.ext.localeCompare(b.ext);
         return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
       });
-    } else {
+    } else if (sortCol === "name" || sortCol === "modified") {
+      // Built-in sort via sortCards() helper.
       sortCards(workingCards, `${sortCol}-${sortDir}` as FolderSortOrder);
+    } else {
+      // Extra-field sort (FR-11, FR-12): localeCompare with empty-last ordering.
+      // Empty string (absent key) always sorts after non-empty values in both
+      // directions so that blank cells do not float to the top on desc click.
+      const dir = sortDir === "asc" ? 1 : -1;
+      workingCards.sort((a, b) => {
+        const aVal = a.meta?.[sortCol] ?? "";
+        const bVal = b.meta?.[sortCol] ?? "";
+        // Tie-break: both empty → sort by name.
+        if (aVal === "" && bVal === "") return a.name.localeCompare(b.name);
+        // Empty always last, regardless of direction.
+        if (aVal === "") return 1;
+        if (bVal === "") return -1;
+        const cmp = dir * aVal.localeCompare(bVal);
+        return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+      });
     }
   };
 
+  // Capture extraFields at call time so lazily-appended rows (EC-13) use the
+  // same field list as the immediately-rendered rows.
+  const extraFieldsForRow = isFiles ? config.extraFields : [];
   const buildRow = isFiles
-    ? (card: FolderCard) => buildFileRow(card, config)
+    ? (card: FolderCard) => buildFileRow(card, config, extraFieldsForRow)
     : (card: FolderCard) => buildFolderRow(card, config);
 
   const clearIndicators = (): void => {
     nameTh.classList.remove("fv-sorted-asc", "fv-sorted-desc");
     if (extTh) extTh.classList.remove("fv-sorted-asc", "fv-sorted-desc");
     if (modTh) modTh.classList.remove("fv-sorted-asc", "fv-sorted-desc");
+    // Clear indicators on all extra-field headers (EC-14 / AD-05).
+    for (const th of extraThs) th.classList.remove("fv-sorted-asc", "fv-sorted-desc");
   };
 
   const rebuildTbody = (): void => {
@@ -362,6 +424,20 @@ function buildSectionTable(
       sortCol = "modified";
       clearIndicators();
       _modTh.classList.add(`fv-sorted-${sortDir}`);
+      rebuildTbody();
+    });
+  }
+
+  // Extra-field column sort handlers (FR-11, FR-12, AC-08).
+  // Iterate by index to pair each <th> element with its field key.
+  for (let i = 0; i < extraThs.length; i++) {
+    const th = extraThs[i];
+    const fieldKey = config.extraFields[i].key;
+    th.addEventListener("click", () => {
+      sortDir = sortCol === fieldKey ? (sortDir === "asc" ? "desc" : "asc") : "asc";
+      sortCol = fieldKey;
+      clearIndicators();
+      th.classList.add(`fv-sorted-${sortDir}`);
       rebuildTbody();
     });
   }

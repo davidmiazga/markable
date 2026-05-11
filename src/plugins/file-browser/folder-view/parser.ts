@@ -14,9 +14,12 @@
  * @module folder-view/parser
  */
 
-import type { FolderViewConfig, FolderSortOrder, FolderLayoutMode } from "./types";
+import type { FolderViewConfig, FolderSortOrder, FolderLayoutMode, ExtraField } from "./types";
 
-/** Valid sort values. Anything else defaults to "name-asc" (EC-12). */
+/**
+ * The four built-in sort values. Any other value is passed through verbatim (FR-08)
+ * as it may be an extra-field key; the table renderer handles unknown values gracefully.
+ */
 const VALID_SORTS = new Set<string>(["name-asc", "name-desc", "modified-asc", "modified-desc"]);
 
 /**
@@ -62,14 +65,23 @@ function parseFit(raw: string): string {
  *
  * @param lines - Individual lines from inside the YAML block (no --- markers).
  * @returns A key→value record; block values are key→string records or string[].
+ *
+ * Length justification: a single-pass state-machine over YAML lines — top-level scalar,
+ * nested object-block, plain sequence, and structured-sequence item states are all
+ * tightly coupled through the shared currentBlock/blockIsArray/currentItem mutable state.
+ * Splitting into sub-functions would require threading 3+ variables across boundaries
+ * with no clarity gain over the flat sequential read.
  */
 function parseYamlLines(
   lines: string[],
-): Record<string, string | Record<string, string> | string[]> {
-  const result: Record<string, string | Record<string, string> | string[]> = {};
+): Record<string, string | Record<string, string> | (string | Record<string, string>)[]> {
+  const result: Record<string, string | Record<string, string> | (string | Record<string, string>)[]> = {};
   let currentBlock: string | null = null;
   // null = block started but no items yet, true = array, false = object
   let blockIsArray: boolean | null = null;
+  // Tracks the current structured sequence item (- key: val) being built.
+  // Reset when a new top-level key is encountered or a plain string item is found.
+  let currentItem: Record<string, string> | null = null;
 
   for (const raw of lines) {
     const line = raw.trimEnd();
@@ -80,18 +92,55 @@ function parseYamlLines(
 
     if (isIndented && currentBlock !== null) {
       if (trimmed.startsWith("- ")) {
-        // Sequence item
+        // Sequence item — may be a plain string or the first key of a mapping.
         if (blockIsArray === null || blockIsArray === true) {
           if (blockIsArray === null) {
             result[currentBlock] = [];
             blockIsArray = true;
           }
-          const item = trimmed.slice(2).trim();
-          if (item) (result[currentBlock] as string[]).push(item);
+          const itemText = trimmed.slice(2).trim();
+          const itemColonIdx = itemText.indexOf(":");
+          if (itemColonIdx !== -1) {
+            // Structured item: "- key: value" → start a new mapping object.
+            const itemKey = itemText.slice(0, itemColonIdx).trim();
+            let itemValue = itemText.slice(itemColonIdx + 1).trim();
+            const ic = itemValue.indexOf(" #");
+            if (ic !== -1) itemValue = itemValue.slice(0, ic).trim();
+            if ((itemValue.startsWith('"') && itemValue.endsWith('"')) ||
+                (itemValue.startsWith("'") && itemValue.endsWith("'"))) {
+              itemValue = itemValue.slice(1, -1);
+            }
+            const obj: Record<string, string> = {};
+            if (itemKey) obj[itemKey] = itemValue;
+            currentItem = obj;
+            (result[currentBlock] as (string | Record<string, string>)[]).push(obj);
+          } else {
+            // Plain string item.
+            if (itemText) {
+              (result[currentBlock] as (string | Record<string, string>)[]).push(itemText);
+            }
+            currentItem = null;
+          }
         }
         continue;
       }
-      // Key:value pair in an object block
+      // Non-"- " indented line: sub-key of structured item, OR object-block key-value.
+      if (currentItem !== null) {
+        // This line adds a sub-key to the most recently started structured item.
+        const colonIdx = trimmed.indexOf(":");
+        if (colonIdx === -1) continue;
+        const key = trimmed.slice(0, colonIdx).trim();
+        let value = trimmed.slice(colonIdx + 1).trim();
+        const commentIdx = value.indexOf(" #");
+        if (commentIdx !== -1) value = value.slice(0, commentIdx).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (key) currentItem[key] = value;
+        continue;
+      }
+      // Key:value pair in an object block (blockIsArray !== true)
       if (blockIsArray !== true) {
         if (blockIsArray === null) {
           result[currentBlock] = {};
@@ -115,6 +164,7 @@ function parseYamlLines(
     // Top-level line — reset block state.
     currentBlock = null;
     blockIsArray = null;
+    currentItem = null;
     const colonIdx = trimmed.indexOf(":");
     if (colonIdx === -1) continue;
     const key = trimmed.slice(0, colonIdx).trim();
@@ -149,7 +199,7 @@ function parseYamlLines(
  * Backwards compatible: flat string `layout` fields pass through unchanged.
  */
 function normalizeFm(
-  raw: Record<string, string | Record<string, string> | string[]>,
+  raw: Record<string, string | Record<string, string> | (string | Record<string, string>)[]>,
 ): Record<string, string> {
   const flat: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
@@ -211,6 +261,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     showCount: false,
     exclude: [],
     contentAreaOverride: true,
+    extraFields: [],
   };
 
   try {
@@ -241,7 +292,31 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
 
     // Extract top-level sequence fields before normalization (FVB-05).
     const rawExclude = rawFm["exclude"];
-    const exclude: string[] = Array.isArray(rawExclude) ? (rawExclude as string[]) : [];
+    // Filter to string items only — structured items are skipped for the exclude list.
+    const exclude: string[] = Array.isArray(rawExclude)
+      ? (rawExclude as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
+      : [];
+
+    // Extract extra-fields sequence (FR-06).
+    const rawExtraFields = rawFm["extra-fields"];
+    const extraFields: ExtraField[] = [];
+    if (Array.isArray(rawExtraFields)) {
+      for (const item of rawExtraFields as (string | Record<string, string>)[]) {
+        if (typeof item === "string") {
+          // Simple list form: "- status" → {key: "status", label: "Status"}
+          const key = item.trim();
+          if (!key) continue;
+          extraFields.push({ key, label: key.charAt(0).toUpperCase() + key.slice(1) });
+        } else if (item && typeof item === "object") {
+          // Structured form: "- key: status\n  label: My Status"
+          const key = (item["key"] ?? "").trim();
+          if (!key) continue; // EC-05 from FR-06: skip items with empty or missing key
+          const rawLabel = (item["label"] ?? "").trim();
+          const label = rawLabel || key.charAt(0).toUpperCase() + key.slice(1);
+          extraFields.push({ key, label });
+        }
+      }
+    }
 
     // Normalize to flat string record for all remaining fields.
     const fm = normalizeFm(rawFm);
@@ -254,11 +329,15 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     // title: use YAML field if non-empty, otherwise the folder's directory name.
     const title = (fm["title"] ?? "").trim() || folderName;
 
-    // sort: validate against allowed values; default to "name-asc" for unknowns (EC-12).
+    // sort: if a known builtin, use it directly. If absent (empty string), default to
+    // "name-asc". If an unknown value, pass it through verbatim — it may be an
+    // extra-field key; the renderer (table-renderer.ts) handles unknown values.
     const sortRaw = (fm["sort"] ?? "").trim();
-    const sort: FolderSortOrder = VALID_SORTS.has(sortRaw)
-      ? (sortRaw as FolderSortOrder)
-      : "name-asc";
+    const sort: FolderSortOrder = sortRaw === ""
+      ? "name-asc"
+      : VALID_SORTS.has(sortRaw)
+        ? (sortRaw as FolderSortOrder)
+        : sortRaw;
 
     // card-width: minimum card width in px; clamped [40, 600].
     const cardWidthRaw = parseInt(String(fm["card-width"] ?? "160"), 10);
@@ -318,7 +397,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       aspectRatio, fit, minHeight, maxHeight,
       showName, showPreview, showExtensions, showFolders, showFiles,
       foldersTitle, filesTitle, showTags, showCount, exclude,
-      contentAreaOverride,
+      contentAreaOverride, extraFields,
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

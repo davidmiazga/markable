@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderFolderTable } from "../../src/plugins/file-browser/folder-view/table-renderer";
-import type { FolderViewConfig, FolderCard } from "../../src/plugins/file-browser/folder-view/types";
+import type { FolderViewConfig, FolderCard, ExtraField } from "../../src/plugins/file-browser/folder-view/types";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -29,7 +29,9 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     maxHeight: 200,
     showName: true,
     showPreview: true,
-    showExtensions: true,
+    // showExtensions defaults to false so name-only assertions work without
+    // needing per-test overrides (existing tests expect bare stems, not "name.md").
+    showExtensions: false,
     showFolders: true,
     showFiles: true,
     foldersTitle: "Folders",
@@ -38,6 +40,7 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     showCount: false,
     exclude: [],
     contentAreaOverride: true,
+    extraFields: [],             // T-25: existing tests unaffected
     ...overrides,
   };
 }
@@ -46,9 +49,16 @@ function makeDirCard(name: string, path = `/vault/${name}`, hasFV = false, child
   return { path, name, kind: "directory", ext: "", modified: 0, hasFolderView: hasFV, childCount };
 }
 
-function makeFileCard(name: string, ext = ".md", modified = 0, path?: string, tags?: string[]): FolderCard {
+function makeFileCard(
+  name: string,
+  ext = ".md",
+  modified = 0,
+  path?: string,
+  tags?: string[],
+  meta?: Record<string, string>,
+): FolderCard {
   const fullPath = path ?? `/vault/${name}${ext === ".md" ? "" : ext}`;
-  return { path: fullPath, name, kind: "file", ext, modified, tags };
+  return { path: fullPath, name, kind: "file", ext, modified, tags, meta };
 }
 
 function makeContainer(): HTMLDivElement {
@@ -442,7 +452,8 @@ describe("renderFolderTable", () => {
       makeConfig({ sort: "name-asc", showExtensions: true }),
       [
         makeFileCard("b.ts", ".ts", 0, "/vault/b.ts"),
-        makeFileCard("a.md", ".md", 0, "/vault/a.md"),
+        // Use stem "a" for the .md card — buildFileRow appends ".md" when showExtensions=true.
+        makeFileCard("a", ".md", 0, "/vault/a.md"),
         makeFileCard("c.png", ".png", 0, "/vault/c.png"),
       ],
       container,
@@ -467,7 +478,7 @@ describe("renderFolderTable", () => {
     const container = makeContainer();
     renderFolderTable(
       makeConfig({ sort: "name-asc", showExtensions: true, showModified: true }),
-      [makeFileCard("a.md", ".md", 0, "/vault/a.md")],
+      [makeFileCard("a", ".md", 0, "/vault/a.md")],
       container,
       "/vault",
     );
@@ -633,5 +644,227 @@ describe("renderFolderTable", () => {
     const container = makeContainer();
     renderFolderTable(makeConfig({ body: "" }), [makeFileCard("note")], container, "/vault");
     expect(container.querySelector(".folder-view-description")).toBeNull();
+  });
+});
+
+describe("extra-fields columns", () => {
+  // Helper: build an ExtraField.
+  function ef(key: string, label: string): ExtraField {
+    return { key, label };
+  }
+
+  // T-15 — Extra field header and cell rendered
+  it("T-15: extraFields with one field and card.meta → <th> with label and <td> with value", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const th = container.querySelector("th.fv-th-extra");
+    expect(th).not.toBeNull();
+    expect(th?.textContent).toBe("Status");
+    const td = container.querySelector("td.fv-td-extra");
+    expect(td).not.toBeNull();
+    expect(td?.textContent).toBe("done");
+  });
+
+  // T-16 — Empty meta → em-dash
+  it("T-16: card with meta={} (field absent) → cell displays '—'", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], {})],
+      container,
+      "/vault",
+    );
+    const td = container.querySelector("td.fv-td-extra");
+    expect(td?.textContent).toBe("—");  // em-dash
+  });
+
+  // T-17 — extraFields=[] (default) → no extra columns
+  it("T-17: extraFields=[] → no extra <th> or <td> rendered", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [] }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector("th.fv-th-extra")).toBeNull();
+    expect(container.querySelector("td.fv-td-extra")).toBeNull();
+  });
+
+  // T-18 — sort: "status" pre-selects Status column header
+  it("T-18: sort='status' with extraFields including status → Status header has fv-sorted-asc", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ sort: "status", extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const extraTh = container.querySelector("th.fv-th-extra");
+    expect(extraTh?.classList.contains("fv-sorted-asc")).toBe(true);
+    // Name header must NOT be pre-selected.
+    const nameTh = container.querySelector("th.fv-th-name");
+    expect(nameTh?.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(nameTh?.classList.contains("fv-sorted-desc")).toBe(false);
+  });
+
+  // T-19 — Clicking Status header sorts rows ascending
+  it("T-19: clicking Status header sorts rows by status value ascending (empty last)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [
+        makeFileCard("c", ".md", 0, undefined, [], { status: "done" }),
+        makeFileCard("a", ".md", 0, undefined, [], { status: "" }),
+        makeFileCard("b", ".md", 0, undefined, [], { status: "in-progress" }),
+      ],
+      container,
+      "/vault",
+    );
+    const statusTh = container.querySelector<HTMLElement>("th.fv-th-extra")!;
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    const names = Array.from(container.querySelectorAll("td.fv-td-name")).map(n => n.textContent);
+    // "done" < "in-progress" alphabetically; empty last.
+    expect(names).toEqual(["c", "b", "a"]);
+  });
+
+  // T-20 — Clicking Status header twice sorts rows descending
+  it("T-20: clicking Status header twice sorts descending (empty still last)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [
+        makeFileCard("c", ".md", 0, undefined, [], { status: "done" }),
+        makeFileCard("a", ".md", 0, undefined, [], { status: "" }),
+        makeFileCard("b", ".md", 0, undefined, [], { status: "in-progress" }),
+      ],
+      container,
+      "/vault",
+    );
+    const statusTh = container.querySelector<HTMLElement>("th.fv-th-extra")!;
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    const names = Array.from(container.querySelectorAll("td.fv-td-name")).map(n => n.textContent);
+    // "in-progress" > "done" desc; empty last.
+    expect(names).toEqual(["b", "c", "a"]);
+    expect(statusTh.classList.contains("fv-sorted-desc")).toBe(true);
+  });
+
+  // T-21 — Empty status sorts last in both directions
+  it("T-21: empty status value always sorts last regardless of direction", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [
+        makeFileCard("empty", ".md", 0, undefined, [], {}),
+        makeFileCard("x",     ".md", 0, undefined, [], { status: "z" }),
+        makeFileCard("a",     ".md", 0, undefined, [], { status: "a" }),
+      ],
+      container,
+      "/vault",
+    );
+    const statusTh = container.querySelector<HTMLElement>("th.fv-th-extra")!;
+
+    // Ascending click.
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    let names = Array.from(container.querySelectorAll("td.fv-td-name")).map(n => n.textContent);
+    expect(names[names.length - 1]).toBe("empty");
+
+    // Descending click.
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    names = Array.from(container.querySelectorAll("td.fv-td-name")).map(n => n.textContent);
+    expect(names[names.length - 1]).toBe("empty");
+  });
+
+  // T-22 — Clicking Status header clears fixed column sort indicators
+  it("T-22: clicking Status header clears fv-sorted-* from Name, Type, and Modified headers", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ sort: "name-asc", showExtensions: true, showModified: true, extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const nameTh  = container.querySelector<HTMLElement>("th.fv-th-name")!;
+    const extTh   = container.querySelector<HTMLElement>("th.fv-th-ext")!;
+    const modTh   = container.querySelector<HTMLElement>("th.fv-th-modified")!;
+    const statusTh = container.querySelector<HTMLElement>("th.fv-th-extra")!;
+
+    expect(nameTh.classList.contains("fv-sorted-asc")).toBe(true);
+
+    statusTh.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+
+    expect(nameTh.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(nameTh.classList.contains("fv-sorted-desc")).toBe(false);
+    expect(extTh.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(modTh.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(statusTh.classList.contains("fv-sorted-asc")).toBe(true);
+  });
+
+  // T-23 — Extra cell uses fv-td-extra class and data-extra-key attribute
+  it("T-23: extra column cells have class fv-td-extra and data-extra-key attribute", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const td = container.querySelector("td.fv-td-extra");
+    expect(td?.getAttribute("data-extra-key")).toBe("status");
+  });
+
+  // T-24 — Extra columns appear after Tags column
+  it("T-24: extra columns appear after Tags column in header row", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ showTags: true, extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, ["tag1"], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const headers = Array.from(container.querySelectorAll("th")).map(th => th.className);
+    const tagsIdx  = headers.findIndex(c => c.includes("fv-th-tags"));
+    const extraIdx = headers.findIndex(c => c.includes("fv-th-extra"));
+    expect(tagsIdx).toBeGreaterThanOrEqual(0);
+    expect(extraIdx).toBeGreaterThan(tagsIdx);
+  });
+
+  // T-25 is verified implicitly: all existing tests pass after makeConfig() gains extraFields:[].
+
+  // EC-06 — sort key not in extraFields → falls back to name-asc behavior
+  it("EC-06: sort='status' with no extraFields → no extra column, no crash, name column sorted asc", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ sort: "status", extraFields: [] }),
+      [makeFileCard("z"), makeFileCard("a"), makeFileCard("m")],
+      container,
+      "/vault",
+    );
+    // No crash; name header should default because "status" is not a builtin.
+    const names = Array.from(container.querySelectorAll("td.fv-td-name")).map(n => n.textContent);
+    // parseSortOrder("status") falls back to col:"name", dir:"asc".
+    expect(names).toEqual(["a", "m", "z"]);
+    expect(container.querySelector("th.fv-th-extra")).toBeNull();
+  });
+
+  // EC-11 — HTML in value is inserted via textContent (no injection)
+  it("EC-11: HTML in field value is inserted via textContent, not innerHTML", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ extraFields: [ef("status", "Status")] }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "<b>done</b>" })],
+      container,
+      "/vault",
+    );
+    const td = container.querySelector("td.fv-td-extra");
+    // innerHTML should contain the escaped version, not a <b> element.
+    expect(td?.querySelector("b")).toBeNull();
+    expect(td?.textContent).toBe("<b>done</b>");
   });
 });

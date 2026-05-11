@@ -88,11 +88,19 @@ describe("parseFolderMd", () => {
     expect(parseFolderMd(content, "F").cardWidth).toBe(160);
   });
 
-  // ── EC-12: Invalid sort value ──────────────────────────────────────────────
+  // ── EC-12 (updated): Unknown sort values pass through verbatim (FR-08).
+  // Truly absent sort field still defaults to "name-asc". Unknown values
+  // are passed through so they can be handled as extra-field sort keys by
+  // the table renderer.
 
-  it("EC-12: sort: invalid-value defaults to name-asc", () => {
-    const content = "---\nlayout: folder-cards\nsort: invalid-value\n---\n";
+  it("EC-12: sort absent → defaults to 'name-asc'", () => {
+    const content = "---\nlayout: folder-cards\n---\n";
     expect(parseFolderMd(content, "F").sort).toBe("name-asc");
+  });
+
+  it("EC-12 (updated): sort: invalid-value passes through verbatim (not defaulted to name-asc)", () => {
+    const content = "---\nlayout: folder-cards\nsort: invalid-value\n---\n";
+    expect(parseFolderMd(content, "F").sort).toBe("invalid-value");
   });
 
   // ── show-modified flag ─────────────────────────────────────────────────────
@@ -535,5 +543,172 @@ describe("content-area-override", () => {
   it("content-area-override absent → contentAreaOverride true (default)", () => {
     const content = "---\nlayout: folder-cards\n---\n";
     expect(parseFolderMd(content, "F").contentAreaOverride).toBe(true);
+  });
+});
+
+describe("extra-fields parsing", () => {
+  // T-01 — Simple list form
+  it("T-01: simple list [status, priority] produces two ExtraField entries with capitalised labels", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - status",
+      "  - priority",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([
+      { key: "status",   label: "Status" },
+      { key: "priority", label: "Priority" },
+    ]);
+  });
+
+  // T-02 — Structured form
+  it("T-02: structured form with explicit key/label produces correct ExtraField", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - key: status",
+      "    label: My Status",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([{ key: "status", label: "My Status" }]);
+  });
+
+  // T-03 — Mixed form (implementation-defined; must not throw)
+  it("T-03: mixed list (string and object) does not throw and returns parseable items", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - status",
+      "  - key: priority",
+      "    label: Priority",
+      "---",
+    ].join("\n");
+    expect(() => parseFolderMd(content, "Folder")).not.toThrow();
+    const cfg = parseFolderMd(content, "Folder");
+    // At minimum: the parseable items are present; no crash.
+    expect(cfg.extraFields.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // T-04 — Absent extra-fields
+  it("T-04: absent extra-fields produces extraFields=[]", () => {
+    const content = "---\nlayout: folder-table\n---\n";
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([]);
+  });
+
+  // T-05 — Object item with empty key is silently skipped
+  it("T-05: structured item with empty key is silently skipped", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - key:",
+      "    label: Something",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([]);
+  });
+
+  // T-06 — Object item with valid key but missing label defaults to capitalised key
+  it("T-06: structured item with valid key but no label uses capitalised key as label", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - key: priority",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([{ key: "priority", label: "Priority" }]);
+  });
+
+  // T-07 — Unknown sort value passes through (extra-field key)
+  it("T-07: sort: status (not in VALID_SORTS) → config.sort is \"status\"", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "sort: status",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.sort).toBe("status");
+  });
+
+  // T-08 — Completely unknown sort value passes through
+  it("T-08: sort: unknown-sort passes through unchanged", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "sort: unknown-sort",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.sort).toBe("unknown-sort");
+  });
+
+  // EC-01 — Empty sequence
+  it("EC-01: extra-fields present but empty sequence → extraFields=[]", () => {
+    const content = "---\nlayout: folder-table\nextra-fields:\n---\n";
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([]);
+  });
+
+  // EC-15 — Key with leading/trailing whitespace is trimmed
+  it("EC-15: key with leading/trailing whitespace in structured form is trimmed", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - key:  status ",
+      "    label: Status",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields[0]?.key).toBe("status");
+  });
+
+  // EC-02 — Key with special characters (hyphens, underscores) passes through as-is
+  it("EC-02: key with hyphens and underscores is stored verbatim (no normalisation)", () => {
+    const content = [
+      "---",
+      "layout: folder-table",
+      "extra-fields:",
+      "  - my-field",
+      "  - field_name",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.extraFields).toEqual([
+      { key: "my-field",   label: "My-field" },
+      { key: "field_name", label: "Field_name" },
+    ]);
+  });
+
+  // EC-16 — extra-fields + nested layout block coexist correctly
+  it("EC-16: extra-fields sequence and nested layout block coexist without interference", () => {
+    const content = [
+      "---",
+      "layout:",
+      "  type: folder-table",
+      "  sort: name-desc",
+      "extra-fields:",
+      "  - status",
+      "  - priority",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "Folder");
+    expect(cfg.layout).toBe("folder-table");
+    expect(cfg.sort).toBe("name-desc");
+    expect(cfg.extraFields).toEqual([
+      { key: "status",   label: "Status" },
+      { key: "priority", label: "Priority" },
+    ]);
   });
 });

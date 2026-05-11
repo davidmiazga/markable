@@ -38,6 +38,7 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     showCount: false,
     exclude: [],
     contentAreaOverride: true,
+    extraFields: [],
     ...overrides,
   };
 }

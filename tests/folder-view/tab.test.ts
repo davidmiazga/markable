@@ -26,6 +26,7 @@ import {
   escapeHtml,
   LAYOUT_RENDERERS,
 } from "../../src/plugins/file-browser/folder-view/tab";
+import { extractFrontmatterKeys } from "../../src/plugins/file-browser/folder-view/frontmatter-reader";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -237,5 +238,204 @@ describe("tab.ts (layout-view refactor)", () => {
     // been loaded yet. The call must not throw.
     delete (window as any).__MARKABLE_TAB_MANAGER__;
     expect(() => openFolderViewTab("/vault/A")).not.toThrow();
+  });
+});
+
+describe("extractFrontmatterKeys", () => {
+  // T-09 — Key present in frontmatter
+  it("T-09: file with 'status: in-progress' returns {status: 'in-progress'}", () => {
+    const content = "---\nstatus: in-progress\n---\n# Body";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({ status: "in-progress" });
+  });
+
+  // T-10 — No frontmatter
+  it("T-10: file with no frontmatter returns {}", () => {
+    const content = "# Just a heading\nNo frontmatter here.";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({});
+  });
+
+  // T-11 — Key absent from frontmatter
+  it("T-11: key absent from frontmatter returns {} for that key", () => {
+    const content = "---\ntitle: My Note\n---\n";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({});
+  });
+
+  // T-12 — Inline comment stripped
+  it("T-12: inline comment stripped: 'status: done # comment' → 'done'", () => {
+    const content = "---\nstatus: done # this is a comment\n---\n";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({ status: "done" });
+  });
+
+  // T-13 — Quoted value stripped
+  it("T-13: double-quoted value stripped: 'status: \"in-progress\"' → 'in-progress'", () => {
+    const content = "---\nstatus: \"in-progress\"\n---\n";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({ status: "in-progress" });
+  });
+
+  it("T-13b: single-quoted value stripped: \"status: 'done'\" → 'done'", () => {
+    const content = "---\nstatus: 'done'\n---\n";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({ status: "done" });
+  });
+
+  // EC-04 — No frontmatter delimiters
+  it("EC-04: no --- delimiters → returns {}", () => {
+    const content = "status: in-progress\nno frontmatter";
+    expect(extractFrontmatterKeys(content, ["status"])).toEqual({});
+  });
+
+  // EC-05 — Value that looks like a YAML object/sequence is returned as-is
+  it("EC-05: list value stored as raw string, no crash", () => {
+    const content = "---\ntags: [a, b]\n---\n";
+    expect(() => extractFrontmatterKeys(content, ["tags"])).not.toThrow();
+    // The exact value is implementation-defined; it must be a string.
+    const result = extractFrontmatterKeys(content, ["tags"]);
+    expect(typeof result["tags"]).toBe("string");
+  });
+
+  // Multiple keys at once
+  it("extracts multiple keys in one pass", () => {
+    const content = "---\nstatus: done\npriority: high\ntitle: My Note\n---\n";
+    expect(extractFrontmatterKeys(content, ["status", "priority"])).toEqual({
+      status: "done",
+      priority: "high",
+    });
+  });
+
+  // Empty keys array
+  it("empty keys array returns {} immediately", () => {
+    const content = "---\nstatus: done\n---\n";
+    expect(extractFrontmatterKeys(content, [])).toEqual({});
+  });
+});
+
+describe("enrichment phase — read failure handling", () => {
+  // T-14 — Read failure → card.meta = {}, render continues
+  it("T-14: read_file rejection for a child .md file sets meta={} and render completes", async () => {
+    // Set up a vault index with one .md file.
+    const vaultIndex = {
+      entries: [{ path: "/vault/note.md", name: "note", modified: 0 }],
+      nonMdFiles: [],
+      directories: [],
+      totalFilesFound: 1,
+      capped: false,
+    };
+
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: vi.fn(() => vaultIndex),
+    };
+
+    // _folder.md returns a folder-table layout with one extra field.
+    // The read for the child note.md rejects.
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (_cmd: string, args: any) => {
+        if (args?.path?.endsWith("_folder.md")) {
+          return "---\nlayout: folder-table\nextra-fields:\n  - status\n---\n";
+        }
+        // Child file read — reject to simulate EC-03.
+        throw new Error("read error");
+      }),
+    };
+
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      ...makeMockTabMgr(),
+      setActiveTabTitle: vi.fn(),
+    };
+
+    const container = document.createElement("div");
+    const renderFn = buildFolderViewRenderFn("/vault");
+    renderFn(container);
+
+    // Wait for the async renderFolderViewTabAsync to complete.
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The container must have been populated (render completed without throwing).
+    expect(container.innerHTML).not.toBe(`<div class="folder-view-loading">Loading…</div>`);
+  });
+
+  // EC-08 — Folder with zero .md files + extraFields declared → Promise.all([]) fires, no reads
+  it("EC-08: folder with zero .md files and extraFields declared → no child reads, render completes", async () => {
+    // Only non-md files and directories — no .md entries.
+    const vaultIndex = {
+      entries: [],
+      nonMdFiles: [{ path: "/vault/photo.png", modified: 0 }],
+      directories: [],
+      totalFilesFound: 1,
+      capped: false,
+    };
+
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: vi.fn(() => vaultIndex),
+    };
+
+    let childReadCount = 0;
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (_cmd: string, args: any) => {
+        if (args?.path?.endsWith("_folder.md")) {
+          return "---\nlayout: folder-table\nextra-fields:\n  - status\n---\n";
+        }
+        // Any child read would be unexpected.
+        childReadCount++;
+        return "---\nstatus: done\n---\n";
+      }),
+    };
+
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      ...makeMockTabMgr(),
+      setActiveTabTitle: vi.fn(),
+    };
+
+    const container = document.createElement("div");
+    buildFolderViewRenderFn("/vault")(container);
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // No child .md files → no reads attempted for child files.
+    expect(childReadCount).toBe(0);
+    // Render must have completed (loading placeholder replaced).
+    expect(container.innerHTML).not.toBe(`<div class="folder-view-loading">Loading…</div>`);
+  });
+
+  // EC-12 — folder-cards layout skips the enrichment phase (no extra-field <th> rendered)
+  // The enrichment guard in tab.ts is `layoutKey === "folder-table"`. For folder-cards,
+  // card.meta is never set, so the folder-cards renderer produces its normal card grid
+  // with no extra-field columns. Note: renderer.ts may still read child files for text
+  // previews — that is a separate code path, not the enrichment phase.
+  it("EC-12: folder-cards layout with extra-fields declared → no extra-field columns in output", async () => {
+    const vaultIndex = {
+      entries: [{ path: "/vault/note.md", name: "note", modified: 0 }],
+      nonMdFiles: [],
+      directories: [],
+      totalFilesFound: 1,
+      capped: false,
+    };
+
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: vi.fn(() => vaultIndex),
+    };
+
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (_cmd: string, args: any) => {
+        if (args?.path?.endsWith("_folder.md")) {
+          return "---\nlayout: folder-cards\nextra-fields:\n  - status\n---\n";
+        }
+        return "";
+      }),
+    };
+
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      ...makeMockTabMgr(),
+      setActiveTabTitle: vi.fn(),
+    };
+
+    const container = document.createElement("div");
+    buildFolderViewRenderFn("/vault")(container);
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // folder-cards output must not contain extra-field table columns.
+    expect(container.querySelector("th.fv-th-extra")).toBeNull();
+    expect(container.querySelector("td.fv-td-extra")).toBeNull();
+    // And the render must have completed (loading placeholder replaced).
+    expect(container.innerHTML).not.toBe(`<div class="folder-view-loading">Loading…</div>`);
   });
 });

@@ -21,6 +21,7 @@ import { buildFolderViewSet } from "./detection";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
 import { renderFolderTable } from "./table-renderer";
+import { extractFrontmatterKeys } from "./frontmatter-reader";
 import type { FolderLayoutRenderer, FolderCard } from "./types";
 import type { VaultIndex } from "../../../lib/vault-types";
 
@@ -225,6 +226,43 @@ async function renderFolderViewTabAsync(
     );
   } else {
     const cards = collectChildren(folderPath, vaultIndex);
+
+    // Step 3a: Enrichment phase — read child .md file frontmatter (FR-09).
+    // Only runs for folder-table when extra fields are declared (EC-12 guard).
+    if (layoutKey === "folder-table" && config.extraFields.length > 0) {
+      const fieldKeys = config.extraFields.map(f => f.key);
+
+      // Non-.md files and directory cards get an empty meta object so the
+      // renderer can safely access card.meta without undefined checks.
+      for (const card of cards) {
+        if (card.kind !== "file" || card.ext !== ".md") {
+          card.meta = {};
+        }
+      }
+
+      // Concurrently read all .md file cards (NFR-03, AD-03: uncapped Promise.all).
+      // Each read failure is caught individually — one error must not abort the
+      // render for all other cards (EC-03, FR-09 step 6).
+      const mdCards = cards.filter(c => c.kind === "file" && c.ext === ".md");
+      await Promise.all(
+        mdCards.map(async (card) => {
+          try {
+            const fileContent = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+              "read_file",
+              { path: card.path },
+            );
+            const raw = typeof fileContent === "string"
+              ? fileContent
+              : (fileContent?.content ?? "");
+            card.meta = extractFrontmatterKeys(raw, fieldKeys);
+          } catch {
+            // EC-03: failed read → empty meta, render continues.
+            card.meta = {};
+          }
+        }),
+      );
+    }
+
     LAYOUT_RENDERERS[layoutKey](config, cards, container, folderPath);
   }
 }
