@@ -394,15 +394,15 @@ const FILE_BROWSER_CSS = `
 .smart-folder-rules { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .smart-folder-rule-row {
   display: flex;
-  grid-template-columns: 110px minmax(130px, auto) 1fr 28px 28px;
   gap: 6px;
-  justify-content: space-evenly;
   align-items: center;
   width: 100%;
 }
 .smart-folder-rule-row .settings-select,
 .smart-folder-rule-row .settings-input { font-size: 12px; padding: 4px 8px; }
-.sf-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sf-type     { flex: 0 0 110px; min-width: 0; }
+.sf-operator { flex: 0 0 145px; min-width: 0; }
+.sf-value    { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sf-value .settings-input,
 .sf-value .settings-select { flex: 1; min-width: 0; }
 .sf-value-number { flex: 0 0 72px !important; width: 72px; }
