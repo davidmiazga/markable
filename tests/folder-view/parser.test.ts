@@ -518,3 +518,22 @@ describe("FVB-09: show-count", () => {
     expect(parseFolderMd(content, "F").showCount).toBe(false);
   });
 });
+
+// ── content-area-override ─────────────────────────────────────────────────────
+
+describe("content-area-override", () => {
+  it("content-area-override: true → contentAreaOverride true", () => {
+    const content = "---\nlayout:\n  type: folder-cards\n  content-area-override: true\n---\n";
+    expect(parseFolderMd(content, "F").contentAreaOverride).toBe(true);
+  });
+
+  it("content-area-override: false → contentAreaOverride false", () => {
+    const content = "---\nlayout:\n  type: folder-cards\n  content-area-override: false\n---\n";
+    expect(parseFolderMd(content, "F").contentAreaOverride).toBe(false);
+  });
+
+  it("content-area-override absent → contentAreaOverride true (default)", () => {
+    const content = "---\nlayout: folder-cards\n---\n";
+    expect(parseFolderMd(content, "F").contentAreaOverride).toBe(true);
+  });
+});

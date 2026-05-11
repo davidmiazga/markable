@@ -37,6 +37,7 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     showTags: false,
     showCount: false,
     exclude: [],
+    contentAreaOverride: true,
     ...overrides,
   };
 }
@@ -337,9 +338,10 @@ describe("renderFolderCards", () => {
       makeFileCard(`file-${i}`, ".md", i),
     );
     const container = makeContainer();
-    // Should complete without timeout or error.
+    // Should complete without timeout or error; lazy loading means only first 50 are in DOM.
     expect(() => renderFolderCards(makeConfig(), cards, container, "/vault")).not.toThrow();
-    expect(container.querySelectorAll(".folder-view-card").length).toBe(500);
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+    expect(container.querySelector(".fv-load-sentinel")).not.toBeNull();
   });
 
   // ── EC-11: columns CSS variable ───────────────────────────────────────────
@@ -817,5 +819,89 @@ describe("renderFolderCards", () => {
     );
     const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
     expect(nameEl?.textContent).toBe("Empty");
+  });
+});
+
+// ── Lazy loading ─────────────────────────────────────────────────────────────
+
+describe("lazy loading", () => {
+  type IOCallback = (entries: Partial<IntersectionObserverEntry>[]) => void;
+  let ioCallback: IOCallback | null = null;
+  const mockObserve = vi.fn();
+  const mockDisconnect = vi.fn();
+
+  beforeEach(() => {
+    ioCallback = null;
+    mockObserve.mockClear();
+    mockDisconnect.mockClear();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(cb: IOCallback) { ioCallback = cb; }
+      observe = mockObserve;
+      disconnect = mockDisconnect;
+    });
+  });
+
+  function makeFileCards(count: number): FolderCard[] {
+    return Array.from({ length: count }, (_, i) => makeFileCard(`note${i}`));
+  }
+
+  it("≤50 cards → all rendered immediately, no sentinel", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), makeFileCards(50), container, "/vault");
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+    expect(container.querySelector(".fv-load-sentinel")).toBeNull();
+  });
+
+  it("51 cards → only first 50 rendered initially, sentinel present", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), makeFileCards(51), container, "/vault");
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+    expect(container.querySelector(".fv-load-sentinel")).not.toBeNull();
+  });
+
+  it("observer fires → next batch rendered", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), makeFileCards(80), container, "/vault");
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+
+    // Simulate sentinel entering viewport.
+    ioCallback!([{ isIntersecting: true } as IntersectionObserverEntry]);
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(80);
+  });
+
+  it("all cards rendered → observer disconnected and sentinel removed", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), makeFileCards(60), container, "/vault");
+
+    ioCallback!([{ isIntersecting: true } as IntersectionObserverEntry]);
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(60);
+    expect(mockDisconnect).toHaveBeenCalledOnce();
+    expect(container.querySelector(".fv-load-sentinel")).toBeNull();
+  });
+
+  it("non-intersecting callback → no additional cards rendered", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), makeFileCards(80), container, "/vault");
+
+    ioCallback!([{ isIntersecting: false } as IntersectionObserverEntry]);
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+  });
+});
+
+// ── content-area-override ─────────────────────────────────────────────────────
+
+describe("content-area-override", () => {
+  it("contentAreaOverride=true (default) → host has no constrained class", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ contentAreaOverride: true }), [makeFileCard("a")], container, "/vault");
+    const host = container.querySelector(".folder-view-host");
+    expect(host?.classList.contains("folder-view-host--constrained")).toBe(false);
+  });
+
+  it("contentAreaOverride=false → host has constrained class", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ contentAreaOverride: false }), [makeFileCard("a")], container, "/vault");
+    const host = container.querySelector(".folder-view-host");
+    expect(host?.classList.contains("folder-view-host--constrained")).toBe(true);
   });
 });

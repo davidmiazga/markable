@@ -215,6 +215,46 @@ describe("matchRule extension", () => {
   });
 });
 
+// ── matchRule — file-type ────────────────────────────────────────────────────
+
+describe("matchRule file-type", () => {
+  const maps = buildInverseMaps(makeVaultIndex([]), []);
+  const jpg  = { path: "/vault/photo.jpg",  name: "photo.jpg",  title: "photo",  modified: 0, isMd: false };
+  const png  = { path: "/vault/icon.png",   name: "icon.png",   title: "icon",   modified: 0, isMd: false };
+  const mp4  = { path: "/vault/clip.mp4",   name: "clip.mp4",   title: "clip",   modified: 0, isMd: false };
+  const mp3  = { path: "/vault/song.mp3",   name: "song.mp3",   title: "song",   modified: 0, isMd: false };
+  const pdf  = { path: "/vault/doc.pdf",    name: "doc.pdf",    title: "doc",    modified: 0, isMd: false };
+  const note = { path: "/vault/note.md",    name: "note",       title: "Note",   modified: 0, isMd: true  };
+
+  it("'is images' matches .jpg and .png", () => {
+    expect(matchRule({ type: "file-type", operator: "is", value: "images" }, jpg,  maps, NOW)).toBe(true);
+    expect(matchRule({ type: "file-type", operator: "is", value: "images" }, png,  maps, NOW)).toBe(true);
+    expect(matchRule({ type: "file-type", operator: "is", value: "images" }, mp4,  maps, NOW)).toBe(false);
+    expect(matchRule({ type: "file-type", operator: "is", value: "images" }, note, maps, NOW)).toBe(false);
+  });
+
+  it("'is video' matches .mp4, not .jpg", () => {
+    expect(matchRule({ type: "file-type", operator: "is", value: "video" }, mp4,  maps, NOW)).toBe(true);
+    expect(matchRule({ type: "file-type", operator: "is", value: "video" }, jpg,  maps, NOW)).toBe(false);
+  });
+
+  it("'is audio' matches .mp3", () => {
+    expect(matchRule({ type: "file-type", operator: "is", value: "audio" }, mp3,  maps, NOW)).toBe(true);
+    expect(matchRule({ type: "file-type", operator: "is", value: "audio" }, mp4,  maps, NOW)).toBe(false);
+  });
+
+  it("'is not images' excludes image files but includes others", () => {
+    expect(matchRule({ type: "file-type", operator: "is not", value: "images" }, jpg,  maps, NOW)).toBe(false);
+    expect(matchRule({ type: "file-type", operator: "is not", value: "images" }, pdf,  maps, NOW)).toBe(true);
+    expect(matchRule({ type: "file-type", operator: "is not", value: "images" }, note, maps, NOW)).toBe(true);
+  });
+
+  it("unknown group name → 'is' returns false, 'is not' returns true", () => {
+    expect(matchRule({ type: "file-type", operator: "is",     value: "spreadsheets" }, jpg, maps, NOW)).toBe(false);
+    expect(matchRule({ type: "file-type", operator: "is not", value: "spreadsheets" }, jpg, maps, NOW)).toBe(true);
+  });
+});
+
 // ── matchRule — modified ──────────────────────────────────────────────────────
 
 describe("matchRule modified", () => {

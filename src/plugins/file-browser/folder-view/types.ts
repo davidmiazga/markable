@@ -56,6 +56,8 @@ export interface FolderMdFrontMatter {
   "show-count"?: string;
   /** FVB-05: list of filenames to exclude from the card grid. */
   exclude?: string[];
+  /** "false" constrains the view to the editor content-area max-width. Default: "true" (full width). */
+  "content-area-override"?: string;
 }
 
 /**
@@ -122,6 +124,8 @@ export interface FolderViewConfig {
   showCount: boolean;
   /** Filenames to exclude from the card grid. Default: []. FVB-05 */
   exclude: string[];
+  /** When false, the view respects the editor content-area max-width (--settings-content-max-width). Default: true (full width). */
+  contentAreaOverride: boolean;
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────

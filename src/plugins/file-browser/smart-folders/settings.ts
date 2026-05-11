@@ -31,12 +31,13 @@ import type { MarkablePluginAPI } from "../../markable-plugin-api";
  * without runtime overhead. Any operator not in the appropriate set is dropped.
  */
 const VALID_OPERATORS: Record<string, Set<string>> = {
-  tag:       new Set(["is", "is not"]),
-  path:      new Set(["contains", "does not contain", "starts with", "does not start with"]),
-  extension: new Set(["is", "is not"]),
-  modified:  new Set(["in last N days", "not in last N days", "before", "after"]),
-  links:     new Set(["outbound = 0", "outbound >= 1", "outbound >= N", "inbound = 0", "inbound >= 1", "inbound >= N"]),
-  title:     new Set(["contains", "does not contain"]),
+  tag:         new Set(["is", "is not"]),
+  path:        new Set(["contains", "does not contain", "starts with", "does not start with"]),
+  extension:   new Set(["is", "is not"]),
+  "file-type": new Set(["is", "is not"]),
+  modified:    new Set(["in last N days", "not in last N days", "before", "after"]),
+  links:       new Set(["outbound = 0", "outbound >= 1", "outbound >= N", "inbound = 0", "inbound >= 1", "inbound >= N"]),
+  title:       new Set(["contains", "does not contain"]),
 };
 
 /** All known rule types — used as a fast membership check. */
@@ -121,7 +122,7 @@ function sanitizeRule(raw: unknown): SmartFolderRule | null {
     // These operators encode the full predicate; value must be null
     // We are lenient here — we just ignore the value and coerce to null
     // so that slightly-off serializations survive.
-  } else if (type === "tag" || type === "path" || type === "extension" || type === "title") {
+  } else if (type === "tag" || type === "path" || type === "extension" || type === "file-type" || type === "title") {
     // String-valued rules
     if (typeof value !== "string") {
       console.warn("[smart-folders] dropping", type, "rule: value must be string, got:", value);

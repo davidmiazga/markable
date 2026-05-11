@@ -210,6 +210,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     showTags: false,
     showCount: false,
     exclude: [],
+    contentAreaOverride: true,
   };
 
   try {
@@ -309,11 +310,15 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     // showCount: only explicit "true" enables (FVB-09).
     const showCount = (fm["show-count"] ?? "false").trim().toLowerCase() === "true";
 
+    // contentAreaOverride: only explicit "false" disables full-width mode.
+    const contentAreaOverride = (fm["content-area-override"] ?? "true") !== "false";
+
     return {
       layout, title, sort, cardWidth, layoutMode, showModified, body,
       aspectRatio, fit, minHeight, maxHeight,
       showName, showPreview, showExtensions, showFolders, showFiles,
       foldersTitle, filesTitle, showTags, showCount, exclude,
+      contentAreaOverride,
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

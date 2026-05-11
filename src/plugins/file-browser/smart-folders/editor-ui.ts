@@ -44,16 +44,28 @@ export interface EditorContext {
 // ── Operator whitelist per type ───────────────────────────────────────────────
 
 const OPERATORS_BY_TYPE: Record<SmartFolderRuleType, string[]> = {
-  tag:       ["is", "is not"],
-  path:      ["contains", "does not contain", "starts with", "does not start with"],
-  extension: ["is", "is not"],
-  modified:  ["in last N days", "not in last N days", "before", "after"],
-  links:     ["outbound = 0", "outbound >= 1", "outbound >= N",
-              "inbound = 0",  "inbound >= 1",  "inbound >= N"],
-  title:     ["contains", "does not contain"],
+  tag:         ["is", "is not"],
+  path:        ["contains", "does not contain", "starts with", "does not start with"],
+  extension:   ["is", "is not"],
+  "file-type": ["is", "is not"],
+  modified:    ["in last N days", "not in last N days", "before", "after"],
+  links:       ["outbound = 0", "outbound >= 1", "outbound >= N",
+                "inbound = 0",  "inbound >= 1",  "inbound >= N"],
+  title:       ["contains", "does not contain"],
 };
 
-function defaultValueForType(_type: SmartFolderRuleType, op: string): SmartFolderRule["value"] {
+const TYPE_LABELS: Record<SmartFolderRuleType, string> = {
+  tag:         "Tag",
+  path:        "Path",
+  extension:   "Extension",
+  "file-type": "File Type",
+  modified:    "Modified",
+  links:       "Links",
+  title:       "Title",
+};
+
+function defaultValueForType(type: SmartFolderRuleType, op: string): SmartFolderRule["value"] {
+  if (type === "file-type") return "images";
   if (op === "outbound = 0" || op === "outbound >= 1" ||
       op === "inbound = 0"  || op === "inbound >= 1")  return null;
   if (op === "outbound >= N" || op === "inbound >= N") return 1;
@@ -123,6 +135,25 @@ function buildValueControl(
     span.appendChild(input);
     span.appendChild(dl);
 
+  } else if (type === "file-type") {
+    const sel = document.createElement("select");
+    sel.className = "settings-select sf-value-select";
+    const groups = [
+      { value: "images", label: "Images" },
+      { value: "video",  label: "Video"  },
+      { value: "audio",  label: "Audio"  },
+    ];
+    const current = (value as string) || "images";
+    for (const g of groups) {
+      const opt = document.createElement("option");
+      opt.value = g.value;
+      opt.textContent = g.label;
+      if (g.value === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", () => onChange(sel.value));
+    span.appendChild(sel);
+
   } else if (type === "modified") {
     if (op === "in last N days" || op === "not in last N days") {
       const input = document.createElement("input");
@@ -188,11 +219,11 @@ function buildRuleRow(
 
   const typeSelect = document.createElement("select");
   typeSelect.className = "settings-select sf-type";
-  const types: SmartFolderRuleType[] = ["tag", "path", "extension", "modified", "links", "title"];
+  const types: SmartFolderRuleType[] = ["tag", "path", "extension", "file-type", "modified", "links", "title"];
   for (const t of types) {
     const opt = document.createElement("option");
     opt.value = t;
-    opt.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+    opt.textContent = TYPE_LABELS[t];
     if (t === rule.type) opt.selected = true;
     typeSelect.appendChild(opt);
   }

@@ -39,6 +39,7 @@ export type SmartFolderRuleType =
   | "tag"
   | "path"
   | "extension"
+  | "file-type"
   | "modified"
   | "links"
   | "title";
@@ -95,6 +96,7 @@ export type SmartFolderRule =
   | { type: "tag";       operator: "is" | "is not";                                           value: string  }
   | { type: "path";      operator: "contains" | "does not contain" | "starts with" | "does not start with"; value: string  }
   | { type: "extension"; operator: "is" | "is not";                                           value: string  }
+  | { type: "file-type"; operator: "is" | "is not";                                           value: string  }
   | { type: "modified";  operator: "in last N days" | "not in last N days";                   value: number  }
   | { type: "modified";  operator: "before" | "after";                                        value: string  }
   | { type: "links";     operator: "outbound = 0" | "outbound >= 1" | "inbound = 0" | "inbound >= 1"; value: null    }

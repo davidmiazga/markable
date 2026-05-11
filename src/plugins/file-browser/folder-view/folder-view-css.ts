@@ -31,6 +31,16 @@ export const FOLDER_VIEW_CSS = `
   font-family: var(--ui-font);
 }
 
+/* Lazy-load sentinel: invisible 1px element at grid end; triggers next batch. */
+.fv-load-sentinel { height: 1px; width: 100%; grid-column: 1 / -1; }
+
+/* content-area-override: false — constrain to editor content-area width and center. */
+.folder-view-host--constrained {
+  max-width: var(--settings-content-max-width, 900px);
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* ── Description block (FR-24) ────────────────────────────────────────── */
 
 /*

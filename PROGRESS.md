@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-09 (session 13)
+**Last Updated:** 2026-05-11 (session 14)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -113,6 +113,21 @@
 - **Plugin panel two-column layout (session 11 cont.)** — `.plugin-section-body` now uses `display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px`. Section headers remain full-width (outside the body grid). Halves the panel scroll height with no JS changes — pure CSS.
 
 - **Folder View via `_folder.md` (session 12)** — A directory containing `_folder.md` gets enhanced file-browser behavior: clicking the **folder name** opens a Folder View tab (card grid of immediate children); clicking the **expand arrow** still toggles the tree. `_folder.md` is fully visible and editable in the tree. YAML front-matter drives the layout (`layout: folder-cards` is the v1 starter). Tab deduplication is by full folder path (`__fv__:<path>` synthetic key) so same-name siblings in different parent directories are always independent tabs. Live update re-renders when `_folder.md` is saved (immediately if the tab is active; stale-flag deferred re-render otherwise). Right-click on any folder adds "Open Folder View" (when `_folder.md` exists) or "Create Folder View…" (when it doesn't, creating a minimal starter template). All 24 ECs covered; `stripScripts` extracted to `folder-view/shared.ts`; tab.title stored unescaped (textContent rendering). 3745 Vitest tests passing; code-reviewer approved 2026-05-09.
+
+- **Folder View — enhancements backlog S-items + tab title (session 14)** — Seven small backlog items implemented plus tab title fix. All changes test-driven, 3838 Vitest tests passing:
+  1. **FVB-01 Tag chips** — `show-tags: true` shows up to 3 YAML tag chips (`.fold-view-tag-chip`) below the filename on `.md` cards. Tags sourced from `VaultIndexEntry.tags` via `collectChildren`.
+  2. **FVB-04 Compact mode** — `card-preview: none` hides the preview rectangle entirely; cards show name + date only.
+  3. **FVB-05 Exclude list** — Top-level `exclude:` YAML sequence suppresses specific filenames from the grid (`.md` files matched by full name e.g. `draft.md`; other files by basename).
+  4. **FVB-06 Hide extensions** — `show-extensions: false` strips non-`.md` extensions from card labels.
+  5. **FVB-07 Section toggles** — `show-folders: false` / `show-files: false` hide entire sections.
+  6. **FVB-08 Custom section titles** — `folders-title:` renames the Folders heading; `files-title:` adds/renames the Files heading (empty = no heading, default).
+  7. **FVB-09 Item count badge** — `show-count: true` appends `(N)` to subfolder card names via O(N) `childCountMap` in `collectChildren`.
+  - **`show-name` / `show-modified`** — New `show-name: true/false` hides the filename label. `show-modified` was already implemented; both added to STARTER template.
+  - **Tab title** — `setActiveTabTitle(title)` added to `TabManager`; called from `renderFolderViewTabAsync` after parse so the tab and title bar show the folder name (or custom `title:` field) instead of `"_folder"`.
+  - **STARTER template** — All new fields documented with inline comments; `title:` and `exclude:` (commented) added as top-level fields; `files-title:` blank with comment on next line.
+  - **`docs/specs/folder-view/reference.md`** — Full YAML reference updated: all new layout-block fields added, `show-modified` moved from top-level to layout-block table, `show-name` added, YAML example synced to STARTER.
+  - **`docs/specs/folder-view/backlog.md`** — FVB-01/04–09 removed from active list; FVB-02/03/10/11 remain (all M effort).
+  2026-05-11.
 
 - **Folder View — visual indicator + card preview (session 13)** — Polish pass on the Folder View feature. Three changes committed:
   1. **Tree indicator** — Replaced the faint underline on folder-view directory labels with: accent-color applied to the folder icon AND label text, plus a 20×20 px `preview` (eye) Material Symbol badge pinned to the right of the row (same position as the vault unmount button). Badge appended in `buildTreeUl` loop; `ICON_PREVIEW` added to `icons/material/index.ts`. CSS in `.tree-node-fv-badge`.

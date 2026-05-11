@@ -1,6 +1,6 @@
 ---
 title: "Folder View — User Guide & Developer Reference"
-last-updated: "2026-05-10"
+last-updated: "2026-05-12"
 review-cadence-days: 30
 status: active
 ---
@@ -42,8 +42,14 @@ Open `_folder.md` in the editor (click the `_folder.md` entry in the tree, or pr
 
 ```yaml
 ---
+title:
+# set title: My Folder to override the tab display name
+# exclude:
+#   - draft.md
+# uncomment to hide specific files from the card grid
 layout:
   type: folder-cards
+  content-area-override: true # false = constrain to editor content-area width
   mode: grid            # grid = consistent columns, flex = fluid smooth resize
   card-width: 160       # min px per card
   aspect-ratio: 1/1     # e.g. 16/9, 4/3, 1.5, original
@@ -51,6 +57,17 @@ layout:
   min-height: 40
   max-height: 200
   sort: name-asc        # name-asc, name-desc, modified-asc, modified-desc
+  card-preview: full    # full = show preview, none = compact name+date grid
+  show-name: true       # false = hide the filename label
+  show-modified: true   # false = hide the modified date
+  show-extensions: true # false = strip file extensions from card labels
+  show-folders: true    # false = hide the Folders section
+  show-files: true      # false = hide the Files section
+  show-tags: false      # true = show up to 3 tags below the filename
+  show-count: false     # true = show item count on subfolder cards
+  folders-title: Folders
+  files-title:
+  # set files-title: Notes to show a heading above the Files section
 ---
 
 Optional description text here — rendered as markdown above the card grid.
@@ -69,6 +86,8 @@ Optional description text here — rendered as markdown above the card grid.
 | `max-height` | `200` | integer px, clamped [20–400] | Maximum height of the preview rectangle in px. |
 | `sort` | `name-asc` | `name-asc`, `name-desc`, `modified-asc`, `modified-desc` | Sort order applied independently to the Folders and Files sections. |
 | `card-preview` | `full` | `full`, `none` | `none` hides the preview rectangle entirely — compact name+date grid. |
+| `show-name` | `true` | `true`, `false` | `false` hides the filename label on every card. |
+| `show-modified` | `true` | `true`, `false` | `false` hides the modified-date line on file cards. |
 | `show-extensions` | `true` | `true`, `false` | `false` strips file extensions from card labels (e.g. `.png`, `.pdf`). `.md` is already stripped. |
 | `show-folders` | `true` | `true`, `false` | `false` hides the Folders section entirely. |
 | `show-files` | `true` | `true`, `false` | `false` hides the Files section entirely. |
@@ -76,6 +95,7 @@ Optional description text here — rendered as markdown above the card grid.
 | `files-title` | _(empty)_ | any string | Add or rename the Files section heading. Empty = no heading (default). |
 | `show-tags` | `false` | `true`, `false` | `true` shows up to 3 YAML tag chips below the card name (`.md` files only). |
 | `show-count` | `false` | `true`, `false` | `true` shows item count in brackets on subfolder card labels. |
+| `content-area-override` | `true` | `true`, `false` | `false` constrains the folder view to the editor content-area max-width (`--settings-content-max-width`) and centers it. `true` (default) uses the full tab width. |
 
 ### Top-level fields
 
@@ -83,8 +103,7 @@ These sit outside the `layout:` block (flat, top-level keys):
 
 | Field | Default | Description |
 |---|---|---|
-| `title` | folder name | Overrides the tab display title. |
-| `show-modified` | `true` | `false` hides the modified-date line on file cards. |
+| `title` | folder name | Overrides the tab display title. Empty = uses folder name. |
 | `exclude` | _(empty list)_ | YAML sequence of filenames to suppress from the grid. Filenames include extension (e.g. `draft.md`, `archive.pdf`). |
 
 **Example with `exclude:`:**

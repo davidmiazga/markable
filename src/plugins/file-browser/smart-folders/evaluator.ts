@@ -32,6 +32,20 @@ import type {
   InverseMaps,
 } from "./types";
 
+// ── File-type groups ─────────────────────────────────────────────────────────
+
+/**
+ * Pre-defined extension sets for the "file-type" rule type.
+ *
+ * Keys are lowercase group names used as the rule's `value` field.
+ * Exported so editor-ui can derive the dropdown labels from the same source.
+ */
+export const FILE_TYPE_GROUPS: Record<string, ReadonlySet<string>> = {
+  images: new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico", ".tiff", ".tif", ".heic", ".heif"]),
+  video:  new Set([".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg", ".3gp"]),
+  audio:  new Set([".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus"]),
+};
+
 // ── Internal candidate type ───────────────────────────────────────────────────
 
 /**
@@ -194,6 +208,13 @@ export function matchRule(
       const want = rule.value.toLowerCase();
       const eq = ext === want;
       return rule.operator === "is" ? eq : !eq;
+    }
+
+    case "file-type": {
+      const ext = extOf(candidate.path);
+      const group = FILE_TYPE_GROUPS[rule.value.toLowerCase()];
+      const inGroup = group ? group.has(ext) : false;
+      return rule.operator === "is" ? inGroup : !inGroup;
     }
 
     case "modified": {

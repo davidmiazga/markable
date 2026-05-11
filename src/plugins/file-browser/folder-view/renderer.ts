@@ -27,6 +27,11 @@ import {
   ICON_FILE_CODE,
 } from "../icons/material/index";
 
+// ── Lazy loading ──────────────────────────────────────────────────────────────
+
+/** Render the first N cards immediately; load the rest via IntersectionObserver. */
+const LAZY_BATCH_SIZE = 50;
+
 // ── Icon mapping ──────────────────────────────────────────────────────────────
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"]);
@@ -362,21 +367,69 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
 // ── Section builder ───────────────────────────────────────────────────────────
 
 /**
+ * Append cards to a grid element, using IntersectionObserver lazy-loading
+ * when the card count exceeds LAZY_BATCH_SIZE.
+ *
+ * ≤ LAZY_BATCH_SIZE: all cards appended synchronously (no observer overhead).
+ * > LAZY_BATCH_SIZE: first batch rendered immediately, a sentinel div is placed
+ *   at the end of the grid, and subsequent batches are appended as the sentinel
+ *   scrolls into view within scrollRoot.
+ *
+ * @param cards      - All cards for this section (pre-sorted).
+ * @param grid       - The `.folder-view-grid` element to append into.
+ * @param config     - FolderViewConfig for buildCard.
+ * @param scrollRoot - The scrollable host element (IntersectionObserver root).
+ */
+function appendCardsToGrid(
+  cards: FolderCard[],
+  grid: HTMLElement,
+  config: FolderViewConfig,
+  scrollRoot: HTMLElement,
+): void {
+  if (cards.length <= LAZY_BATCH_SIZE) {
+    for (const card of cards) grid.appendChild(buildCard(card, config));
+    return;
+  }
+
+  for (const card of cards.slice(0, LAZY_BATCH_SIZE)) grid.appendChild(buildCard(card, config));
+
+  let rendered = LAZY_BATCH_SIZE;
+  const sentinel = document.createElement("div");
+  sentinel.className = "fv-load-sentinel";
+  grid.appendChild(sentinel);
+
+  const observer = new IntersectionObserver((entries) => {
+    if (!entries[0].isIntersecting) return;
+    const batch = cards.slice(rendered, rendered + LAZY_BATCH_SIZE);
+    for (const card of batch) grid.insertBefore(buildCard(card, config), sentinel);
+    rendered += batch.length;
+    if (rendered >= cards.length) {
+      observer.disconnect();
+      sentinel.remove();
+    }
+  }, { root: scrollRoot, rootMargin: "200px 0px" });
+
+  observer.observe(sentinel);
+}
+
+/**
  * Build a section element (heading + CSS grid of cards).
  *
  * Used for both the "Folders" section and the "Files" section (FR-18).
- * The grid's column count is controlled by the --fv-columns CSS variable
- * set inline on the grid element (FR-25).
+ * Cards are appended via appendCardsToGrid, which lazy-loads when the section
+ * has more than LAZY_BATCH_SIZE items.
  *
- * @param title   - The section heading text (e.g. "Folders" or "Files").
- * @param cards   - Pre-sorted FolderCards for this section.
- * @param config  - FolderViewConfig (for columns and showModified).
+ * @param title      - The section heading text (e.g. "Folders" or "Files").
+ * @param cards      - Pre-sorted FolderCards for this section.
+ * @param config     - FolderViewConfig (for card width, layout mode, etc.).
+ * @param scrollRoot - Scrollable host element passed to appendCardsToGrid.
  * @returns The `.folder-view-section` div element.
  */
 function buildSection(
   title: string | null,
   cards: FolderCard[],
   config: FolderViewConfig,
+  scrollRoot: HTMLElement,
 ): HTMLElement {
   const section = document.createElement("div");
   section.className = "folder-view-section";
@@ -390,16 +443,11 @@ function buildSection(
 
   const grid = document.createElement("div");
   grid.className = "folder-view-grid";
-  // Set --fv-card-width (inherited by cards for flex-basis / minmax).
   grid.style.setProperty("--fv-card-width", config.cardWidth + "px");
-  // Flex mode adds a modifier class; grid mode is the default (no class).
   if (config.layoutMode === "flex") grid.classList.add("fv-flex-mode");
   grid.setAttribute("role", "list");
 
-  // EC-22: single O(N) loop — no nested card×card operations.
-  for (const card of cards) {
-    grid.appendChild(buildCard(card, config));
-  }
+  appendCardsToGrid(cards, grid, config, scrollRoot);
 
   section.appendChild(grid);
   return section;
@@ -441,6 +489,7 @@ export function renderFolderCards(
 
   const host = document.createElement("div");
   host.className = "folder-view-host";
+  if (!config.contentAreaOverride) host.classList.add("folder-view-host--constrained");
 
   // Step 2: Description block (FR-11/FR-24).
   if (config.body.trim()) {
@@ -492,11 +541,11 @@ export function renderFolderCards(
 
   // Step 5: Render sections — subfolders always before files (FR-18).
   if (showDirs) {
-    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config));
+    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config, host));
   }
 
   if (showFiles) {
-    host.appendChild(buildSection(config.filesTitle || null, fileCards, config));
+    host.appendChild(buildSection(config.filesTitle || null, fileCards, config, host));
   }
 
   container.appendChild(host);
