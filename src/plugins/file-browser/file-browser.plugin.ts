@@ -36,7 +36,7 @@ import {
   ICON_FOLDER_OPEN,
   ICON_FOLDER_MANAGED,
   ICON_FILE,
-  ICON_FILE_MD,
+  ICON_FILE_MARKDOWN,
   ICON_FILE_IMAGE,
   ICON_FILE_JSON,
   ICON_FILE_CODE,
@@ -73,6 +73,7 @@ import {
 // Folder View — bundled inline by Rollup.
 import { buildFolderViewSet } from "./folder-view/detection";
 import { FOLDER_VIEW_CSS } from "./folder-view/folder-view-css";
+import { FOLDER_TABLE_CSS } from "./folder-view/folder-table-css";
 import {
   openFolderViewTab as _openFolderViewTab,
   buildFolderViewRenderFn,
@@ -712,7 +713,7 @@ const FILE_BROWSER_CSS = `
   background: #e05252;
 }
 
-` + FOLDER_VIEW_CSS;
+` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS;
 
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
@@ -1251,7 +1252,7 @@ function wrapSvg(svg: string, size: number): string {
 /** Map a filename extension to the appropriate Material Symbol icon string. */
 function fileIconFor(name: string): string {
   const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-  if (ext === "md" || ext === "markdown") return ICON_FILE_MD;
+  if (ext === "md" || ext === "markdown") return ICON_FILE_MARKDOWN;
   if (ext === "png" || ext === "jpg" || ext === "jpeg" ||
       ext === "gif" || ext === "webp" || ext === "svg" ||
       ext === "ico" || ext === "bmp" || ext === "tiff") return ICON_FILE_IMAGE;
@@ -1321,7 +1322,7 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
     } else if (node.type === "directory") {
       icon.innerHTML = _iconSet.folder(node.name, node.expanded);
     } else {
-      icon.innerHTML = _iconSet.file(node.name);
+      icon.innerHTML = _iconSet.file(node.path);
     }
   }
   li.appendChild(icon);
@@ -2991,7 +2992,7 @@ const FOLDER_VIEW_STARTER = [
   "#   - draft.md",
   "# uncomment to hide specific files from the card grid",
   "layout:",
-  "  type: folder-cards",
+  "  type: folder-cards  # folder-table = compact sortable list",
   "  content-area-override: true # false = constrain to editor content-area width",
   "  mode: grid            # grid = consistent columns, flex = fluid smooth resize",
   "  card-width: 160       # min px per card",

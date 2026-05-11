@@ -20,6 +20,7 @@ import { parseFolderMd } from "./parser";
 import { buildFolderViewSet } from "./detection";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
+import { renderFolderTable } from "./table-renderer";
 import type { FolderLayoutRenderer, FolderCard } from "./types";
 import type { VaultIndex } from "../../../lib/vault-types";
 
@@ -54,6 +55,7 @@ export function escapeHtml(str: string): string {
  */
 export const LAYOUT_RENDERERS: Record<string, FolderLayoutRenderer> = {
   "folder-cards": renderFolderCards,
+  "folder-table": renderFolderTable,
 };
 
 // ── Children collection (FR-19, AD-5, EC-22) ─────────────────────────────────

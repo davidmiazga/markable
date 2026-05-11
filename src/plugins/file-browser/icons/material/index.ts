@@ -22,9 +22,13 @@ export const ICON_FOLDER_MANAGED =
 export const ICON_FILE =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M319-250h322v-60H319v60Zm0-170h322v-60H319v60ZM220-80q-24 0-42-18t-18-42v-680q0-24 18-42t42-18h361l219 219v521q0 24-18 42t-42 18H220Zm331-554v-186H220v680h520v-494H551ZM220-820v186-186 680-680Z"/></svg>`;
 
-/** Material Symbols: article */
+/** Material Symbols: article — used for plain-text (.txt) files */
 export const ICON_FILE_MD =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M277-279h275v-60H277v60Zm0-171h406v-60H277v60Zm0-171h406v-60H277v60Zm-97 501q-24 0-42-18t-18-42v-600q0-24 18-42t42-18h600q24 0 42 18t18 42v600q0 24-18 42t-42 18H180Zm0-60h600v-600H180v600Zm0-600v600-600Z"/></svg>`;
+
+/** Custom markdown file icon — used for .md / .markdown files */
+export const ICON_FILE_MARKDOWN =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 960"><path d="M220,880c-16,0-30-6-42-18s-18-26-18-42V140c0-16,6-30,18-42s26-18,42-18h361l219,219v521c0,16-6,30-18,42s-26,18-42,18H220ZM551,326v-186H220v680h520v-494h-189Z"/><polygon points="655.2 597.8 480 773 304.8 597.8 347.8 554.8 449.6 656.6 449.6 374 510.4 374 510.4 656.6 612.2 554.8 655.2 597.8"/></svg>`;
 
 /** Material Symbols: image */
 export const ICON_FILE_IMAGE =

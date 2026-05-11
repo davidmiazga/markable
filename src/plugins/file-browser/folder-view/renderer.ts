@@ -22,6 +22,7 @@ import {
   ICON_FOLDER,
   ICON_FILE,
   ICON_FILE_MD,
+  ICON_FILE_MARKDOWN,
   ICON_FILE_IMAGE,
   ICON_FILE_JSON,
   ICON_FILE_CODE,
@@ -34,8 +35,9 @@ const LAZY_BATCH_SIZE = 50;
 
 // ── Icon mapping ──────────────────────────────────────────────────────────────
 
-const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"]);
-const TEXT_EXTS  = new Set([".md", ".txt", ".markdown"]);
+const IMAGE_EXTS    = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"]);
+const MD_EXTS       = new Set([".md", ".markdown"]);
+const TEXT_EXTS     = new Set([".md", ".txt", ".markdown"]);
 
 /**
  * Return the SVG icon string for a file card based on its extension.
@@ -46,9 +48,10 @@ const TEXT_EXTS  = new Set([".md", ".txt", ".markdown"]);
  * @param ext - The file extension with leading dot (e.g. ".pdf"). May be "".
  * @returns An SVG string for the icon.
  */
-function getFileIconForCard(ext: string): string {
+export function getFileIconForCard(ext: string): string {
   const lower = ext.toLowerCase();
-  if (TEXT_EXTS.has(lower)) return ICON_FILE_MD;
+  if (MD_EXTS.has(lower))   return ICON_FILE_MARKDOWN;
+  if (lower === ".txt")     return ICON_FILE_MD;
   if (IMAGE_EXTS.has(lower)) return ICON_FILE_IMAGE;
   if ([".json", ".yaml", ".yml", ".toml"].includes(lower)) return ICON_FILE_JSON;
   if ([".ts", ".js", ".tsx", ".jsx", ".py", ".rs", ".go", ".sh"].includes(lower)) return ICON_FILE_CODE;
@@ -65,7 +68,7 @@ function getFileIconForCard(ext: string): string {
  * @param ms - Unix timestamp in milliseconds.
  * @returns Formatted date string.
  */
-function formatModified(ms: number): string {
+export function formatModified(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -84,7 +87,7 @@ function formatModified(ms: number): string {
  * @param cards - The card array to sort (mutated in place).
  * @param sort  - The sort order from FolderViewConfig.sort.
  */
-function sortCards(cards: FolderCard[], sort: FolderSortOrder): void {
+export function sortCards(cards: FolderCard[], sort: FolderSortOrder): void {
   cards.sort((a, b) => {
     switch (sort) {
       case "name-desc":     return b.name.localeCompare(a.name);
