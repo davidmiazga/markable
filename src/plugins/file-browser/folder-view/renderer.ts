@@ -136,17 +136,36 @@ function handleCardClick(card: FolderCard): void {
 /**
  * Build the preview rectangle shown at the top of each card.
  *
- * - Images: rendered as <img> via asset:// URL (synchronous).
+ * Shape and sizing are driven by config (aspectRatio, minHeight, maxHeight).
+ * Image fit (cover / contain / 80% auto / etc.) is driven by config.fit via
+ * CSS background-size, which requires background-image rather than <img>.
+ *
+ * - Images (fixed ratio): background-image + background-size for full
+ *   background-size vocabulary. Preload via Image() for error detection.
+ * - Images (original): <img> with natural proportions so the container
+ *   height follows the image. config.fit is ignored in this mode.
  * - Text / Markdown: async read_file; shows first ~300 chars stripped of
  *   frontmatter. Falls back to the file icon if the read fails.
  * - Directories: large folder icon centred in rectangle.
  * - All other files: centred file-type icon.
  *
  * EC-13: no innerHTML on user-supplied text; textContent is used throughout.
+ *
+ * Length justification: three content types × two image sub-modes each require
+ * distinct element construction and async paths. All heavy lifting for icons,
+ * text loading, and image loading is contained here; no further split is
+ * possible without threading config through an opaque extra layer.
  */
-function buildCardPreview(card: FolderCard): HTMLElement {
+function buildCardPreview(card: FolderCard, config: FolderViewConfig): HTMLElement {
   const preview = document.createElement("div");
   preview.className = "folder-view-card-preview";
+
+  // Apply layout constraints from config (inline styles override CSS defaults).
+  if (config.aspectRatio !== "original") {
+    preview.style.aspectRatio = config.aspectRatio;
+  }
+  preview.style.minHeight = config.minHeight + "px";
+  preview.style.maxHeight = config.maxHeight + "px";
 
   if (card.kind === "directory") {
     const wrap = document.createElement("div");
@@ -161,18 +180,42 @@ function buildCardPreview(card: FolderCard): HTMLElement {
   if (IMAGE_EXTS.has(extLower)) {
     const convertFileSrc = (window as any).__MARKABLE_CONVERT_FILE_SRC__;
     if (convertFileSrc) {
-      const img = document.createElement("img");
-      img.src = convertFileSrc(card.path);
-      img.alt = card.name;
-      img.className = "folder-view-preview-img";
-      img.addEventListener("error", () => {
-        img.remove();
-        const wrap = document.createElement("div");
-        wrap.className = "folder-view-preview-icon";
-        wrap.innerHTML = getFileIconForCard(extLower);
-        preview.appendChild(wrap);
-      });
-      preview.appendChild(img);
+      const url = convertFileSrc(card.path) as string;
+
+      if (config.aspectRatio === "original") {
+        // Natural proportions: use <img> so the container height follows the image.
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = card.name;
+        img.className = "folder-view-preview-img-natural";
+        img.addEventListener("error", () => {
+          img.remove();
+          const wrap = document.createElement("div");
+          wrap.className = "folder-view-preview-icon";
+          wrap.innerHTML = getFileIconForCard(extLower);
+          preview.appendChild(wrap);
+        });
+        preview.appendChild(img);
+      } else {
+        // Fixed-ratio box: background-image + background-size so the full
+        // CSS background-size vocabulary ("80% auto", etc.) is available.
+        // Preload via a hidden Image to detect load errors before creating the div.
+        const probe = new Image();
+        probe.onload = () => {
+          const bg = document.createElement("div");
+          bg.className = "folder-view-preview-bg-img";
+          bg.style.backgroundImage = `url("${url}")`;
+          bg.style.backgroundSize = config.fit;
+          preview.appendChild(bg);
+        };
+        probe.onerror = () => {
+          const wrap = document.createElement("div");
+          wrap.className = "folder-view-preview-icon";
+          wrap.innerHTML = getFileIconForCard(extLower);
+          preview.appendChild(wrap);
+        };
+        probe.src = url;
+      }
     } else {
       const wrap = document.createElement("div");
       wrap.className = "folder-view-preview-icon";
@@ -254,15 +297,53 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
       : `Open file ${card.name}`,
   );
 
-  // Preview rectangle (image / text excerpt / icon).
-  el.appendChild(buildCardPreview(card));
+  // Preview rectangle — skipped in compact mode (FVB-04).
+  if (config.showPreview) {
+    el.appendChild(buildCardPreview(card, config));
+  }
+
+  // Display name: strip extension from non-md files when showExtensions=false (FVB-06).
+  let displayName = card.name;
+  if (!config.showExtensions && card.ext && card.ext !== ".md" && card.name.endsWith(card.ext)) {
+    displayName = card.name.slice(0, -card.ext.length);
+  }
+
+  // Item count appended to folder card name (FVB-09).
+  if (config.showCount && card.kind === "directory" && (card.childCount ?? 0) > 0) {
+    displayName += ` (${card.childCount})`;
+  }
 
   // Name text — set via .textContent to prevent XSS (EC-13).
-  const nameEl = document.createElement("div");
-  nameEl.className = "folder-view-card-name";
-  nameEl.textContent = card.name;
-  nameEl.title = card.path;
-  el.appendChild(nameEl);
+  if (config.showName) {
+    const nameEl = document.createElement("div");
+    nameEl.className = "folder-view-card-name";
+    nameEl.textContent = displayName;
+    nameEl.title = card.path;
+    el.appendChild(nameEl);
+  }
+
+  // Tag chips — first 3 tags for .md files when showTags=true (FVB-01).
+  if (config.showTags && card.tags && card.tags.length > 0) {
+    const tagsEl = document.createElement("div");
+    tagsEl.className = "folder-view-card-tags";
+    const limit = Math.min(3, card.tags.length);
+    for (let i = 0; i < limit; i++) {
+      const chip = document.createElement("span");
+      chip.className = "folder-view-tag-chip";
+      chip.textContent = card.tags[i];
+      chip.title = card.tags[i];
+      tagsEl.appendChild(chip);
+    }
+    el.appendChild(tagsEl);
+  }
+
+  // Modified date — only for file cards with a known timestamp (FR-10).
+  if (config.showModified && card.kind === "file" && card.modified > 0) {
+    const dateEl = document.createElement("div");
+    dateEl.className = "folder-view-card-date";
+    dateEl.textContent = formatModified(card.modified);
+    el.appendChild(dateEl);
+  }
 
   // Click handler (FR-21/FR-22).
   el.addEventListener("click", () => handleCardClick(card));
@@ -274,9 +355,6 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
       handleCardClick(card);
     }
   });
-
-  // Suppress unused-variable warning — config is kept for the API contract.
-  void config;
 
   return el;
 }
@@ -312,8 +390,10 @@ function buildSection(
 
   const grid = document.createElement("div");
   grid.className = "folder-view-grid";
-  // FR-25: set --fv-columns CSS custom property inline for this grid.
-  grid.style.setProperty("--fv-columns", String(config.columns));
+  // Set --fv-card-width (inherited by cards for flex-basis / minmax).
+  grid.style.setProperty("--fv-card-width", config.cardWidth + "px");
+  // Flex mode adds a modifier class; grid mode is the default (no class).
+  if (config.layoutMode === "flex") grid.classList.add("fv-flex-mode");
   grid.setAttribute("role", "list");
 
   // EC-22: single O(N) loop — no nested card×card operations.
@@ -380,15 +460,28 @@ export function renderFolderCards(
     host.appendChild(desc);
   }
 
-  // Step 3: Separate and sort.
-  const dirCards = cards.filter(c => c.kind === "directory");
-  const fileCards = cards.filter(c => c.kind === "file");
+  // Step 3: Apply exclude filter (FVB-05), then separate and sort.
+  const excludeSet = new Set(config.exclude);
+  const visibleCards = excludeSet.size > 0
+    ? cards.filter(c => {
+        // For .md files the name is the stem; reconstruct full filename for comparison.
+        const filename = c.ext === ".md" ? c.name + ".md" : c.name;
+        return !excludeSet.has(filename);
+      })
+    : cards;
+
+  const dirCards  = visibleCards.filter(c => c.kind === "directory");
+  const fileCards = visibleCards.filter(c => c.kind === "file");
 
   sortCards(dirCards, config.sort);
   sortCards(fileCards, config.sort);
 
+  // Respect section-visibility toggles (FVB-07).
+  const showDirs  = config.showFolders && dirCards.length > 0;
+  const showFiles = config.showFiles  && fileCards.length > 0;
+
   // Step 4: Empty state (FR-26, EC-06).
-  if (dirCards.length === 0 && fileCards.length === 0) {
+  if (!showDirs && !showFiles) {
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
     empty.textContent = "This folder is empty.";
@@ -398,12 +491,12 @@ export function renderFolderCards(
   }
 
   // Step 5: Render sections — subfolders always before files (FR-18).
-  if (dirCards.length > 0) {
-    host.appendChild(buildSection("Folders", dirCards, config));
+  if (showDirs) {
+    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config));
   }
 
-  if (fileCards.length > 0) {
-    host.appendChild(buildSection(null, fileCards, config));
+  if (showFiles) {
+    host.appendChild(buildSection(config.filesTitle || null, fileCards, config));
   }
 
   container.appendChild(host);

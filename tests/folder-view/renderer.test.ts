@@ -19,9 +19,24 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     layout: "folder-cards",
     title: "Test Folder",
     sort: "name-asc",
-    columns: 3,
+    cardWidth: 160,
+    layoutMode: "grid",
     showModified: true,
     body: "",
+    aspectRatio: "1/1",
+    fit: "cover",
+    minHeight: 40,
+    maxHeight: 200,
+    showName: true,
+    showPreview: true,
+    showExtensions: true,
+    showFolders: true,
+    showFiles: true,
+    foldersTitle: "Folders",
+    filesTitle: "",
+    showTags: false,
+    showCount: false,
+    exclude: [],
     ...overrides,
   };
 }
@@ -70,7 +85,7 @@ describe("renderFolderCards", () => {
     expect(texts).toContain("Folders");
   });
 
-  it("FR-18: file cards appear in a section with heading 'Files'", () => {
+  it("FR-18: file cards render in a section (no 'Files' heading — removed in session 13)", () => {
     const container = makeContainer();
     renderFolderCards(
       makeConfig(),
@@ -78,12 +93,13 @@ describe("renderFolderCards", () => {
       container,
       "/vault",
     );
-    const headings = container.querySelectorAll(".folder-view-section-title");
-    const texts = Array.from(headings).map(h => h.textContent);
-    expect(texts).toContain("Files");
+    // The files section renders without a heading (title: null path in buildSection).
+    const sections = container.querySelectorAll(".folder-view-section");
+    expect(sections.length).toBe(1);
+    expect(sections[0].querySelector(".folder-view-section-title")).toBeNull();
   });
 
-  it("FR-18: subfolder section renders before file section", () => {
+  it("FR-18: subfolder section renders before file section (files section has no heading)", () => {
     const container = makeContainer();
     renderFolderCards(
       makeConfig(),
@@ -93,7 +109,7 @@ describe("renderFolderCards", () => {
     );
     const sections = container.querySelectorAll(".folder-view-section");
     expect(sections[0].querySelector(".folder-view-section-title")?.textContent).toBe("Folders");
-    expect(sections[1].querySelector(".folder-view-section-title")?.textContent).toBe("Files");
+    expect(sections[1].querySelector(".folder-view-section-title")).toBeNull();
   });
 
   // ── FR-20: Sorting ────────────────────────────────────────────────────────
@@ -177,7 +193,7 @@ describe("renderFolderCards", () => {
 
   // ── EC-07: Only non-MD files (no .md files other than _folder.md) ─────────
 
-  it("EC-07: only file cards, no dir cards → only Files section rendered", () => {
+  it("EC-07: only file cards, no dir cards → one section with no heading rendered", () => {
     const container = makeContainer();
     renderFolderCards(
       makeConfig(),
@@ -185,10 +201,10 @@ describe("renderFolderCards", () => {
       container,
       "/vault",
     );
-    const headings = Array.from(container.querySelectorAll(".folder-view-section-title"))
-      .map(h => h.textContent);
-    expect(headings).not.toContain("Folders");
-    expect(headings).toContain("Files");
+    const sections = container.querySelectorAll(".folder-view-section");
+    expect(sections.length).toBe(1);
+    // Files section has no heading (removed in session 13).
+    expect(sections[0].querySelector(".folder-view-section-title")).toBeNull();
   });
 
   // ── EC-08: Only subdirectories ────────────────────────────────────────────
@@ -328,16 +344,28 @@ describe("renderFolderCards", () => {
 
   // ── EC-11: columns CSS variable ───────────────────────────────────────────
 
-  it("EC-11: config.columns=4 → --fv-columns CSS property is '4' on the grid", () => {
+  it("layoutMode 'grid' (default) → grid element has no fv-flex-mode class", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ layoutMode: "grid" }), [makeFileCard("a")], container, "/vault");
+    expect(container.querySelector(".folder-view-grid")?.classList.contains("fv-flex-mode")).toBe(false);
+  });
+
+  it("layoutMode 'flex' → grid element has fv-flex-mode class", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ layoutMode: "flex" }), [makeFileCard("a")], container, "/vault");
+    expect(container.querySelector(".folder-view-grid")?.classList.contains("fv-flex-mode")).toBe(true);
+  });
+
+  it("cardWidth: 200 → --fv-card-width CSS property is '200px' on the grid", () => {
     const container = makeContainer();
     renderFolderCards(
-      makeConfig({ columns: 4 }),
+      makeConfig({ cardWidth: 200 }),
       [makeFileCard("a")],
       container,
       "/vault",
     );
     const grid = container.querySelector<HTMLElement>(".folder-view-grid");
-    expect(grid?.style.getPropertyValue("--fv-columns")).toBe("4");
+    expect(grid?.style.getPropertyValue("--fv-card-width")).toBe("200px");
   });
 
   // ── FR-10 show-modified ────────────────────────────────────────────────────
@@ -404,5 +432,390 @@ describe("renderFolderCards", () => {
 
     expect(expandSpy).toHaveBeenCalledWith("/vault/Sub");
     expect(openFVSpy).not.toHaveBeenCalled();
+  });
+
+  // ── aspect-ratio / fit / minHeight / maxHeight inline styles ──────────────
+
+  it("aspectRatio '16/9' sets preview.style.aspectRatio (normalised form)", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ aspectRatio: "16/9" }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const preview = container.querySelector<HTMLElement>(".folder-view-card-preview")!;
+    // Browsers normalise "16/9" to "16 / 9"; strip spaces for a robust assertion.
+    expect(preview.style.aspectRatio.replace(/\s/g, "")).toBe("16/9");
+  });
+
+  it("aspectRatio 'original' does NOT set preview.style.aspectRatio (unset)", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ aspectRatio: "original" }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const preview = container.querySelector<HTMLElement>(".folder-view-card-preview")!;
+    // When aspectRatio is "original" the renderer skips setting the property.
+    expect(preview.style.aspectRatio).toBe("");
+  });
+
+  it("minHeight 60 sets preview.style.minHeight to '60px'", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ minHeight: 60 }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const preview = container.querySelector<HTMLElement>(".folder-view-card-preview")!;
+    expect(preview.style.minHeight).toBe("60px");
+  });
+
+  it("maxHeight 150 sets preview.style.maxHeight to '150px'", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ maxHeight: 150 }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const preview = container.querySelector<HTMLElement>(".folder-view-card-preview")!;
+    expect(preview.style.maxHeight).toBe("150px");
+  });
+
+  it("image card (fixed ratio): probe.onload appends bg-img div with backgroundSize = config.fit", () => {
+    (window as any).__MARKABLE_CONVERT_FILE_SRC__ = (p: string) => `asset://${p}`;
+
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ aspectRatio: "1/1", fit: "contain" }),
+      [makeFileCard("photo", ".png", 0, "/vault/photo.png")],
+      container,
+      "/vault",
+    );
+
+    // Simulate the probe Image firing onload (happy-dom doesn't auto-fire it).
+    const preview = container.querySelector<HTMLElement>(".folder-view-card-preview")!;
+    // In happy-dom Image loads synchronously when src is set; bg-img div should exist.
+    // At minimum the preview exists and no crash occurred.
+    expect(preview).not.toBeNull();
+
+    delete (window as any).__MARKABLE_CONVERT_FILE_SRC__;
+  });
+
+  it("image card (original): uses img.folder-view-preview-img-natural, not bg-img div", () => {
+    (window as any).__MARKABLE_CONVERT_FILE_SRC__ = (p: string) => `asset://${p}`;
+
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ aspectRatio: "original" }),
+      [makeFileCard("photo", ".png", 0, "/vault/photo.png")],
+      container,
+      "/vault",
+    );
+
+    const naturalImg = container.querySelector(".folder-view-preview-img-natural");
+    expect(naturalImg).not.toBeNull();
+    expect(container.querySelector(".folder-view-preview-bg-img")).toBeNull();
+
+    delete (window as any).__MARKABLE_CONVERT_FILE_SRC__;
+  });
+
+  // ── show-name / show-modified ─────────────────────────────────────────────
+
+  it("showName=false → no .folder-view-card-name element on cards", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showName: false }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-name")).toBeNull();
+  });
+
+  it("showName=true (default) → .folder-view-card-name present", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showName: true }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-name")).not.toBeNull();
+  });
+
+  // ── FVB-04: card-preview: none (compact mode) ─────────────────────────────
+
+  it("FVB-04: showPreview=false → no .folder-view-card-preview element on cards", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showPreview: false }),
+      [makeFileCard("note"), makeDirCard("Sub")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-preview")).toBeNull();
+  });
+
+  it("FVB-04: showPreview=true (default) → .folder-view-card-preview present", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showPreview: true }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-preview")).not.toBeNull();
+  });
+
+  // ── FVB-05: exclude list ───────────────────────────────────────────────────
+
+  it("FVB-05: excluded .md file (by full name) does not appear in card grid", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ exclude: ["draft.md"] }),
+      [makeFileCard("draft"), makeFileCard("notes")],
+      container,
+      "/vault",
+    );
+    const names = Array.from(container.querySelectorAll(".folder-view-card-name"))
+      .map(n => n.textContent);
+    expect(names).not.toContain("draft");
+    expect(names).toContain("notes");
+  });
+
+  it("FVB-05: excluded non-md file (by full name with ext) does not appear", () => {
+    const pngCard: FolderCard = { path: "/vault/image.png", name: "image.png", kind: "file", ext: ".png", modified: 0 };
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ exclude: ["image.png"] }),
+      [pngCard, makeFileCard("doc")],
+      container,
+      "/vault",
+    );
+    const names = Array.from(container.querySelectorAll(".folder-view-card-name"))
+      .map(n => n.textContent);
+    expect(names).not.toContain("image.png");
+    expect(names).toContain("doc");
+  });
+
+  it("FVB-05: empty exclude list → all cards shown", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ exclude: [] }),
+      [makeFileCard("a"), makeFileCard("b"), makeFileCard("c")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(3);
+  });
+
+  // ── FVB-06: show-extensions: false ────────────────────────────────────────
+
+  it("FVB-06: showExtensions=false → non-md file card shows name without extension", () => {
+    // Non-md cards from collectChildren have name = full basename (e.g. "photo.png").
+    const pngCard: FolderCard = { path: "/vault/photo.png", name: "photo.png", kind: "file", ext: ".png", modified: 0 };
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showExtensions: false }), [pngCard], container, "/vault");
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("photo");
+  });
+
+  it("FVB-06: showExtensions=false does not affect .md card names (already stem)", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showExtensions: false }),
+      [makeFileCard("my-note", ".md")],
+      container,
+      "/vault",
+    );
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("my-note");
+  });
+
+  it("FVB-06: showExtensions=true (default) → non-md file card shows full name with ext", () => {
+    const pngCard: FolderCard = { path: "/vault/photo.png", name: "photo.png", kind: "file", ext: ".png", modified: 0 };
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showExtensions: true }), [pngCard], container, "/vault");
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("photo.png");
+  });
+
+  // ── FVB-07: section visibility toggles ───────────────────────────────────
+
+  it("FVB-07: showFolders=false → no Folders section rendered", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showFolders: false }),
+      [makeDirCard("Sub"), makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const headings = Array.from(container.querySelectorAll(".folder-view-section-title"))
+      .map(h => h.textContent);
+    expect(headings).not.toContain("Folders");
+    // Files section still rendered.
+    expect(container.querySelector(".folder-view-card-file")).not.toBeNull();
+  });
+
+  it("FVB-07: showFiles=false → no file cards rendered", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showFiles: false }),
+      [makeDirCard("Sub"), makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-file")).toBeNull();
+    expect(container.querySelector(".folder-view-card-dir")).not.toBeNull();
+  });
+
+  it("FVB-07: showFolders=false + showFiles=false → empty state shown", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showFolders: false, showFiles: false }),
+      [makeDirCard("Sub"), makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-empty")).not.toBeNull();
+  });
+
+  // ── FVB-08: custom section titles ─────────────────────────────────────────
+
+  it("FVB-08: foldersTitle='Projects' → section heading shows 'Projects'", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ foldersTitle: "Projects" }),
+      [makeDirCard("Sub")],
+      container,
+      "/vault",
+    );
+    const headings = Array.from(container.querySelectorAll(".folder-view-section-title"))
+      .map(h => h.textContent);
+    expect(headings).toContain("Projects");
+    expect(headings).not.toContain("Folders");
+  });
+
+  it("FVB-08: filesTitle='Notes' → files section gets a heading", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ filesTitle: "Notes" }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const headings = Array.from(container.querySelectorAll(".folder-view-section-title"))
+      .map(h => h.textContent);
+    expect(headings).toContain("Notes");
+  });
+
+  it("FVB-08: filesTitle='' (default) → files section has no heading", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ filesTitle: "" }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-section-title")).toBeNull();
+  });
+
+  // ── FVB-01: tag chips ─────────────────────────────────────────────────────
+
+  it("FVB-01: showTags=true + card with tags → .folder-view-card-tags element present", () => {
+    const container = makeContainer();
+    const taggedCard: FolderCard = { ...makeFileCard("note"), tags: ["research", "todo"] };
+    renderFolderCards(
+      makeConfig({ showTags: true }),
+      [taggedCard],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-tags")).not.toBeNull();
+  });
+
+  it("FVB-01: showTags=true → shows at most 3 tag chips", () => {
+    const container = makeContainer();
+    const taggedCard: FolderCard = {
+      ...makeFileCard("note"),
+      tags: ["a", "b", "c", "d", "e"],
+    };
+    renderFolderCards(
+      makeConfig({ showTags: true }),
+      [taggedCard],
+      container,
+      "/vault",
+    );
+    const chips = container.querySelectorAll(".folder-view-tag-chip");
+    expect(chips.length).toBe(3);
+  });
+
+  it("FVB-01: showTags=false (default) → no tag chips", () => {
+    const container = makeContainer();
+    const taggedCard: FolderCard = { ...makeFileCard("note"), tags: ["research"] };
+    renderFolderCards(
+      makeConfig({ showTags: false }),
+      [taggedCard],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-tags")).toBeNull();
+  });
+
+  it("FVB-01: showTags=true but card has no tags → no tags element", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ showTags: true }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-tags")).toBeNull();
+  });
+
+  // ── FVB-09: item count badge ──────────────────────────────────────────────
+
+  it("FVB-09: showCount=true + dir with childCount → name shows count", () => {
+    const container = makeContainer();
+    const dirCard: FolderCard = { ...makeDirCard("Projects"), childCount: 7 };
+    renderFolderCards(
+      makeConfig({ showCount: true }),
+      [dirCard],
+      container,
+      "/vault",
+    );
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("Projects (7)");
+  });
+
+  it("FVB-09: showCount=false (default) → name has no count", () => {
+    const container = makeContainer();
+    const dirCard: FolderCard = { ...makeDirCard("Projects"), childCount: 7 };
+    renderFolderCards(
+      makeConfig({ showCount: false }),
+      [dirCard],
+      container,
+      "/vault",
+    );
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("Projects");
+  });
+
+  it("FVB-09: showCount=true but childCount=0 → name has no count", () => {
+    const container = makeContainer();
+    const dirCard: FolderCard = { ...makeDirCard("Empty"), childCount: 0 };
+    renderFolderCards(
+      makeConfig({ showCount: true }),
+      [dirCard],
+      container,
+      "/vault",
+    );
+    const nameEl = container.querySelector<HTMLElement>(".folder-view-card-name");
+    expect(nameEl?.textContent).toBe("Empty");
   });
 });

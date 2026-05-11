@@ -937,6 +937,20 @@ export class TabManager {
   }
 
   /**
+   * Override the display title of the active tab.
+   *
+   * Called by layout renderers (e.g. Folder View) to show the folder name
+   * rather than the underlying filename ("_folder").
+   */
+  setActiveTabTitle(title: string): void {
+    const tab = this.getActiveTab();
+    if (!tab) return;
+    tab.title = title;
+    this._updateTitleBar(tab);
+    this._notifyRenderer();
+  }
+
+  /**
    * Closes the tab identified by id.
    *
    * Special cases:

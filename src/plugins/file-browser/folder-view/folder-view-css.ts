@@ -69,14 +69,19 @@ export const FOLDER_VIEW_CSS = `
 /* ── Card grid ────────────────────────────────────────────────────────── */
 
 /*
- * .folder-view-grid: CSS grid container.
- * Column count is controlled by the --fv-columns custom property set inline
- * on the element by renderer.ts (FR-25, EC-11).
+ * .folder-view-grid: default is CSS grid with auto-fill — consistent,
+ * predictable column counts that snap as the container resizes.
+ * .fv-flex-mode switches to flex-wrap for continuous fluid resizing.
  */
 .folder-view-grid {
   display: grid;
-  grid-template-columns: repeat(var(--fv-columns, 3), 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(var(--fv-card-width, 160px), 1fr));
   gap: 10px;
+}
+
+.folder-view-grid.fv-flex-mode {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 /* ── Card base styles ─────────────────────────────────────────────────── */
@@ -86,6 +91,12 @@ export const FOLDER_VIEW_CSS = `
  * No padding at the card level — the preview rectangle fills the top
  * edge-to-edge; the name label has its own padding below.
  */
+.fv-flex-mode .folder-view-card {
+  flex: 1 1 var(--fv-card-width, 160px);
+  max-width: calc(var(--fv-card-width, 160px) * 2);
+  min-width: 0;
+}
+
 .folder-view-card {
   display: flex;
   flex-direction: column;
@@ -110,25 +121,37 @@ export const FOLDER_VIEW_CSS = `
 
 /*
  * .folder-view-card-preview: content-preview area at the top of each card.
- * Images fill the rectangle; text files show an excerpt; other files show
- * a centred icon.
+ * Shape and sizing are set by inline styles from renderer.ts (aspectRatio,
+ * minHeight, maxHeight). The CSS fallback min-height applies only when
+ * inline styles are absent (e.g. in tests without full config).
+ * position: relative anchors .folder-view-preview-bg-img (absolute inset).
  */
 .folder-view-card-preview {
   width: 100%;
-  height: 90px;
+  min-height: 40px;
   overflow: hidden;
   background: var(--bg-tertiary, rgba(128,128,128,.07));
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  position: relative;
 }
 
-/* Image: cover-fill the rectangle. */
-.folder-view-preview-img {
+/* Background-image div for fixed-ratio image previews. Fills the container
+ * absolutely; background-size is set inline by renderer.ts (config.fit). */
+.folder-view-preview-bg-img {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* Natural-proportion <img> for aspect-ratio: original. Fills width, height
+ * follows the image's intrinsic ratio. Container clips via overflow: hidden. */
+.folder-view-preview-img-natural {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
   display: block;
 }
 
@@ -171,7 +194,16 @@ export const FOLDER_VIEW_CSS = `
   font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
-  padding: 6px 8px;
+  padding: 6px 8px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-view-card-date {
+  font-size: 10px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  padding: 0 8px 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -223,6 +255,29 @@ export const FOLDER_VIEW_CSS = `
   margin: 0 0 16px;
 }
 
+/* ── Tag chips (FVB-01) ───────────────────────────────────────────────── */
+
+.folder-view-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 2px 8px 6px;
+}
+
+.folder-view-tag-chip {
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-tertiary, rgba(128,128,128,.12));
+  color: var(--text-secondary, rgba(128,128,128,.65));
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 72px;
+  text-overflow: ellipsis;
+}
+
 /* ── Folder View enhanced directory in the file tree (FR-07) ──────────── */
 
 /*
@@ -233,6 +288,12 @@ export const FOLDER_VIEW_CSS = `
  */
 .tree-node-has-folder-view .tree-node-icon,
 .tree-node-has-folder-view .tree-node-label {
+  color: var(--accent-color);
+}
+
+/* _folder.md file entries share the accent color of their parent directory. */
+.tree-node-is-folder-md .tree-node-icon,
+.tree-node-is-folder-md .tree-node-label {
   color: var(--accent-color);
 }
 

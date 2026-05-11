@@ -259,7 +259,6 @@ const FILE_BROWSER_CSS = `
   margin: 6px 8px;
   border-radius: 6px;
   overflow: hidden;
-  background: var(--card-bg, rgba(128,128,128,.07));
 }
 .file-tree-card .file-tree {
   overflow-y: visible;
@@ -1651,6 +1650,10 @@ function buildTreeUl(
       badge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
       el.appendChild(badge);
     }
+    // Style _folder.md file entries to visually match their parent folder-view directory.
+    if (path.endsWith("/_folder.md") || path.endsWith("\\_folder.md")) {
+      el.classList.add("tree-node-is-folder-md");
+    }
     attachNodeListeners(el, vaultId, hasFolderView);
   }
 
@@ -2940,16 +2943,14 @@ function buildDirContextMenuItems(
         showInlineCreateInput(path, container, vaultId);
       },
     },
-    // FR-35: "Create Folder View…" injected between "New Note" and "New Folder"
-    // only when the directory does NOT already have _folder.md.
-    ...(!hasFolderView ? [
-      {
-        label: "Create Folder View…",
-        handler: () => {
-          void createFolderViewFile(path, container, vaultId);
-        },
-      } as { label: string; handler: (() => void) | null },
-    ] : []),
+    // FR-35: "Create Folder View…" when no _folder.md; "Reset Folder View…" when one exists.
+    // Both appear between "New Note" and "New Folder".
+    {
+      label: hasFolderView ? "Reset Folder View…" : "Create Folder View…",
+      handler: hasFolderView
+        ? () => { void resetFolderViewFile(path, container, vaultId); }
+        : () => { void createFolderViewFile(path, container, vaultId); },
+    },
     {
       label: "New Folder",
       handler: () => {
@@ -2980,6 +2981,35 @@ function buildDirContextMenuItems(
     },
   ];
 }
+
+/** Default _folder.md content written by both create and reset actions. */
+const FOLDER_VIEW_STARTER = [
+  "---",
+  "title:",
+  "# set title: My Folder to override the tab display name",
+  "layout:",
+  "  type: folder-cards",
+  "  mode: grid            # grid = consistent columns, flex = fluid smooth resize",
+  "  card-width: 160       # min px per card",
+  "  aspect-ratio: 1/1     # e.g. 16/9, 4/3, 1.5, original",
+  "  fit: cover            # cover, contain, 80% auto, auto 60%, 70% 50%",
+  "  min-height: 40",
+  "  max-height: 200",
+  "  sort: name-asc        # name-asc, name-desc, modified-asc, modified-desc",
+  "  card-preview: full    # full = show preview, none = compact name+date grid",
+  "  show-name: true       # false = hide the filename label",
+  "  show-modified: true   # false = hide the modified date",
+  "  show-extensions: true # false = strip file extensions from card labels",
+  "  show-folders: true    # false = hide the Folders section",
+  "  show-files: true      # false = hide the Files section",
+  "  folders-title: Folders",
+  "  files-title:",
+  "  # set files-title: Notes to show a heading above the Files section",
+  "  show-tags: false      # true = show up to 3 tags below the filename",
+  "  show-count: false     # true = show item count on subfolder cards",
+  "---",
+  "",
+].join("\n");
 
 /**
  * Create _folder.md in the given directory with a minimal starter template.
@@ -3023,11 +3053,10 @@ async function createFolderViewFile(
   }
 
   // FR-36: write the minimal starter template.
-  const STARTER = "---\nlayout: folder-cards\n---\n";
   try {
     await (window as any).__TAURI_INTERNALS__?.invoke?.(
       "write_file",
-      { path: folderMdPath, content: STARTER },
+      { path: folderMdPath, content: FOLDER_VIEW_STARTER },
     );
   } catch (err) {
     if (container) {
@@ -3043,6 +3072,45 @@ async function createFolderViewFile(
   void vaultManager?.reloadVaultIndex?.();
 
   // Open the folder-view layout immediately (not the _folder.md editor).
+  openFolderViewTab(dirPath);
+}
+
+/**
+ * Overwrite _folder.md with the default STARTER template after user confirmation.
+ *
+ * Used by the "Reset Folder View…" context menu item when hasFolderView=true.
+ * Presents a native confirm dialog before writing so the user cannot accidentally
+ * lose customisations.
+ */
+async function resetFolderViewFile(
+  dirPath: string,
+  container: HTMLElement | null,
+  _vaultId: string,
+): Promise<void> {
+  const confirmed = window.confirm(
+    "Reset _folder.md to defaults? Your current settings will be overwritten.",
+  );
+  if (!confirmed) return;
+
+  const folderMdPath = dirPath + "/_folder.md";
+  try {
+    await (window as any).__TAURI_INTERNALS__?.invoke?.(
+      "write_file",
+      { path: folderMdPath, content: FOLDER_VIEW_STARTER },
+    );
+  } catch (err) {
+    if (container) {
+      showInlineError(
+        container,
+        `Could not reset _folder.md: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return;
+  }
+
+  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+  void vaultManager?.reloadVaultIndex?.();
+
   openFolderViewTab(dirPath);
 }
 
@@ -4217,6 +4285,10 @@ export const _testing = {
   handleContextMenu,
   /** Expose createFolderViewFile for context-menu integration tests (step_06). */
   createFolderViewFile,
+  /** Expose resetFolderViewFile for reset behaviour tests. */
+  resetFolderViewFile,
+  /** Expose FOLDER_VIEW_STARTER so tests can assert the exact template content. */
+  FOLDER_VIEW_STARTER,
   /** Set _lastFolderViewSet for context-menu integration tests (step_06). */
   setLastFolderViewSet(s: Set<string>): void {
     _lastFolderViewSet = s;

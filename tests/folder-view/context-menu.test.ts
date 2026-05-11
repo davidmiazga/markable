@@ -87,10 +87,22 @@ describe("buildDirContextMenuItems — folder-view injection", () => {
     expect(createFVIdx).toBeLessThan(folderIdx);
   });
 
-  it("FR-35 no duplicate: hasFolderView=true → no 'Create Folder View…' item", () => {
+  it("FR-35 toggle: hasFolderView=true → 'Create Folder View…' replaced by 'Reset Folder View…'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
     expect(items.some(i => i.label === "Create Folder View…")).toBe(false);
+    expect(items.some(i => i.label === "Reset Folder View…")).toBe(true);
+  });
+
+  it("FR-35 reset position: 'Reset Folder View…' appears between 'New Note' and 'New Folder'", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
+    const labels = items.map(i => i.label);
+    const noteIdx = labels.indexOf("New Note");
+    const resetIdx = labels.indexOf("Reset Folder View…");
+    const folderIdx = labels.indexOf("New Folder");
+    expect(resetIdx).toBeGreaterThan(noteIdx);
+    expect(resetIdx).toBeLessThan(folderIdx);
   });
 
 });
@@ -212,10 +224,9 @@ describe("createFolderViewFile", () => {
     const container = document.createElement("div");
     await _testing.createFolderViewFile("/vault/A", container, "vault-1");
 
-    const STARTER = "---\nlayout: folder-cards\n---\n";
     expect(writeFileSpy).toHaveBeenCalledWith(
       "write_file",
-      { path: "/vault/A/_folder.md", content: STARTER },
+      { path: "/vault/A/_folder.md", content: _testing.FOLDER_VIEW_STARTER },
     );
   });
 
@@ -239,6 +250,97 @@ describe("createFolderViewFile", () => {
     const container = document.createElement("div");
     await _testing.createFolderViewFile("/vault/A", container, "vault-1");
 
+    expect(openFileInTabSpy).not.toHaveBeenCalled();
+  });
+
+});
+
+// ── Reset Folder View context menu presence ───────────────────────────────────
+
+describe("buildDirContextMenuItems — Reset Folder View item", () => {
+
+  it("hasFolderView=true → 'Reset Folder View…' item is present", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
+    expect(items.some(i => i.label === "Reset Folder View…")).toBe(true);
+  });
+
+  it("hasFolderView=false → 'Reset Folder View…' item is absent", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
+    expect(items.some(i => i.label === "Reset Folder View…")).toBe(false);
+  });
+
+  it("'Open Folder View' is NOT directly followed by 'Reset Folder View…' (reset is in the New Note/New Folder slot)", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
+    const openIdx = items.findIndex(i => i.label === "Open Folder View");
+    expect(openIdx).toBeGreaterThanOrEqual(0);
+    expect(items[openIdx + 1]?.label).not.toBe("Reset Folder View…");
+  });
+
+});
+
+// ── resetFolderViewFile ───────────────────────────────────────────────────────
+
+describe("resetFolderViewFile", () => {
+
+  let openFileInTabSpy: Mock;
+  let writeFileSpy: Mock;
+
+  beforeEach(() => {
+    openFileInTabSpy = vi.fn(() => Promise.resolve());
+    writeFileSpy = vi.fn().mockResolvedValue(undefined);
+
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: openFileInTabSpy,
+      enterLayoutView: vi.fn(),
+    };
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: vi.fn((cmd: string, args: Record<string, unknown>) => {
+        if (cmd === "write_file") return writeFileSpy(cmd, args);
+        return Promise.resolve(undefined);
+      }),
+    };
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getVaultIndex: vi.fn().mockReturnValue({ entries: [], directories: [], nonMdFiles: [] }),
+      reloadVaultIndex: vi.fn(),
+    };
+  });
+
+  it("confirm=true: write_file is called with FOLDER_VIEW_STARTER content", async () => {
+    (window.confirm as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(true);
+    const container = document.createElement("div");
+    await _testing.resetFolderViewFile("/vault/A", container, "vault-1");
+    expect(writeFileSpy).toHaveBeenCalledWith(
+      "write_file",
+      { path: "/vault/A/_folder.md", content: _testing.FOLDER_VIEW_STARTER },
+    );
+  });
+
+  it("confirm=false: write_file is NOT called", async () => {
+    (window.confirm as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(false);
+    const container = document.createElement("div");
+    await _testing.resetFolderViewFile("/vault/A", container, "vault-1");
+    expect(writeFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("success: folder-view tab is opened after write", async () => {
+    (window.confirm as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(true);
+    const container = document.createElement("div");
+    await _testing.resetFolderViewFile("/vault/A", container, "vault-1");
+    expect(openFileInTabSpy).toHaveBeenCalledWith("/vault/A/_folder.md");
+  });
+
+  it("write_file throws: folder-view tab is NOT opened", async () => {
+    (window.confirm as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(true);
+    writeFileSpy.mockRejectedValueOnce(new Error("disk full"));
+    (window as any).__TAURI_INTERNALS__.invoke = vi.fn((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "write_file") return writeFileSpy(cmd, args);
+      return Promise.resolve(undefined);
+    });
+    const container = document.createElement("div");
+    await _testing.resetFolderViewFile("/vault/A", container, "vault-1");
     expect(openFileInTabSpy).not.toHaveBeenCalled();
   });
 

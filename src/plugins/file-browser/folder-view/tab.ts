@@ -89,6 +89,19 @@ export function collectChildren(
   const fvSet = buildFolderViewSet(vaultIndex);
   const prefix = folderPath + "/";
 
+  // ── Child-count map for FVB-09 (O(N) over full vault index) ─────────────
+  // Counts immediate children per directory path across the whole index.
+  const childCountMap = new Map<string, number>();
+  const bumpCount = (childPath: string): void => {
+    const parent = childPath.slice(0, childPath.lastIndexOf("/"));
+    if (parent) childCountMap.set(parent, (childCountMap.get(parent) ?? 0) + 1);
+  };
+  for (const entry of vaultIndex.entries) bumpCount(entry.path);
+  for (const nf of vaultIndex.nonMdFiles ?? []) bumpCount((nf as any).path ?? nf);
+  for (const dir of vaultIndex.directories ?? []) {
+    bumpCount(typeof dir === "string" ? dir : (dir as any).path ?? "");
+  }
+
   const cards: FolderCard[] = [];
 
   // ── Directory children ────────────────────────────────────────────────────
@@ -105,6 +118,7 @@ export function collectChildren(
       ext: "",
       modified: 0,
       hasFolderView: fvSet.has(p),
+      childCount: childCountMap.get(p) ?? 0,
     });
   }
 
@@ -120,6 +134,7 @@ export function collectChildren(
       kind: "file",
       ext: ".md",
       modified: entry.modified ?? 0,
+      tags: (entry as any).tags ?? [],
     });
   }
 
@@ -192,6 +207,9 @@ async function renderFolderViewTabAsync(
   // Step 2: Parse front-matter and body.
   const folderName = folderPath.split("/").pop() ?? folderPath;
   const config = parseFolderMd(content, folderName);
+
+  // Update the tab title to the folder name (or custom title:) rather than "_folder".
+  (window as any).__MARKABLE_TAB_MANAGER__?.setActiveTabTitle?.(config.title);
 
   // Step 3: Dispatch to layout renderer (FR-27/FR-28).
   const layoutKey = config.layout.toLowerCase();

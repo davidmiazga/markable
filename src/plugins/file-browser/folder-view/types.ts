@@ -12,6 +12,9 @@
 /** Allowed sort order values for the card grid. */
 export type FolderSortOrder = "name-asc" | "name-desc" | "modified-asc" | "modified-desc";
 
+/** Layout mode for the card grid. */
+export type FolderLayoutMode = "grid" | "flex";
+
 /**
  * Parsed YAML front-matter of a _folder.md file.
  *
@@ -26,8 +29,33 @@ export interface FolderMdFrontMatter {
   layout?: string;
   title?: string;
   sort?: string;
-  columns?: string | number;
+  "card-width"?: string | number;
+  "layout-mode"?: string;
   "show-modified"?: string | boolean;
+  "aspect-ratio"?: string;
+  fit?: string;
+  "min-height"?: string | number;
+  "max-height"?: string | number;
+  /** "false" hides the card name label. */
+  "show-name"?: string;
+  /** FVB-04: "none" hides the preview rectangle. */
+  "card-preview"?: string;
+  /** FVB-06: "false" strips file extensions from card labels. */
+  "show-extensions"?: string;
+  /** FVB-07: "false" hides the Folders section entirely. */
+  "show-folders"?: string;
+  /** FVB-07: "false" hides the Files section entirely. */
+  "show-files"?: string;
+  /** FVB-08: renames the Folders section heading. */
+  "folders-title"?: string;
+  /** FVB-08: adds / renames the Files section heading. */
+  "files-title"?: string;
+  /** FVB-01: "true" shows up to 3 tag chips below the card name. */
+  "show-tags"?: string;
+  /** FVB-09: "true" shows item count on subfolder cards. */
+  "show-count"?: string;
+  /** FVB-05: list of filenames to exclude from the card grid. */
+  exclude?: string[];
 }
 
 /**
@@ -47,12 +75,53 @@ export interface FolderViewConfig {
   title: string;
   /** Sort order applied to both subfolder and file sections. Default: "name-asc". */
   sort: FolderSortOrder;
-  /** Number of columns in the card grid, clamped to [2, 6]. Default: 3. */
-  columns: number;
+  /**
+   * Minimum card width in pixels used in the responsive layout.
+   * Clamped to [40, 600]. Default: 160.
+   */
+  cardWidth: number;
+  /** Whether to use a fixed-column grid or a fluid flex-wrap layout. Default: "grid". */
+  layoutMode: FolderLayoutMode;
   /** Whether to show the modified date on file cards. Default: true. */
   showModified: boolean;
   /** Markdown body below the closing --- of the YAML block. May be empty string. */
   body: string;
+  /**
+   * CSS aspect-ratio value for the preview rectangle, e.g. "1/1", "16/9".
+   * The special value "original" removes the fixed-ratio constraint.
+   * Default: "1/1".
+   */
+  aspectRatio: string;
+  /**
+   * CSS background-size value applied to image previews, e.g. "cover",
+   * "contain", "80% auto". Ignored when aspectRatio is "original".
+   * Default: "cover".
+   */
+  fit: string;
+  /** Minimum preview rectangle height in pixels. Default: 40. */
+  minHeight: number;
+  /** Maximum preview rectangle height in pixels. Default: 200. */
+  maxHeight: number;
+  /** Whether to show the card name label. Default: true. */
+  showName: boolean;
+  /** Whether to render the preview rectangle on cards. Default: true. FVB-04 */
+  showPreview: boolean;
+  /** Whether to show file extensions on card labels. Default: true. FVB-06 */
+  showExtensions: boolean;
+  /** Whether to render the Folders section. Default: true. FVB-07 */
+  showFolders: boolean;
+  /** Whether to render the Files section. Default: true. FVB-07 */
+  showFiles: boolean;
+  /** Section heading for the Folders section. Default: "Folders". FVB-08 */
+  foldersTitle: string;
+  /** Section heading for the Files section. Empty string = no heading. Default: "". FVB-08 */
+  filesTitle: string;
+  /** Whether to show tag chips below card names. Default: false. FVB-01 */
+  showTags: boolean;
+  /** Whether to show item count on subfolder cards. Default: false. FVB-09 */
+  showCount: boolean;
+  /** Filenames to exclude from the card grid. Default: []. FVB-05 */
+  exclude: string[];
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────
@@ -85,6 +154,10 @@ export interface FolderCard {
    * opens that subfolder's Folder View tab in addition to expanding the tree.
    */
   hasFolderView?: boolean;
+  /** YAML tags from front matter. Present for .md files only. FVB-01 */
+  tags?: string[];
+  /** Number of immediate children (files + dirs). Present for directories only. FVB-09 */
+  childCount?: number;
 }
 
 // ── Renderer interface ─────────────────────────────────────────────────────────
