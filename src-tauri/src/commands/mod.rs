@@ -26,7 +26,7 @@ pub use file_ops::{
     update_wiki_links,
 };
 pub use files::{list_md_files, list_preset_files, ensure_directory, get_home_dir, get_app_data_dir};
-pub use io::{read_file, write_file, write_binary_file};
+pub use io::{read_file, write_file, write_binary_file, get_image_dimensions, get_exif_data, sidecar_exists};
 pub use plugins::{
     copy_core_plugins,
     list_core_plugins,

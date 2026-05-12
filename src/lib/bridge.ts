@@ -641,3 +641,170 @@ export async function renameFile(
     };
   }
 }
+
+/**
+ * Delete a single file (not a directory) from disk.
+ *
+ * Wraps the Rust `delete_file` command. The plugin calls this command
+ * directly via __TAURI_INTERNALS__; this wrapper exists for non-plugin
+ * callers and type documentation.
+ *
+ * @param path - Absolute path to the file to delete.
+ * @returns FileResult<void> — ok:true on success, ok:false with error message on failure.
+ */
+export async function deleteFile(path: string): Promise<FileResult<void>> {
+  try {
+    await invoke("delete_file", { path });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "delete_file",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Move a file (not a directory) to a destination directory, preserving
+ * the original filename.
+ *
+ * Wraps the Rust `move_file` command. For moving directories, use
+ * renameFile(itemPath, destDir + "/" + dirName) instead.
+ * The plugin calls this command directly via __TAURI_INTERNALS__;
+ * this wrapper exists for non-plugin callers and type documentation.
+ *
+ * @param source         - Absolute path of the source file.
+ * @param destinationDir - Absolute path of the destination directory.
+ * @returns FileResult<string> where value is the new absolute file path on success.
+ */
+export async function moveFile(
+  source: string,
+  destinationDir: string,
+): Promise<FileResult<string>> {
+  try {
+    const newPath = await invoke<string>("move_file", {
+      source,
+      destinationDir,
+    });
+    return { ok: true, value: newPath };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "move_file",
+        path: source,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+// ── Image metadata commands ───────────────────────────────────────────────────
+
+/**
+ * Read image dimensions (width × height in pixels) from the file header.
+ *
+ * Supports JPEG, PNG, GIF, WebP, and HEIC/HEIF. Header-only read — no full decode.
+ * The plugin calls get_image_dimensions directly via __TAURI_INTERNALS__; this wrapper
+ * exists for non-plugin consumers and type documentation (FR-10).
+ *
+ * @param path - Absolute path to the image file.
+ * @returns FileResult<{ width: number; height: number }> — never throws.
+ */
+export async function getImageDimensions(
+  path: string,
+): Promise<FileResult<{ width: number; height: number }>> {
+  try {
+    // Rust Result<(u32, u32), String> serialises the success value as a JSON array [w, h].
+    const [width, height] = await invoke<[number, number]>("get_image_dimensions", { path });
+    return { ok: true, value: { width, height } };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "get_image_dimensions",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Read Exif metadata from a JPEG image file.
+ *
+ * Returns DateTimeOriginal as YYYY-MM-DD and camera as "Make Model" string.
+ * Both fields are null when the Exif tag is absent.
+ * JPEG only for v1 (HEIC/HEIF Exif is out of scope).
+ * The plugin calls get_exif_data directly via __TAURI_INTERNALS__; this wrapper
+ * exists for non-plugin consumers and type documentation (FR-10).
+ *
+ * @param path - Absolute path to the JPEG file.
+ * @returns FileResult<{ dateTaken: string | null; camera: string | null }> — never throws.
+ */
+export async function getExifData(
+  path: string,
+): Promise<FileResult<{ dateTaken: string | null; camera: string | null }>> {
+  try {
+    // Rust uses snake_case (no rename_all): date_taken, camera.
+    const data = await invoke<{ date_taken: string | null; camera: string | null }>(
+      "get_exif_data",
+      { path },
+    );
+    return {
+      ok: true,
+      value: {
+        dateTaken: data.date_taken,
+        camera: data.camera,
+      },
+    };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "get_exif_data",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Check whether a sidecar file (path + ".md") exists on disk.
+ *
+ * Returns true if the sidecar file exists as a regular file.
+ * The plugin calls sidecar_exists directly via __TAURI_INTERNALS__; this wrapper
+ * exists per convention (FR-10). Note: executeBulkYaml does NOT call this — it writes
+ * directly via write_file, which creates the file if absent (NFR-7).
+ *
+ * @param path - Absolute path to the source file (e.g. "/vault/photo.jpg").
+ *               The sidecar path checked is path + ".md".
+ * @returns FileResult<boolean> — never throws.
+ */
+export async function sidecarExists(
+  path: string,
+): Promise<FileResult<boolean>> {
+  try {
+    const exists = await invoke<boolean>("sidecar_exists", { path });
+    return { ok: true, value: exists };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "sidecar_exists",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}

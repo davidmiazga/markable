@@ -25,6 +25,50 @@ import { extractFrontmatterKeys } from "./frontmatter-reader";
 import type { FolderLayoutRenderer, FolderCard } from "./types";
 import type { VaultIndex } from "../../../lib/vault-types";
 
+// ── Image extension constants (FR-9, step_04) ────────────────────────────────
+
+/**
+ * Set of image file extensions that may have sidecar .md companions.
+ *
+ * Used both for:
+ *   (a) Sidecar exclusion in collectChildren (FR-9): a .md file whose stem ends
+ *       in one of these extensions is treated as a sidecar, not a document.
+ *   (b) Image type dispatch in the enrichment loop (step_05): determines whether
+ *       to call get_image_dimensions / get_exif_data for a non-.md card.
+ *
+ * Lowercase, without leading dot. Each entry is a recognised image format
+ * supported by get_image_dimensions or commonly stored in vaults.
+ */
+export const IMAGE_EXTENSIONS = new Set([
+  "jpg", "jpeg", "png", "gif", "webp", "heic", "heif",
+]);
+
+/**
+ * Return true if a vault .md entry stem looks like a sidecar for an image file.
+ *
+ * A sidecar stem is the filename without ".md" (i.e. entry.name in the vault index).
+ * The stem is a sidecar when it contains a dot and its last dot-segment is a
+ * known image extension.
+ *
+ * Examples:
+ *   "photo.jpg"      → true  (stem has ".jpg" suffix)
+ *   "banner.png"     → true
+ *   "my.project.jpg" → true  (EC-20: last segment is "jpg")
+ *   "_folder"        → false (no dot in stem)
+ *   "readme"         → false (no dot)
+ *   "notes.txt"      → false ("txt" not an image extension)
+ *
+ * This function is NOT exported — it is a private helper used only within tab.ts.
+ *
+ * @param stem - The entry.name field (filename without ".md").
+ */
+function isSidecarStem(stem: string): boolean {
+  const lastDot = stem.lastIndexOf(".");
+  if (lastDot === -1) return false;
+  const ext = stem.slice(lastDot + 1).toLowerCase();
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
 // ── HTML escape utility (EC-13) ───────────────────────────────────────────────
 
 /**
@@ -131,6 +175,10 @@ export function collectChildren(
     if (entry.path.slice(prefix.length).includes("/")) continue;
     // FR-23: exclude _folder.md from the card grid.
     if (entry.name === "_folder" && entry.path.endsWith(".md")) continue;
+    // FR-9: exclude sidecar .md files (e.g. photo.jpg.md) from the card grid.
+    // entry.name is the stem (filename without ".md"). A sidecar stem ends in an
+    // image extension (e.g. "photo.jpg"). See isSidecarStem() for the algorithm.
+    if (isSidecarStem(entry.name)) continue;
     cards.push({
       path: entry.path,
       name: entry.name, // stem without ".md" for Markdown files
@@ -159,6 +207,49 @@ export function collectChildren(
   }
 
   return cards;
+}
+
+// ── Image enrichment helpers ──────────────────────────────────────────────────
+
+/**
+ * The four built-in image column identifiers.
+ *
+ * Must stay in sync with BUILTIN_FIELDS in parser.ts (they are both sets of the
+ * same four strings). Used to detect when image enrichment is needed and to
+ * dispatch dimension / EXIF reads vs sidecar reads in the enrichment loop.
+ *
+ * Defined here (not imported from parser.ts) because tab.ts is an IIFE bundle
+ * that cannot import from plugin-external modules at runtime.
+ */
+const IMAGE_BUILTIN_KEYS = new Set(["width", "height", "date-taken", "camera"]);
+
+/**
+ * Extensions eligible for EXIF data extraction via get_exif_data.
+ *
+ * JPEG is fully supported in v1. HEIC/HEIF is listed here so that future
+ * Rust-side HEIC Exif support requires no TypeScript change. PNG/GIF/WebP
+ * do not carry standard Exif data and are intentionally excluded.
+ */
+const EXIF_ELIGIBLE_EXTS = new Set(["jpg", "jpeg", "heic", "heif"]);
+
+/**
+ * Return true when the FolderViewConfig requests at least one image built-in column.
+ *
+ * The enrichment gate in renderFolderViewTabAsync calls this helper to decide
+ * whether image-specific reads (get_image_dimensions, get_exif_data) should run.
+ *
+ * Checks config.fields (fields: mode) first. Falls back to checking config.extraFields
+ * for legacy mode, though image keys will not normally appear there because they are
+ * in BUILTIN_FIELDS and are therefore excluded from extraFields by parseFolderMd.
+ *
+ * @param config - The parsed FolderViewConfig.
+ */
+function imageColumnsRequested(config: import("./types").FolderViewConfig): boolean {
+  if (config.fields !== null) {
+    return config.fields.some(f => IMAGE_BUILTIN_KEYS.has(f));
+  }
+  // Legacy mode: check extraFields (defensive; image keys are unlikely here).
+  return config.extraFields.some(f => IMAGE_BUILTIN_KEYS.has(f.key));
 }
 
 // ── Async render (reads disk and dispatches to layout renderer) ───────────────
@@ -227,37 +318,143 @@ async function renderFolderViewTabAsync(
   } else {
     const cards = collectChildren(folderPath, vaultIndex);
 
-    // Step 3a: Enrichment phase — read child .md file frontmatter (FR-09).
-    // Only runs for folder-table when extra fields are declared (EC-12 guard).
-    if (layoutKey === "folder-table" && config.extraFields.length > 0) {
-      const fieldKeys = config.extraFields.map(f => f.key);
+    // Step 3a: Enrichment phase — read child metadata for folder-table columns.
+    // Runs when:
+    //   (a) extra-fields are declared (custom frontmatter columns), OR
+    //   (b) image built-in columns are requested (width, height, date-taken, camera).
+    // NFR-5: no enrichment runs for layouts other than folder-table or when neither
+    // condition is met.
+    const needsEnrichment =
+      layoutKey === "folder-table" &&
+      (config.extraFields.length > 0 || imageColumnsRequested(config));
 
-      // Non-.md files and directory cards get an empty meta object so the
-      // renderer can safely access card.meta without undefined checks.
+    if (needsEnrichment) {
+      // Determine which field keys are needed per card type.
+      //
+      // requestedImageKeys: which of the four image built-ins appear in config.fields.
+      //   These drive Rust command calls (get_image_dimensions, get_exif_data).
+      //
+      // sidecarKeys: non-builtin (custom) keys from config.extraFields.
+      //   Used for both .md file enrichment AND sidecar reads for image cards.
+      //   config.extraFields already excludes BUILTIN_FIELDS entries (parser.ts resolved them).
+      const allRequestedFields: string[] = config.fields !== null
+        ? config.fields
+        : config.extraFields.map(f => f.key);
+
+      const requestedImageKeys = allRequestedFields.filter(f => IMAGE_BUILTIN_KEYS.has(f));
+      const needsDimensions = requestedImageKeys.includes("width") || requestedImageKeys.includes("height");
+      const needsExif = requestedImageKeys.includes("date-taken") || requestedImageKeys.includes("camera");
+      const sidecarKeys = config.extraFields.map(f => f.key);
+
+      // Initialise meta for non-.md file cards and directory cards so the renderer
+      // can safely access card.meta without undefined checks (no-op for .md cards —
+      // they get their meta set in the enrichment loop below).
       for (const card of cards) {
         if (card.kind !== "file" || card.ext !== ".md") {
           card.meta = {};
         }
       }
 
-      // Concurrently read all .md file cards (NFR-03, AD-03: uncapped Promise.all).
-      // Each read failure is caught individually — one error must not abort the
-      // render for all other cards (EC-03, FR-09 step 6).
-      const mdCards = cards.filter(c => c.kind === "file" && c.ext === ".md");
+      // Enrich all cards concurrently (AD-3: uncapped Promise.all, same as existing .md path).
+      // Each per-card async callback handles its own errors so one failure cannot abort
+      // the render for other cards (FR-8 per-card error isolation).
       await Promise.all(
-        mdCards.map(async (card) => {
-          try {
-            const fileContent = await (window as any).__TAURI_INTERNALS__?.invoke?.(
-              "read_file",
-              { path: card.path },
-            );
-            const raw = typeof fileContent === "string"
-              ? fileContent
-              : (fileContent?.content ?? "");
-            card.meta = extractFrontmatterKeys(raw, fieldKeys);
-          } catch {
-            // EC-03: failed read → empty meta, render continues.
-            card.meta = {};
+        cards.map(async (card) => {
+          // ── Directory cards: no enrichment (card.meta already initialised to {}) ─
+          if (card.kind === "directory") return;
+
+          // ── .md file cards: unchanged enrichment path ─────────────────────────
+          if (card.ext === ".md") {
+            if (sidecarKeys.length === 0) return; // no custom fields requested
+            try {
+              const fileContent = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+                "read_file",
+                { path: card.path },
+              );
+              const raw = typeof fileContent === "string"
+                ? fileContent
+                : (fileContent?.content ?? "");
+              card.meta = extractFrontmatterKeys(raw, sidecarKeys);
+            } catch {
+              // EC-03: failed read → empty meta, render continues.
+              card.meta = {};
+            }
+            return;
+          }
+
+          // ── Non-.md file cards ───────────────────────────────────────────────
+          // Determine if this card is an image by checking its extension.
+          const extRaw = card.ext.startsWith(".") ? card.ext.slice(1).toLowerCase() : card.ext.toLowerCase();
+          const isImage = IMAGE_EXTENSIONS.has(extRaw);
+
+          if (!isImage) {
+            // Non-image, non-.md file (e.g. .pdf, .zip): meta stays {} (EC-6, FR-7).
+            return;
+          }
+
+          // ── Image card enrichment ────────────────────────────────────────────
+
+          // 1. Image dimensions (FR-2): call get_image_dimensions for width/height.
+          if (needsDimensions) {
+            try {
+              const dims = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+                "get_image_dimensions",
+                { path: card.path },
+              ) as [number, number];
+              card.meta!["width"]  = String(dims[0]);
+              card.meta!["height"] = String(dims[1]);
+            } catch {
+              // EC-1: truncated or unreadable image → store "" so renderer shows em-dash.
+              card.meta!["width"]  = "";
+              card.meta!["height"] = "";
+            }
+          }
+
+          // 2. EXIF data (FR-3): only for EXIF-eligible extensions (JPEG, HEIC/HEIF).
+          //    PNG, GIF, WebP do not carry standard Exif — store "" without invoking.
+          if (needsExif) {
+            if (EXIF_ELIGIBLE_EXTS.has(extRaw)) {
+              try {
+                const exif = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+                  "get_exif_data",
+                  { path: card.path },
+                ) as { date_taken: string | null; camera: string | null };
+                card.meta!["date-taken"] = exif.date_taken ?? "";
+                card.meta!["camera"]     = exif.camera ?? "";
+              } catch {
+                // EC-2: no Exif segment or parse error → store "" for em-dash fallback.
+                card.meta!["date-taken"] = "";
+                card.meta!["camera"]     = "";
+              }
+            } else {
+              // PNG, GIF, WebP: EXIF not supported — set "" so renderer shows em-dash.
+              card.meta!["date-taken"] = "";
+              card.meta!["camera"]     = "";
+            }
+          }
+
+          // 3. Sidecar keys (FR-4): read <image>.md for any non-builtin fields requested.
+          if (sidecarKeys.length > 0) {
+            const sidecarPath = card.path + ".md";
+            try {
+              const sidecarContent = await (window as any).__TAURI_INTERNALS__?.invoke?.(
+                "read_file",
+                { path: sidecarPath },
+              );
+              const raw = typeof sidecarContent === "string"
+                ? sidecarContent
+                : (sidecarContent?.content ?? "");
+              const sidecarMeta = extractFrontmatterKeys(raw, sidecarKeys);
+              // Merge sidecar meta into card.meta (image keys already set above).
+              for (const k of sidecarKeys) {
+                card.meta![k] = sidecarMeta[k] ?? "";
+              }
+            } catch {
+              // EC-1 (sidecar variant): sidecar missing or unreadable → "" for each key.
+              for (const k of sidecarKeys) {
+                card.meta![k] = "";
+              }
+            }
           }
         }),
       );

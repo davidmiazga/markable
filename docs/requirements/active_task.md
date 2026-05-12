@@ -1,581 +1,275 @@
 ---
-title: "Folder Table — Unified fields: Column List"
-last-updated: "2026-05-11"
-review-cadence-days: 30
+title: "Image Metadata as First-Class Columns in Folder-Table"
+last-updated: "2026-05-12"
+review-cadence-days: 7
 status: active
 ---
 
-# Active Task — Folder Table: Unified `fields:` Column List
+# Feature: Image Metadata as First-Class Columns in Folder-Table
 
 ## Summary
 
-As a Markable user, I want to declare a single `fields:` list in `_folder.md`
-that controls which columns appear in the `folder-table` layout, in what order,
-and that accepts any YAML frontmatter key as a custom column — replacing the
-separate `show-modified`, `show-tags`, `show-extensions`, `show-count`, and
-`extra-fields:` flags with one unified sequence that I can reorder and annotate
-directly.
+As a visual user browsing image-heavy folders in folder-table view, I want image dimensions, EXIF metadata (date taken, camera), and custom sidecar tags to appear as sortable columns alongside `.md` file metadata, so that images feel like first-class citizens in my vault without requiring a separate digital asset manager.
 
 ---
 
-## Background and Motivation
+## Knowns
 
-The current `folder-table` layout exposes column visibility through four separate
-boolean flags (`show-modified`, `show-tags`, `show-extensions`, `show-count`) and
-a separate `extra-fields:` sequence for custom frontmatter columns. Adding or
-reordering columns requires editing multiple lines in multiple places, and there
-is no mechanism to change column order at all — it is hardcoded in the renderer.
+### Scope
 
-This feature replaces that fragmented system with a single `fields:` sequence.
-Each item names a column to render, in the order listed. Built-in column names
-map to the existing column implementations. Any unrecognised name is treated as a
-custom frontmatter key (equivalent to the current `extra-fields:` mechanism).
+All three capabilities apply exclusively to the `folder-table` layout. The `folder-cards` layout is unchanged. All changes are confined to the file-browser plugin and the Rust backend; no changes to any other plugin or to the main application shell are required.
 
-The `folder-cards` layout is entirely unaffected. All existing `_folder.md`
-files that do not include `fields:` continue to work identically — full backwards
-compatibility is mandatory.
+The three capabilities are:
 
----
+1. **Image dimensions** — `width` and `height` as built-in sortable columns for image files. Read-only; read from image binary headers at enrichment time.
+2. **EXIF metadata** — `date-taken` and `camera` as built-in sortable columns for JPEG/HEIC files that carry Exif segments. Read-only. No write-back to image files ever.
+3. **Custom sidecar tagging** — `photo.jpg` gets a companion `photo.jpg.md` with YAML frontmatter (`tags`, `rating`, `notes`, or any custom key). The existing "Apply YAML" bulk action in the toolbar is extended to write to sidecar files instead of skipping non-`.md` files. `extractFrontmatterKeys` in `frontmatter-reader.ts` already reads sidecars transparently because it receives an absolute path and does not care about the naming pattern — it just reads a `.md` file.
 
-## Desired YAML Syntax
+### What Is Explicitly Out of Scope
 
-```yaml
-layout:
-  type: folder-table
-  fields:
-    - name
-    - type        # file extension column
-    - modified
-    - tags
-    - customtag   # any frontmatter key = extra column
+- Writing EXIF or XMP metadata back to any image file.
+- XMP sidecar files (`.xmp`). Only the `.jpg.md` / `.<ext>.md` pattern is supported.
+- Image thumbnails or preview tiles in the table rows.
+- Support for embedded ICC profiles, GPS coordinates, or any EXIF field beyond date-taken and camera make/model.
+- Any digital asset manager features: collections, albums, keyword hierarchies, face recognition, smart albums.
+- The `folder-cards` layout (card grid). Zero changes there.
+- Generating or managing sidecars from the UI beyond the existing "Apply YAML" bulk action.
+- Animated GIF or video file metadata.
+
+### Existing Infrastructure
+
+**Plugin architecture constraint**: The file-browser plugin is an IIFE bundle. It may not import from `src/lib/bridge.ts`. All Tauri calls inside the plugin use `window.__TAURI_INTERNALS__?.invoke?.(...)` directly. All new Rust commands must also be callable via this pattern.
+
+**`FolderCard.meta`**: The `meta?: Record<string, string>` field on `FolderCard` (defined in `types.ts`) is already the carrier for enriched column data. The enrichment phase in `tab.ts` (`renderFolderViewTabAsync`) populates `card.meta` by reading `.md` file frontmatter. The new image enrichment follows the same pattern: populate `card.meta` with image-derived values so `table-renderer.ts` can display them without any changes to the renderer's per-cell logic.
+
+**`BUILTIN_FIELDS` set** (in `parser.ts`): Currently `{ "name", "type", "ext", "modified", "tags", "count", "icon" }`. The new built-in image column identifiers (`width`, `height`, `date-taken`, `camera`) must be added to this set so they are not misclassified as custom frontmatter keys by `parseFolderMd` and `resolveFields`.
+
+**`fieldHeaderLabel`** (in `table-renderer.ts`): Maps built-in field identifiers to English column header labels. Needs cases for `width`, `height`, `date-taken`, `camera`.
+
+**Sidecar resolution in enrichment**: When a non-`.md` card is encountered and sidecar enrichment is enabled, the sidecar path is `card.path + ".md"` (e.g. `/vault/photos/sunset.jpg.md`). The existing `extractFrontmatterKeys` function already works on any `.md` file, so no change to that function is needed.
+
+**`executeBulkYaml`** in `bulk-operations.ts`: Currently skips all non-`.md` files with `result.skippedCount += 1`. This must be extended: when a non-`.md` file has a sidecar (`<path>.md` exists or can be created), "Apply YAML" operates on the sidecar instead of skipping the source file.
+
+### New Rust Commands Required
+
+Two new Rust commands are needed. Neither exists today. Both must be added to `src-tauri/src/commands/` and registered in `src-tauri/src/lib.rs`.
+
+**`get_image_dimensions(path: String) -> Result<(u32, u32), String>`**
+
+Returns `(width, height)` in pixels by reading the minimum necessary bytes from the image header — no full decode. Must support JPEG (SOF0/SOF2 markers), PNG (IHDR chunk), GIF (logical screen descriptor), WebP (VP8/VP8L/VP8X chunks), and HEIC/HEIF (ISO BMFF `ispe` box). Returns `Err` for unsupported formats and unreadable files. No new Cargo dependency required — all of these formats have fixed-position header bytes parseable with `std::io::Read`.
+
+**`get_exif_data(path: String) -> Result<ExifData, String>`**
+
+Returns a small struct `ExifData { date_taken: Option<String>, camera: Option<String> }`. `date_taken` is the Exif `DateTimeOriginal` (tag 0x9003) formatted as `YYYY-MM-DD`. `camera` is `Make` (tag 0x010F) + `" "` + `Model` (tag 0x0110), trimmed. Returns `Err` if the file has no Exif segment or cannot be read. JPEG only for v1 (HEIC/HEIF Exif parsing is not required). A minimal Exif parser that locates the APP1 marker, reads the TIFF header, and walks the IFD0 directory is sufficient. No new Cargo dependency required.
+
+**`sidecar_exists(path: String) -> Result<bool, String>`**
+
+Returns `true` if `path + ".md"` exists on disk as a regular file. Used by the bulk-YAML extension to decide whether to create or update a sidecar. Simple `std::path::Path::exists()` check. Returns `Err` only on OS-level failures.
+
+All three new commands must have typed wrappers added to `src/lib/bridge.ts` per project convention, even though the plugin calls them via `__TAURI_INTERNALS__` directly.
+
+### Enrichment Phase Extension (in `tab.ts`)
+
+The current enrichment guard:
+
+```
+if (layoutKey === "folder-table" && config.extraFields.length > 0)
 ```
 
-Users control columns by editing this list:
-- Delete a line to remove that column.
-- Reorder lines to reorder columns.
-- Add any frontmatter key name to get a custom data column.
+Must be extended to also run when image built-in columns are requested. The condition becomes:
+
+```
+if (layoutKey === "folder-table" && (config.extraFields.length > 0 || imageColumnsRequested))
+```
+
+where `imageColumnsRequested` is true when any of `["width", "height", "date-taken", "camera"]` appears in `config.fields` (fields mode) or is declared in `config.extraFields` (legacy extra-fields mode).
+
+Within the enrichment loop, per-card logic:
+
+- If the card is a `.md` file: existing path (read frontmatter, call `extractFrontmatterKeys`). Unchanged.
+- If the card is an image file (ext in `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.heic`, `.heif`):
+  - If `width` or `height` is requested: call `get_image_dimensions(card.path)`. On success, store `"width"` and `"height"` as string values in `card.meta`. On error, store `""` (em-dash fallback in renderer).
+  - If `date-taken` or `camera` is requested AND the file is `.jpg`/`.jpeg`/`.heic`/`.heif`: call `get_exif_data(card.path)`. On success, store `"date-taken"` and/or `"camera"` as string values. On error, store `""`.
+  - If sidecar fields are requested (any key that is not a built-in image key): attempt to read `card.path + ".md"` via `read_file`. If it exists, call `extractFrontmatterKeys` on it for the requested keys. If it does not exist or read fails, store `""` for each requested key.
+- If the card is a non-image, non-`.md` file: `card.meta = {}`.
+- If the card is a directory: `card.meta = {}`. (Unchanged.)
+
+All image metadata reads are performed concurrently (same `Promise.all` pattern as the existing `.md` enrichment). Individual failures are caught per-card — one failure must not abort the render.
+
+### `_folder.md` Syntax (User-Facing)
+
+The four new built-in column identifiers are used in the `fields:` sequence like any other column:
+
+```yaml
+layout: folder-table
+fields:
+  - name
+  - ext
+  - width
+  - height
+  - date-taken
+  - camera
+  - tags
+  - rating        # reads from photo.jpg.md sidecar
+```
+
+No new YAML keys are introduced in `_folder.md`. The `fields:` mechanism already handles the ordering and visibility of any identifier. `width`, `height`, `date-taken`, and `camera` work identically to any other built-in identifier — they are added to `BUILTIN_FIELDS` so the parser classifies them correctly.
+
+### Sidecar Bulk-YAML Extension
+
+`executeBulkYaml` in `bulk-operations.ts` currently skips any non-`.md` file:
+
+```typescript
+if (kind === "directory" || !itemPath.endsWith(".md")) {
+  result.skippedCount += 1;
+  continue;
+}
+```
+
+The extension replaces this skip with a sidecar-write path for non-`.md` files:
+
+- If `kind === "directory"`: still skip. Directories have no sidecar.
+- If `kind === "file"` and path does not end in `.md`: compute `sidecarPath = itemPath + ".md"`. Operate on `sidecarPath` instead of `itemPath`. The sidecar may not yet exist; `write_file` creates it if absent (Rust `fs::write` creates the file). A sidecar created for the first time gets a minimal frontmatter block wrapping the key-value pair.
+- The result summary for a YAML operation that mixed `.md` and non-`.md` files should report total files processed (both direct `.md` and sidecar writes) without distinguishing them. "Skipped" is reserved for directories only.
 
 ---
 
 ## Functional Requirements
 
-### FR-01 — New `fields:` YAML key
+### FR-1 — New Built-in Column Identifiers
 
-`_folder.md` may declare a `fields:` sequence under the `layout:` block or at
-the top level (same placement flexibility as `extra-fields:`). Each item is a
-plain string. Example:
+`width`, `height`, `date-taken`, and `camera` are added to `BUILTIN_FIELDS` in `parser.ts`. They may be used in the `fields:` sequence in `_folder.md`. When declared, they appear as sortable columns in the folder-table. When absent from `fields:`, they do not appear (same behaviour as any other column).
 
-```yaml
-fields:
-  - name
-  - modified
-  - tags
-  - status       # custom frontmatter key
-```
+### FR-2 — Image Dimensions Columns
 
-When `fields:` is present it supersedes all column-visibility flags (`show-modified`,
-`show-tags`, `show-extensions`, `show-count`) and the `extra-fields:` sequence.
-Those keys are parsed but ignored when `fields:` is present.
+When `width` or `height` appears in `config.fields` (or `config.extraFields`), the enrichment phase calls `get_image_dimensions` for each image card. Results are stored as string values in `card.meta` (e.g. `"1920"`, `"1080"`). The renderer displays the value as-is; the cell shows an em-dash (`—`) when the value is absent or empty. These columns are sortable via locale-aware string comparison (which is numerically correct for same-length strings; sufficiently accurate for v1).
 
-### FR-02 — Built-in field identifiers: Files section
+Supported formats for dimension reading: JPEG, PNG, GIF, WebP, HEIC/HEIF.
 
-The following identifiers have built-in meaning for the Files section of the table:
+### FR-3 — EXIF Columns
 
-| Identifier | Meaning | Equivalent legacy flag |
-|---|---|---|
-| `name` | Filename column | always shown in legacy mode |
-| `type` or `ext` | File extension column | `show-extensions: true` |
-| `modified` | Last-modified date column | `show-modified: true` |
-| `tags` | Tag chips column | `show-tags: true` |
+When `date-taken` or `camera` appears in `config.fields` (or `config.extraFields`), the enrichment phase calls `get_exif_data` for each `.jpg`/`.jpeg`/`.heic`/`.heif` card. Results are stored as string values in `card.meta`. PNG, GIF, and WebP cards always get `""` for these keys (EXIF not supported). The em-dash fallback applies as with FR-2.
 
-Any string not in this set (and not `count`) is a custom frontmatter key and
-produces an extra column (same semantics as `extra-fields:`).
+`date-taken` displays in the format `YYYY-MM-DD` as extracted from Exif `DateTimeOriginal`. The column header label is `"Date Taken"`.
+`camera` displays as `"Make Model"` (trimmed, null bytes stripped). The column header label is `"Camera"`.
 
-### FR-03 — Built-in field identifiers: Folders section
+Both columns are sortable.
 
-The following identifiers have built-in meaning for the Folders section of the
-table:
+### FR-4 — Sidecar Read in Enrichment
 
-| Identifier | Meaning | Equivalent legacy flag |
-|---|---|---|
-| `name` | Folder name column | always shown in legacy mode |
-| `count` | Item count column | `show-count: true` |
+When a non-`.md` file card has sidecar fields requested (any `config.fields` or `config.extraFields` entry that is not one of the four built-in image keys and not in the standard `BUILTIN_FIELDS` set), the enrichment phase reads `card.path + ".md"` and calls `extractFrontmatterKeys` on it. If the sidecar does not exist or cannot be read, the keys are absent from `card.meta` (em-dash fallback in renderer). Sidecar read failures must not cause an error or break the render.
 
-All other field identifiers in `fields:` produce an em-dash cell in folder rows
-to keep the column structure aligned between the two sections.
+### FR-5 — Sidecar Write via Bulk-YAML
 
-`count` in the Files section produces an em-dash cell (it is folders-only).
+When the user applies a YAML key-value via the bulk toolbar and the selection includes non-`.md` image files, the operation writes to the corresponding `<imagepath>.md` sidecar file instead of skipping. If the sidecar does not exist, it is created with a minimal frontmatter block. The operation result summary counts sidecar writes in `succeeded` alongside direct `.md` file writes. Directories remain skipped.
 
-### FR-04 — BUILTIN_FIELDS constant
+### FR-6 — Column Header Labels
 
-A module-level constant `BUILTIN_FIELDS` is defined in `parser.ts`:
+`fieldHeaderLabel` in `table-renderer.ts` must return the following for the new built-in identifiers:
 
-```typescript
-const BUILTIN_FIELDS = new Set(["name", "type", "ext", "modified", "tags", "count"]);
-```
+| Identifier | Header label |
+|---|---|
+| `width` | `"Width"` |
+| `height` | `"Height"` |
+| `date-taken` | `"Date Taken"` |
+| `camera` | `"Camera"` |
 
-This set is used by the parser to derive `extraFields` from `fields:` and by the
-renderer to classify columns.
+### FR-7 — Non-Image Files Receive Empty Meta for Image Keys
 
-### FR-05 — Parser: `fields:` extraction
+For non-image files (e.g. `.pdf`, `.zip`, `.txt`) that appear in a folder where image columns are declared, `card.meta` is set to `{}` for those keys (same as the current behaviour for non-`.md`, non-image files). Em-dash renders in those cells.
 
-`parseFolderMd()` in `parser.ts` must gain a new `extractFieldsRaw()` helper
-(parallel to the existing `extractExtraFieldsRaw()`) that:
+### FR-8 — Lazy Enrichment (No Blocking)
 
-1. Scans raw YAML lines for a `fields:` key at any indentation level (same
-   approach as `extractExtraFieldsRaw`).
-2. Collects subsequent more-indented `- item` lines as plain strings.
-3. Strips inline comments (` #...`) and surrounding quotes from each item.
-4. Returns a `string[]` (never null; empty array when key is absent or sequence
-   is empty).
+Image dimension and EXIF reads are performed in the same concurrent `Promise.all` enrichment loop as `.md` frontmatter reads. The initial `folder-view-loading` placeholder is shown while enrichment runs. Enrichment does not block tab opening or any other UI. This matches NFR-03 in the existing architecture (uncapped `Promise.all`).
 
-Unlike `extra-fields:`, `fields:` items are always plain strings — no inline
-`key: label` or structured `key:/label:` sub-key syntax is supported. Built-in
-column labels are hardcoded in the renderer; custom field labels default to the
-capitalised key.
+### FR-9 — Sidecar Isolation from Vault Index Display
 
-### FR-06 — Parser: `config.fields` and derived `config.extraFields`
+A sidecar file (`photo.jpg.md`) is a companion to its image and must not appear as a standalone row in the folder-table. The vault index already surfaces `.md` files through `vaultIndex.entries`; `collectChildren` in `tab.ts` must exclude any `.md` file whose stem ends in an image extension (e.g. `photo.jpg.md`, `banner.png.md`). The exclusion pattern is: if `entry.name` (the stem without `.md`) contains a dot and the portion after the last dot is a known image extension (`jpg`, `jpeg`, `png`, `gif`, `webp`, `heic`, `heif`), exclude it from the file cards array.
 
-`parseFolderMd()` sets `config.fields` as follows:
+### FR-10 — New bridge.ts Wrappers
 
-- When `fields:` is present and non-empty: `config.fields = rawFields` (the
-  extracted `string[]`).
-- When `fields:` is absent or the sequence is empty: `config.fields = null`.
+Three new typed wrappers are added to `src/lib/bridge.ts`:
 
-When `config.fields !== null`, the parser also derives `config.extraFields` from
-it for backwards compatibility with the enrichment phase in `tab.ts`:
-
-```typescript
-config.extraFields = config.fields
-  .filter(f => !BUILTIN_FIELDS.has(f))
-  .map(f => ({ key: f, label: f.charAt(0).toUpperCase() + f.slice(1) }));
-```
-
-This means the enrichment guard in `tab.ts` (`config.extraFields.length > 0`)
-continues to work without modification.
-
-When `config.fields === null`, `config.extraFields` is derived from the legacy
-`extra-fields:` sequence exactly as it is today.
-
-### FR-07 — `FolderViewConfig` changes
-
-`FolderViewConfig` gains one new field:
-
-```typescript
-/**
- * Ordered list of column identifiers from the fields: YAML sequence.
- * null when fields: is absent — triggers legacy flag-based column logic.
- */
-fields: string[] | null;
-```
-
-Default value: `null`.
-
-All other existing fields on `FolderViewConfig` remain unchanged. The `showModified`,
-`showExtensions`, `showTags`, `showCount`, and `extraFields` fields are all still
-populated from their existing YAML sources; they are just ignored by the renderer
-when `fields !== null`.
-
-### FR-08 — `FolderMdFrontMatter` changes
-
-`FolderMdFrontMatter` gains one new field:
-
-```typescript
-/** Raw YAML value for the fields: sequence. */
-"fields"?: unknown;
-```
-
-### FR-09 — Renderer: `resolveFields()` helper
-
-A new module-level helper is added to `table-renderer.ts`:
-
-```typescript
-function resolveFields(config: FolderViewConfig, isFiles: boolean): string[]
-```
-
-Behaviour:
-
-- When `config.fields !== null` and `isFiles === true`: return `config.fields`
-  with `"count"` filtered out (count is folders-only).
-- When `config.fields !== null` and `isFiles === false`: return `config.fields`
-  with only `"name"` and `"count"` retained as recognised; all others are passed
-  through as a signal to render an em-dash cell (see FR-11).
-- When `config.fields === null`: derive the column list from legacy flags (see
-  FR-12).
-
-### FR-10 — Renderer: fields-mode column construction (Files section)
-
-When `config.fields !== null`, `buildSectionTable()` for the Files section must
-iterate `resolveFields(config, true)` to construct both `<th>` header elements
-and `<td>` data cells in each file row, in that order.
-
-Column construction rules per field identifier (Files section):
-
-| Field identifier | `<th>` label | `<td>` content | Sortable? |
-|---|---|---|---|
-| `name` | "Name" | Filename (respecting extensions display) | Yes (name-asc/desc) |
-| `type` or `ext` | "Type" | `card.ext` | Yes (ext sort) |
-| `modified` | "Modified" | `formatModified(card.modified)` or "—" | Yes (modified-asc/desc) |
-| `tags` | "Tags" | Tag chip elements | No |
-| Any other string | Capitalised key | `card.meta?.[key]` or "—" | Yes (extra-field sort) |
-
-The icon column (`<td class="fv-td-icon">`) is always rendered first, before any
-field columns, regardless of the `fields:` list. It does not appear in `fields:`
-and cannot be removed or reordered by the user.
-
-### FR-11 — Renderer: fields-mode column construction (Folders section)
-
-When `config.fields !== null`, `buildSectionTable()` for the Folders section
-iterates `resolveFields(config, false)`. For each identifier in the resolved
-list:
-
-- `name`: render the folder name `<td>` (standard behaviour).
-- `count`: render the item count `<td>`.
-- Any other identifier: render an em-dash `<td>` with class `fv-td-placeholder`
-  to keep rows aligned with the files table.
-
-The icon column is always rendered first as per FR-10.
-
-### FR-12 — Renderer: legacy (backwards-compat) column construction
-
-When `config.fields === null`, `buildSectionTable()` behaves exactly as it does
-today — columns are constructed from the individual boolean flags
-(`config.showExtensions`, `config.showModified`, `config.showTags`,
-`config.showCount`, and `config.extraFields`). No change to this code path.
-
-This is the "no `fields:` key" case. All existing `_folder.md` files that lack
-`fields:` continue to work identically.
-
-### FR-13 — Sort: fields-mode pre-selection
-
-In fields mode, initial sort pre-selection works as follows:
-
-- The sort column is determined from `config.sort` as today.
-- If `config.sort` matches a built-in builtin (`name`, `modified`, `ext`) the
-  appropriate `<th>` receives the `fv-sorted-*` class on initial render.
-- If `config.sort` matches a custom field key present in `fields:`, that custom
-  column header receives the `fv-sorted-asc` class on initial render.
-- If `config.sort` does not match any column in `fields:`, no column is
-  pre-selected (no `fv-sorted-*` class applied); the sort falls back to name-asc
-  on first click.
-
-Sort interaction (click to sort, click again to toggle direction) continues to
-work for all sortable columns regardless of mode.
-
-### FR-14 — Sort: `name` absent from `fields:` is valid
-
-When `name` is absent from `fields:`, the name column is simply not rendered.
-The sort fallback column for the name header click handler does not exist; no
-error occurs. If `config.sort` would normally select the name column but the
-name column is absent, no column is pre-selected.
-
-### FR-15 — `name` absent from `fields:` — name still accessible in sort
-
-Even when `name` is not in `fields:`, `card.name` still exists on the data model
-and the renderer can still sort by name internally as a tie-breaker. The absence
-of a `name` field only removes the visual column — it does not affect data model
-availability.
-
-### FR-16 — `fields: []` (empty list)
-
-An explicitly empty `fields:` sequence (key present, no items) is treated as
-`config.fields = null` (falls through to legacy mode). This preserves the
-invariant that a present-but-empty `fields:` does not suppress all columns.
-
-### FR-17 — Enrichment phase: unchanged guard logic
-
-The enrichment phase guard in `renderFolderViewTabAsync()` (`tab.ts`):
-
-```typescript
-if (layoutKey === "folder-table" && config.extraFields.length > 0)
-```
-
-is NOT modified. Because the parser derives `config.extraFields` from
-`config.fields` when `fields:` is present (FR-06), this guard fires correctly
-in both modes.
-
-### FR-18 — XSS prevention
-
-Custom field values read from child `.md` frontmatter are inserted via
-`.textContent` (never `.innerHTML`). Em-dash fallback values are also set via
-`.textContent`. Column header labels derived from capitalised key names are set
-via `.textContent`.
-
-### FR-19 — `FOLDER_VIEW_STARTER` update
-
-The `FOLDER_VIEW_STARTER` constant in `file-browser.plugin.ts` gains a commented-
-out `fields:` block in the position of the former `# extra-fields:` comment
-block:
-
-```text
-"# fields:",
-"#   - name",
-"#   - type       # file extension column",
-"#   - modified",
-"#   - tags",
-"# uncomment to control which columns appear and in what order",
-"# add any frontmatter key as a custom column (folder-table only)",
-```
-
-The three lines of `# extra-fields:` comments are removed from the starter (they
-are superseded by the `# fields:` block). All other starter lines are unchanged.
-
-### FR-20 — `folder-cards` layout: unaffected
-
-The `folder-cards` renderer (`renderer.ts`) is not modified. `config.fields`
-is parsed and stored regardless of layout but is never read by the cards renderer.
+- `getImageDimensions(path: string): Promise<FileResult<{ width: number; height: number }>>` — wraps `get_image_dimensions`
+- `getExifData(path: string): Promise<FileResult<{ dateTaken: string | null; camera: string | null }>>` — wraps `get_exif_data`
+- `sidecarExists(path: string): Promise<FileResult<boolean>>` — wraps `sidecar_exists`
 
 ---
 
 ## Non-Functional Requirements
 
-- **NFR-01** — No new npm dependencies. No new Rollup bundle targets.
-- **NFR-02** — No Rust changes. All frontmatter reads use the existing `read_file`
-  Tauri command.
-- **NFR-03** — `parseFolderMd()` must never throw. The new `fields:` extraction
-  path is wrapped in the existing top-level try/catch.
-- **NFR-04** — When `config.fields === null` the renderer code path is identical
-  to the current implementation. No regression to existing tests.
-- **NFR-05** — Column order in fields mode is determined solely by the `fields:`
-  list. The renderer must not impose any hardcoded ordering on top of the list.
-- **NFR-06** — The icon column is always rendered first and is not part of
-  `fields:`. This is implementation-internal and must not be surfaced as a
-  user-facing field identifier.
+- **NFR-1** — No EXIF data is ever written to any image file. The EXIF command is read-only.
+- **NFR-2** — `get_image_dimensions` reads only the minimum bytes required to locate the dimension fields in each format's header (e.g. first ~26 bytes for PNG, first SOFn marker for JPEG). It does not decode the full image.
+- **NFR-3** — No new Cargo crates for EXIF or image parsing. Both parsers are implemented with standard library I/O (`std::io::Read`, `std::io::Seek`).
+- **NFR-4** — Sidecar files are invisible in the folder-table view (FR-9). A user browsing a photo folder sees only image rows, not companion `.jpg.md` rows.
+- **NFR-5** — Image enrichment is gated the same way existing enrichment is gated: only runs for `folder-table` and only when at least one image column or sidecar field is declared. Folders with no image columns declared are unaffected and pay no performance cost.
+- **NFR-6** — All new built-in identifiers follow the existing hyphenated-lowercase key convention (`date-taken`, not `dateTaken`). Column header labels use Title Case.
+- **NFR-7** — `executeBulkYaml` never calls `sidecar_exists` over the network before the operation; instead it calls `write_file` on the sidecar path directly. If the file does not exist, Rust `write_file` creates it. This avoids a round-trip check before every write.
+- **NFR-8** — All user-controlled text (filenames, EXIF strings) inserted into the DOM uses `.textContent`. No `.innerHTML` interpolation of image metadata strings.
 
 ---
 
-## Acceptance Criteria
+## Files to Create or Modify
 
-- **AC-01** — A `_folder.md` with `fields: [name, modified, tags]` renders a
-  files-section table with exactly those three data columns in that order (plus
-  the always-present icon column).
-- **AC-02** — A `_folder.md` with `fields: [modified, name]` renders the Modified
-  column before the Name column.
-- **AC-03** — A `_folder.md` with `fields: [name, status]` where `status` is a
-  custom frontmatter key renders a "Status" column populated from child `.md`
-  frontmatter.
-- **AC-04** — A `_folder.md` with no `fields:` key renders identically to the
-  current implementation (legacy flags control visibility; all existing tests
-  pass).
-- **AC-05** — A `_folder.md` with `fields: [name, count]` renders the Folders
-  section with Name and Count columns; Files section renders Name column only
-  (count produces an em-dash in files rows — wait, `count` is excluded from files
-  by `resolveFields`; Name column only).
-- **AC-06** — A `_folder.md` with `fields: [name, modified]` renders the Folders
-  section with Name column and an em-dash column (Modified is not a folder
-  built-in); folder rows show "—" in the second column.
-- **AC-07** — A `_folder.md` with `fields: [modified, tags]` (name omitted)
-  renders no Name column. Rows exist but the Name `<th>` and name `<td>` are
-  absent.
-- **AC-08** — `fields: []` (empty sequence) falls through to legacy mode;
-  `config.fields` is `null`.
-- **AC-09** — `show-modified: false` in the YAML is ignored when `fields:`
-  includes `modified`; the Modified column is rendered.
-- **AC-10** — `extra-fields: [status]` is ignored when `fields:` is present;
-  only columns in `fields:` appear.
-- **AC-11** — `fields:` items with inline comments (`- modified  # last changed`)
-  parse the item as `modified` (comment stripped).
-- **AC-12** — The `folder-cards` layout renders identically regardless of whether
-  `fields:` is present or absent.
+| File | Nature of change |
+|---|---|
+| `src-tauri/src/commands/io.rs` | Add `get_image_dimensions`, `get_exif_data`, `sidecar_exists` commands |
+| `src-tauri/src/lib.rs` | Register the three new commands in the invoke handler |
+| `src/lib/bridge.ts` | Add `getImageDimensions`, `getExifData`, `sidecarExists` typed wrappers |
+| `src/plugins/file-browser/folder-view/parser.ts` | Add `width`, `height`, `date-taken`, `camera` to `BUILTIN_FIELDS` |
+| `src/plugins/file-browser/folder-view/tab.ts` | Extend enrichment phase: image dimension + EXIF reads, sidecar reads, update enrichment guard, add sidecar exclusion to `collectChildren` |
+| `src/plugins/file-browser/folder-view/table-renderer.ts` | Add `fieldHeaderLabel` cases for four new built-in identifiers |
+| `src/plugins/file-browser/folder-view/bulk-operations.ts` | Extend `executeBulkYaml` to write sidecars for non-`.md` files |
 
----
-
-## Files to Change
-
-| File | Action | Notes |
-|---|---|---|
-| `src/plugins/file-browser/folder-view/types.ts` | Extend | Add `fields: string[] \| null` to `FolderViewConfig`; add `"fields"?: unknown` to `FolderMdFrontMatter` |
-| `src/plugins/file-browser/folder-view/parser.ts` | Extend | Add `BUILTIN_FIELDS` constant; add `extractFieldsRaw()` helper; populate `config.fields` and derive `config.extraFields` from it when non-null; add `fields: null` to `safeDefaults` |
-| `src/plugins/file-browser/folder-view/table-renderer.ts` | Extend | Add `resolveFields()` helper; replace column construction in `buildSectionTable()` with fields-mode path when `config.fields !== null`; legacy path unchanged |
-| `src/plugins/file-browser/file-browser.plugin.ts` | Update | Replace `# extra-fields:` comment block in `FOLDER_VIEW_STARTER` with `# fields:` comment block (FR-19) |
-| `tests/folder-view/parser.test.ts` | Add tests | New describe block for `fields:` extraction and `config.fields` / derived `extraFields` |
-| `tests/folder-view/table-renderer.test.ts` | Add tests | New describe block for fields-mode rendering: column order, omitted columns, custom fields, folder em-dash cells, empty list fallback, backwards-compat mode unchanged |
-
-**Files that must NOT be changed:**
-- `src/plugins/file-browser/folder-view/tab.ts` (no changes required)
-- `src/plugins/file-browser/folder-view/renderer.ts`
-- `src/plugins/file-browser/folder-view/detection.ts`
-- `src/plugins/file-browser/folder-view/fallback.ts`
-- `src/plugins/file-browser/folder-view/frontmatter-reader.ts`
-- Any Rust source files
-
----
-
-## Test Requirements
-
-### TR-01 — `tests/folder-view/parser.test.ts` additions
-
-New `describe("fields: extraction")` block covering:
-
-- **T-01** — `fields: [name, modified, tags]` → `config.fields = ["name", "modified", "tags"]`;
-  `config.extraFields = []` (no non-builtin items).
-- **T-02** — `fields: [name, status, priority]` → `config.fields = ["name", "status", "priority"]`;
-  `config.extraFields = [{key:"status",label:"Status"}, {key:"priority",label:"Priority"}]`.
-- **T-03** — `fields:` absent → `config.fields = null`; `config.extraFields` is
-  derived from `extra-fields:` as before (existing tests cover this path).
-- **T-04** — `fields:` present at top level (not nested under `layout:`) →
-  correctly extracted.
-- **T-05** — `fields:` nested under `layout:` block → correctly extracted (same
-  as the `extra-fields:` top-level / nested duality).
-- **T-06** — Item with inline comment: `- modified  # last changed` → item parsed
-  as `"modified"`.
-- **T-07** — `fields: []` (empty sequence) → `config.fields = null`.
-- **T-08** — `fields:` and `extra-fields:` both present → `config.fields` is
-  populated from `fields:`; `config.extraFields` is derived from `fields:`
-  (non-builtin items); `extra-fields:` is ignored.
-- **T-09** — `show-modified: false` with `fields: [modified]` → `config.fields`
-  contains `"modified"` and `config.showModified` is `false` (both parsed
-  independently; renderer decides which takes precedence).
-
-### TR-02 — `tests/folder-view/table-renderer.test.ts` additions
-
-New `describe("fields-mode rendering")` block covering:
-
-- **T-10** — `fields: ["name", "modified"]` → files thead has exactly Icon, Name,
-  Modified headers in that order.
-- **T-11** — `fields: ["modified", "name"]` → files thead has exactly Icon,
-  Modified, Name headers in that order (Modified before Name).
-- **T-12** — `fields: ["name", "status"]` with `extraFields: [{key:"status",label:"Status"}]`
-  and a card with `meta: {status:"draft"}` → Status `<th>` present and `<td>`
-  shows `"draft"`.
-- **T-13** — `fields: ["name", "status"]` with a card with `meta: {}` → Status
-  `<td>` shows `"—"`.
-- **T-14** — `fields: ["name", "modified"]` → no Tags or Type column rendered.
-- **T-15** — `fields: ["modified", "tags"]` (name omitted) → no Name `<th>` in
-  the files thead.
-- **T-16** — `fields: ["name", "count"]` → Files section: `count` field excluded
-  by `resolveFields`; files thead has Icon, Name only. Folders section: has Icon,
-  Name, Count.
-- **T-17** — `fields: ["name", "modified"]` in Folders section → Modified column
-  produces em-dash `<td>` cells in folder rows (Modified is not a folder built-in).
-- **T-18** — `config.fields = null` (legacy mode) → `makeConfig()` fixture with
-  `showModified: true, showExtensions: true` produces the same thead and cells as
-  the current implementation; all existing table-renderer tests pass unmodified.
-- **T-19** — `fields: ["name", "status"]`, `sort: "status"` → Status `<th>` has
-  `fv-sorted-asc` class on initial render; Name `<th>` has no sort class.
-- **T-20** — `fields: ["name"]` (only name) → files section renders a single data
-  column (Name) plus icon; no other headers present.
+No new TypeScript files. No new Rust files (new commands go in existing `io.rs`).
 
 ---
 
 ## Edge Case Inventory
 
-This list is the Reviewer's mandatory test checklist. Every EC must have a
-corresponding test or be explicitly justified as untestable in isolation.
+**EC-1** — Image file has no readable header (truncated file, zero-byte file): `get_image_dimensions` returns `Err`. Enrichment stores `""` for `width` and `height`. Em-dash renders in those cells.
 
-- **EC-01** — `fields:` key present but sequence is empty (`fields:` with no
-  items). Result: `config.fields = null` (falls through to legacy mode). No
-  columns suppressed; renders as if `fields:` were absent.
+**EC-2** — JPEG file has no APP1/Exif segment (e.g. stripped JPEG): `get_exif_data` returns `Err`. Enrichment stores `""` for `date-taken` and `camera`. Em-dash in cells.
 
-- **EC-02** — `name` is absent from `fields:`. The Name column is not rendered
-  in either section. No crash. Sort tie-breaking by `card.name` still works
-  internally (the data exists; only the visual column is absent).
+**EC-3** — Exif `DateTimeOriginal` is absent but `DateTime` (tag 0x0132) is present: `get_exif_data` returns `None` for `date_taken` (only `DateTimeOriginal` is read in v1). Em-dash in cell.
 
-- **EC-03** — `count` appears in the Files `fields:` list. `resolveFields` filters
-  `count` from the files column list; it is not rendered as a file column.
-  No crash, no em-dash cell (count is simply excluded, not rendered as a
-  placeholder).
+**EC-4** — Exif `Make` is present but `Model` is absent (or vice versa): `camera` string uses whichever field is present, trimmed. If both are absent, `camera` is `None` → em-dash.
 
-- **EC-04** — `type` and `ext` are aliases. Both identifiers produce the same Type
-  column. If both appear in `fields:`, two Type columns are rendered (it is a
-  user authoring error; deduplication is not required in v1).
+**EC-5** — Image dimensions are zero (malformed header with 0×0 stored): `get_image_dimensions` returns `Ok((0, 0))`. Enrichment stores `"0"`. Table displays `"0"`. This is the file's own malformed data; no special treatment.
 
-- **EC-05** — An unknown string that happens to match a CSS class name or a DOM
-  property name (e.g. `fields: [constructor]`) is treated as a custom
-  frontmatter key. The key is used only as a lookup in `card.meta` and as a
-  column label (capitalised); no eval or property access on native objects occurs.
+**EC-6** — Non-image file (e.g. `.pdf`) in a folder with `width` column declared: enrichment skips dimension read; `card.meta` for that card has no `width` entry. Em-dash in cell.
 
-- **EC-06** — `fields:` contains a custom key but no child `.md` files have that
-  key in their frontmatter. All custom-field cells display `"—"`. The enrichment
-  phase runs (because `config.extraFields.length > 0`) but returns empty strings
-  for every card. No crash.
+**EC-7** — Sidecar file `photo.jpg.md` is created by the user and placed in the vault before this feature is used: `collectChildren` must exclude it from standalone rows (FR-9). It will not appear as a row; its contents will be read during enrichment for the parent `photo.jpg` card.
 
-- **EC-07** — `fields:` and `extra-fields:` both present. `fields:` wins
-  entirely: `config.extraFields` is derived from `fields:` (non-builtin items
-  only); `extra-fields:` is ignored. This means any custom keys that were only in
-  `extra-fields:` and not in `fields:` produce no columns.
+**EC-8** — Sidecar `photo.jpg.md` is deleted externally between the folder-table render and a subsequent "Apply YAML" operation: `write_file` on the sidecar path creates a new file (Rust creates the file if absent). The write succeeds and counts toward `succeeded`. No error.
 
-- **EC-08** — `show-modified: false` is present alongside `fields: [name, modified]`.
-  `config.showModified` is `false` and `config.fields` contains `"modified"`.
-  The renderer uses `config.fields` (fields mode); the Modified column IS rendered.
-  The legacy `showModified` flag is ignored when `fields !== null`.
+**EC-9** — Sidecar already exists and "Apply YAML" is used to add a key that the sidecar already has: existing behaviour of `applyYamlKey` — the key value is overwritten. No error.
 
-- **EC-09** — `fields: [name, modified]` is present alongside `show-count: true`.
-  The Count column is NOT rendered (not in `fields:`) even though `config.showCount`
-  is `true`. Fields mode supersedes legacy flags.
+**EC-10** — "Apply YAML" with `op = "remove"` on an image card whose sidecar does not exist: `read_file` on the sidecar path returns a "File not found" error. This is caught per-item and added to `failed`. The error message is "File not found: <sidecarPath>". This is the correct behaviour because there is nothing to remove.
 
-- **EC-10** — `fields:` contains only custom keys with no `name` (e.g.
-  `fields: [status, priority]`). The Folders section iterates
-  `resolveFields(config, false)` and finds neither `name` nor `count`. All folder
-  rows render only the icon cell plus em-dash cells for `status` and `priority`.
-  No crash; folder rows are visually sparse but structurally valid.
+**EC-11** — Sidecar file has malformed frontmatter (opening `---` with no closing `---`): `executeBulkYaml` detects `parsed.malformed === true` and adds the sidecar path to `failed` with "Could not parse frontmatter in: <sidecarPath>". The sidecar is not written. Identical to the existing behaviour for malformed `.md` files.
 
-- **EC-11** — `fields:` item value is an empty string after comment-stripping
-  (e.g. `- # just a comment`). The empty string is silently skipped; it produces
-  no column.
+**EC-12** — Folder contains a file named `photo.jpg.md` that is not a sidecar (e.g. it is a standalone note about photography named with a `.jpg.md` double extension by the user): FR-9 exclusion hides this file from the table. This is an accepted trade-off; the file must be renamed or placed in a different folder to appear as a row.
 
-- **EC-12** — `fields:` contains duplicate identifiers (e.g. `[name, name]`).
-  Two Name columns are rendered. This is a user authoring error; deduplication is
-  not required in v1.
+**EC-13** — HEIC/HEIF dimension read: `get_image_dimensions` reads the ISO BMFF `ispe` box to extract width and height. If the box is absent or the file is corrupted, returns `Err`. Em-dash fallback.
 
-- **EC-13** — Sort interaction in fields mode: clicking a column header that is
-  present in `fields:` works normally. Clicking a column that is absent from
-  `fields:` cannot happen (the `<th>` element does not exist). No stale click
-  handler references exist.
+**EC-14** — WebP with VP8X container (extended WebP): `get_image_dimensions` reads the `VP8X` chunk canvas width and height. If the chunk is missing (plain VP8 or VP8L without a container), falls back to reading the VP8 or VP8L bitstream dimensions directly.
 
-- **EC-14** — `clearIndicators()` in fields mode must clear the sort indicator
-  from all dynamically constructed column headers, including custom-field headers
-  and any built-in column headers present in `fields:`. The existing `extraThs`
-  array pattern is sufficient when fields-mode headers are added to it.
+**EC-15** — PNG with non-standard IHDR position (IHDR not the first chunk after signature): `get_image_dimensions` reads only the first chunk after the 8-byte PNG signature. If it is not `IHDR`, returns `Err`. Standard-compliant PNG files always have `IHDR` first.
 
-- **EC-15** — `folder-cards` layout with `fields:` present in `_folder.md`.
-  `config.fields` is populated but the `folder-cards` renderer never reads it.
-  Render output is identical to `folder-cards` without `fields:`.
+**EC-16** — Concurrent enrichment for a folder with 500+ images: `Promise.all` is uncapped. Each call is an async Tauri invoke. At 500 concurrent invokes, the Rust side processes them on the async runtime. Performance must be acceptable (sub-3s for 500 images) because only header bytes are read, not full image decode. No batching is required for v1.
 
-- **EC-16** — `fields:` extracted from a nested `layout:` block: the
-  `extractFieldsRaw()` helper uses indentation comparison (same as
-  `extractExtraFieldsRaw()`), so it correctly finds `fields:` inside a `layout:`
-  block where it is more-indented than the top level.
+**EC-17** — `date-taken` Exif value is in a non-standard format (e.g. `2024:13:45 99:99:99`): `get_exif_data` returns the raw string as-is. No validation or reformatting. The caller receives whatever bytes are in the Exif tag.
 
-- **EC-17** — `fields:` item with surrounding quotes: `- "modified"`. Quote-
-  stripping in `extractFieldsRaw()` produces the identifier `modified` (no
-  quotes in the resulting string).
+**EC-18** — Image file is a symlink: `std::fs::File::open` follows symlinks by default on macOS. Dimension and EXIF reads succeed if the target is a readable image. If the target is missing, `get_image_dimensions` returns `Err`.
 
-- **EC-18** — The `makeConfig()` test fixture in `table-renderer.test.ts` does not
-  yet include `fields: null`. After this change, `makeConfig()` must include
-  `fields: null` in its default spread to ensure all existing table-renderer tests
-  remain in legacy mode and pass without modification.
+**EC-19** — `width`/`height` column declared but the folder contains no image files: enrichment skips all non-image cards (stores `{}`). All rows display em-dash in width/height cells. No error.
 
----
+**EC-20** — Sidecar exclusion in `collectChildren` for a `.md` file whose stem is ambiguous (e.g. `my.project.jpg.md`): The exclusion check uses only the last dot segment of `entry.name` (the stem without `.md`). `entry.name` for `my.project.jpg.md` is `my.project.jpg`. The last segment after the last dot is `jpg`, which is a known image extension. The file is excluded. This is the correct behaviour.
 
-## Resolved Design Decisions
+**EC-21** — "Apply YAML" on a selection of mixed `.md` files and image files: `.md` files are written directly; image files get their sidecar written. The result summary counts all writes together in `succeeded`. The text "N of M files processed" does not distinguish direct vs sidecar writes.
 
-- **RDD-01** — `fields:` items are always plain strings. No `key: label` inline
-  syntax is supported (unlike `extra-fields:`). Built-in column labels are
-  hardcoded; custom field labels default to capitalised key. This simplifies the
-  parser and keeps the YAML clean.
-
-- **RDD-02** — The parser derives `config.extraFields` from `config.fields` when
-  `fields:` is present. This avoids modifying the enrichment phase guard in
-  `tab.ts`, keeping the change surface small.
-
-- **RDD-03** — `fields: []` (empty sequence) falls through to legacy mode
-  (`config.fields = null`) rather than producing a table with zero columns. A
-  user who writes an empty `fields:` key is more likely to have made an authoring
-  error than to intentionally want no columns.
-
-- **RDD-04** — `count` is excluded from the Files section by `resolveFields`, not
-  by treating it as a custom key with an em-dash cell. This avoids adding a
-  phantom column to the files section.
-
-- **RDD-05** — The icon column is renderer-internal and not part of `fields:`.
-  Exposing it as a field identifier would allow users to remove it or reorder it,
-  which would break the visual design (icon is always the first cell for both
-  directories and files).
-
-- **RDD-06** — `tab.ts` requires no changes. The enrichment guard
-  `config.extraFields.length > 0` fires correctly because the parser populates
-  `config.extraFields` from `config.fields` when applicable.
+**EC-22** — `camera` Exif string contains null bytes (`\0`) from null-padded fixed-width Exif ASCII fields: Rust must strip null bytes before returning the string. The trimmed result (e.g. `"Canon EOS R5"` not `"Canon EOS R5\0\0\0"`) is stored in `card.meta`.
 
 ---
 
@@ -583,6 +277,6 @@ corresponding test or be explicitly justified as untestable in isolation.
 
 - Artifact: `docs/requirements/active_task.md`
 - Status: Requirements Validated
-- Edge cases to verify in tests: 18 items in Edge Case Inventory (EC-01 through EC-18)
+- Edge cases to verify in tests: 22 items in Edge Case Inventory (EC-1 through EC-22)
 
 Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.

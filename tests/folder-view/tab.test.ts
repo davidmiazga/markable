@@ -352,8 +352,11 @@ describe("enrichment phase — read failure handling", () => {
     expect(container.innerHTML).not.toBe(`<div class="folder-view-loading">Loading…</div>`);
   });
 
-  // EC-08 — Folder with zero .md files + extraFields declared → Promise.all([]) fires, no reads
-  it("EC-08: folder with zero .md files and extraFields declared → no child reads, render completes", async () => {
+  // EC-08 — Folder with an image file + extraFields declared → sidecar read attempted for the image.
+  // Updated for the image-metadata feature: non-.md image cards now trigger sidecar reads when
+  // extra-fields are declared. Previously this test expected 0 reads; now 1 sidecar read is expected
+  // (for photo.png.md) because image cards are enriched with sidecar data (FR-4, step_05).
+  it("EC-08: folder with an image file and extraFields declared → sidecar read attempted, render completes", async () => {
     // Only non-md files and directories — no .md entries.
     const vaultIndex = {
       entries: [],
@@ -373,9 +376,9 @@ describe("enrichment phase — read failure handling", () => {
         if (args?.path?.endsWith("_folder.md")) {
           return "---\nlayout: folder-table\nextra-fields:\n  - status\n---\n";
         }
-        // Any child read would be unexpected.
+        // For the image file's sidecar read (photo.png.md) — simulate missing sidecar.
         childReadCount++;
-        return "---\nstatus: done\n---\n";
+        throw new Error("File not found: " + args?.path);
       }),
     };
 
@@ -389,9 +392,9 @@ describe("enrichment phase — read failure handling", () => {
 
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    // No child .md files → no reads attempted for child files.
-    expect(childReadCount).toBe(0);
-    // Render must have completed (loading placeholder replaced).
+    // photo.png is an image card with a sidecar key declared → 1 sidecar read attempted.
+    expect(childReadCount).toBe(1);
+    // Render must have completed (loading placeholder replaced) despite the sidecar miss.
     expect(container.innerHTML).not.toBe(`<div class="folder-view-loading">Loading…</div>`);
   });
 

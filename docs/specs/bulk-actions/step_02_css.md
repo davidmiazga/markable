@@ -1,86 +1,29 @@
-/**
- * folder-table-css.ts — CSS for the `folder-table` layout.
- *
- * Exported as FOLDER_TABLE_CSS and appended to FILE_BROWSER_CSS in
- * file-browser.plugin.ts alongside FOLDER_VIEW_CSS.
- *
- * All color values use CSS custom properties — no hard-coded colors (FR-25).
- * Reuses `.folder-view-host`, `.folder-view-section`, `.folder-view-section-title`,
- * `.folder-view-tag-chip`, and `.folder-view-empty` from folder-view-css.ts.
- *
- * @module folder-view/folder-table-css
- */
+---
+title: "Step 02 — Bulk Action CSS"
+last-updated: "2026-05-11"
+review-cadence-days: 7
+status: active
+---
 
-export const FOLDER_TABLE_CSS = `
+# Step 02 — Bulk Action CSS
 
-/* ── Table layout ─────────────────────────────────────────────────────── */
+## Goal
 
-.fv-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  table-layout: fixed;
-}
+Append all new CSS rules for the checkbox column, selected-row tint, and bulk
+toolbar to `folder-table-css.ts`. No new CSS file is introduced.
 
-/* ── Column widths ────────────────────────────────────────────────────── */
+All rules use CSS custom properties. No hard-coded color values (FR-9, NFR-5).
 
-.fv-th-icon, .fv-td-icon { width: 28px; padding: 5px 4px 5px 0; }
-.fv-th-ext,  .fv-td-ext  { width: 58px; }
-.fv-th-modified, .fv-td-modified { width: 110px; }
-.fv-th-count, .fv-td-count { width: 54px; }
-.fv-th-tags, .fv-td-tags  { width: 160px; }
+---
 
-/* ── Header cells ─────────────────────────────────────────────────────── */
+## Files to Modify
 
-.fv-th {
-  text-align: left;
-  padding: 5px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.2));
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-.fv-th-icon, .fv-th-tags, .fv-th-count { cursor: default; }
-.fv-th.fv-sorted-asc::after  { content: " ↑"; opacity: .7; }
-.fv-th.fv-sorted-desc::after { content: " ↓"; opacity: .7; }
+### `src/plugins/file-browser/folder-view/folder-table-css.ts`
 
-/* ── Data rows ────────────────────────────────────────────────────────── */
+The file currently exports `FOLDER_TABLE_CSS` as a template-literal string.
+Append the following block to the string **before the closing backtick**.
 
-.fv-row {
-  cursor: pointer;
-  border-bottom: 1px solid var(--border-color-subtle, rgba(128,128,128,.08));
-}
-.fv-row:last-child { border-bottom: none; }
-.fv-row:hover { background: var(--bg-secondary, rgba(128,128,128,.06)); }
-.fv-row:focus { outline: 2px solid var(--accent, #4a9eff); outline-offset: -2px; }
-
-/* ── Data cells ───────────────────────────────────────────────────────── */
-
-.fv-td {
-  padding: 6px 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  color: var(--text-primary);
-}
-.fv-td-icon { color: var(--text-secondary); line-height: 0; }
-.fv-td-icon svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
-.fv-td-name { font-size: 13px; }
-.fv-td-ext  { color: var(--text-secondary); font-size: 11px; }
-.fv-td-modified { color: var(--text-secondary); font-size: 12px; }
-.fv-td-count { color: var(--text-secondary); font-size: 12px; text-align: right; }
-.fv-td-tags { padding-top: 4px; padding-bottom: 4px; }
-.fv-td-extra { color: var(--text-primary); font-size: 12px; }
-
-/* ── Lazy-load sentinel row ───────────────────────────────────────────── */
-
-.fv-sentinel-row { height: 1px; visibility: hidden; }
-
+```css
 /* ── Checkbox column ───────────────────────────────────────────────── */
 
 /* Fixed narrow width; no cursor pointer (clicking the cell stops propagation) */
@@ -174,7 +117,7 @@ export const FOLDER_TABLE_CSS = `
   display: none;
   align-items: center;
   gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 .fv-bulk-subui--visible {
   display: flex;
@@ -193,11 +136,7 @@ export const FOLDER_TABLE_CSS = `
   background: var(--bg-input, var(--bg-primary));
   color: var(--text-primary);
   font-size: 12px;
-  min-width: 120px;
-}
-.fv-bulk-subui__input--short {
-  min-width: 80px;
-  width: 80px;
+  min-width: 220px;
 }
 
 .fv-bulk-subui__select {
@@ -219,5 +158,27 @@ export const FOLDER_TABLE_CSS = `
 .fv-bulk-result--error {
   color: var(--color-error, #e05252);
 }
+```
 
-`;
+---
+
+## Acceptance Criteria
+
+1. `folder-table-css.ts` compiles without TypeScript errors.
+2. The `FOLDER_TABLE_CSS` export string contains the new rules for:
+   - `.fv-th-checkbox` / `.fv-td-checkbox`
+   - `.fv-row.fv-row--selected`
+   - `.fv-bulk-toolbar` and `.fv-bulk-toolbar--visible`
+   - `.fv-bulk-toolbar__btn` and `.fv-bulk-toolbar__btn--danger`
+   - `.fv-bulk-subui` and `.fv-bulk-subui--visible`
+   - `.fv-bulk-result`
+3. No hard-coded color hex values exist in the new rules (all colors via
+   `var(--...)` with optional fallbacks).
+4. `npm run test:run` passes (CSS changes do not affect TypeScript tests).
+
+---
+
+## No Tests in This Step
+
+CSS correctness is verified visually during step_07. Unit tests that check
+for class names are written in steps 04 and 05.

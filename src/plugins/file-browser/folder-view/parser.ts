@@ -27,10 +27,17 @@ const VALID_SORTS = new Set<string>(["name-asc", "name-desc", "modified-asc", "m
  * Any identifier not in this set is treated as a custom frontmatter key.
  * Used by extractFieldsRaw-derived logic in parseFolderMd() (FR-04).
  *
- * Exported so table-renderer.ts can import it to classify field identifiers
- * during column construction without re-declaring the same set.
+ * The four image built-in identifiers (width, height, date-taken, camera) are
+ * included here so they are NOT classified as custom frontmatter keys and do
+ * NOT appear in config.extraFields. The enrichment gate in tab.ts uses
+ * imageColumnsRequested(config) to detect when image enrichment is needed.
+ *
+ * Exported so table-renderer.ts and tab.ts can import it for field classification.
  */
-export const BUILTIN_FIELDS = new Set(["name", "type", "ext", "modified", "tags", "count", "icon"]);
+export const BUILTIN_FIELDS = new Set([
+  "name", "type", "ext", "modified", "tags", "count", "icon",
+  "width", "height", "date-taken", "camera",
+]);
 
 /**
  * Parse an aspect-ratio YAML value into a CSS-ready string.
