@@ -712,3 +712,150 @@ describe("extra-fields parsing", () => {
     ]);
   });
 });
+
+describe("fields: extraction", () => {
+  // T-01
+  it("T-01: fields:[name,modified,tags] → config.fields=[name,modified,tags]; extraFields=[]", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - name", "  - modified", "  - tags",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["name", "modified", "tags"]);
+    expect(cfg.extraFields).toEqual([]);
+  });
+
+  // T-02
+  it("T-02: fields:[name,status,priority] → extraFields=[{key:status,...},{key:priority,...}]", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - name", "  - status", "  - priority",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["name", "status", "priority"]);
+    expect(cfg.extraFields).toEqual([
+      { key: "status", label: "Status" },
+      { key: "priority", label: "Priority" },
+    ]);
+  });
+
+  // T-03
+  it("T-03: fields: absent → config.fields=null; extraFields from extra-fields: as before", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "extra-fields:", "  - status",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toBeNull();
+    expect(cfg.extraFields).toEqual([{ key: "status", label: "Status" }]);
+  });
+
+  // T-04
+  it("T-04: fields: at top level (not nested under layout:) → correctly extracted", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - name", "  - modified",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["name", "modified"]);
+  });
+
+  // T-05
+  it("T-05: fields: nested under layout: block → correctly extracted", () => {
+    const content = [
+      "---",
+      "layout:",
+      "  type: folder-table",
+      "  sort: name-asc",
+      "fields:",
+      "  - name",
+      "  - modified",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["name", "modified"]);
+    expect(cfg.layout).toBe("folder-table");
+  });
+
+  // T-06
+  it("T-06: item with inline comment '- modified  # last changed' → parsed as 'modified'", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - modified  # last changed",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["modified"]);
+  });
+
+  // T-07
+  it("T-07: fields: [] (empty sequence) → config.fields=null", () => {
+    const content = "---\nlayout: folder-table\nfields:\n---\n";
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toBeNull();
+  });
+
+  // T-08
+  it("T-08: fields: and extra-fields: both present → fields: wins; extra-fields: ignored", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - name", "  - status",
+      "extra-fields:", "  - priority",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["name", "status"]);
+    // extraFields derived from fields:, not extra-fields:
+    expect(cfg.extraFields).toEqual([{ key: "status", label: "Status" }]);
+    // 'priority' from extra-fields: is NOT present
+    expect(cfg.extraFields.find(f => f.key === "priority")).toBeUndefined();
+  });
+
+  // T-09
+  it("T-09: show-modified:false with fields:[modified] → both parsed independently", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "show-modified: false",
+      "fields:", "  - modified",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    // Parser stores both; renderer decides which to use.
+    expect(cfg.fields).toContain("modified");
+    expect(cfg.showModified).toBe(false);
+  });
+
+  // EC-01: empty fields
+  it("EC-01: fields: key present but no items → config.fields=null (falls through to legacy)", () => {
+    const content = "---\nlayout: folder-table\nfields:\n---\n";
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toBeNull();
+  });
+
+  // EC-11: blank item after comment-stripping
+  it("EC-11: item that becomes blank after comment-strip is silently skipped", () => {
+    const content = [
+      "---", "layout: folder-table",
+      "fields:", "  - # just a comment", "  - name",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    // "# just a comment" — the "- " is followed by nothing after comment-strip
+    expect(cfg.fields).toEqual(["name"]);
+  });
+
+  // EC-17: quoted item
+  it("EC-17: quoted item '- \"modified\"' → parses as 'modified' (no quotes in result)", () => {
+    const content = [
+      "---", "layout: folder-table",
+      'fields:', '  - "modified"',
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.fields).toEqual(["modified"]);
+  });
+});

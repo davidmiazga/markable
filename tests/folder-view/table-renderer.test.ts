@@ -41,6 +41,7 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     exclude: [],
     contentAreaOverride: true,
     extraFields: [],             // T-25: existing tests unaffected
+    fields: null,                // AD-7: null keeps all existing tests in legacy mode
     ...overrides,
   };
 }
@@ -866,5 +867,282 @@ describe("extra-fields columns", () => {
     // innerHTML should contain the escaped version, not a <b> element.
     expect(td?.querySelector("b")).toBeNull();
     expect(td?.textContent).toBe("<b>done</b>");
+  });
+});
+
+describe("fields-mode rendering", () => {
+  // T-10 — Column order: name then modified
+  it("T-10: fields:[name,modified] → files thead: Icon, Name, Modified (in that order)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified"], extraFields: [] }),
+      [makeFileCard("note", ".md", 1000000)],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.className);
+    expect(ths[0]).toContain("fv-th-icon");
+    expect(ths[1]).toContain("fv-th-name");
+    expect(ths[2]).toContain("fv-th-modified");
+    expect(ths.length).toBe(3);
+  });
+
+  // T-11 — Column order: modified before name
+  it("T-11: fields:[modified,name] → files thead: Icon, Modified, Name (Modified before Name)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["modified", "name"], extraFields: [] }),
+      [makeFileCard("note", ".md", 1000000)],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.className);
+    expect(ths[1]).toContain("fv-th-modified");
+    expect(ths[2]).toContain("fv-th-name");
+  });
+
+  // T-12 — Custom field with value
+  it("T-12: fields:[name,status] with card.meta.status='draft' → Status th and 'draft' td", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({
+        fields: ["name", "status"],
+        extraFields: [{ key: "status", label: "Status" }],
+      }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "draft" })],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.textContent);
+    expect(ths).toContain("Status");
+    const extraTd = container.querySelector("td.fv-td-extra");
+    expect(extraTd?.textContent).toBe("draft");
+  });
+
+  // T-13 — Custom field absent from meta → em-dash
+  it("T-13: fields:[name,status] with card.meta={} → Status td shows '—'", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({
+        fields: ["name", "status"],
+        extraFields: [{ key: "status", label: "Status" }],
+      }),
+      [makeFileCard("note", ".md", 0, undefined, [], {})],
+      container,
+      "/vault",
+    );
+    const extraTd = container.querySelector("td.fv-td-extra");
+    expect(extraTd?.textContent).toBe("—");
+  });
+
+  // T-14 — Absent columns
+  it("T-14: fields:[name,modified] → no Tags or Type column", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified"], extraFields: [] }),
+      [makeFileCard("note", ".md", 1000000, undefined, ["tag1"])],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector("th.fv-th-tags")).toBeNull();
+    expect(container.querySelector("th.fv-th-ext")).toBeNull();
+    expect(container.querySelector("td.fv-td-tags")).toBeNull();
+    expect(container.querySelector("td.fv-td-ext")).toBeNull();
+  });
+
+  // T-15 — Name absent
+  it("T-15: fields:[modified,tags] (name omitted) → no Name th in files thead", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["modified", "tags"], extraFields: [] }),
+      [makeFileCard("note", ".md", 1000000, undefined, ["t1"])],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector("th.fv-th-name")).toBeNull();
+  });
+
+  // T-16 — count excluded from files; present in folders
+  it("T-16: fields:[name,count] → Files thead: Icon+Name only; Folders: Icon+Name+Count", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "count"], extraFields: [] }),
+      [makeDirCard("Sub", "/vault/Sub", false, 3), makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    // Two tables — one for folders, one for files.
+    const tables = container.querySelectorAll("table.fv-table");
+    expect(tables.length).toBe(2);
+
+    // Folders table (first): should have Name and Count headers.
+    const foldersTheads = tables[0].querySelectorAll("th");
+    const folderThTexts = Array.from(foldersTheads).map(th => th.textContent);
+    expect(folderThTexts).toContain("Items"); // count → "Items"
+    expect(folderThTexts).toContain("Name");
+
+    // Files table (second): should have Name header but no Count header.
+    const filesTheads = tables[1].querySelectorAll("th");
+    const fileThTexts = Array.from(filesTheads).map(th => th.textContent);
+    expect(fileThTexts).toContain("Name");
+    expect(fileThTexts).not.toContain("Items");
+  });
+
+  // T-17 — Folders section em-dash for modified
+  it("T-17: fields:[name,modified] → Folders section: Name td + em-dash td per folder row", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified"], extraFields: [] }),
+      [makeDirCard("Sub"), makeFileCard("note", ".md", 1000000)],
+      container,
+      "/vault",
+    );
+    const placeholders = container.querySelectorAll("td.fv-td-placeholder");
+    expect(placeholders.length).toBeGreaterThanOrEqual(1);
+    expect(placeholders[0].textContent).toBe("—");
+  });
+
+  // T-18 — Legacy mode unchanged (AC-04 / NFR-04)
+  it("T-18: config.fields=null (legacy mode) → showModified+showExtensions produce same output as before", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: null, showModified: true, showExtensions: true }),
+      [makeFileCard("note", ".md", 1000000, "/vault/note.md")],
+      container,
+      "/vault",
+    );
+    // Legacy columns present.
+    expect(container.querySelector("th.fv-th-modified")).not.toBeNull();
+    expect(container.querySelector("th.fv-th-ext")).not.toBeNull();
+    expect(container.querySelector("td.fv-td-modified")).not.toBeNull();
+    expect(container.querySelector("td.fv-td-ext")).not.toBeNull();
+  });
+
+  // T-19 — Custom field sort pre-selection
+  it("T-19: fields:[name,status], sort:status → Status th has fv-sorted-asc; Name th has none", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({
+        fields: ["name", "status"],
+        sort: "status",
+        extraFields: [{ key: "status", label: "Status" }],
+      }),
+      [makeFileCard("note", ".md", 0, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("th"));
+    const statusTh = ths.find(th => th.textContent === "Status");
+    const nameTh   = ths.find(th => th.className.includes("fv-th-name"));
+    expect(statusTh?.classList.contains("fv-sorted-asc")).toBe(true);
+    expect(nameTh?.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(nameTh?.classList.contains("fv-sorted-desc")).toBe(false);
+  });
+
+  // T-20 — Single name column
+  it("T-20: fields:[name] → files thead has only Icon + Name", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name"], extraFields: [] }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    const ths = container.querySelectorAll("thead th");
+    expect(ths.length).toBe(2); // icon + name
+    expect(ths[1].textContent).toBe("Name");
+  });
+
+  // EC-03 — count in files → excluded, no column
+  it("EC-03: count in fields for files section → excluded by resolveFields, no extra column", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "count"], extraFields: [] }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    // Files section: count is filtered out, so only icon + name
+    const ths = container.querySelectorAll("thead th");
+    expect(ths.length).toBe(2);
+    expect(Array.from(ths).map(th => th.textContent)).not.toContain("Items");
+  });
+
+  // EC-04 — type and ext aliases
+  it("EC-04: type and ext both produce Type column header", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "type"], extraFields: [] }),
+      [makeFileCard("photo", ".png", 0, "/vault/photo.png")],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.textContent);
+    expect(ths).toContain("Type");
+  });
+
+  // EC-10 — no name or count in folders
+  it("EC-10: fields:[status,priority] → folders rows render only icon + em-dash cells", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["status", "priority"], extraFields: [{ key: "status", label: "Status" }, { key: "priority", label: "Priority" }] }),
+      [makeDirCard("Sub")],
+      container,
+      "/vault",
+    );
+    const foldersTable = container.querySelector("table.fv-table");
+    const placeholders = foldersTable?.querySelectorAll("td.fv-td-placeholder");
+    expect(placeholders?.length).toBe(2); // status + priority em-dashes
+    // No name td present in folder rows
+    expect(foldersTable?.querySelector("td.fv-td-name")).toBeNull();
+  });
+
+  // EC-14 — clearIndicators covers all fields-mode ths
+  it("EC-14: clicking a header in fields mode clears sort class from all other headers", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified", "status"], sort: "name-asc",
+                   extraFields: [{ key: "status", label: "Status" }] }),
+      [makeFileCard("note", ".md", 1000000, undefined, [], { status: "done" })],
+      container,
+      "/vault",
+    );
+    const ths = Array.from(container.querySelectorAll("thead th"));
+    const nameTh   = ths.find(th => th.className.includes("fv-th-name"))!;
+    const statusTh = ths.find(th => th.textContent === "Status")!;
+    // Initial: name has fv-sorted-asc
+    expect(nameTh.classList.contains("fv-sorted-asc")).toBe(true);
+    // Click status header
+    (statusTh as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    expect(nameTh.classList.contains("fv-sorted-asc")).toBe(false);
+    expect(statusTh.classList.contains("fv-sorted-asc")).toBe(true);
+  });
+
+  // EC-08 — show-modified:false ignored when fields: contains "modified"
+  it("EC-08: show-modified:false with fields:[name,modified] → Modified column IS rendered (fields mode wins)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified"], showModified: false, extraFields: [] }),
+      [makeFileCard("note", ".md", 1000000)],
+      container,
+      "/vault",
+    );
+    // Fields mode: Modified column must be present despite showModified=false.
+    expect(container.querySelector("th.fv-th-modified")).not.toBeNull();
+    expect(container.querySelector("td.fv-td-modified")).not.toBeNull();
+  });
+
+  // EC-09 — show-count:true ignored when fields: does not contain "count"
+  it("EC-09: show-count:true with fields:[name,modified] → Count column NOT rendered (fields mode supersedes)", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ fields: ["name", "modified"], showCount: true, extraFields: [] }),
+      [makeDirCard("Sub", "/vault/Sub", false, 5)],
+      container,
+      "/vault",
+    );
+    // Fields mode: Count column must be absent despite showCount=true.
+    expect(container.querySelector("th.fv-th-count")).toBeNull();
+    expect(container.querySelector("td.fv-td-count")).toBeNull();
   });
 });

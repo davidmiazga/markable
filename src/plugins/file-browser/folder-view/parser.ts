@@ -23,6 +23,16 @@ import type { FolderViewConfig, FolderSortOrder, FolderLayoutMode, ExtraField } 
 const VALID_SORTS = new Set<string>(["name-asc", "name-desc", "modified-asc", "modified-desc"]);
 
 /**
+ * Set of built-in column identifiers for the folder-table fields: sequence.
+ * Any identifier not in this set is treated as a custom frontmatter key.
+ * Used by extractFieldsRaw-derived logic in parseFolderMd() (FR-04).
+ *
+ * Exported so table-renderer.ts can import it to classify field identifiers
+ * during column construction without re-declaring the same set.
+ */
+export const BUILTIN_FIELDS = new Set(["name", "type", "ext", "modified", "tags", "count", "icon"]);
+
+/**
  * Parse an aspect-ratio YAML value into a CSS-ready string.
  *
  * Accepts: "W:H", "W/H", plain positive number, or the special token "original".
@@ -187,6 +197,148 @@ function parseYamlLines(
 }
 
 /**
+ * Extract raw extra-fields items from YAML lines at any indentation level.
+ *
+ * `parseYamlLines` only handles one level of nesting, so `extra-fields:` placed
+ * inside a `layout:` block (a common pattern) would lose its array items. This
+ * function scans the raw lines independently, finds `extra-fields:` wherever it
+ * appears, then collects the items beneath it using indentation comparison.
+ *
+ * Handles all three item forms:
+ *   - status                   → plain string
+ *   - status: My Status        → inline key:label
+ *   - key: status              → structured (with optional "  label:" continuation)
+ *     label: My Status
+ *
+ * Length justification: three distinct item forms each require their own parse
+ * path; the indentation-tracking logic cannot be extracted without threading
+ * `blockIndent`, `currentItem`, and the result array through extra parameters.
+ */
+function extractExtraFieldsRaw(lines: string[]): (string | Record<string, string>)[] {
+  // Find the extra-fields: line at any indentation level.
+  let startIdx = -1;
+  let blockIndent = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimStart();
+    if (!trimmed.startsWith("extra-fields:")) continue;
+    const afterColon = trimmed.slice("extra-fields:".length).trim();
+    const commentStripped = afterColon.startsWith("#") ? "" : afterColon.replace(/ #.*$/, "").trim();
+    if (commentStripped !== "") continue; // has an inline value — not a block key
+    startIdx = i;
+    blockIndent = raw.length - trimmed.length;
+    break;
+  }
+  if (startIdx === -1) return [];
+
+  const result: (string | Record<string, string>)[] = [];
+  let currentItem: Record<string, string> | null = null;
+
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimEnd().trimStart();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = raw.length - raw.trimStart().length;
+    if (indent <= blockIndent) break; // returned to same or parent indentation level
+
+    if (trimmed.startsWith("- ")) {
+      const rest = trimmed.slice(2).trim();
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx > 0) {
+        // Inline "- fieldname: label" or start of structured "- key: fieldname"
+        const k = rest.slice(0, colonIdx).trim();
+        let v = rest.slice(colonIdx + 1).trim();
+        v = v.replace(/ #.*$/, "").trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        currentItem = { [k]: v };
+        result.push(currentItem);
+      } else {
+        currentItem = null;
+        if (rest) result.push(rest);
+      }
+    } else if (currentItem !== null) {
+      // Continuation sub-key for structured items (e.g. "  label: My Status")
+      const colonIdx = trimmed.indexOf(":");
+      if (colonIdx > 0) {
+        const k = trimmed.slice(0, colonIdx).trim();
+        let v = trimmed.slice(colonIdx + 1).trim();
+        v = v.replace(/ #.*$/, "").trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        currentItem[k] = v;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Extract raw fields: items from YAML lines at any indentation level.
+ *
+ * Parallel to extractExtraFieldsRaw() but simpler: fields: items are always
+ * plain strings. No structured sub-key (key:/label:) syntax is supported.
+ *
+ * Algorithm:
+ * 1. Find the first line whose trimmed form starts with "fields:" with no
+ *    inline value after the colon (same approach as extractExtraFieldsRaw).
+ * 2. Collect subsequent more-indented "- item" lines.
+ * 3. Strip inline comments (" #...") and surrounding quotes from each item.
+ * 4. Skip blank items after stripping.
+ * 5. Return the collected string[] (empty array when key is absent or has
+ *    no items).
+ *
+ * @param lines - Raw YAML lines from inside the front-matter block.
+ * @returns string[] of plain field identifiers; never null.
+ */
+function extractFieldsRaw(lines: string[]): string[] {
+  // Locate the fields: key at any indentation level.
+  let startIdx = -1;
+  let blockIndent = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimStart();
+    if (!trimmed.startsWith("fields:")) continue;
+    const afterColon = trimmed.slice("fields:".length).trim();
+    const commentStripped = afterColon.startsWith("#") ? "" : afterColon.replace(/ #.*$/, "").trim();
+    if (commentStripped !== "") continue; // inline value — not a block key
+    startIdx = i;
+    blockIndent = raw.length - trimmed.length;
+    break;
+  }
+  if (startIdx === -1) return [];
+
+  const result: string[] = [];
+
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimEnd().trimStart();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = raw.length - raw.trimStart().length;
+    if (indent <= blockIndent) break; // returned to same or parent indentation
+
+    if (!trimmed.startsWith("- ")) continue; // non-sequence line inside block: skip
+    let item = trimmed.slice(2).trim();
+    // Strip inline comment: " # ..." anywhere in item, or a leading "#" (pure comment item).
+    // A leading "#" means the item was "- # some comment" which strips to empty.
+    if (item.startsWith("#")) {
+      item = "";
+    } else {
+      const commentIdx = item.indexOf(" #");
+      if (commentIdx !== -1) item = item.slice(0, commentIdx).trim();
+    }
+    // Strip surrounding single or double quotes (EC-17).
+    if (
+      (item.startsWith('"') && item.endsWith('"')) ||
+      (item.startsWith("'") && item.endsWith("'"))
+    ) {
+      item = item.slice(1, -1);
+    }
+    item = item.trim();
+    if (item) result.push(item); // EC-11: skip blank items after stripping
+  }
+  return result;
+}
+
+/**
  * Normalize a parsed front-matter record: if the `layout` field is a nested
  * block (new format), flatten its sub-keys to the top level.
  *
@@ -262,6 +414,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     exclude: [],
     contentAreaOverride: true,
     extraFields: [],
+    fields: null,   // null = legacy flag-based column mode (AD-6, EC-01)
   };
 
   try {
@@ -297,26 +450,36 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       ? (rawExclude as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
       : [];
 
-    // Extract extra-fields sequence (FR-06).
-    const rawExtraFields = rawFm["extra-fields"];
+    // Extract extra-fields sequence (FR-06). Uses a dedicated pre-pass so the
+    // field works whether it appears at top-level or nested under layout:.
+    const rawExtraFields = extractExtraFieldsRaw(yamlBlock.split("\n"));
     const extraFields: ExtraField[] = [];
-    if (Array.isArray(rawExtraFields)) {
-      for (const item of rawExtraFields as (string | Record<string, string>)[]) {
-        if (typeof item === "string") {
-          // Simple list form: "- status" → {key: "status", label: "Status"}
-          const key = item.trim();
-          if (!key) continue;
-          extraFields.push({ key, label: key.charAt(0).toUpperCase() + key.slice(1) });
-        } else if (item && typeof item === "object") {
+    for (const item of rawExtraFields) {
+      if (typeof item === "string") {
+        const key = item.trim();
+        if (!key) continue;
+        extraFields.push({ key, label: key.charAt(0).toUpperCase() + key.slice(1) });
+      } else if (item && typeof item === "object") {
+        if ("key" in item) {
           // Structured form: "- key: status\n  label: My Status"
           const key = (item["key"] ?? "").trim();
-          if (!key) continue; // EC-05 from FR-06: skip items with empty or missing key
+          if (!key) continue;
           const rawLabel = (item["label"] ?? "").trim();
-          const label = rawLabel || key.charAt(0).toUpperCase() + key.slice(1);
-          extraFields.push({ key, label });
+          extraFields.push({ key, label: rawLabel || key.charAt(0).toUpperCase() + key.slice(1) });
+        } else {
+          // Inline form: "- fieldname: My Label"
+          const firstKey = Object.keys(item)[0];
+          if (!firstKey) continue;
+          const rawLabel = (item[firstKey] ?? "").trim();
+          extraFields.push({ key: firstKey, label: rawLabel || firstKey.charAt(0).toUpperCase() + firstKey.slice(1) });
         }
       }
     }
+
+    // Extract fields: sequence (FR-05). Uses same pre-pass approach as
+    // extractExtraFieldsRaw so it works whether fields: is at top level
+    // or nested under layout:.
+    const rawFields = extractFieldsRaw(yamlBlock.split("\n"));
 
     // Normalize to flat string record for all remaining fields.
     const fm = normalizeFm(rawFm);
@@ -392,12 +555,28 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     // contentAreaOverride: only explicit "false" disables full-width mode.
     const contentAreaOverride = (fm["content-area-override"] ?? "true") !== "false";
 
+    // Populate config.fields and conditionally derive extraFields from it (FR-06).
+    // When fields: is present and non-empty, config.extraFields is derived from
+    // the non-builtin items in fields: so the enrichment guard in tab.ts
+    // (config.extraFields.length > 0) continues to work without modification (RDD-02).
+    const fields: string[] | null =
+      rawFields.length > 0 ? rawFields : null; // EC-01, FR-16: empty = null
+
+    let resolvedExtraFields = extraFields; // default: from extra-fields: sequence
+    if (fields !== null) {
+      // When fields: is declared, derive extraFields from the non-builtin items
+      // so tab.ts enrichment fires correctly for custom columns (AC-10 / EC-07).
+      resolvedExtraFields = fields
+        .filter(f => !BUILTIN_FIELDS.has(f))
+        .map(f => ({ key: f, label: f.charAt(0).toUpperCase() + f.slice(1) }));
+    }
+
     return {
       layout, title, sort, cardWidth, layoutMode, showModified, body,
       aspectRatio, fit, minHeight, maxHeight,
       showName, showPreview, showExtensions, showFolders, showFiles,
       foldersTitle, filesTitle, showTags, showCount, exclude,
-      contentAreaOverride, extraFields,
+      contentAreaOverride, extraFields: resolvedExtraFields, fields,
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

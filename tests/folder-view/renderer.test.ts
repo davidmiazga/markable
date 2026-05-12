@@ -39,6 +39,7 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     exclude: [],
     contentAreaOverride: true,
     extraFields: [],
+    fields: null,              // fields: null keeps this fixture in legacy mode (EC-18 / AD-7)
     ...overrides,
   };
 }

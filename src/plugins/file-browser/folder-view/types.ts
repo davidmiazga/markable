@@ -88,6 +88,11 @@ export interface FolderMdFrontMatter {
    * Extracted before normalizeFm() and processed into ExtraField[] by parseFolderMd().
    */
   "extra-fields"?: unknown;
+  /**
+   * Raw YAML value for the fields: sequence.
+   * Extracted by extractFieldsRaw() in parser.ts.
+   */
+  "fields"?: unknown;
 }
 
 /**
@@ -161,6 +166,13 @@ export interface FolderViewConfig {
    * Default: []. Present for all layouts; ignored outside folder-table.
    */
   extraFields: ExtraField[];
+  /**
+   * Ordered list of column identifiers from the fields: YAML sequence.
+   * null when fields: is absent or empty — triggers legacy flag-based column logic.
+   * When non-null, supersedes showModified, showExtensions, showTags, showCount,
+   * and extraFields for the purposes of column rendering in table-renderer.ts.
+   */
+  fields: string[] | null;
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────
