@@ -489,10 +489,34 @@ export const FOLDER_VIEW_CSS = `
 .fvp-pane {
   flex: 0 0 var(--fvp-height, 60%);
   overflow-y: auto;
-  min-height: 80px;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.2));
+  min-height: 60px;
   display: flex;
   flex-direction: column;
+}
+
+/* Draggable resize handle — 4px hit area between pane and content */
+/* Resize handle: visually 1px, but padding extends the grab target to 7px. */
+.fvp-resize-handle {
+  flex: 0 0 1px;
+  cursor: ns-resize;
+  position: relative;
+  z-index: 10;
+  padding: 3px 0;
+  box-sizing: content-box;
+  background: transparent;
+}
+.fvp-resize-handle::after {
+  content: '';
+  display: block;
+  height: 1px;
+  background: var(--border-color, rgba(128,128,128,.2));
+  opacity: .3;
+  transition: background 0.15s, opacity 0.15s;
+}
+.fvp-resize-handle:hover::after,
+.fvp-resize-handle--dragging::after {
+  background: var(--accent-color, #4a9eff);
+  opacity: 1;
 }
 
 .fvp-header {

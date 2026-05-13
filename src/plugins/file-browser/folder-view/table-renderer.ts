@@ -20,7 +20,7 @@ import type { FolderViewConfig, FolderCard, FolderSortOrder, ExtraField } from "
 import { sortCards, getFileIconForCard, formatModified } from "./renderer";
 import { ICON_FOLDER } from "../icons/material/index";
 import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
-import { buildPreviewPane } from "./preview-pane";
+import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
 import type { PreviewPaneHandle } from "./preview-pane";
 import { buildCheckboxTd, buildMasterCheckboxTh }
   from "./bulk-selection";
@@ -893,6 +893,7 @@ export function renderFolderTable(
     host.style.setProperty("--fvp-height", config.previewHeight);
     previewHandle = buildPreviewPane();
     host.appendChild(previewHandle.pane);
+    host.appendChild(attachPaneResizeHandle(host, previewHandle.pane));
 
     const mainWrapper = document.createElement("div");
     mainWrapper.className = "folder-view-main";

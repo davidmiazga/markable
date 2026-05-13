@@ -53,6 +53,64 @@ export interface PreviewPaneHandle {
  * and a `.fvp-body` content area. The host must set `--fvp-height` on itself
  * so the pane's `flex: 0 0 var(--fvp-height, 60%)` resolves to the right size.
  */
+/**
+ * Create a draggable horizontal resize handle and wire it between the preview
+ * pane and the content area below it.
+ *
+ * Uses pointer-capture so the resize continues smoothly even when the pointer
+ * moves outside the 4px hit target (same pattern as sidebar-manager.ts
+ * `_attachResizeHandle`). Updates `--fvp-height` on `host` as a pixel value
+ * so the pane's `flex: 0 0 var(--fvp-height)` responds in real time.
+ *
+ * @param host - The `.fv-host--with-preview` element that holds `--fvp-height`.
+ * @param pane - The `.fvp-pane` element whose rendered height is the drag origin.
+ * @returns The handle element to insert between pane and `.folder-view-main`.
+ */
+export function attachPaneResizeHandle(
+  host: HTMLElement,
+  pane: HTMLElement,
+): HTMLElement {
+  const handle = document.createElement("div");
+  handle.className = "fvp-resize-handle";
+
+  const MIN_HEIGHT = 60;
+
+  let startY      = 0;
+  let startHeight = 0;
+
+  function onPointerDown(e: PointerEvent): void {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    startY      = e.clientY;
+    startHeight = pane.offsetHeight;
+    document.body.style.cursor    = "ns-resize";
+    document.body.style.userSelect = "none";
+    handle.classList.add("fvp-resize-handle--dragging");
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    const delta  = e.clientY - startY;
+    const hostH  = host.clientHeight;
+    const newH   = Math.max(MIN_HEIGHT, Math.min(startHeight + delta, hostH - MIN_HEIGHT));
+    host.style.setProperty("--fvp-height", `${newH}px`);
+  }
+
+  function onPointerUp(e: PointerEvent): void {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    handle.releasePointerCapture(e.pointerId);
+    document.body.style.cursor    = "";
+    document.body.style.userSelect = "";
+    handle.classList.remove("fvp-resize-handle--dragging");
+  }
+
+  handle.addEventListener("pointerdown", onPointerDown);
+  handle.addEventListener("pointermove", onPointerMove);
+  handle.addEventListener("pointerup",   onPointerUp);
+
+  return handle;
+}
+
 export function buildPreviewPane(): PreviewPaneHandle {
   let loadToken = 0;
 

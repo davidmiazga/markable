@@ -18,7 +18,7 @@
 
 import type { FolderViewConfig, FolderCard, FolderSortOrder, BulkContext } from "./types";
 import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
-import { buildPreviewPane } from "./preview-pane";
+import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
 import { buildMasterCheckboxTh, buildCheckboxTd } from "./bulk-selection";
 import {
   ICON_FOLDER,
@@ -768,6 +768,7 @@ export function renderFolderCards(
     host.style.setProperty("--fvp-height", config.previewHeight);
     const previewHandle = buildPreviewPane();
     host.appendChild(previewHandle.pane);
+    host.appendChild(attachPaneResizeHandle(host, previewHandle.pane));
 
     const mainWrapper = document.createElement("div");
     mainWrapper.className = "folder-view-main";
