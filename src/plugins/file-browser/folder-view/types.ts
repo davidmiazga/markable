@@ -2,10 +2,16 @@
  * types.ts — Pure TypeScript type definitions for the Folder View feature.
  *
  * These types are consumed by parser.ts, detection.ts, tab.ts, renderer.ts,
- * and fallback.ts. No runtime logic lives here — only structural contracts.
+ * table-renderer.ts, and fallback.ts. No runtime logic lives here — only
+ * structural contracts.
  *
  * @module folder-view/types
  */
+
+// Type-only imports for BulkContext — these are erased at emit time and safe
+// for an IIFE bundle because they carry no runtime module reference.
+import type { SelectionState } from "./bulk-selection";
+import type { ToolbarRefs } from "./bulk-toolbar";
 
 // ── Front-matter field types ──────────────────────────────────────────────────
 
@@ -219,26 +225,60 @@ export interface FolderCard {
   meta?: Record<string, string>;
 }
 
+// ── Bulk context ───────────────────────────────────────────────────────────────
+
+/**
+ * Bulk-selection wiring passed from renderFolderViewTabAsync (tab.ts) to both
+ * layout renderers as the optional fifth argument. Created once per render call
+ * and shared across all sections in both renderers.
+ *
+ * selectionState — Mutable shared selection: paths + kindMap.
+ * toolbarRefs    — Live DOM references for the toolbar; already attached to the
+ *                  renderer's host before any sections are appended.
+ * syncToolbar    — Closure: calls updateToolbar(toolbarRefs, selectionState).
+ *                  Each row/card checkbox change must call this.
+ * onMove         — Async callback invoked by toolbar Confirm Move.
+ * onDelete       — Async callback invoked by toolbar Confirm Delete.
+ * onYaml         — Async callback invoked by toolbar Apply YAML.
+ */
+export interface BulkContext {
+  selectionState: SelectionState;
+  toolbarRefs: ToolbarRefs;
+  syncToolbar: () => void;
+  onMove:   (destDir: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  onYaml:   (op: "add" | "remove", key: string, value: string) => Promise<void>;
+}
+
 // ── Renderer interface ─────────────────────────────────────────────────────────
 
 /**
  * Contract for a folder layout renderer.
  *
- * v1 registers exactly one: "folder-cards" → renderFolderCards (renderer.ts).
+ * v1 registers two layouts: "folder-cards" → renderFolderCards (renderer.ts)
+ * and "folder-table" → renderFolderTable (table-renderer.ts).
  *
  * Adding a new layout in a future task requires only adding one entry to the
  * LAYOUT_RENDERERS Record in tab.ts (FR-28). The renderer receives the fully
  * validated FolderViewConfig, the pre-collected list of FolderCards, the DOM
- * container to render into, and the absolute folder path for click handlers.
+ * container to render into, the absolute folder path for click handlers, and
+ * an optional BulkContext for shared selection state.
+ *
+ * The fifth parameter is optional (context?) so all existing callers —
+ * including tests that invoke the renderer without a bulk context — continue
+ * to compile with zero changes. Renderers that do not need bulk support may
+ * simply ignore it.
  *
  * @param config     - Validated configuration from parseFolderMd().
  * @param cards      - Immediate children collected by collectChildren().
  * @param container  - The #custom-tab-host element to render into.
  * @param folderPath - Absolute path of the folder being rendered.
+ * @param context    - Optional bulk-selection wiring from tab.ts.
  */
 export type FolderLayoutRenderer = (
   config: FolderViewConfig,
   cards: FolderCard[],
   container: HTMLElement,
   folderPath: string,
+  context?: BulkContext,
 ) => void;

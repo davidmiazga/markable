@@ -37,6 +37,7 @@ const VALID_SORTS = new Set<string>(["name-asc", "name-desc", "modified-asc", "m
 export const BUILTIN_FIELDS = new Set([
   "name", "type", "ext", "modified", "tags", "count", "icon",
   "width", "height", "date-taken", "camera",
+  "select",
 ]);
 
 /**

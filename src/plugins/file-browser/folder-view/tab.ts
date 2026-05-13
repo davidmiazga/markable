@@ -16,13 +16,18 @@
  * @module folder-view/tab
  */
 
+import { applyExcludeFilter } from "./shared";
 import { parseFolderMd } from "./parser";
 import { buildFolderViewSet } from "./detection";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
 import { renderFolderTable } from "./table-renderer";
 import { extractFrontmatterKeys } from "./frontmatter-reader";
-import type { FolderLayoutRenderer, FolderCard } from "./types";
+import { createSelectionState } from "./bulk-selection";
+import { buildToolbar, updateToolbar, showResult } from "./bulk-toolbar";
+import { executeBulkMove, executeBulkDelete, executeBulkYaml, formatOperationResult }
+  from "./bulk-operations";
+import type { FolderLayoutRenderer, FolderCard, BulkContext } from "./types";
 import type { VaultIndex } from "../../../lib/vault-types";
 
 // ── Image extension constants (FR-9, step_04) ────────────────────────────────
@@ -252,6 +257,11 @@ function imageColumnsRequested(config: import("./types").FolderViewConfig): bool
   return config.extraFields.some(f => IMAGE_BUILTIN_KEYS.has(f.key));
 }
 
+/** Return true when the `select` field is declared, enabling bulk checkboxes. */
+function selectRequested(config: import("./types").FolderViewConfig): boolean {
+  return config.fields !== null && config.fields.includes("select");
+}
+
 // ── Async render (reads disk and dispatches to layout renderer) ───────────────
 
 /**
@@ -271,8 +281,10 @@ function imageColumnsRequested(config: import("./types").FolderViewConfig): bool
  *
  * Length justification: covers one indivisible async flow — read → parse →
  * dispatch.  Each step's result feeds directly into the next and shares
- * error-handling context.  Splitting would require threading 4+ values across
- * function boundaries with no clarity gain.
+ * error-handling context.  The BulkContext construction (selectionState, toolbar,
+ * three callbacks) is inlined here because it must close over `cards` after
+ * enrichment and before the renderer is called — extracting it would require
+ * threading 6+ values across function boundaries with no clarity gain.
  *
  * @param folderPath    - Absolute path of the folder being rendered.
  * @param folderMdPath  - Absolute path of _folder.md inside the folder.
@@ -318,15 +330,13 @@ async function renderFolderViewTabAsync(
   } else {
     const cards = collectChildren(folderPath, vaultIndex);
 
-    // Step 3a: Enrichment phase — read child metadata for folder-table columns.
-    // Runs when:
-    //   (a) extra-fields are declared (custom frontmatter columns), OR
+    // Step 3a: Enrichment phase — read child metadata from disk.
+    // Runs when any layout requests enriched field values:
+    //   (a) extra-fields are declared (custom frontmatter keys), OR
     //   (b) image built-in columns are requested (width, height, date-taken, camera).
-    // NFR-5: no enrichment runs for layouts other than folder-table or when neither
-    // condition is met.
+    // When neither condition is met, enrichment is skipped for all layouts (no-op).
     const needsEnrichment =
-      layoutKey === "folder-table" &&
-      (config.extraFields.length > 0 || imageColumnsRequested(config));
+      config.extraFields.length > 0 || imageColumnsRequested(config);
 
     if (needsEnrichment) {
       // Determine which field keys are needed per card type.
@@ -460,7 +470,66 @@ async function renderFolderViewTabAsync(
       );
     }
 
-    LAYOUT_RENDERERS[layoutKey](config, cards, container, folderPath);
+    // Step 3b: Construct shared BulkContext — only when `select` is in fields:.
+    // When absent (or fields: null) the renderers receive undefined and render
+    // without toolbar or checkboxes.
+    let bulkContext: BulkContext | undefined;
+    if (selectRequested(config)) {
+      // visibleCards is needed by onYaml to know which paths are eligible.
+      // applyExcludeFilter is shared with renderer.ts so both always agree.
+      const visibleCards = applyExcludeFilter(cards, config.exclude);
+      const dirCards  = visibleCards.filter(c => c.kind === "directory");
+      const fileCards = visibleCards.filter(c => c.kind === "file");
+
+      const selectionState = createSelectionState();
+
+      // Extract the three operation callbacks as named consts so they can be both
+      // wired into buildToolbar AND stored in BulkContext without forward-reference
+      // issues. Using const (not let) guarantees no stale-closure risk.
+      const onMove = async (destDir: string): Promise<void> => {
+        const result = await executeBulkMove(selectionState, destDir);
+        const summary = formatOperationResult(result, "Moved");
+        showResult(toolbarRefs, summary, result.failed.length > 0);
+        if (result.succeeded > 0) {
+          (window as any).__MARKABLE_TAB_MANAGER__?.refreshLayoutView?.();
+        }
+      };
+
+      const onDelete = async (): Promise<void> => {
+        const result = await executeBulkDelete(selectionState);
+        const summary = formatOperationResult(result, "Deleted");
+        showResult(toolbarRefs, summary, result.failed.length > 0);
+        if (result.succeeded > 0) {
+          (window as any).__MARKABLE_TAB_MANAGER__?.refreshLayoutView?.();
+        }
+      };
+
+      const onYaml = async (
+        op: "add" | "remove", key: string, value: string,
+      ): Promise<void> => {
+        const yamlResult = await executeBulkYaml(
+          selectionState, op, key, value, [...dirCards, ...fileCards],
+        );
+        const summary = formatOperationResult(
+          yamlResult, "Processed", yamlResult.skippedCount,
+        );
+        showResult(toolbarRefs, summary, yamlResult.failed.length > 0);
+        // No re-render after YAML apply (FR-6 maintained).
+      };
+
+      // toolbarRefs is declared const and used inside onMove/onDelete/onYaml
+      // closures; those closures close over toolbarRefs by reference which is
+      // valid because the closures are only called after buildToolbar returns.
+      const toolbarRefs = buildToolbar(selectionState, onMove, onDelete, onYaml);
+
+      // syncToolbar is a single no-arg closure that each renderer threads down to
+      // individual checkbox change handlers so the toolbar count stays current.
+      const syncToolbar = (): void => updateToolbar(toolbarRefs, selectionState);
+
+      bulkContext = { selectionState, toolbarRefs, syncToolbar, onMove, onDelete, onYaml };
+    }
+
+    LAYOUT_RENDERERS[layoutKey](config, cards, container, folderPath, bulkContext);
   }
 }
 

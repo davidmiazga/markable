@@ -324,4 +324,143 @@ export const FOLDER_VIEW_CSS = `
   width: 100%;
   height: 100%;
 }
+
+/* ── Card metadata line (.fv-card-meta) ─────────────────────────────── */
+
+/*
+ * .fv-card-meta: single-line condensed field-values row below the card name.
+ * Appears in fields: mode and in legacy mode when showModified/showTags is true.
+ * It replaces .folder-view-card-date when fields: is declared (EC-16).
+ * Smaller font and muted color match .folder-view-card-date style to keep the
+ * visual change zero for existing users.
+ * overflow:hidden + text-overflow:ellipsis truncates long combined values (C-9).
+ */
+.fv-card-meta {
+  font-size: 10px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  padding: 0 8px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Card checkbox (.fv-card-checkbox-wrap) ──────────────────────────── */
+
+/*
+ * .fv-card-checkbox-wrap: repurposed <td> from buildCheckboxTd used as an
+ * absolutely-positioned overlay in the top-left corner of each card.
+ * The card itself has position:relative set inline by buildCard so this
+ * overlay stays within the card boundaries.
+ *
+ * z-index:1 lifts the checkbox above .folder-view-preview-bg-img (no explicit
+ * z-index, so stays at stacking context 0).
+ *
+ * Hover-only visibility: opacity 0 by default; transitions to 1 when the card
+ * or its parent section is hovered. The 0.1s duration matches the card
+ * background transition for visual consistency (C-10).
+ *
+ * A small semi-transparent backing (rgba(0,0,0,0.18)) improves legibility over
+ * light-colored or transparent image previews without a harsh opaque box.
+ */
+.fv-card-checkbox-wrap {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  /* Reset <td> default styles that would affect positioning */
+  padding: 0;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Semi-transparent backing for contrast against image previews */
+  background: var(--bg-overlay, rgba(0,0,0,0.18));
+  border-radius: 3px;
+  width: 20px;
+  height: 20px;
+}
+
+/* Reveal checkbox when the card itself is hovered (EC-18) */
+.folder-view-card:hover .fv-card-checkbox-wrap {
+  opacity: 1;
+}
+
+/* Reveal all section checkboxes when hovering anywhere in the section (EC-18) */
+.folder-view-section:hover .fv-card-checkbox-wrap {
+  opacity: 1;
+}
+
+/* Keep checkbox visible when the card is selected so the user can uncheck
+ * without having to hover exactly over the card first (EC-18). */
+.folder-view-card.fv-row--selected .fv-card-checkbox-wrap {
+  opacity: 1;
+}
+
+/* Checkbox input sizing inside the wrap */
+.fv-card-checkbox-wrap input[type="checkbox"] {
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent, #4a9eff);
+  vertical-align: middle;
+}
+
+/* ── Card selected state ──────────────────────────────────────────────── */
+
+/*
+ * .fv-row--selected on a card: applied by buildCheckboxTd's change handler
+ * (tr.classList.toggle("fv-row--selected", input.checked), where tr is the
+ * card div cast to HTMLTableRowElement). Uses the same CSS variable as
+ * .fv-row.fv-row--selected in folder-table-css.ts for visual consistency.
+ */
+.folder-view-card.fv-row--selected {
+  background: var(--bulk-select-bg,
+    color-mix(in srgb, var(--accent, #4a9eff) 12%, transparent));
+  border-color: var(--accent, #4a9eff);
+}
+.folder-view-card.fv-row--selected:hover {
+  background: var(--bulk-select-hover-bg,
+    color-mix(in srgb, var(--accent, #4a9eff) 20%, transparent));
+}
+
+/* ── Master checkbox row for card sections ───────────────────────────── */
+
+/*
+ * .fv-card-master-checkbox-wrap: row above the card grid in each section.
+ * Only rendered when a BulkContext is provided (Step 04).
+ * Aligns master checkbox + "Select all" label horizontally.
+ */
+.fv-card-master-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 2px 0;
+}
+
+.fv-card-master-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  user-select: none;
+}
+
+.fv-card-master-label input[type="checkbox"] {
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent, #4a9eff);
+  vertical-align: middle;
+}
+
+.fv-card-master-label-text {
+  font-size: 11px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+}
 `;

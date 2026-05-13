@@ -1,6 +1,6 @@
 # Markable 2.0 — Progress Tracker
 
-**Last Updated:** 2026-05-11 (session 14)
+**Last Updated:** 2026-05-12 (session 15)
 **Current Status:** Phase 1 complete ✅ — Phase 2 in progress 🟡
 
 ---
@@ -134,6 +134,33 @@
   2. **Card layout — preview rectangle** — Cards now show a 90 px preview rectangle at the top (edge-to-edge) followed by the filename label below. Preview content per type: **images** (`.png/.jpg/.jpeg/.gif/.webp/.svg/.avif/.bmp/.ico`) rendered via `__MARKABLE_CONVERT_FILE_SRC__` as a cover-fill `<img>`; **text/markdown** (`.md/.txt/.markdown`) async-loaded via `invoke("read_file")`, YAML frontmatter stripped, first 300 chars shown as clamped text; **directories** — centred folder icon; **all other files** — centred file-type icon. `buildCardPreview` helper added to `renderer.ts`; `IMAGE_EXTS` / `TEXT_EXTS` module-level sets replace inline array literals in icon lookup.
   3. **"Files" section title removed** — `buildSection` now accepts `title: string | null`; passing `null` skips the `<h3>` heading. The files section passes `null`; the "Folders" heading is preserved for mixed-content folders. 2026-05-09.
 
+- **Folder View — folder-table layout + custom fields + field ordering (session 15)** — Full sortable table view added as a second layout type alongside `folder-cards`. Changes committed 2026-05-12:
+  - **`folder-table` layout** — `layout: { type: folder-table }` in `_folder.md` renders a compact sortable `<table>` instead of the card grid. Built-in columns: icon, name, type, ext, modified, tags, count. Click any column header to sort ascending/descending; icon/tags/count headers are non-sortable. Lazy-load sentinel row (IntersectionObserver) renders children in batches of 50.
+  - **Custom frontmatter columns (`extra-fields:`)** — `extra-fields:` list in the layout block adds arbitrary frontmatter keys as columns. The enrichment pipeline in `tab.ts` reads each `.md` child's frontmatter via `extractFrontmatterKeys` and populates `card.meta`. Non-`.md` files show an em-dash fallback.
+  - **Column ordering control (`fields:`)** — `fields:` sequence overrides the default column order and visibility. Any built-in key (`icon`, `name`, `type`, `ext`, `modified`, `tags`, `count`) or custom frontmatter key can be listed. The `icon` entry is explicit — not always-first. YAML `fields:` with an inline comment on the key line no longer silently skips the entire block (parser comment-strip fix).
+  - **STARTER template redesign** — All inline comments moved to their own lines above each setting. All `show-*` display toggles removed. `fields:` example section added with individual column entries commented out.
+  - **`fieldHeaderLabel`** in `table-renderer.ts` maps built-in identifiers to English column headers.
+  - **Tests**: 103 test files, 4140+ Vitest passing; 200 Rust tests passing. 2026-05-12.
+
+- **Folder View — bulk select + bulk actions (session 15 cont.)** — Checkbox selection and three bulk operations added to folder-table. Changes committed 2026-05-12:
+  - **Checkbox column** — Header checkbox (select all / deselect all); per-row checkbox; `fv-row--selected` tint on checked rows. `SelectionState { paths: Set<string> }` shared across Folders and Files sections.
+  - **Bulk toolbar** — Sticky `fv-bulk-toolbar` appears above the table when any checkbox is checked; shows "N selected" count. Hides and resets when selection becomes empty.
+  - **Move** — Inline text input for destination path; "Confirm Move" button (disabled until non-empty path entered). Directories moved via `rename_file`; files via `move_file`. On success, calls `refreshLayoutView`.
+  - **Delete** — Inline confirmation: "Delete N item(s)? This cannot be undone." Danger-styled "Confirm Delete" button. Deletes files via `delete_file`, directories via `delete_directory`. On success, calls `refreshLayoutView`.
+  - **File properties** — Inline YAML editor: operation select (Add / update key · Remove key), key input, value input (hidden for Remove). Writes to `.md` files directly; writes to `<path>.md` sidecar for non-`.md` files (creates sidecar if absent). Multi-file result summary "N of M files processed". 411 tests covering all operations.
+  - **New files**: `bulk-selection.ts`, `bulk-toolbar.ts`, `bulk-operations.ts`, `yaml-frontmatter.ts`. CSS in `folder-table-css.ts`. 2026-05-12.
+
+- **Folder View — image metadata columns + sidecar tagging (session 15 cont.)** — Images are now first-class citizens in folder-table. Changes committed 2026-05-12:
+  - **New built-in columns**: `width`, `height`, `date-taken`, `camera` added to `BUILTIN_FIELDS`. Usable in `fields:` like any other column.
+  - **`get_image_dimensions` Rust command** — Header-only parsing (no full decode) for JPEG (SOF segment walk), PNG (IHDR), GIF (Logical Screen Descriptor), WebP (VP8/VP8L/VP8X), HEIC (ISO BMFF `ispe` box). Pure `std::io` — no new Cargo crates.
+  - **`get_exif_data` Rust command** — JPEG-only for v1. Walks APP1 marker, TIFF IFD0, ExifIFD for Make, Model, DateTimeOriginal (tag 0x9003). Null bytes stripped from all string fields (EC-22). Returns `ExifData { date_taken, camera }`.
+  - **`sidecar_exists` Rust command** — Checks for `<path>.md` companion file.
+  - **Enrichment pipeline extension** (`tab.ts`) — Fires when any image built-in column is declared. Per-card: calls `get_image_dimensions` for width/height; calls `get_exif_data` for JPEG/HEIC date-taken/camera; reads sidecar `.md` via `extractFrontmatterKeys` for custom keys. Concurrent `Promise.all` — per-card errors isolated.
+  - **Sidecar exclusion** — `collectChildren` suppresses `.md` files whose stem ends in a known image extension (e.g. `photo.jpg.md`) from appearing as standalone rows.
+  - **Sidecar write** — "File properties" bulk action extended: non-`.md` files write to `<path>.md` sidecar instead of being skipped. Creates sidecar if absent.
+  - **VP8 bug fix** — RFC 6386 §9.1: VP8 stores actual display width in bits [13:0] (not `width-1`). Removed incorrect `+1` from `parse_webp_dimensions` VP8 branch.
+  - 201 Rust tests; 4140+ Vitest tests; code-reviewer approved (2 rounds). 2026-05-12.
+
 - **Plugin disable trap audit — removed dead `window.__MARKABLE_*_SIDEBAR_PANEL__` fallbacks (session 10 cont.)** — Committed 2026-05-08 (`f91292d Window commands trimmed.`). Repo-wide grep confirmed only `daily-note.plugin.ts` had the dead-fallback anti-pattern (`if (_api) {...} else { window.__MARKABLE_*?.() }`). Both `registerSidebarPanel()` and `unregisterSidebarPanel()` helpers reduced to plain `_api?.method?.(...)` calls. `docs/specs/daily-note/step_05_calendar_sidebar.md` updated (status active → reference) with a note explaining why the fallback was removed and the disable-order trap (`_api` must be cleared LAST in `onDisable`). No tests relied on the window globals — they mock `_api` directly. 3507 Vitest tests passing.
 
 - **Sidebar polish — header hover affordance, full icon coverage, daily-note disable bug (session 10 cont.)** — Committed 2026-05-08 (`88716a9 Icons added. Daily Note fixed.`):
@@ -155,17 +182,24 @@ None.
 
 ### In Progress / Next 🟡
 
-**Session ended 2026-05-09 (session 13).**
+**Session ended 2026-05-12 (session 15).**
 
 #### State at end of session
 - All Phase 2 features above are committed and merged to `main`.
-- Folder View: complete including session-13 polish — split-click, card-grid with per-file preview rectangles, tree visual indicator (accent color + preview badge), live update, context menu, all ECs covered.
-- `docs/requirements/active_task.md` — Folder View layout refactor task. Status set to `reference`.
-- `docs/specs/folder-view-layout-refactor/00_index.md` — Status set to `reference`.
-- Test suite: **94 files, 3745 passing**. Rust: 178 passing.
-- **Next step**: Continue refining the Folder View card layout (user wants to refine before adding new layout types). Then consider Layouts feature or other PKM features.
+- Folder View: folder-table complete (sortable table, custom fields, field ordering, bulk actions, image metadata columns, sidecar tagging, sidecar exclusion).
+- Folder cards: complete including session-13 polish.
+- `docs/requirements/active_task.md` — Image metadata feature. Status: `reference`.
+- `docs/specs/image-metadata/00_index.md` — Architecture + 7 step files. Status: `reference`.
+- Test suite: **105 files, 4140+ passing**. Rust: **201 passing**.
+- **Next step**: Further Folder View polish or new PKM features (see suggested list below).
 
 #### Key technical state
+- **Folder-table layout**: `buildSectionTable` in `table-renderer.ts`. `resolveFields(config, isFiles)` returns the ordered field list (`null` = legacy mode, all built-ins shown). `fieldHeaderLabel(field)` maps identifiers to column headers. Sort state is per-section (folders / files); clicking a header cycles asc → desc → asc.
+- **Image enrichment gate**: `imageColumnsRequested(config)` in `tab.ts` checks `config.fields` for any of `["width","height","date-taken","camera"]`. Enrichment runs when `extraFields.length > 0 || imageColumnsRequested(config)`.
+- **Sidecar exclusion**: `isSidecarStem(name)` in `tab.ts` — returns true when the last dot-segment of `name` (e.g. `photo.jpg` from `photo.jpg.md`) is a known image extension.
+- **Bulk operations**: `executeBulkMove`, `executeBulkDelete`, `executeBulkYaml` in `bulk-operations.ts`. `executeBulkYaml` writes to `path + ".md"` sidecar for non-`.md` files; creates sidecar if absent for `add` op; throws for `remove` on missing sidecar.
+- **YAML frontmatter parser**: `yaml-frontmatter.ts` — `parseYamlFrontmatter`, `applyYamlKey`, `removeYamlKey`, `reconstructFile`. `needsQuoting` includes `value.startsWith("---")` (EC-24).
+- **Rust image commands**: `get_image_dimensions(path)`, `get_exif_data(path)`, `sidecar_exists(path)` in `src-tauri/src/commands/io.rs`. No new Cargo crates — pure `std::io`. VP8 stores actual display width (not dim-1); `& 0x3FFF` with no `+1` is correct.
 - **Folder View card preview**: `buildCardPreview` in `renderer.ts`. `IMAGE_EXTS` and `TEXT_EXTS` module-level Sets drive the branching. Image preview uses `window.__MARKABLE_CONVERT_FILE_SRC__`. Text preview uses `window.__TAURI_INTERNALS__?.invoke("read_file", {path})` async, strips frontmatter, clamps to 300 chars via `-webkit-line-clamp: 5`. Other files and directories get a centred icon.
 - **Folder View tree indicator**: `hasFolderView=true` nodes get `.tree-node-has-folder-view` (accent color on icon + label) and a `.tree-node-fv-badge` `<span>` (20×20 px `ICON_PREVIEW` SVG, `opacity: 0.75`, accent color). Badge is `aria-hidden`.
 - **Folder View tab mechanism**: `openFolderViewTab(folderPath)` → `openFileInTab(_folder.md).then(() => enterLayoutView(buildFolderViewRenderFn(folderPath)))`. No custom-tab registry. `isInLayoutView` + `layoutRenderFn` on `TabEntry` handle deferred re-render.
@@ -210,6 +244,12 @@ These align with the project direction: File Browser is the gateway to PKM.
 | ~~**Quick capture / inbox note**~~ | ~~Med~~ | ~~Done 2026-05-04~~ |
 | ~~**Auto Title plugin**~~ | ~~Low–Med~~ | ~~Done 2026-05-04~~ |
 | ~~**Drag files within vault tree**~~ | ~~Med~~ | ~~Done 2026-05-02~~ |
+| ~~**Folder-table layout + custom fields**~~ | ~~Med~~ | ~~Done 2026-05-12~~ |
+| ~~**Bulk select + bulk actions**~~ | ~~Med~~ | ~~Done 2026-05-12~~ |
+| ~~**Image metadata columns + sidecar tagging**~~ | ~~Med~~ | ~~Done 2026-05-12~~ |
+| **Native rating column** | Low | Read `rating` from sidecar `.md`; render as star widget; add `rating` to `BUILTIN_FIELDS` |
+| **Folder-table column resize** | Low–Med | Drag column dividers to resize; persist widths per folder via `_folder.md` or settings |
+| **Folder View — folder-cards polish** | Low | Remaining FVB-02/03/10/11 backlog items |
 | **AI YAML injection** | High | Reads note, suggests + writes front-matter; requires AI API integration |
 | **DMG build + code signing** | Med | Deferred from Phase 1; `CI=true` workaround documented in `docs/build-notes/` |
 

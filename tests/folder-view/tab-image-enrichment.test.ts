@@ -449,6 +449,24 @@ describe("image enrichment — guard behaviour (IE-11, IE-12, IE-14)", () => {
     expect(invokeCalls("get_image_dimensions").length).toBe(1);
   });
 
+  it("EC-4 / IE-12b: folder-cards layout with fields: [name, width] and an image card → get_image_dimensions invoked", async () => {
+    setup(
+      [],
+      [{ path: "/vault/photo.jpg", modified: 0 }],
+      "---\nlayout: folder-cards\nfields:\n  - name\n  - width\n---\n",
+      (cmd) => {
+        if (cmd === "read_file") {
+          return "---\nlayout: folder-cards\nfields:\n  - name\n  - width\n---\n";
+        }
+        if (cmd === "get_image_dimensions") return [800, 600];
+        return undefined;
+      },
+    );
+
+    await renderAndWait();
+    expect(invokeCalls("get_image_dimensions").length).toBe(1);
+  });
+
   it("IE-14 (EC-19): width column declared, folder has no image files (only .md) → no image commands invoked", async () => {
     setup(
       [{ path: "/vault/note.md", name: "note" }],

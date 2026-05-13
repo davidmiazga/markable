@@ -19,14 +19,10 @@
 import type { FolderViewConfig, FolderCard, FolderSortOrder, ExtraField } from "./types";
 import { sortCards, getFileIconForCard, formatModified } from "./renderer";
 import { ICON_FOLDER } from "../icons/material/index";
-import { stripScripts } from "./shared";
-import { createSelectionState, buildCheckboxTd, buildMasterCheckboxTh }
+import { stripScripts, applyExcludeFilter } from "./shared";
+import { buildCheckboxTd, buildMasterCheckboxTh }
   from "./bulk-selection";
 import type { SelectionState } from "./bulk-selection";
-import { buildToolbar, updateToolbar, showResult }
-  from "./bulk-toolbar";
-import { executeBulkMove, executeBulkDelete, executeBulkYaml, formatOperationResult }
-  from "./bulk-operations";
 
 // ── Lazy loading ──────────────────────────────────────────────────────────────
 
@@ -121,12 +117,13 @@ function appendRowsToTbody(
  */
 function resolveFields(config: FolderViewConfig, isFiles: boolean): string[] {
   if (config.fields === null) return [];
+  // "select" controls checkbox visibility (BulkContext) — not a data column.
+  const base = config.fields.filter(f => f !== "select");
   if (isFiles) {
     // count is folders-only; excluded from files section (AD-8, AC-05).
-    return config.fields.filter(f => f !== "count");
+    return base.filter(f => f !== "count");
   }
-  // Folders section: keep all identifiers; caller handles em-dash for unknowns.
-  return config.fields;
+  return base;
 }
 
 /**
@@ -446,7 +443,7 @@ function parseSortOrder(sort: FolderSortOrder): { col: "name" | "modified"; dir:
  * @param config         - FolderViewConfig for column visibility flags.
  * @param host           - The .folder-view-host element (IntersectionObserver root).
  * @param isFiles        - true → file columns; false → folder columns.
- * @param selectionState - Shared mutable selection state from renderFolderTable().
+ * @param selectionState - Shared mutable selection state, or undefined when checkboxes are off.
  * @param syncToolbar    - Closure that calls updateToolbar(toolbarRefs, selectionState).
  */
 function buildSectionTable(
@@ -455,8 +452,8 @@ function buildSectionTable(
   config: FolderViewConfig,
   host: HTMLElement,
   isFiles: boolean,
-  selectionState: SelectionState,
-  syncToolbar: () => void,
+  selectionState: SelectionState | undefined,
+  syncToolbar: (() => void) | undefined,
 ): HTMLElement {
   const { col: initCol, dir: initDir } = parseSortOrder(config.sort);
   // Folders only sort by name; if config had a modified sort, default to asc-name.
@@ -499,26 +496,29 @@ function buildSectionTable(
   const fieldThPairs: { th: HTMLTableCellElement; field: string }[] = [];
 
   // ── Checkbox column (FR-1) ────────────────────────────────────────────────
-  // The master checkbox <th> must be the very first column in every section.
-  // sectionLabel drives the aria-label; rowCheckboxes and sectionRows are
-  // populated by the buildRow wrapper below so master ↔ row sync works.
-  const sectionLabel = isFiles
-    ? (config.filesTitle || "Files")
-    : (config.foldersTitle || "Folders");
-  const rowCheckboxes: HTMLInputElement[] = [];
-  const sectionRows: HTMLTableRowElement[] = [];
-  const sectionPaths: string[] = cards.map(c => c.path);
+  // Only rendered when selectionState is provided (i.e. "select" in fields:).
+  let masterInput: HTMLInputElement | undefined;
+  let rowCheckboxes: HTMLInputElement[] = [];
+  let sectionRows: HTMLTableRowElement[] = [];
+  let sectionPaths: string[] = [];
 
-  const { th: masterTh, masterInput } = buildMasterCheckboxTh(
-    sectionLabel,
-    sectionPaths,
-    selectionState,
-    syncToolbar,
-    rowCheckboxes,
-    sectionRows,
-  );
-  // Appended before any other <th> so checkbox is always leftmost (FR-1).
-  headerRow.appendChild(masterTh);
+  if (selectionState) {
+    sectionPaths = cards.map(c => c.path);
+    const sectionLabel = isFiles
+      ? (config.filesTitle || "Files")
+      : (config.foldersTitle || "Folders");
+    const built = buildMasterCheckboxTh(
+      sectionLabel,
+      sectionPaths,
+      selectionState,
+      syncToolbar!,
+      rowCheckboxes,
+      sectionRows,
+    );
+    masterInput = built.masterInput;
+    // Appended before any other <th> so checkbox is always leftmost (FR-1).
+    headerRow.appendChild(built.th);
+  }
 
   if (!isFieldsMode) {
     // ── Legacy thead ───────────────────────────────────────────────────────
@@ -687,33 +687,31 @@ function buildSectionTable(
   const extraFieldsForRow = isFiles ? config.extraFields : [];
 
   /**
-   * Wraps the legacy row builders to prepend the checkbox cell after the
-   * underlying row is constructed. The master checkbox needs references to
-   * all row inputs and rows in the section, accumulated here via push into
-   * the shared arrays.
+   * Wraps the row builders to optionally prepend the checkbox cell.
+   * Checkbox is only added when selectionState is provided ("select" in fields:).
    */
   const buildRow = (card: FolderCard): HTMLTableRowElement => {
     const tr = isFiles
       ? buildFileRow(card, config, extraFieldsForRow, resolvedFields)
       : buildFolderRow(card, config, resolvedFields);
 
-    // Build checkbox cell. masterInput is captured from the thead construction
-    // above. rowCheckboxes and sectionRows accumulate as rows are built.
-    const checkboxTd = buildCheckboxTd(
-      card,
-      tr,
-      selectionState,
-      syncToolbar,
-      masterInput,
-      sectionPaths,
-    );
-    // Prepend the checkbox as the leftmost cell in the row.
-    tr.insertBefore(checkboxTd, tr.firstChild);
+    if (selectionState && masterInput) {
+      // Build checkbox cell and prepend as leftmost cell in the row.
+      const checkboxTd = buildCheckboxTd(
+        card,
+        tr,
+        selectionState,
+        syncToolbar!,
+        masterInput,
+        sectionPaths,
+      );
+      tr.insertBefore(checkboxTd, tr.firstChild);
 
-    // Register for master-checkbox sync (populated before lazy batches fire).
-    const inputInTd = checkboxTd.querySelector<HTMLInputElement>("input[type=checkbox]")!;
-    rowCheckboxes.push(inputInTd);
-    sectionRows.push(tr);
+      // Register for master-checkbox sync.
+      const inputInTd = checkboxTd.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+      rowCheckboxes.push(inputInTd);
+      sectionRows.push(tr);
+    }
 
     return tr;
   };
@@ -731,8 +729,8 @@ function buildSectionTable(
   const rebuildTbody = (): void => {
     // FR-7, NFR-7: clear selection state before any re-render so ghost-selected
     // rows from the old tbody do not persist after sort rebuilds the table.
-    selectionState.paths.clear();
-    syncToolbar();
+    selectionState?.paths.clear();
+    syncToolbar?.();
 
     tbody.innerHTML = "";
     applySort();
@@ -825,6 +823,12 @@ function buildSectionTable(
  * This is the FolderLayoutRenderer for the "folder-table" layout (FR-28).
  * Reuses all existing _folder.md config fields with no new YAML additions.
  *
+ * After Step 01 of the unification refactor, the SelectionState, toolbar, and
+ * operation callbacks are constructed in tab.ts and passed in via the optional
+ * `context` parameter. When `context` is absent (e.g. in tests that call
+ * renderFolderTable directly without a fifth argument), a local fallback context
+ * is created here so the table remains fully functional with no API breakage.
+ *
  * Length justification: mirrors renderFolderCards() — two distinct sections
  * (subfolders, files), each requiring exclude filtering, sort init, and
  * conditional render. All per-section work is delegated to buildSectionTable().
@@ -833,12 +837,14 @@ function buildSectionTable(
  * @param cards       - Immediate children from collectChildren() (unsorted).
  * @param container   - The DOM element to render into (cleared on entry).
  * @param _folderPath - Absolute path of the folder (satisfies FolderLayoutRenderer contract).
+ * @param context     - Optional shared bulk wiring from tab.ts (Step 01).
  */
 export function renderFolderTable(
   config: FolderViewConfig,
   cards: FolderCard[],
   container: HTMLElement,
   _folderPath: string,
+  context?: import("./types").BulkContext,
 ): void {
   container.innerHTML = "";
 
@@ -847,59 +853,18 @@ export function renderFolderTable(
   if (!config.contentAreaOverride) host.classList.add("folder-view-host--constrained");
 
   // ── Bulk selection + toolbar ──────────────────────────────────────────────
-  // One SelectionState shared across both sections for this render call.
-  const selectionState: SelectionState = createSelectionState();
+  // context is only provided when "select" is in fields: (tab.ts gates this).
+  // When absent, toolbar and checkboxes are fully suppressed.
+  const selectionState = context?.selectionState;
+  const syncToolbar    = context?.syncToolbar;
 
-  const excludeSet = new Set(config.exclude);
-  const visibleCards = excludeSet.size > 0
-    ? cards.filter(c => {
-        const filename = c.ext === ".md" ? c.name + ".md" : c.name;
-        return !excludeSet.has(filename);
-      })
-    : cards;
+  if (context) {
+    host.appendChild(context.toolbarRefs.toolbar);
+  }
 
+  const visibleCards = applyExcludeFilter(cards, config.exclude);
   const dirCards  = visibleCards.filter(c => c.kind === "directory");
   const fileCards = visibleCards.filter(c => c.kind === "file");
-
-  // Build the toolbar before sections. dirCards/fileCards are captured in the
-  // YAML callback closure — they are const refs to arrays that do not change
-  // for the lifetime of this render, so capturing them here is safe (AD-3).
-  const toolbarRefs = buildToolbar(
-    selectionState,
-    async (destDir) => {
-      const result = await executeBulkMove(selectionState, destDir);
-      const summary = formatOperationResult(result, "Moved");
-      showResult(toolbarRefs, summary, result.failed.length > 0);
-      if (result.succeeded > 0) {
-        (window as any).__MARKABLE_TAB_MANAGER__?.refreshLayoutView?.();
-      }
-    },
-    async () => {
-      const result = await executeBulkDelete(selectionState);
-      const summary = formatOperationResult(result, "Deleted");
-      showResult(toolbarRefs, summary, result.failed.length > 0);
-      if (result.succeeded > 0) {
-        (window as any).__MARKABLE_TAB_MANAGER__?.refreshLayoutView?.();
-      }
-    },
-    async (op, key, value) => {
-      const yamlResult = await executeBulkYaml(
-        selectionState, op, key, value, [...dirCards, ...fileCards],
-      );
-      const summary = formatOperationResult(
-        yamlResult, "Processed", yamlResult.skippedCount,
-      );
-      showResult(toolbarRefs, summary, yamlResult.failed.length > 0);
-      // FR-6: no re-render after YAML apply.
-    },
-  );
-
-  // Toolbar is first child of host (FR-3, AD-3).
-  host.appendChild(toolbarRefs.toolbar);
-
-  // syncToolbar closure is threaded down to both section builders so each
-  // row checkbox change can update the toolbar visibility and count.
-  const syncToolbar = () => updateToolbar(toolbarRefs, selectionState);
 
   if (config.body.trim()) {
     const desc = document.createElement("div");

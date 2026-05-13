@@ -881,11 +881,11 @@ describe("fields-mode rendering", () => {
       "/vault",
     );
     const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.className);
-    // ths[0] is now the checkbox column (bulk-actions); icon is ths[1].
-    expect(ths[1]).toContain("fv-th-icon");
-    expect(ths[2]).toContain("fv-th-name");
-    expect(ths[3]).toContain("fv-th-modified");
-    expect(ths.length).toBe(4); // checkbox + icon + name + modified
+    // No checkbox column (no BulkContext provided). ths[0] = icon.
+    expect(ths[0]).toContain("fv-th-icon");
+    expect(ths[1]).toContain("fv-th-name");
+    expect(ths[2]).toContain("fv-th-modified");
+    expect(ths.length).toBe(3); // icon + name + modified
   });
 
   // T-11 — Column order: modified before name
@@ -898,9 +898,9 @@ describe("fields-mode rendering", () => {
       "/vault",
     );
     const ths = Array.from(container.querySelectorAll("thead th")).map(th => th.className);
-    // ths[0] is checkbox, ths[1] is icon, ths[2] is modified, ths[3] is name.
-    expect(ths[2]).toContain("fv-th-modified");
-    expect(ths[3]).toContain("fv-th-name");
+    // No checkbox (no BulkContext). ths[0] = icon, ths[1] = modified, ths[2] = name.
+    expect(ths[1]).toContain("fv-th-modified");
+    expect(ths[2]).toContain("fv-th-name");
   });
 
   // T-12 — Custom field with value
@@ -1051,9 +1051,9 @@ describe("fields-mode rendering", () => {
       "/vault",
     );
     const ths = container.querySelectorAll("thead th");
-    // checkbox + icon + name = 3 columns.
-    expect(ths.length).toBe(3);
-    expect(ths[2].textContent).toBe("Name");
+    // No checkbox (no BulkContext). icon + name = 2 columns.
+    expect(ths.length).toBe(2);
+    expect(ths[1].textContent).toBe("Name");
   });
 
   // EC-03 — count in files → excluded, no column
@@ -1065,9 +1065,9 @@ describe("fields-mode rendering", () => {
       container,
       "/vault",
     );
-    // Files section: count is filtered out. checkbox + icon + name = 3.
+    // Files section: count is filtered out. No checkbox (no BulkContext). icon + name = 2.
     const ths = container.querySelectorAll("thead th");
-    expect(ths.length).toBe(3);
+    expect(ths.length).toBe(2);
     expect(Array.from(ths).map(th => th.textContent)).not.toContain("Items");
   });
 

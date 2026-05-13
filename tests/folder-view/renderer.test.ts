@@ -10,7 +10,9 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderFolderCards } from "../../src/plugins/file-browser/folder-view/renderer";
-import type { FolderViewConfig, FolderCard } from "../../src/plugins/file-browser/folder-view/types";
+import { createSelectionState } from "../../src/plugins/file-browser/folder-view/bulk-selection";
+import { buildToolbar, updateToolbar } from "../../src/plugins/file-browser/folder-view/bulk-toolbar";
+import type { FolderViewConfig, FolderCard, BulkContext } from "../../src/plugins/file-browser/folder-view/types";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +59,31 @@ function makeContainer(): HTMLDivElement {
   const div = document.createElement("div");
   div.id = "custom-tab-host";
   return div;
+}
+
+/**
+ * Build a minimal BulkContext suitable for passing to renderFolderCards in tests.
+ *
+ * Creates a fresh SelectionState and a toolbar with no-op operation callbacks
+ * so tests can verify checkbox/toolbar wiring without triggering real Tauri calls.
+ */
+function makeBulkContext(): BulkContext {
+  const selectionState = createSelectionState();
+  const toolbarRefs = buildToolbar(
+    selectionState,
+    async () => {},
+    async () => {},
+    async () => {},
+  );
+  const syncToolbar = () => updateToolbar(toolbarRefs, selectionState);
+  return {
+    selectionState,
+    toolbarRefs,
+    syncToolbar,
+    onMove:   async () => {},
+    onDelete: async () => {},
+    onYaml:   async () => {},
+  };
 }
 
 describe("renderFolderCards", () => {
@@ -905,5 +932,478 @@ describe("content-area-override", () => {
     renderFolderCards(makeConfig({ contentAreaOverride: false }), [makeFileCard("a")], container, "/vault");
     const host = container.querySelector(".folder-view-host");
     expect(host?.classList.contains("folder-view-host--constrained")).toBe(true);
+  });
+});
+
+// ── Step 03: Bulk toolbar wiring into cards layout ───────────────────────────
+
+describe("bulk toolbar — folder-cards layout (Step 03)", () => {
+  beforeEach(() => {
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn(),
+      openMediaInTab: vi.fn(),
+    };
+    (window as any).__MARKABLE_FILE_BROWSER__ = { expandDirectory: vi.fn() };
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(public cb: Function) {}
+      observe = vi.fn();
+      disconnect = vi.fn();
+    });
+  });
+
+  // Test A: toolbar node is inserted as first child of host when context provided.
+  it("A: toolbar node is inserted as first child of .folder-view-host when context provided", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), [makeFileCard("note")], container, "/vault", context);
+
+    const host = container.querySelector(".folder-view-host")!;
+    const firstChild = host.firstElementChild;
+    // The toolbar must be the first child of host.
+    expect(firstChild?.classList.contains("fv-bulk-toolbar")).toBe(true);
+    // The container must also expose the toolbar via querySelector.
+    expect(container.querySelector(".fv-bulk-toolbar")).not.toBeNull();
+  });
+
+  // Test B: toolbar node is absent when no context provided.
+  it("B: toolbar node is absent when no context provided (backward-compat no-op)", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), [makeFileCard("note")], container, "/vault");
+
+    expect(container.querySelector(".fv-bulk-toolbar")).toBeNull();
+  });
+
+  // Test C: toolbar is hidden by default (no fv-bulk-toolbar--visible class).
+  it("C: toolbar starts hidden (no fv-bulk-toolbar--visible) before any checkbox interaction", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), [makeFileCard("note")], container, "/vault", context);
+
+    const toolbar = container.querySelector(".fv-bulk-toolbar");
+    expect(toolbar?.classList.contains("fv-bulk-toolbar--visible")).toBe(false);
+  });
+});
+
+// ── Step 04: Card checkboxes ──────────────────────────────────────────────────
+
+describe("card checkboxes (Step 04)", () => {
+  type IOCallback = (entries: Partial<IntersectionObserverEntry>[]) => void;
+  let ioCallback: IOCallback | null = null;
+
+  beforeEach(() => {
+    ioCallback = null;
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn(),
+      openMediaInTab: vi.fn(),
+    };
+    (window as any).__MARKABLE_FILE_BROWSER__ = { expandDirectory: vi.fn() };
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(cb: IOCallback) { ioCallback = cb; }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    });
+  });
+
+  function makeFileCards(count: number): FolderCard[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeFileCard(`file${i}`, ".md", 0, `/vault/file${i}.md`),
+    );
+  }
+
+  // EC-10: directory card gets a checkbox.
+  it("EC-10: directory card contains an input[type=checkbox] when context provided", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), [makeDirCard("Sub")], container, "/vault", context);
+
+    const dirCard = container.querySelector(".folder-view-card-dir");
+    expect(dirCard?.querySelector("input[type=checkbox]")).not.toBeNull();
+  });
+
+  // EC-9: checkbox click stops propagation (does not trigger card navigation).
+  it("EC-9: checkbox change event does NOT call openFileInTab (stopPropagation works)", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 0, "/vault/note.md");
+    renderFolderCards(makeConfig({ showFolders: false }), [card], container, "/vault", context);
+
+    const checkbox = container.querySelector<HTMLInputElement>(".fv-card-checkbox-wrap input")!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect((window as any).__MARKABLE_TAB_MANAGER__.openFileInTab).not.toHaveBeenCalled();
+  });
+
+  // Checkbox change adds path to selectionState and makes toolbar visible.
+  it("checking a card checkbox adds its path to selectionState and shows toolbar", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 0, "/vault/note.md");
+    renderFolderCards(makeConfig({ showFolders: false }), [card], container, "/vault", context);
+
+    const checkbox = container.querySelector<HTMLInputElement>(".fv-card-checkbox-wrap input")!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+
+    expect(context.selectionState.paths.has("/vault/note.md")).toBe(true);
+    expect(container.querySelector(".fv-bulk-toolbar--visible")).not.toBeNull();
+  });
+
+  // Card has position: relative set inline when checkboxCtx provided.
+  it("card element has style.position === 'relative' when context provided", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", context);
+
+    const cardEl = container.querySelector<HTMLElement>(".folder-view-card")!;
+    expect(cardEl.style.position).toBe("relative");
+  });
+
+  // Checkbox container has class fv-card-checkbox-wrap.
+  it("checkbox container has className === 'fv-card-checkbox-wrap'", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", context);
+
+    const wrap = container.querySelector(".fv-card-checkbox-wrap");
+    expect(wrap).not.toBeNull();
+    // The wrap should contain the checkbox input.
+    expect(wrap?.querySelector("input[type=checkbox]")).not.toBeNull();
+  });
+
+  // EC-5: lazy-loaded card checkboxes register into selectionState.
+  it("EC-5: lazy-loaded card checkbox registers into selectionState when fired", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    // 51 cards trigger lazy loading (threshold is 50).
+    const cards = makeFileCards(51);
+    renderFolderCards(makeConfig({ showFolders: false }), cards, container, "/vault", context);
+
+    // Before observer fires, only 50 cards in DOM.
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(50);
+
+    // Fire the IntersectionObserver to load the 51st card.
+    ioCallback!([{ isIntersecting: true } as IntersectionObserverEntry]);
+    expect(container.querySelectorAll(".folder-view-card").length).toBe(51);
+
+    // The 51st card should have a checkbox.
+    const allCheckboxes = container.querySelectorAll<HTMLInputElement>(".fv-card-checkbox-wrap input");
+    expect(allCheckboxes.length).toBe(51);
+
+    // Checking the last card's checkbox should register in selectionState.
+    // Note: the lazy-loaded card is the 51st in SORTED order (name-asc), not
+    // necessarily cards[50] from the original unsorted array. We check that
+    // selectionState.paths grows by 1 — i.e. some path was registered.
+    const lastCheckbox = allCheckboxes[allCheckboxes.length - 1];
+    lastCheckbox.checked = true;
+    lastCheckbox.dispatchEvent(new Event("change"));
+
+    expect(context.selectionState.paths.size).toBe(1);
+  });
+
+  // EC-6: previously checked card retains checked state after lazy load.
+  it("EC-6: first card checkbox stays checked after lazy batch loads", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    const cards = makeFileCards(51);
+    renderFolderCards(makeConfig({ showFolders: false }), cards, container, "/vault", context);
+
+    // Check the first card.
+    const firstCheckbox = container.querySelector<HTMLInputElement>(".fv-card-checkbox-wrap input")!;
+    firstCheckbox.checked = true;
+    firstCheckbox.dispatchEvent(new Event("change"));
+    expect(context.selectionState.paths.has(cards[0].path)).toBe(true);
+
+    // Fire the IntersectionObserver to load the next batch.
+    ioCallback!([{ isIntersecting: true } as IntersectionObserverEntry]);
+
+    // The first card's path must still be in selectionState.
+    expect(context.selectionState.paths.has(cards[0].path)).toBe(true);
+    // The newly loaded card should not be checked.
+    const allCheckboxes = container.querySelectorAll<HTMLInputElement>(".fv-card-checkbox-wrap input");
+    expect(allCheckboxes[50].checked).toBe(false);
+
+    // EC-6 spec: "Master checkbox transitions to indeterminate if partial selection now exists."
+    // With 1 of 51 cards checked after the lazy batch, master must be indeterminate.
+    const masterInput = container.querySelector<HTMLInputElement>(".fv-card-master-checkbox-wrap input")!;
+    expect(masterInput).not.toBeNull();
+    expect(masterInput.indeterminate).toBe(true);
+    expect(masterInput.checked).toBe(false);
+  });
+
+  // EC-11: two independent renders have isolated SelectionStates.
+  it("EC-11: two independent renders have isolated selectionStates", () => {
+    const ctx1 = makeBulkContext();
+    const ctx2 = makeBulkContext();
+
+    const c1 = makeContainer();
+    const c2 = makeContainer();
+    const card1 = makeFileCard("note1", ".md", 0, "/vault/note1.md");
+    const card2 = makeFileCard("note2", ".md", 0, "/vault/note2.md");
+
+    renderFolderCards(makeConfig({ showFolders: false }), [card1], c1, "/vault", ctx1);
+    renderFolderCards(makeConfig({ showFolders: false }), [card2], c2, "/vault", ctx2);
+
+    // Check the card in the first render.
+    const cb1 = c1.querySelector<HTMLInputElement>(".fv-card-checkbox-wrap input")!;
+    cb1.checked = true;
+    cb1.dispatchEvent(new Event("change"));
+
+    // ctx1 should have note1; ctx2 should have nothing.
+    expect(ctx1.selectionState.paths.has("/vault/note1.md")).toBe(true);
+    expect(ctx2.selectionState.paths.size).toBe(0);
+  });
+});
+
+// ── Step 05: Metadata line (.fv-card-meta) ────────────────────────────────────
+
+describe("metadata line — fv-card-meta (Step 05)", () => {
+  beforeEach(() => {
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn(),
+      openMediaInTab: vi.fn(),
+    };
+    (window as any).__MARKABLE_FILE_BROWSER__ = { expandDirectory: vi.fn() };
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(public cb: Function) {}
+      observe = vi.fn();
+      disconnect = vi.fn();
+    });
+  });
+
+  // EC-1A: legacy mode, showModified=true, card has modified timestamp.
+  it("EC-1A: legacy mode — showModified=true → .fv-card-meta shows date string", () => {
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 1_000_000);
+    renderFolderCards(
+      makeConfig({ fields: null, showModified: true, showTags: false }),
+      [card],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta).not.toBeNull();
+    expect(meta?.textContent?.length).toBeGreaterThan(0);
+  });
+
+  // EC-1B: legacy mode, neither flag → no meta line.
+  it("EC-1B: legacy mode — showModified=false, showTags=false → no .fv-card-meta", () => {
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 1_000_000);
+    renderFolderCards(
+      makeConfig({ fields: null, showModified: false, showTags: false }),
+      [card],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
+  });
+
+  // EC-2: fields mode [modified, tags] → correct joined string.
+  it("EC-2: fields:[modified,tags] → meta line shows date · tags joined", () => {
+    const container = makeContainer();
+    const card: FolderCard = {
+      ...makeFileCard("note", ".md", 1_000_000),
+      tags: ["a", "b"],
+    };
+    renderFolderCards(
+      makeConfig({ fields: ["modified", "tags"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta).not.toBeNull();
+    // The meta line should contain both the date and the tags joined.
+    expect(meta?.textContent).toContain("a · b");
+  });
+
+  // EC-3: fields:[name, status], file with meta → shows status only (name filtered).
+  it("EC-3: fields:[name,status], file with meta.status → shows status value only", () => {
+    const container = makeContainer();
+    const card: FolderCard = {
+      ...makeFileCard("note", ".md", 0),
+      meta: { status: "draft" },
+    };
+    renderFolderCards(
+      makeConfig({ fields: ["name", "status"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta?.textContent).toBe("draft");
+  });
+
+  // EC-3b: fields:[name, status], file with no meta → no meta element (all em-dashes).
+  it("EC-3b: fields:[name,status], file with empty meta → no .fv-card-meta (all em-dashes)", () => {
+    const container = makeContainer();
+    const card: FolderCard = { ...makeFileCard("note", ".md", 0), meta: {} };
+    renderFolderCards(
+      makeConfig({ fields: ["name", "status"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    // All-em-dash result → no element appended (EC-13 rule).
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
+  });
+
+  // EC-13: fields:[name] only → no meta element (only skipped fields).
+  it("EC-13: fields:[name] only → no .fv-card-meta appended", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ fields: ["name"] }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
+  });
+
+  // EC-14: fields:[count], directory → shows childCount; file → no meta element.
+  it("EC-14: fields:[count], directory with childCount=5 → meta shows '5'", () => {
+    const container = makeContainer();
+    const dirCard: FolderCard = { ...makeDirCard("Sub"), childCount: 5 };
+    renderFolderCards(
+      makeConfig({ fields: ["count"], showFiles: false }),
+      [dirCard],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta?.textContent).toBe("5");
+  });
+
+  it("EC-14: fields:[count], file card → no .fv-card-meta (count is dirs-only)", () => {
+    const container = makeContainer();
+    renderFolderCards(
+      makeConfig({ fields: ["count"], showFolders: false }),
+      [makeFileCard("note")],
+      container,
+      "/vault",
+    );
+    // File card with count field → em-dash → all-em-dash → no element.
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
+  });
+
+  // EC-15: XSS via textContent — script tag in field value rendered as literal text.
+  it("EC-15: XSS — script tag in meta.status rendered as literal text via textContent", () => {
+    const xss = "<script>alert(1)</script>";
+    const container = makeContainer();
+    const card: FolderCard = {
+      ...makeFileCard("note", ".md", 0),
+      meta: { status: xss },
+    };
+    renderFolderCards(
+      makeConfig({ fields: ["status"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta?.textContent).toBe(xss);
+    // No <script> element must have been injected into the DOM.
+    expect(document.querySelectorAll("script").length).toBe(0);
+  });
+
+  // EC-16: fields: declared → .folder-view-card-date NOT appended.
+  it("EC-16: fields:[modified], showModified=true → .folder-view-card-date absent, .fv-card-meta present", () => {
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 1_000_000);
+    renderFolderCards(
+      makeConfig({ fields: ["modified"], showModified: true }),
+      [card],
+      container,
+      "/vault",
+    );
+    expect(container.querySelector(".folder-view-card-date")).toBeNull();
+    expect(container.querySelector(".fv-card-meta")).not.toBeNull();
+  });
+
+  // EC-17: enrichment failure → meta={} → em-dash → no meta element.
+  it("EC-17: card with meta={} for custom field → no .fv-card-meta (em-dash suppression)", () => {
+    const container = makeContainer();
+    const card: FolderCard = { ...makeFileCard("note", ".md", 0), meta: {} };
+    renderFolderCards(
+      makeConfig({ fields: ["status"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    // meta["status"] is undefined → "" → "—" → all-em-dash → null element.
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
+  });
+});
+
+// ── Step 06: CSS classes and FOLDER_VIEW_STARTER (C-8) ──────────────────────
+
+describe("CSS classes and FOLDER_VIEW_STARTER (Step 06)", () => {
+  beforeEach(() => {
+    (window as any).__MARKABLE_TAB_MANAGER__ = {
+      openFileInTab: vi.fn(),
+      openMediaInTab: vi.fn(),
+    };
+    (window as any).__MARKABLE_FILE_BROWSER__ = { expandDirectory: vi.fn() };
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(public cb: Function) {}
+      observe = vi.fn();
+      disconnect = vi.fn();
+    });
+  });
+
+  // CSS class assertions: JSDOM doesn't execute CSS but we can assert DOM class presence.
+
+  it("metadata line element has className === 'fv-card-meta'", () => {
+    const container = makeContainer();
+    const card = makeFileCard("note", ".md", 1_000_000);
+    renderFolderCards(
+      makeConfig({ fields: ["modified"] }),
+      [card],
+      container,
+      "/vault",
+    );
+    const meta = container.querySelector(".fv-card-meta");
+    expect(meta).not.toBeNull();
+    expect(meta?.className).toBe("fv-card-meta");
+  });
+
+  it("EC-18: CSS class fv-card-checkbox-wrap present on card — hover opacity applied by CSS", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", context);
+
+    const wrap = container.querySelector(".fv-card-checkbox-wrap");
+    expect(wrap).not.toBeNull();
+    expect(wrap?.className).toBe("fv-card-checkbox-wrap");
+  });
+
+  it("card element has style.position === 'relative' when context provided (for checkbox z-index)", () => {
+    const context = makeBulkContext();
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", context);
+
+    const card = container.querySelector<HTMLElement>(".folder-view-card")!;
+    expect(card.style.position).toBe("relative");
+  });
+
+  // C-8: FOLDER_VIEW_STARTER no longer says "folder-table only".
+  it("C-8: FOLDER_VIEW_STARTER does not contain 'folder-table only'", async () => {
+    // Dynamically import to avoid circular dependency with plugin file.
+    // The export is via the plugin's API surface (markable.FOLDER_VIEW_STARTER).
+    // We test via direct import of the constant from the plugin source.
+    const { default: _mod } = await import(
+      "../../src/plugins/file-browser/file-browser.plugin"
+    ) as any;
+    // The plugin registers itself via window globals; we just need the exported API.
+    // Actually FOLDER_VIEW_STARTER is not exported at module level but via the API.
+    // Fallback: check the source string directly.
+    const pluginSource = await import(
+      "../../src/plugins/file-browser/file-browser.plugin?raw"
+    ) as any;
+    const src: string = pluginSource.default ?? pluginSource;
+    expect(src.includes("folder-table only")).toBe(false);
+    expect(src.includes("fields:")).toBe(true);
+    expect(src.includes("extra-fields:")).toBe(true);
   });
 });

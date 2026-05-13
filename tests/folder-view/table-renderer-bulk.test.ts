@@ -8,7 +8,11 @@
 import { it, expect, vi, beforeEach } from "vitest";
 import { renderFolderTable }
   from "../../src/plugins/file-browser/folder-view/table-renderer";
+import { createSelectionState } from "../../src/plugins/file-browser/folder-view/bulk-selection";
+import { buildToolbar, updateToolbar } from "../../src/plugins/file-browser/folder-view/bulk-toolbar";
 import type { FolderViewConfig, FolderCard }
+  from "../../src/plugins/file-browser/folder-view/types";
+import type { BulkContext }
   from "../../src/plugins/file-browser/folder-view/types";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -71,6 +75,26 @@ class MockIntersectionObserver {
   }
 }
 
+// ── BulkContext factory ───────────────────────────────────────────────────────
+
+function makeBulkContext(): BulkContext {
+  const selectionState = createSelectionState();
+  const toolbarRefs = buildToolbar(
+    selectionState,
+    async () => {},
+    async () => {},
+    async () => {},
+  );
+  return {
+    selectionState,
+    toolbarRefs,
+    syncToolbar: () => updateToolbar(toolbarRefs, selectionState),
+    onMove:   async () => {},
+    onDelete: async () => {},
+    onYaml:   async () => {},
+  };
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -90,7 +114,7 @@ beforeEach(() => {
 it("I-01: checkbox <th> is first column in both section theads (FR-1)", () => {
   const container = makeContainer();
   const cards = [makeDirCard("docs"), makeFileCard("note")];
-  renderFolderTable(makeConfig(), cards, container, "/vault");
+  renderFolderTable(makeConfig(), cards, container, "/vault", makeBulkContext());
 
   const theads = container.querySelectorAll("thead");
   for (const thead of theads) {
@@ -104,7 +128,7 @@ it("I-01: checkbox <th> is first column in both section theads (FR-1)", () => {
 it("I-02: each data row has a checkbox <td> as first child (FR-1)", () => {
   const container = makeContainer();
   const cards = [makeDirCard("docs"), makeFileCard("note")];
-  renderFolderTable(makeConfig(), cards, container, "/vault");
+  renderFolderTable(makeConfig(), cards, container, "/vault", makeBulkContext());
 
   const rows = container.querySelectorAll("tbody tr.fv-row");
   expect(rows.length).toBeGreaterThan(0);
@@ -119,7 +143,7 @@ it("I-02: each data row has a checkbox <td> as first child (FR-1)", () => {
 it("I-03: toolbar element exists in DOM as first child of .folder-view-host (FR-3)", () => {
   const container = makeContainer();
   const cards = [makeFileCard("note")];
-  renderFolderTable(makeConfig(), cards, container, "/vault");
+  renderFolderTable(makeConfig(), cards, container, "/vault", makeBulkContext());
 
   const host = container.querySelector(".folder-view-host")!;
   const firstChild = host.firstElementChild;
@@ -130,7 +154,7 @@ it("I-03: toolbar element exists in DOM as first child of .folder-view-host (FR-
 
 it("I-04: toolbar has no --visible class on initial render (FR-3)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const toolbar = container.querySelector(".fv-bulk-toolbar");
   expect(toolbar?.classList.contains("fv-bulk-toolbar--visible")).toBe(false);
@@ -140,7 +164,7 @@ it("I-04: toolbar has no --visible class on initial render (FR-3)", () => {
 
 it("I-05: checking a file row checkbox makes toolbar visible (FR-2, FR-3)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const checkbox = container.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
   checkbox.checked = true;
@@ -154,7 +178,7 @@ it("I-05: checking a file row checkbox makes toolbar visible (FR-2, FR-3)", () =
 
 it("I-06: count label shows '1 selected' after one check (FR-2)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const checkbox = container.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
   checkbox.checked = true;
@@ -173,6 +197,7 @@ it("I-07: checking all rows in files section makes master checked (not indetermi
     [makeFileCard("note1"), makeFileCard("note2")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>(".fv-td-checkbox input"));
@@ -195,6 +220,7 @@ it("I-08: checking some rows makes master checkbox indeterminate (FR-1)", () => 
     [makeFileCard("note1"), makeFileCard("note2")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>(".fv-td-checkbox input"));
@@ -210,7 +236,7 @@ it("I-08: checking some rows makes master checkbox indeterminate (FR-1)", () => 
 
 it("I-09: clicking checkbox cell does NOT call openFileInTab (FR-1)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const checkboxTd = container.querySelector<HTMLElement>(".fv-td-checkbox")!;
   checkboxTd.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -229,6 +255,7 @@ it("I-10: clicking row body calls openFileInTab (FR-1)", () => {
     [makeFileCard("note", ".md", "/vault/note.md")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const row = container.querySelector<HTMLElement>("tbody tr.fv-row")!;
@@ -242,7 +269,7 @@ it("I-10: clicking row body calls openFileInTab (FR-1)", () => {
 
 it("I-11: sort click (name header) clears selection and hides toolbar (FR-7, EC-16)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   // Select the row.
   const checkbox = container.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
@@ -267,6 +294,7 @@ it("I-12: both sections checked items accumulate in shared toolbar count (EC-21)
     [makeDirCard("docs"), makeFileCard("note")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>(".fv-td-checkbox input"));
@@ -289,6 +317,7 @@ it("I-13: master checkbox for Folders section has aria-label='Select all Folders
     [makeDirCard("docs")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const masterCb = container.querySelector<HTMLInputElement>(".fv-th-checkbox input")!;
@@ -304,6 +333,7 @@ it("I-14: row checkboxes have aria-label='Select <name>' (FR-8)", () => {
     [makeFileCard("my-note")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const rowCb = container.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
@@ -314,7 +344,7 @@ it("I-14: row checkboxes have aria-label='Select <name>' (FR-8)", () => {
 
 it("I-15: toolbar root has role=toolbar and aria-label=Bulk actions (FR-8)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig(), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const toolbar = container.querySelector(".fv-bulk-toolbar")!;
   expect(toolbar.getAttribute("role")).toBe("toolbar");
@@ -330,6 +360,7 @@ it("I-16: fields mode: checkbox column still appears as leftmost column (NFR-5)"
     [makeFileCard("note")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const firstTh = container.querySelector("thead tr th:first-child");
@@ -348,6 +379,7 @@ it("I-17: legacy mode: checkbox column still appears as leftmost column (NFR-5)"
     [makeFileCard("note")],
     container,
     "/vault",
+    makeBulkContext(),
   );
 
   const firstTh = container.querySelector("thead tr th:first-child");
@@ -358,7 +390,7 @@ it("I-17: legacy mode: checkbox column still appears as leftmost column (NFR-5)"
 
 it("I-18: checking row checkbox applies fv-row--selected class (FR-9)", () => {
   const container = makeContainer();
-  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault");
+  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault", makeBulkContext());
 
   const row = container.querySelector<HTMLElement>("tbody tr.fv-row")!;
   const cb = row.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
@@ -385,7 +417,7 @@ it("I-19: lazily-rendered rows work correctly after IntersectionObserver fires (
     }
   });
 
-  renderFolderTable(makeConfig({ showFolders: false }), cards, container, "/vault");
+  renderFolderTable(makeConfig({ showFolders: false }), cards, container, "/vault", makeBulkContext());
 
   // Before the sentinel fires, only 50 rows should be visible.
   const rowsBefore = container.querySelectorAll("tbody tr.fv-row");
@@ -402,4 +434,52 @@ it("I-19: lazily-rendered rows work correctly after IntersectionObserver fires (
     const firstTd = row.querySelector("td:first-child");
     expect(firstTd?.classList.contains("fv-td-checkbox")).toBe(true);
   }
+});
+
+// ── I-20: BulkContext passed from outside — renderer uses shared SelectionState ─
+
+it("I-20: renderFolderTable with external BulkContext uses the shared SelectionState (EC-12)", () => {
+  // Build a BulkContext externally, simulating what tab.ts will do after Step 01.
+  const selectionState = createSelectionState();
+  const toolbarRefs = buildToolbar(
+    selectionState,
+    async () => {},
+    async () => {},
+    async () => {},
+  );
+  const syncToolbar = () => updateToolbar(toolbarRefs, selectionState);
+
+  const bulkContext: BulkContext = {
+    selectionState,
+    toolbarRefs,
+    syncToolbar,
+    onMove:   async () => {},
+    onDelete: async () => {},
+    onYaml:   async () => {},
+  };
+
+  const container = makeContainer();
+  const card = makeFileCard("note", ".md", "/vault/note.md");
+  renderFolderTable(makeConfig({ showFolders: false }), [card], container, "/vault", bulkContext);
+
+  // Check a row checkbox — the path must be added to the *external* selectionState,
+  // not to a renderer-internal one. This is the key behavioral guarantee of Step 01.
+  const checkbox = container.querySelector<HTMLInputElement>(".fv-td-checkbox input")!;
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new Event("change"));
+
+  // The external selectionState.paths must contain the card's path.
+  expect(selectionState.paths.has("/vault/note.md")).toBe(true);
+});
+
+// ── I-21: no-context → no toolbar, no checkboxes ─────────────────────────────
+
+it("I-21: renderFolderTable without BulkContext renders no toolbar and no checkboxes", () => {
+  const container = makeContainer();
+  renderFolderTable(makeConfig({ showFolders: false }), [makeFileCard("note")], container, "/vault");
+
+  // No toolbar, no checkbox column — "select" was not in fields.
+  expect(container.querySelector(".fv-bulk-toolbar")).toBeNull();
+  expect(container.querySelector(".fv-th-checkbox")).toBeNull();
+  expect(container.querySelector(".fv-td-checkbox")).toBeNull();
 });

@@ -1,282 +1,323 @@
 ---
-title: "Image Metadata as First-Class Columns in Folder-Table"
+title: "Folder View Unified Data Model — Shared Enrichment, Bulk Selection, and Fields for Both Layouts"
 last-updated: "2026-05-12"
 review-cadence-days: 7
 status: active
 ---
 
-# Feature: Image Metadata as First-Class Columns in Folder-Table
+# Folder View Unified Data Model
 
 ## Summary
 
-As a visual user browsing image-heavy folders in folder-table view, I want image dimensions, EXIF metadata (date taken, camera), and custom sidecar tags to appear as sortable columns alongside `.md` file metadata, so that images feel like first-class citizens in my vault without requiring a separate digital asset manager.
+As a Markable user, I want both the `folder-cards` and `folder-table` layouts to
+share the same enrichment pipeline, the same `fields:` / `extra-fields:` YAML
+configuration, and the same bulk-selection + bulk-action toolbar, so that switching
+layout is purely a visual change and the data available to each layout is identical.
 
 ---
 
 ## Knowns
 
-### Scope
+### What exists today
 
-All three capabilities apply exclusively to the `folder-table` layout. The `folder-cards` layout is unchanged. All changes are confined to the file-browser plugin and the Rust backend; no changes to any other plugin or to the main application shell are required.
+- `tab.ts` runs enrichment **only** when `layoutKey === "folder-table"` (line 328).
+  For any other layout the enrichment block is skipped entirely, so `card.meta` is
+  never populated for cards rendered by `renderer.ts`.
+- `table-renderer.ts` owns: creating `SelectionState`, building the bulk toolbar
+  via `buildToolbar()`, wiring the `syncToolbar` closure, and appending
+  `toolbarRefs.toolbar` as the first child of the host element.
+- `renderer.ts` (`folder-cards`) has: no checkboxes, no bulk toolbar, no metadata
+  line. Cards show only a preview rectangle, card name, optional tag chips, and an
+  optional modified date.
+- `bulk-toolbar.ts`, `bulk-selection.ts`, and `bulk-operations.ts` are already
+  layout-agnostic and will not change.
+- `parser.ts` exports `BUILTIN_FIELDS` and `parseFolderMd()`. The `fields:` YAML
+  key is already fully parsed and stored in `config.fields`. The enrichment guard
+  in `tab.ts` reads `config.extraFields.length > 0` and `imageColumnsRequested(config)`.
+- The existing `fields:` mechanism already drives column order and extra-field
+  derivation for the table layout. The mechanism will be reused — not replaced —
+  for the cards layout.
+- `FOLDER_VIEW_STARTER` in `file-browser.plugin.ts` (lines 2987–3027) is the
+  template written when the user creates a new `_folder.md`. It currently
+  comments out `fields:` as "folder-table only". That comment must be updated
+  (see C-8).
 
-The three capabilities are:
+### What the user has decided
 
-1. **Image dimensions** — `width` and `height` as built-in sortable columns for image files. Read-only; read from image binary headers at enrichment time.
-2. **EXIF metadata** — `date-taken` and `camera` as built-in sortable columns for JPEG/HEIC files that carry Exif segments. Read-only. No write-back to image files ever.
-3. **Custom sidecar tagging** — `photo.jpg` gets a companion `photo.jpg.md` with YAML frontmatter (`tags`, `rating`, `notes`, or any custom key). The existing "Apply YAML" bulk action in the toolbar is extended to write to sidecar files instead of skipping non-`.md` files. `extractFrontmatterKeys` in `frontmatter-reader.ts` already reads sidecars transparently because it receives an absolute path and does not care about the naming pattern — it just reads a `.md` file.
+1. The enrichment pipeline runs for **all** layouts, not just `folder-table`.
+   The layout-key gate (`layoutKey === "folder-table"`) is removed.
 
-### What Is Explicitly Out of Scope
+2. `fields:` controls which fields are shown in **both** layouts:
+   - table layout: as sortable columns (unchanged behaviour).
+   - cards layout: as a single condensed metadata line below the card name.
 
-- Writing EXIF or XMP metadata back to any image file.
-- XMP sidecar files (`.xmp`). Only the `.jpg.md` / `.<ext>.md` pattern is supported.
-- Image thumbnails or preview tiles in the table rows.
-- Support for embedded ICC profiles, GPS coordinates, or any EXIF field beyond date-taken and camera make/model.
-- Any digital asset manager features: collections, albums, keyword hierarchies, face recognition, smart albums.
-- The `folder-cards` layout (card grid). Zero changes there.
-- Generating or managing sidecars from the UI beyond the existing "Apply YAML" bulk action.
-- Animated GIF or video file metadata.
+3. **Metadata line format (cards).** One line, values only, no field labels.
+   Values separated by ` · ` (space-dot-space). Tags shown as plain text values
+   joined by ` · `, not as chip elements. Example: `Jan 5, 2026 · nature · travel`.
+   All values written via `.textContent` (never `.innerHTML`).
 
-### Existing Infrastructure
+4. **Default fields when `fields:` is absent (cards layout).** `modified` and
+   `tags` render automatically with no YAML at all — the "minimum useful" default,
+   matching the existing `showModified` / `showTags` boolean defaults.
 
-**Plugin architecture constraint**: The file-browser plugin is an IIFE bundle. It may not import from `src/lib/bridge.ts`. All Tauri calls inside the plugin use `window.__TAURI_INTERNALS__?.invoke?.(...)` directly. All new Rust commands must also be callable via this pattern.
+5. **`show-modified` / `show-tags` interaction with `fields:`.** When `fields:` is
+   declared, it fully supersedes `show-modified` and `show-tags` for metadata-line
+   rendering. The boolean flags apply only in legacy mode (no `fields:` declared).
+   This is consistent with how the table layout already handles the flags.
 
-**`FolderCard.meta`**: The `meta?: Record<string, string>` field on `FolderCard` (defined in `types.ts`) is already the carrier for enriched column data. The enrichment phase in `tab.ts` (`renderFolderViewTabAsync`) populates `card.meta` by reading `.md` file frontmatter. The new image enrichment follows the same pattern: populate `card.meta` with image-derived values so `table-renderer.ts` can display them without any changes to the renderer's per-cell logic.
+6. **`extra-fields:` scope for cards.** Custom frontmatter keys in `extra-fields:`
+   are fully supported for the cards layout. The same enrichment pipeline (which
+   reads `.md` frontmatter via Tauri) runs for both layouts. Values appear in the
+   metadata line.
 
-**`BUILTIN_FIELDS` set** (in `parser.ts`): Currently `{ "name", "type", "ext", "modified", "tags", "count", "icon" }`. The new built-in image column identifiers (`width`, `height`, `date-taken`, `camera`) must be added to this set so they are not misclassified as custom frontmatter keys by `parseFolderMd` and `resolveFields`.
+7. **Image metadata in cards.** If `fields:` includes image built-in keys
+   (`width`, `height`, `date-taken`, `camera`), those values appear in the metadata
+   line on image cards. The enrichment pipeline already supports this for table;
+   cards receive the same values.
 
-**`fieldHeaderLabel`** (in `table-renderer.ts`): Maps built-in field identifiers to English column header labels. Needs cases for `width`, `height`, `date-taken`, `camera`.
+8. **Checkbox position on cards.** Top-left corner of the card, absolutely
+   positioned. Hover-only visibility — appears when the card or its parent section
+   is hovered (same opacity-transition pattern used elsewhere in the app). Both
+   file cards and directory cards receive checkboxes.
 
-**Sidecar resolution in enrichment**: When a non-`.md` card is encountered and sidecar enrichment is enabled, the sidecar path is `card.path + ".md"` (e.g. `/vault/photos/sunset.jpg.md`). The existing `extractFrontmatterKeys` function already works on any `.md` file, so no change to that function is needed.
+9. **Bulk toolbar position on cards.** Sticky above the section content inside
+   `.folder-view-host`, same position as the table layout. Same DOM construction
+   from the existing `buildToolbar()` function.
 
-**`executeBulkYaml`** in `bulk-operations.ts`: Currently skips all non-`.md` files with `result.skippedCount += 1`. This must be extended: when a non-`.md` file has a sidecar (`<path>.md` exists or can be created), "Apply YAML" operates on the sidecar instead of skipping the source file.
+10. The bulk toolbar appears above both layouts. One `SelectionState` is shared
+    across both sections per render call, identical to the existing table behaviour.
 
-### New Rust Commands Required
+11. `bulk-toolbar.ts`, `bulk-selection.ts`, and `bulk-operations.ts` internals
+    are **not changed** — they are already layout-agnostic.
 
-Two new Rust commands are needed. Neither exists today. Both must be added to `src-tauri/src/commands/` and registered in `src-tauri/src/lib.rs`.
-
-**`get_image_dimensions(path: String) -> Result<(u32, u32), String>`**
-
-Returns `(width, height)` in pixels by reading the minimum necessary bytes from the image header — no full decode. Must support JPEG (SOF0/SOF2 markers), PNG (IHDR chunk), GIF (logical screen descriptor), WebP (VP8/VP8L/VP8X chunks), and HEIC/HEIF (ISO BMFF `ispe` box). Returns `Err` for unsupported formats and unreadable files. No new Cargo dependency required — all of these formats have fixed-position header bytes parseable with `std::io::Read`.
-
-**`get_exif_data(path: String) -> Result<ExifData, String>`**
-
-Returns a small struct `ExifData { date_taken: Option<String>, camera: Option<String> }`. `date_taken` is the Exif `DateTimeOriginal` (tag 0x9003) formatted as `YYYY-MM-DD`. `camera` is `Make` (tag 0x010F) + `" "` + `Model` (tag 0x0110), trimmed. Returns `Err` if the file has no Exif segment or cannot be read. JPEG only for v1 (HEIC/HEIF Exif parsing is not required). A minimal Exif parser that locates the APP1 marker, reads the TIFF header, and walks the IFD0 directory is sufficient. No new Cargo dependency required.
-
-**`sidecar_exists(path: String) -> Result<bool, String>`**
-
-Returns `true` if `path + ".md"` exists on disk as a regular file. Used by the bulk-YAML extension to decide whether to create or update a sidecar. Simple `std::path::Path::exists()` check. Returns `Err` only on OS-level failures.
-
-All three new commands must have typed wrappers added to `src/lib/bridge.ts` per project convention, even though the plugin calls them via `__TAURI_INTERNALS__` directly.
-
-### Enrichment Phase Extension (in `tab.ts`)
-
-The current enrichment guard:
-
-```
-if (layoutKey === "folder-table" && config.extraFields.length > 0)
-```
-
-Must be extended to also run when image built-in columns are requested. The condition becomes:
-
-```
-if (layoutKey === "folder-table" && (config.extraFields.length > 0 || imageColumnsRequested))
-```
-
-where `imageColumnsRequested` is true when any of `["width", "height", "date-taken", "camera"]` appears in `config.fields` (fields mode) or is declared in `config.extraFields` (legacy extra-fields mode).
-
-Within the enrichment loop, per-card logic:
-
-- If the card is a `.md` file: existing path (read frontmatter, call `extractFrontmatterKeys`). Unchanged.
-- If the card is an image file (ext in `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.heic`, `.heif`):
-  - If `width` or `height` is requested: call `get_image_dimensions(card.path)`. On success, store `"width"` and `"height"` as string values in `card.meta`. On error, store `""` (em-dash fallback in renderer).
-  - If `date-taken` or `camera` is requested AND the file is `.jpg`/`.jpeg`/`.heic`/`.heif`: call `get_exif_data(card.path)`. On success, store `"date-taken"` and/or `"camera"` as string values. On error, store `""`.
-  - If sidecar fields are requested (any key that is not a built-in image key): attempt to read `card.path + ".md"` via `read_file`. If it exists, call `extractFrontmatterKeys` on it for the requested keys. If it does not exist or read fails, store `""` for each requested key.
-- If the card is a non-image, non-`.md` file: `card.meta = {}`.
-- If the card is a directory: `card.meta = {}`. (Unchanged.)
-
-All image metadata reads are performed concurrently (same `Promise.all` pattern as the existing `.md` enrichment). Individual failures are caught per-card — one failure must not abort the render.
-
-### `_folder.md` Syntax (User-Facing)
-
-The four new built-in column identifiers are used in the `fields:` sequence like any other column:
-
-```yaml
-layout: folder-table
-fields:
-  - name
-  - ext
-  - width
-  - height
-  - date-taken
-  - camera
-  - tags
-  - rating        # reads from photo.jpg.md sidecar
-```
-
-No new YAML keys are introduced in `_folder.md`. The `fields:` mechanism already handles the ordering and visibility of any identifier. `width`, `height`, `date-taken`, and `camera` work identically to any other built-in identifier — they are added to `BUILTIN_FIELDS` so the parser classifies them correctly.
-
-### Sidecar Bulk-YAML Extension
-
-`executeBulkYaml` in `bulk-operations.ts` currently skips any non-`.md` file:
-
-```typescript
-if (kind === "directory" || !itemPath.endsWith(".md")) {
-  result.skippedCount += 1;
-  continue;
-}
-```
-
-The extension replaces this skip with a sidecar-write path for non-`.md` files:
-
-- If `kind === "directory"`: still skip. Directories have no sidecar.
-- If `kind === "file"` and path does not end in `.md`: compute `sidecarPath = itemPath + ".md"`. Operate on `sidecarPath` instead of `itemPath`. The sidecar may not yet exist; `write_file` creates it if absent (Rust `fs::write` creates the file). A sidecar created for the first time gets a minimal frontmatter block wrapping the key-value pair.
-- The result summary for a YAML operation that mixed `.md` and non-`.md` files should report total files processed (both direct `.md` and sidecar writes) without distinguishing them. "Skipped" is reserved for directories only.
+12. This refactor ships before any further layout types are added.
 
 ---
 
-## Functional Requirements
+## Proposed Constraints
 
-### FR-1 — New Built-in Column Identifiers
+- **C-1 (Enrichment gate).** Remove `layoutKey === "folder-table" &&` from the
+  `needsEnrichment` condition in `tab.ts`. The new condition is simply:
+  `config.extraFields.length > 0 || imageColumnsRequested(config)`. This is
+  necessary and sufficient because `parseFolderMd` already derives
+  `config.extraFields` from non-builtin entries in `fields:` when `fields:` is
+  declared (parser line 576–578). No parser changes are needed for the enrichment
+  gate to work for cards.
 
-`width`, `height`, `date-taken`, and `camera` are added to `BUILTIN_FIELDS` in `parser.ts`. They may be used in the `fields:` sequence in `_folder.md`. When declared, they appear as sortable columns in the folder-table. When absent from `fields:`, they do not appear (same behaviour as any other column).
+- **C-2 (Toolbar construction moves to `tab.ts`).** `renderFolderViewTabAsync`
+  creates `SelectionState` and calls `buildToolbar()` before dispatching to the
+  layout renderer. Both `selectionState` and `toolbarRefs` are passed as new
+  arguments to the `FolderLayoutRenderer` signature (or via a shared context
+  object). `table-renderer.ts` removes its own `SelectionState`/toolbar
+  construction and uses the passed-in values instead. `renderer.ts` adds its own
+  checkbox and toolbar wiring using the same passed-in values.
 
-### FR-2 — Image Dimensions Columns
+  **Alternative:** keep toolbar construction inside each renderer but factor out
+  a shared helper function exported from a new `shared-bulk.ts`. This avoids
+  changing the `FolderLayoutRenderer` type signature. Architect should decide.
 
-When `width` or `height` appears in `config.fields` (or `config.extraFields`), the enrichment phase calls `get_image_dimensions` for each image card. Results are stored as string values in `card.meta` (e.g. `"1920"`, `"1080"`). The renderer displays the value as-is; the cell shows an em-dash (`—`) when the value is absent or empty. These columns are sortable via locale-aware string comparison (which is numerically correct for same-length strings; sufficiently accurate for v1).
+- **C-3 (No `FolderViewConfig` changes for default cards fields).** Rather than
+  adding a new config field (e.g. `cardsDefaultFields`), the default metadata
+  rendering for cards is hard-coded inside `renderer.ts`: when `config.fields`
+  is null and `config.extraFields` is empty, show `modified` and `tags` only if
+  those items are non-empty. This avoids widening the `FolderViewConfig` type
+  and keeps `parser.ts` unchanged.
 
-Supported formats for dimension reading: JPEG, PNG, GIF, WebP, HEIC/HEIF.
+- **C-4 (Metadata line rendering in cards — XSS).** All field values in the
+  metadata line must use `.textContent`, not `.innerHTML`. This mirrors the
+  existing table renderer pattern and is non-negotiable given the XSS surface
+  (frontmatter values are user-controlled).
 
-### FR-3 — EXIF Columns
+- **C-5 (Checkbox cell does not trigger card navigation).** The checkbox `<input>`
+  and its containing element must call `event.stopPropagation()` to prevent the
+  card's `click` handler from firing when the user checks a card. This matches
+  the existing `buildCheckboxTd` pattern in `bulk-selection.ts`.
 
-When `date-taken` or `camera` appears in `config.fields` (or `config.extraFields`), the enrichment phase calls `get_exif_data` for each `.jpg`/`.jpeg`/`.heic`/`.heif` card. Results are stored as string values in `card.meta`. PNG, GIF, and WebP cards always get `""` for these keys (EXIF not supported). The em-dash fallback applies as with FR-2.
+- **C-6 (Lazy-loading compatibility).** Cards are loaded in batches via
+  `IntersectionObserver`. Checkboxes added to lazy-loaded cards must register
+  into the same `SelectionState`, `rowCheckboxes`, and `sectionPaths` arrays
+  used by the section master checkbox. The lazy-load path in `appendCardsToGrid`
+  must pass these arrays through to `buildCard` (or equivalent) — this is the
+  critical threading requirement. The architect must design the wiring so that
+  each `IntersectionObserver` callback closure captures the correct per-section
+  arrays, not a stale snapshot.
 
-`date-taken` displays in the format `YYYY-MM-DD` as extracted from Exif `DateTimeOriginal`. The column header label is `"Date Taken"`.
-`camera` displays as `"Make Model"` (trimmed, null bytes stripped). The column header label is `"Camera"`.
+- **C-7 (Sort-rebuild clears selection in cards).** When the cards view is
+  re-sorted (if sort is added), the selection state must be cleared before
+  rebuilding. For v1 of this refactor, cards do not support interactive sort,
+  so this constraint applies only if the architect decides to add card sorting
+  in the same task.
 
-Both columns are sortable.
+- **C-8 (`FOLDER_VIEW_STARTER` update).** The comment in `FOLDER_VIEW_STARTER`
+  that describes `fields:` as "folder-table only" must be removed. The updated
+  comment must explain that `fields:` applies to both layouts: for table it drives
+  column order; for cards it drives the metadata line below the card name. The
+  `extra-fields:` comment must similarly remove any table-only qualifier.
 
-### FR-4 — Sidecar Read in Enrichment
+- **C-9 (CSS for metadata line).** A new CSS class (`.folder-view-card-meta`)
+  must be added to `folder-view-css.ts` for the metadata line beneath the card
+  name. Styling: smaller font, muted color, consistent with the existing
+  `.folder-view-card-date` style. The metadata line replaces the existing
+  `.folder-view-card-date` element when `fields:` is declared — the two must not
+  appear simultaneously.
 
-When a non-`.md` file card has sidecar fields requested (any `config.fields` or `config.extraFields` entry that is not one of the four built-in image keys and not in the standard `BUILTIN_FIELDS` set), the enrichment phase reads `card.path + ".md"` and calls `extractFrontmatterKeys` on it. If the sidecar does not exist or cannot be read, the keys are absent from `card.meta` (em-dash fallback in renderer). Sidecar read failures must not cause an error or break the render.
-
-### FR-5 — Sidecar Write via Bulk-YAML
-
-When the user applies a YAML key-value via the bulk toolbar and the selection includes non-`.md` image files, the operation writes to the corresponding `<imagepath>.md` sidecar file instead of skipping. If the sidecar does not exist, it is created with a minimal frontmatter block. The operation result summary counts sidecar writes in `succeeded` alongside direct `.md` file writes. Directories remain skipped.
-
-### FR-6 — Column Header Labels
-
-`fieldHeaderLabel` in `table-renderer.ts` must return the following for the new built-in identifiers:
-
-| Identifier | Header label |
-|---|---|
-| `width` | `"Width"` |
-| `height` | `"Height"` |
-| `date-taken` | `"Date Taken"` |
-| `camera` | `"Camera"` |
-
-### FR-7 — Non-Image Files Receive Empty Meta for Image Keys
-
-For non-image files (e.g. `.pdf`, `.zip`, `.txt`) that appear in a folder where image columns are declared, `card.meta` is set to `{}` for those keys (same as the current behaviour for non-`.md`, non-image files). Em-dash renders in those cells.
-
-### FR-8 — Lazy Enrichment (No Blocking)
-
-Image dimension and EXIF reads are performed in the same concurrent `Promise.all` enrichment loop as `.md` frontmatter reads. The initial `folder-view-loading` placeholder is shown while enrichment runs. Enrichment does not block tab opening or any other UI. This matches NFR-03 in the existing architecture (uncapped `Promise.all`).
-
-### FR-9 — Sidecar Isolation from Vault Index Display
-
-A sidecar file (`photo.jpg.md`) is a companion to its image and must not appear as a standalone row in the folder-table. The vault index already surfaces `.md` files through `vaultIndex.entries`; `collectChildren` in `tab.ts` must exclude any `.md` file whose stem ends in an image extension (e.g. `photo.jpg.md`, `banner.png.md`). The exclusion pattern is: if `entry.name` (the stem without `.md`) contains a dot and the portion after the last dot is a known image extension (`jpg`, `jpeg`, `png`, `gif`, `webp`, `heic`, `heif`), exclude it from the file cards array.
-
-### FR-10 — New bridge.ts Wrappers
-
-Three new typed wrappers are added to `src/lib/bridge.ts`:
-
-- `getImageDimensions(path: string): Promise<FileResult<{ width: number; height: number }>>` — wraps `get_image_dimensions`
-- `getExifData(path: string): Promise<FileResult<{ dateTaken: string | null; camera: string | null }>>` — wraps `get_exif_data`
-- `sidecarExists(path: string): Promise<FileResult<boolean>>` — wraps `sidecar_exists`
+- **C-10 (CSS for card checkbox).** A new CSS rule for the card checkbox element
+  must be added to `folder-view-css.ts`. Positioning: `position: absolute`,
+  top-left corner of the card. Visibility: `opacity: 0` by default; transitions
+  to `opacity: 1` when the card or its ancestor section is hovered (using the
+  same opacity-transition pattern already present in the app). The checkbox must
+  not interfere with the card preview image layout.
 
 ---
 
-## Non-Functional Requirements
-
-- **NFR-1** — No EXIF data is ever written to any image file. The EXIF command is read-only.
-- **NFR-2** — `get_image_dimensions` reads only the minimum bytes required to locate the dimension fields in each format's header (e.g. first ~26 bytes for PNG, first SOFn marker for JPEG). It does not decode the full image.
-- **NFR-3** — No new Cargo crates for EXIF or image parsing. Both parsers are implemented with standard library I/O (`std::io::Read`, `std::io::Seek`).
-- **NFR-4** — Sidecar files are invisible in the folder-table view (FR-9). A user browsing a photo folder sees only image rows, not companion `.jpg.md` rows.
-- **NFR-5** — Image enrichment is gated the same way existing enrichment is gated: only runs for `folder-table` and only when at least one image column or sidecar field is declared. Folders with no image columns declared are unaffected and pay no performance cost.
-- **NFR-6** — All new built-in identifiers follow the existing hyphenated-lowercase key convention (`date-taken`, not `dateTaken`). Column header labels use Title Case.
-- **NFR-7** — `executeBulkYaml` never calls `sidecar_exists` over the network before the operation; instead it calls `write_file` on the sidecar path directly. If the file does not exist, Rust `write_file` creates it. This avoids a round-trip check before every write.
-- **NFR-8** — All user-controlled text (filenames, EXIF strings) inserted into the DOM uses `.textContent`. No `.innerHTML` interpolation of image metadata strings.
-
----
-
-## Files to Create or Modify
+## Files That Change
 
 | File | Nature of change |
 |---|---|
-| `src-tauri/src/commands/io.rs` | Add `get_image_dimensions`, `get_exif_data`, `sidecar_exists` commands |
-| `src-tauri/src/lib.rs` | Register the three new commands in the invoke handler |
-| `src/lib/bridge.ts` | Add `getImageDimensions`, `getExifData`, `sidecarExists` typed wrappers |
-| `src/plugins/file-browser/folder-view/parser.ts` | Add `width`, `height`, `date-taken`, `camera` to `BUILTIN_FIELDS` |
-| `src/plugins/file-browser/folder-view/tab.ts` | Extend enrichment phase: image dimension + EXIF reads, sidecar reads, update enrichment guard, add sidecar exclusion to `collectChildren` |
-| `src/plugins/file-browser/folder-view/table-renderer.ts` | Add `fieldHeaderLabel` cases for four new built-in identifiers |
-| `src/plugins/file-browser/folder-view/bulk-operations.ts` | Extend `executeBulkYaml` to write sidecars for non-`.md` files |
+| `tab.ts` | Remove `layoutKey === "folder-table" &&` from enrichment gate; move `SelectionState` + `buildToolbar()` construction here (if C-2 preferred over alternative) |
+| `renderer.ts` | Add checkbox per card (top-left, hover-only, wired to `SelectionState`); add metadata line below card name (from `config.fields` / `config.extraFields` / default fields); wire lazy-load path to pass selection arrays through; wire master checkbox per section |
+| `table-renderer.ts` | Remove `SelectionState` + `buildToolbar()` construction (if C-2 preferred); receive them as parameters or from shared context |
+| `folder-view-css.ts` | Add `.folder-view-card-meta` styles; add card checkbox position and hover-opacity CSS (C-9, C-10) |
+| `file-browser.plugin.ts` | Update `FOLDER_VIEW_STARTER` comment on `fields:` and `extra-fields:` to remove "folder-table only" qualifier (C-8) |
 
-No new TypeScript files. No new Rust files (new commands go in existing `io.rs`).
+## Files That Do NOT Change
+
+| File | Reason |
+|---|---|
+| `bulk-toolbar.ts` | Already layout-agnostic |
+| `bulk-selection.ts` | Already layout-agnostic |
+| `bulk-operations.ts` | Already layout-agnostic |
+| `parser.ts` | No new YAML keys; existing `fields:` / `extra-fields:` parsing is sufficient |
+| `types.ts` | `FolderViewConfig` and `FolderCard` need no new fields (C-3); `FolderLayoutRenderer` signature may change only if C-2 approach adds parameters |
+| `folder-table-css.ts` | Table-specific styles unchanged |
+| `yaml-frontmatter.ts` | No change |
+| `frontmatter-reader.ts` | No change |
 
 ---
 
 ## Edge Case Inventory
 
-**EC-1** — Image file has no readable header (truncated file, zero-byte file): `get_image_dimensions` returns `Err`. Enrichment stores `""` for `width` and `height`. Em-dash renders in those cells.
+The following edge cases must be verified in tests and code review. This list is
+the Reviewer's mandatory test checklist.
 
-**EC-2** — JPEG file has no APP1/Exif segment (e.g. stripped JPEG): `get_exif_data` returns `Err`. Enrichment stores `""` for `date-taken` and `camera`. Em-dash in cells.
+**EC-1 — Cards layout, no `fields:` declared, no `extra-fields:`.**
+Expected: metadata line shows `modified` (if > 0) and tags (if any) as plain
+text values separated by ` · `, matching the existing `showModified`/`showTags`
+defaults. No enrichment reads occur because `config.extraFields` is empty and
+`imageColumnsRequested` returns false.
 
-**EC-3** — Exif `DateTimeOriginal` is absent but `DateTime` (tag 0x0132) is present: `get_exif_data` returns `None` for `date_taken` (only `DateTimeOriginal` is read in v1). Em-dash in cell.
+**EC-2 — Cards layout, `fields:` declared with only built-in fields (e.g. `modified`, `tags`).**
+Expected: metadata line shows exactly those fields in declaration order, values
+only, separated by ` · `. No enrichment reads occur (no custom frontmatter keys,
+no image keys). Card click still navigates normally.
 
-**EC-4** — Exif `Make` is present but `Model` is absent (or vice versa): `camera` string uses whichever field is present, trimmed. If both are absent, `camera` is `None` → em-dash.
+**EC-3 — Cards layout, `fields:` declared with a custom frontmatter key (e.g. `status`).**
+Expected: enrichment runs and reads `status` from each `.md` file's frontmatter.
+The value appears in the metadata line. Cards with no `status` key show an em-dash.
+Non-`.md` cards (images, PDFs) show an em-dash for custom keys.
 
-**EC-5** — Image dimensions are zero (malformed header with 0×0 stored): `get_image_dimensions` returns `Ok((0, 0))`. Enrichment stores `"0"`. Table displays `"0"`. This is the file's own malformed data; no special treatment.
+**EC-4 — Cards layout, `fields:` includes image built-in keys (`width`, `height`) and cards include image files.**
+Expected: enrichment runs `get_image_dimensions` for each image card. Values appear
+in the metadata line for image cards. Non-image cards show an em-dash.
 
-**EC-6** — Non-image file (e.g. `.pdf`) in a folder with `width` column declared: enrichment skips dimension read; `card.meta` for that card has no `width` entry. Em-dash in cell.
+**EC-5 — Cards layout, `fields:` declared, card count exceeds `LAZY_BATCH_SIZE` (50).**
+Expected: lazily-loaded card batch registers checkboxes into the same
+`SelectionState` and section arrays as the first batch. The `IntersectionObserver`
+callback closure must capture the per-section `rowCheckboxes` and `sectionPaths`
+arrays by reference (not copy). Master checkbox state transitions
+(unchecked → indeterminate → checked) remain correct after lazy load fires.
 
-**EC-7** — Sidecar file `photo.jpg.md` is created by the user and placed in the vault before this feature is used: `collectChildren` must exclude it from standalone rows (FR-9). It will not appear as a row; its contents will be read during enrichment for the parent `photo.jpg` card.
+**EC-6 — User checks a card, then a lazy batch loads.**
+Expected: previously checked cards retain their `fv-row--selected` visual class
+and their paths remain in `selectionState.paths`. Newly loaded cards start
+unchecked. Master checkbox transitions to indeterminate if partial selection
+now exists.
 
-**EC-8** — Sidecar `photo.jpg.md` is deleted externally between the folder-table render and a subsequent "Apply YAML" operation: `write_file` on the sidecar path creates a new file (Rust creates the file if absent). The write succeeds and counts toward `succeeded`. No error.
+**EC-7 — Bulk delete on cards layout.**
+Expected: same flow as table layout. After `refreshLayoutView()`, the entire host
+is re-rendered and selection is cleared. The toolbar hides. No ghost-checked cards
+appear.
 
-**EC-9** — Sidecar already exists and "Apply YAML" is used to add a key that the sidecar already has: existing behaviour of `applyYamlKey` — the key value is overwritten. No error.
+**EC-8 — Bulk move on cards layout.**
+Expected: same as EC-7. Destination path input and Confirm Move flow are identical
+to the table layout because `buildToolbar` is reused unchanged.
 
-**EC-10** — "Apply YAML" with `op = "remove"` on an image card whose sidecar does not exist: `read_file` on the sidecar path returns a "File not found" error. This is caught per-item and added to `failed`. The error message is "File not found: <sidecarPath>". This is the correct behaviour because there is nothing to remove.
+**EC-9 — Card checkbox click does not navigate.**
+Expected: clicking the checkbox area does not open the file or expand the folder.
+`stopPropagation()` on both the `<input>` change event and the containing element
+click event prevents the card's navigation handler from firing.
 
-**EC-11** — Sidecar file has malformed frontmatter (opening `---` with no closing `---`): `executeBulkYaml` detects `parsed.malformed === true` and adds the sidecar path to `failed` with "Could not parse frontmatter in: <sidecarPath>". The sidecar is not written. Identical to the existing behaviour for malformed `.md` files.
+**EC-10 — Directory card checkbox.**
+Expected: directory cards include a checkbox and can be selected for bulk operations
+(move, delete). The `kindMap` entry for directory paths is `"directory"`, so
+`executeBulkDelete` dispatches the correct `delete_directory` Tauri command.
 
-**EC-12** — Folder contains a file named `photo.jpg.md` that is not a sidecar (e.g. it is a standalone note about photography named with a `.jpg.md` double extension by the user): FR-9 exclusion hides this file from the table. This is an accepted trade-off; the file must be renamed or placed in a different folder to appear as a row.
+**EC-11 — Mixed layout: one folder uses `folder-cards`, another uses `folder-table`.**
+Expected: both folders function independently. Each render call is isolated — a
+`SelectionState` created for one folder view has no effect on another. Switching
+tabs between the two layouts does not cause shared state contamination.
 
-**EC-13** — HEIC/HEIF dimension read: `get_image_dimensions` reads the ISO BMFF `ispe` box to extract width and height. If the box is absent or the file is corrupted, returns `Err`. Em-dash fallback.
+**EC-12 — `fields:` declared in a `folder-table` `_folder.md` after the refactor.**
+Expected: table layout behaviour is identical to today. Enrichment gate change
+does not break anything. Column rendering, sort, and bulk operations all work as
+before.
 
-**EC-14** — WebP with VP8X container (extended WebP): `get_image_dimensions` reads the `VP8X` chunk canvas width and height. If the chunk is missing (plain VP8 or VP8L without a container), falls back to reading the VP8 or VP8L bitstream dimensions directly.
+**EC-13 — `fields:` contains only `name` (no date, no tags, no custom fields).**
+Expected for cards: metadata line is empty (or omitted entirely). The card shows
+only the name, preview, and checkbox — no `.folder-view-card-meta` element is
+appended to the DOM. No enrichment runs.
 
-**EC-15** — PNG with non-standard IHDR position (IHDR not the first chunk after signature): `get_image_dimensions` reads only the first chunk after the 8-byte PNG signature. If it is not `IHDR`, returns `Err`. Standard-compliant PNG files always have `IHDR` first.
+**EC-14 — `fields:` contains `count` for a `folder-cards` layout.**
+Expected: `count` appears in the metadata line of directory cards only (showing
+`childCount`). File cards show an em-dash for `count`, consistent with how the
+table layout handles this case.
 
-**EC-16** — Concurrent enrichment for a folder with 500+ images: `Promise.all` is uncapped. Each call is an async Tauri invoke. At 500 concurrent invokes, the Rust side processes them on the async runtime. Performance must be acceptable (sub-3s for 500 images) because only header bytes are read, not full image decode. No batching is required for v1.
+**EC-15 — XSS attempt: a file has a frontmatter value containing `<script>alert(1)</script>`.**
+Expected: the metadata line renders the raw string via `.textContent`, not
+`.innerHTML`. The `<script>` tag is displayed as literal text, not executed.
 
-**EC-17** — `date-taken` Exif value is in a non-standard format (e.g. `2024:13:45 99:99:99`): `get_exif_data` returns the raw string as-is. No validation or reformatting. The caller receives whatever bytes are in the Exif tag.
+**EC-16 — `show-modified: false` and `fields:` both declared in a cards `_folder.md`.**
+Expected: `fields:` fully supersedes `show-modified`. If `modified` is not in
+`fields:`, no modified date appears — regardless of the `show-modified:` boolean.
+The boolean flags are ignored entirely when `fields:` is declared.
 
-**EC-18** — Image file is a symlink: `std::fs::File::open` follows symlinks by default on macOS. Dimension and EXIF reads succeed if the target is a readable image. If the target is missing, `get_image_dimensions` returns `Err`.
+**EC-17 — Enrichment failure for one card (read_file returns error).**
+Expected: that card's `meta` is set to `{}`. Its metadata line shows em-dashes for
+all custom fields. Other cards in the same render complete normally (per-card error
+isolation, unchanged from the existing table enrichment logic).
 
-**EC-19** — `width`/`height` column declared but the folder contains no image files: enrichment skips all non-image cards (stores `{}`). All rows display em-dash in width/height cells. No error.
-
-**EC-20** — Sidecar exclusion in `collectChildren` for a `.md` file whose stem is ambiguous (e.g. `my.project.jpg.md`): The exclusion check uses only the last dot segment of `entry.name` (the stem without `.md`). `entry.name` for `my.project.jpg.md` is `my.project.jpg`. The last segment after the last dot is `jpg`, which is a known image extension. The file is excluded. This is the correct behaviour.
-
-**EC-21** — "Apply YAML" on a selection of mixed `.md` files and image files: `.md` files are written directly; image files get their sidecar written. The result summary counts all writes together in `succeeded`. The text "N of M files processed" does not distinguish direct vs sidecar writes.
-
-**EC-22** — `camera` Exif string contains null bytes (`\0`) from null-padded fixed-width Exif ASCII fields: Rust must strip null bytes before returning the string. The trimmed result (e.g. `"Canon EOS R5"` not `"Canon EOS R5\0\0\0"`) is stored in `card.meta`.
+**EC-18 — Checkbox visibility on hover: parent section hover vs. card hover.**
+Expected: checkbox becomes visible (opacity 1) when either the individual card
+is hovered or when the parent section container is hovered (whichever CSS rule
+is used). Checkbox returns to invisible when hover leaves both the card and the
+section. The transition must use the same opacity-transition duration as other
+hover effects in the app.
 
 ---
 
-## Handoff Summary
+## Out of Scope for This Task
 
-- Artifact: `docs/requirements/active_task.md`
-- Status: Requirements Validated
-- Edge cases to verify in tests: 22 items in Edge Case Inventory (EC-1 through EC-22)
+- Adding new layout types beyond `folder-cards` and `folder-table`.
+- Interactive column sorting in the cards layout (cards do not have sortable
+  column headers; config `sort:` continues to control initial card order).
+- YAML editor / UI for configuring `fields:` — users edit `_folder.md` directly.
+- Changes to `bulk-operations.ts`, `bulk-toolbar.ts`, or `bulk-selection.ts`
+  internals.
+- Any change to the Rust backend commands.
+- Adding image preview to the metadata line (images continue to show the preview
+  rectangle as today; image metadata via `fields:` appears in the text metadata
+  line below the name).
 
-Next step: Activate @software-architect and provide `docs/requirements/active_task.md` as context.
+---
+
+## Open Questions for Architect
+
+The following design decision must be resolved during architecture (not during
+requirements):
+
+**OQ-1 — Shared context vs. changed renderer signature.**
+C-2 proposes moving `SelectionState` + toolbar construction to `tab.ts` and
+passing them as parameters to each renderer. This changes the `FolderLayoutRenderer`
+type signature, which is a type-level breaking change for any future third-party
+layout renderer. The alternative (a shared helper, new `shared-bulk.ts`) keeps the
+signature stable. Architect to pick one approach and document the rationale.

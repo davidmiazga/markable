@@ -16,8 +16,9 @@
  * @module folder-view/renderer
  */
 
-import type { FolderViewConfig, FolderCard, FolderSortOrder } from "./types";
-import { stripScripts } from "./shared";
+import type { FolderViewConfig, FolderCard, FolderSortOrder, BulkContext } from "./types";
+import { stripScripts, applyExcludeFilter } from "./shared";
+import { buildMasterCheckboxTh, buildCheckboxTd } from "./bulk-selection";
 import {
   ICON_FOLDER,
   ICON_FILE,
@@ -32,6 +33,33 @@ import {
 
 /** Render the first N cards immediately; load the rest via IntersectionObserver. */
 const LAZY_BATCH_SIZE = 50;
+
+// ── Bulk-selection checkbox context ──────────────────────────────────────────
+
+/**
+ * Per-section bulk-selection wiring threaded through card builders.
+ *
+ * This type is module-internal — not exported. It groups everything `buildCard`
+ * needs to wire a checkbox for one card, along with the per-section arrays that
+ * must be captured by reference in the IntersectionObserver closure (C-6).
+ *
+ * selectionState — Shared mutable selection passed down from BulkContext.
+ * syncToolbar    — No-arg closure that updates the toolbar visibility/count.
+ * masterInput    — The section's master <input> for indeterminate sync.
+ * rowCheckboxes  — Array of all row <input> elements in this section.
+ *                  Grows as lazy batches fire (captured by object reference).
+ * sectionRows    — Array of all card elements in this section (cast for compat).
+ * sectionPaths   — Array of all paths in this section.
+ *                  Complete at construction time (pre-seeded from sectionCards).
+ */
+interface CheckboxContext {
+  selectionState: BulkContext["selectionState"];
+  syncToolbar:    () => void;
+  masterInput:    HTMLInputElement;
+  rowCheckboxes:  HTMLInputElement[];
+  sectionRows:    HTMLTableRowElement[];
+  sectionPaths:   string[];
+}
 
 // ── Icon mapping ──────────────────────────────────────────────────────────────
 
@@ -97,6 +125,90 @@ export function sortCards(cards: FolderCard[], sort: FolderSortOrder): void {
       default:              return a.name.localeCompare(b.name);
     }
   });
+}
+
+// ── Metadata line builder ─────────────────────────────────────────────────────
+
+/**
+ * Build the `.fv-card-meta` metadata line element for a card.
+ *
+ * Fields mode (config.fields !== null):
+ *   Renders values for each field in config.fields, in declaration order,
+ *   excluding "name" (already shown as the card name) and "icon". Non-empty
+ *   values are separated by " · " (middle dot, U+00B7). Missing or empty values
+ *   render as "—" (em-dash, U+2014). If every field produces an em-dash, or the
+ *   field list is empty after filtering, returns null so nothing is appended
+ *   (EC-13 rule: keep cards clean when no data is available).
+ *
+ * Legacy mode (config.fields === null):
+ *   Shows modified date when config.showModified is true and the card is a file
+ *   with a non-zero timestamp. Shows tags joined by " · " when config.showTags
+ *   is true. Returns null when nothing is displayable.
+ *
+ * All values are written via .textContent — never .innerHTML (C-4, EC-15).
+ *
+ * @param card   - The FolderCard to read data from.
+ * @param config - The FolderViewConfig.
+ * @returns An HTMLDivElement with class "fv-card-meta", or null.
+ */
+function buildCardMeta(card: FolderCard, config: FolderViewConfig): HTMLElement | null {
+  const parts: string[] = [];
+
+  if (config.fields !== null) {
+    // ── Fields mode ───────────────────────────────────────────────────────────
+    for (const field of config.fields) {
+      // "name" is already the card title; "icon" is visual only; "select" controls
+      // checkbox visibility (not a text value) — all three are skipped here.
+      if (field === "name" || field === "icon" || field === "select") continue;
+
+      let value = "";
+
+      if (field === "modified") {
+        // Use the formatted date when a valid timestamp exists; empty otherwise.
+        value = card.modified > 0 ? formatModified(card.modified) : "";
+      } else if (field === "tags") {
+        // Join all tags with the middle-dot separator as a single meta segment.
+        // This differs from the chip display in legacy mode (max 3 chips).
+        value = card.tags && card.tags.length > 0 ? card.tags.join(" · ") : "";
+      } else if (field === "count") {
+        // "count" is only meaningful for directory cards (EC-14).
+        // For file cards we leave value="" → em-dash → may be suppressed.
+        if (card.kind === "directory") {
+          value = String(card.childCount ?? 0);
+        }
+      } else if (field === "type" || field === "ext") {
+        // Show the raw extension string (e.g. ".pdf", ".md").
+        value = card.ext;
+      } else {
+        // All other identifiers (image built-ins: width/height/date-taken/camera;
+        // custom frontmatter keys) are read from card.meta populated by enrichment.
+        value = card.meta?.[field] ?? "";
+      }
+
+      // Em-dash (U+2014) for missing or empty values — consistent with table renderer.
+      parts.push(value === "" ? "—" : value);
+    }
+
+    // EC-13: suppress the element when every field produced an em-dash (no data).
+    // Also suppress when all fields were skipped (empty parts array after filtering).
+    if (parts.length === 0 || parts.every(p => p === "—")) return null;
+
+  } else {
+    // ── Legacy mode ───────────────────────────────────────────────────────────
+    // Show modified date only. Tags are rendered as chip elements in buildCard
+    // (the .folder-view-card-tags block) — adding them here would double-render.
+    if (config.showModified && card.kind === "file" && card.modified > 0) {
+      parts.push(formatModified(card.modified));
+    }
+
+    if (parts.length === 0) return null;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "fv-card-meta";
+  // All values written via textContent — never innerHTML (C-4, EC-15 XSS guard).
+  meta.textContent = parts.join(" · ");
+  return meta;
 }
 
 // ── Card click handler ────────────────────────────────────────────────────────
@@ -273,7 +385,7 @@ function buildCardPreview(card: FolderCard, config: FolderViewConfig): HTMLEleme
 /**
  * Build one card element for the grid.
  *
- * Structure: preview rectangle (top) → name label (bottom).
+ * Structure: preview rectangle → name label → metadata line → checkbox overlay.
  *
  * Accessibility (NFR-07):
  *   - role="button" so screen readers announce it as interactive.
@@ -281,19 +393,43 @@ function buildCardPreview(card: FolderCard, config: FolderViewConfig): HTMLEleme
  *   - aria-label provides a descriptive name (e.g. "Open folder Reports").
  *   - Enter and Space keys activate the card (same as click).
  *
- * EC-13 XSS note: card.name is set via .textContent (not .innerHTML) so
- * characters like < and > are rendered as text, never as HTML.
+ * EC-13 XSS note: card.name and all field values are set via .textContent
+ * (not .innerHTML) so characters like < and > are rendered as text, never as HTML.
  *
- * @param card   - The FolderCard to render.
- * @param config - Config for showModified flag (retained for forward compatibility).
+ * When checkboxCtx is provided (Step 04):
+ *   - el.style.position = "relative" is set so the absolutely-positioned
+ *     checkbox overlay sits in the correct corner.
+ *   - A .fv-card-checkbox-wrap element is appended as the last child.
+ *   - The checkbox input is registered into checkboxCtx.rowCheckboxes and
+ *     the card path is pushed into checkboxCtx.sectionPaths (lazy-load safe,
+ *     C-6: the array is captured by reference in the IntersectionObserver closure).
+ *
+ * Length justification: five distinct concerns — preview rectangle, name/ext/count
+ * label, legacy date+tag chips, fields-mode meta line, and checkbox overlay — each
+ * require their own conditional DOM construction and event wiring. Splitting into
+ * sub-functions would require threading `config`, `card`, `checkboxCtx`, and
+ * `displayName` through an extra parameter layer with no clarity gain.
+ *
+ * @param card         - The FolderCard to render.
+ * @param config       - FolderViewConfig for layout and display flags.
+ * @param checkboxCtx  - Optional per-section bulk-selection wiring (Step 04).
  * @returns The card `<div>` element with all wiring attached.
  */
-function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
+function buildCard(
+  card: FolderCard,
+  config: FolderViewConfig,
+  checkboxCtx?: CheckboxContext,
+): HTMLElement {
   const el = document.createElement("div");
   el.className = [
     "folder-view-card",
     card.kind === "directory" ? "folder-view-card-dir" : "folder-view-card-file",
   ].join(" ");
+
+  // Required for the absolutely-positioned checkbox overlay (Step 04, C-5).
+  if (checkboxCtx) {
+    el.style.position = "relative";
+  }
 
   // NFR-07: accessibility attributes.
   el.setAttribute("role", "button");
@@ -330,8 +466,14 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
     el.appendChild(nameEl);
   }
 
-  // Tag chips — first 3 tags for .md files when showTags=true (FVB-01).
-  if (config.showTags && card.tags && card.tags.length > 0) {
+  // ── Fields mode guard (EC-16, D-3) ─────────────────────────────────────────
+  // When fields: is declared, the metadata line (.fv-card-meta) supersedes both
+  // the tag chips and the legacy modified-date element. Guard both legacy blocks
+  // with config.fields === null to ensure mutual exclusion (EC-16, constraint #7).
+
+  // Tag chips — legacy mode only: first 3 tags for .md files when showTags=true.
+  // In fields: mode, tags appear as plain text in the .fv-card-meta line instead.
+  if (config.fields === null && config.showTags && card.tags && card.tags.length > 0) {
     const tagsEl = document.createElement("div");
     tagsEl.className = "folder-view-card-tags";
     const limit = Math.min(3, card.tags.length);
@@ -345,13 +487,21 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
     el.appendChild(tagsEl);
   }
 
-  // Modified date — only for file cards with a known timestamp (FR-10).
-  if (config.showModified && card.kind === "file" && card.modified > 0) {
+  // Modified date element — legacy mode only (FR-10).
+  // When fields: is declared, this is superseded by .fv-card-meta (EC-16).
+  if (config.fields === null && config.showModified && card.kind === "file" && card.modified > 0) {
     const dateEl = document.createElement("div");
     dateEl.className = "folder-view-card-date";
     dateEl.textContent = formatModified(card.modified);
     el.appendChild(dateEl);
   }
+
+  // Metadata line — covers both fields: mode and legacy mode (Step 05).
+  // buildCardMeta returns null when there is nothing displayable, so the
+  // append is guarded. Mutual exclusion with .folder-view-card-date is
+  // enforced by the config.fields === null guards above (EC-16, D-3).
+  const metaEl = buildCardMeta(card, config);
+  if (metaEl) el.appendChild(metaEl);
 
   // Click handler (FR-21/FR-22).
   el.addEventListener("click", () => handleCardClick(card));
@@ -363,6 +513,38 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
       handleCardClick(card);
     }
   });
+
+  // ── Checkbox overlay (Step 04) ──────────────────────────────────────────────
+  // Must be appended last so z-index places it above other card content.
+  // The <td> returned by buildCheckboxTd is repurposed as a positioned overlay
+  // by overriding its className to "fv-card-checkbox-wrap". The CSS for this
+  // class (Step 06) applies position:absolute, top:6px, left:6px, z-index:1.
+  if (checkboxCtx) {
+    const { selectionState, syncToolbar, masterInput, rowCheckboxes,
+            sectionRows, sectionPaths } = checkboxCtx;
+
+    // buildCheckboxTd is typed for HTMLTableRowElement but only uses classList.toggle.
+    // Casting the card div is safe here (structural typing — no table-specific access).
+    const checkboxTd = buildCheckboxTd(
+      card,
+      el as unknown as HTMLTableRowElement,
+      selectionState,
+      syncToolbar,
+      masterInput,
+      sectionPaths,
+    );
+
+    // Repurpose the <td> as a positioned overlay. The original fv-td-checkbox
+    // class is replaced with fv-card-checkbox-wrap for card-layout CSS.
+    checkboxTd.className = "fv-card-checkbox-wrap";
+    el.appendChild(checkboxTd);
+
+    // Register the checkbox input and card element for master-checkbox sync.
+    const inputInWrap = checkboxTd.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+    rowCheckboxes.push(inputInWrap);
+    // Cast is safe: buildMasterCheckboxTh only calls classList.toggle on rows.
+    sectionRows.push(el as unknown as HTMLTableRowElement);
+  }
 
   return el;
 }
@@ -378,33 +560,49 @@ function buildCard(card: FolderCard, config: FolderViewConfig): HTMLElement {
  *   at the end of the grid, and subsequent batches are appended as the sentinel
  *   scrolls into view within scrollRoot.
  *
- * @param cards      - All cards for this section (pre-sorted).
- * @param grid       - The `.folder-view-grid` element to append into.
- * @param config     - FolderViewConfig for buildCard.
- * @param scrollRoot - The scrollable host element (IntersectionObserver root).
+ * C-6 (lazy-load checkbox threading): `checkboxCtx` is captured by object
+ * reference in the IntersectionObserver closure. The inner arrays
+ * (rowCheckboxes, sectionPaths, sectionRows) grow in place as batches fire,
+ * so the master checkbox state calculation always sees the live arrays.
+ *
+ * @param cards       - All cards for this section (pre-sorted).
+ * @param grid        - The `.folder-view-grid` element to append into.
+ * @param config      - FolderViewConfig for buildCard.
+ * @param scrollRoot  - The scrollable host element (IntersectionObserver root).
+ * @param checkboxCtx - Optional per-section bulk wiring; captured by reference.
  */
 function appendCardsToGrid(
   cards: FolderCard[],
   grid: HTMLElement,
   config: FolderViewConfig,
   scrollRoot: HTMLElement,
+  checkboxCtx?: CheckboxContext,
 ): void {
   if (cards.length <= LAZY_BATCH_SIZE) {
-    for (const card of cards) grid.appendChild(buildCard(card, config));
+    for (const card of cards) grid.appendChild(buildCard(card, config, checkboxCtx));
     return;
   }
 
-  for (const card of cards.slice(0, LAZY_BATCH_SIZE)) grid.appendChild(buildCard(card, config));
+  for (const card of cards.slice(0, LAZY_BATCH_SIZE)) {
+    grid.appendChild(buildCard(card, config, checkboxCtx));
+  }
 
   let rendered = LAZY_BATCH_SIZE;
   const sentinel = document.createElement("div");
   sentinel.className = "fv-load-sentinel";
   grid.appendChild(sentinel);
 
+  // CRITICAL (C-6): checkboxCtx is captured by reference.
+  // checkboxCtx.rowCheckboxes and checkboxCtx.sectionPaths are the same array
+  // objects that were allocated in makeCheckboxCtx. The closure captures the
+  // object reference, not a snapshot, so lazily-added checkboxes are visible
+  // to updateMasterCheckboxState (which reads sectionPaths.filter(...)).
   const observer = new IntersectionObserver((entries) => {
     if (!entries[0].isIntersecting) return;
     const batch = cards.slice(rendered, rendered + LAZY_BATCH_SIZE);
-    for (const card of batch) grid.insertBefore(buildCard(card, config), sentinel);
+    for (const card of batch) {
+      grid.insertBefore(buildCard(card, config, checkboxCtx), sentinel);
+    }
     rendered += batch.length;
     if (rendered >= cards.length) {
       observer.disconnect();
@@ -416,16 +614,23 @@ function appendCardsToGrid(
 }
 
 /**
- * Build a section element (heading + CSS grid of cards).
+ * Build a section element (optional heading + master checkbox + CSS grid of cards).
  *
  * Used for both the "Folders" section and the "Files" section (FR-18).
  * Cards are appended via appendCardsToGrid, which lazy-loads when the section
  * has more than LAZY_BATCH_SIZE items.
  *
- * @param title      - The section heading text (e.g. "Folders" or "Files").
- * @param cards      - Pre-sorted FolderCards for this section.
- * @param config     - FolderViewConfig (for card width, layout mode, etc.).
- * @param scrollRoot - Scrollable host element passed to appendCardsToGrid.
+ * When `checkboxCtx` is provided, a master-checkbox row is rendered immediately
+ * after the heading (or at the top if there is no heading). The master checkbox
+ * uses the same `buildMasterCheckboxTh` helper as the table renderer, but only
+ * the returned `masterInput` is used — the `<th>` element is discarded since
+ * cards sections use a `<div>` wrapper instead.
+ *
+ * @param title       - The section heading text (e.g. "Folders"). null = no heading.
+ * @param cards       - Pre-sorted FolderCards for this section.
+ * @param config      - FolderViewConfig (for card width, layout mode, etc.).
+ * @param scrollRoot  - Scrollable host element passed to appendCardsToGrid.
+ * @param checkboxCtx - Optional per-section bulk wiring from renderFolderCards.
  * @returns The `.folder-view-section` div element.
  */
 function buildSection(
@@ -433,6 +638,7 @@ function buildSection(
   cards: FolderCard[],
   config: FolderViewConfig,
   scrollRoot: HTMLElement,
+  checkboxCtx?: CheckboxContext,
 ): HTMLElement {
   const section = document.createElement("div");
   section.className = "folder-view-section";
@@ -444,13 +650,32 @@ function buildSection(
     section.appendChild(heading);
   }
 
+  // Master checkbox wrap — only when bulk context is provided.
+  // The <th> returned by buildMasterCheckboxTh is discarded (not applicable to
+  // a div-based grid); we only need masterInput from the returned object.
+  if (checkboxCtx) {
+    const masterWrap = document.createElement("div");
+    masterWrap.className = "fv-card-master-checkbox-wrap";
+    const masterLabel = document.createElement("label");
+    masterLabel.className = "fv-card-master-label";
+    const masterInput = checkboxCtx.masterInput;
+    masterInput.setAttribute("aria-label", `Select all ${title ?? "items"}`);
+    masterLabel.appendChild(masterInput);
+    const labelText = document.createElement("span");
+    labelText.className = "fv-card-master-label-text";
+    labelText.textContent = "Select all";
+    masterLabel.appendChild(labelText);
+    masterWrap.appendChild(masterLabel);
+    section.appendChild(masterWrap);
+  }
+
   const grid = document.createElement("div");
   grid.className = "folder-view-grid";
   grid.style.setProperty("--fv-card-width", config.cardWidth + "px");
   if (config.layoutMode === "flex") grid.classList.add("fv-flex-mode");
   grid.setAttribute("role", "list");
 
-  appendCardsToGrid(cards, grid, config, scrollRoot);
+  appendCardsToGrid(cards, grid, config, scrollRoot, checkboxCtx);
 
   section.appendChild(grid);
   return section;
@@ -465,28 +690,32 @@ function buildSection(
  *
  * Algorithm:
  * 1. Clear the container and create the host div.
- * 2. Render the description block if config.body is non-empty (FR-11/FR-24).
- * 3. Separate cards into subfolder and file sections; sort each independently (FR-20).
- * 4. If both sections are empty, render the empty-state message (FR-26).
- * 5. Render each non-empty section (subfolder section first per FR-18).
+ * 2. If context is provided, attach toolbar as first child of host (Step 03).
+ * 3. Render the description block if config.body is non-empty (FR-11/FR-24).
+ * 4. Separate cards into subfolder and file sections; sort each independently (FR-20).
+ * 5. If both sections are empty, render the empty-state message (FR-26).
+ * 6. For each non-empty section, build a per-section CheckboxContext (Step 04)
+ *    and render the section with master checkbox + per-card checkboxes.
  *
  * Length justification: this function orchestrates two distinct sections (subfolders
- * and files), each requiring sort, build, and conditional render logic. All
- * heavy lifting is delegated to buildSection(), buildCard(), sortCards().
- * The top-level control flow cannot be meaningfully split further without
+ * and files), each requiring sort, CheckboxContext construction, build, and conditional
+ * render logic. All heavy lifting is delegated to buildSection(), buildCard(),
+ * sortCards(). The top-level control flow cannot be meaningfully split further without
  * threading config + cards through an opaque extra layer.
  *
- * @param config     - Validated FolderViewConfig from parseFolderMd().
- * @param cards      - Immediate children from collectChildren() (unsorted).
- * @param container  - The DOM element to render into (cleared on entry).
+ * @param config      - Validated FolderViewConfig from parseFolderMd().
+ * @param cards       - Immediate children from collectChildren() (unsorted).
+ * @param container   - The DOM element to render into (cleared on entry).
  * @param _folderPath - Absolute path of the folder (unused in this renderer;
  *                      present to satisfy the FolderLayoutRenderer contract).
+ * @param context     - Optional shared bulk wiring from tab.ts (Step 01).
  */
 export function renderFolderCards(
   config: FolderViewConfig,
   cards: FolderCard[],
   container: HTMLElement,
   _folderPath: string,
+  context?: BulkContext,
 ): void {
   container.innerHTML = "";
 
@@ -494,7 +723,16 @@ export function renderFolderCards(
   host.className = "folder-view-host";
   if (!config.contentAreaOverride) host.classList.add("folder-view-host--constrained");
 
-  // Step 2: Description block (FR-11/FR-24).
+  // Step 03: Attach toolbar as first child of host when bulk context is provided.
+  // The toolbar is already fully constructed in tab.ts; this positions it above
+  // the description block and all section content, matching the table layout.
+  // The toolbar starts hidden (no fv-bulk-toolbar--visible); it becomes visible
+  // only when syncToolbar() is called after a checkbox change.
+  if (context?.toolbarRefs) {
+    host.appendChild(context.toolbarRefs.toolbar);
+  }
+
+  // Step 3 (original): Description block (FR-11/FR-24).
   if (config.body.trim()) {
     const desc = document.createElement("div");
     desc.className = "folder-view-description";
@@ -512,15 +750,8 @@ export function renderFolderCards(
     host.appendChild(desc);
   }
 
-  // Step 3: Apply exclude filter (FVB-05), then separate and sort.
-  const excludeSet = new Set(config.exclude);
-  const visibleCards = excludeSet.size > 0
-    ? cards.filter(c => {
-        // For .md files the name is the stem; reconstruct full filename for comparison.
-        const filename = c.ext === ".md" ? c.name + ".md" : c.name;
-        return !excludeSet.has(filename);
-      })
-    : cards;
+  // Step 4: Apply exclude filter (FVB-05), then separate and sort.
+  const visibleCards = applyExcludeFilter(cards, config.exclude);
 
   const dirCards  = visibleCards.filter(c => c.kind === "directory");
   const fileCards = visibleCards.filter(c => c.kind === "file");
@@ -532,7 +763,7 @@ export function renderFolderCards(
   const showDirs  = config.showFolders && dirCards.length > 0;
   const showFiles = config.showFiles  && fileCards.length > 0;
 
-  // Step 4: Empty state (FR-26, EC-06).
+  // Step 5: Empty state (FR-26, EC-06).
   if (!showDirs && !showFiles) {
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
@@ -542,13 +773,61 @@ export function renderFolderCards(
     return;
   }
 
-  // Step 5: Render sections — subfolders always before files (FR-18).
+  // Step 6: Build per-section CheckboxContext when bulk context is provided.
+  //
+  // Why per-section: each section has its own master checkbox, and the master
+  // checkbox state is computed from its section's sectionPaths only. Sharing
+  // a single context across sections would mix folder and file paths in the
+  // master checkbox calculation.
+  //
+  // The sectionPaths array is complete at construction time — pre-seeded from
+  // sectionCards.map(c => c.path). rowCheckboxes and sectionRows are the arrays
+  // that grow as lazy batches fire (C-6: IntersectionObserver closure captures
+  // checkboxCtx by reference, so appends into those arrays are visible to
+  // updateMasterCheckboxState).
+  const makeCheckboxCtx = (
+    sectionCards: FolderCard[],
+    sectionLabel: string,
+  ): CheckboxContext | undefined => {
+    if (!context) return undefined;
+
+    const sectionPaths = sectionCards.map(c => c.path);
+    const rowCheckboxes: HTMLInputElement[] = [];
+    const sectionRows: HTMLTableRowElement[] = [];
+
+    // buildMasterCheckboxTh wires the master checkbox and returns masterInput.
+    // The <th> element is discarded — the cards layout uses a <div> wrapper.
+    const { masterInput } = buildMasterCheckboxTh(
+      sectionLabel,
+      sectionPaths,
+      context.selectionState,
+      context.syncToolbar,
+      rowCheckboxes,
+      sectionRows,
+    );
+
+    return {
+      selectionState: context.selectionState,
+      syncToolbar:    context.syncToolbar,
+      masterInput,
+      rowCheckboxes,
+      sectionRows,
+      sectionPaths,
+    };
+  };
+
+  const dirLabel  = config.foldersTitle || "Folders";
+  const fileLabel = config.filesTitle   || "Files";
+
+  // Step 7: Render sections — subfolders always before files (FR-18).
   if (showDirs) {
-    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config, host));
+    const checkboxCtx = makeCheckboxCtx(dirCards, dirLabel);
+    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config, host, checkboxCtx));
   }
 
   if (showFiles) {
-    host.appendChild(buildSection(config.filesTitle || null, fileCards, config, host));
+    const checkboxCtx = makeCheckboxCtx(fileCards, fileLabel);
+    host.appendChild(buildSection(config.filesTitle || null, fileCards, config, host, checkboxCtx));
   }
 
   container.appendChild(host);
