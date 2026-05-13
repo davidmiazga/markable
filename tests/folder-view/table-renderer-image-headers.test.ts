@@ -42,6 +42,8 @@ function makeConfig(fields: string[]): FolderViewConfig {
     contentAreaOverride: true,
     extraFields: [],
     fields,
+    previewPane:   false,
+    previewHeight: "60%",
   };
 }
 

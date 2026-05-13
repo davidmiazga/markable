@@ -42,6 +42,8 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     contentAreaOverride: true,
     extraFields: [],             // T-25: existing tests unaffected
     fields: null,                // AD-7: null keeps all existing tests in legacy mode
+    previewPane:   false,
+    previewHeight: "60%",
     ...overrides,
   };
 }

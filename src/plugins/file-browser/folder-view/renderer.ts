@@ -17,7 +17,8 @@
  */
 
 import type { FolderViewConfig, FolderCard, FolderSortOrder, BulkContext } from "./types";
-import { stripScripts, applyExcludeFilter } from "./shared";
+import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
+import { buildPreviewPane } from "./preview-pane";
 import { buildMasterCheckboxTh, buildCheckboxTd } from "./bulk-selection";
 import {
   ICON_FOLDER,
@@ -419,6 +420,7 @@ function buildCard(
   card: FolderCard,
   config: FolderViewConfig,
   checkboxCtx?: CheckboxContext,
+  onSelect?: (card: FolderCard, el: HTMLElement) => void,
 ): HTMLElement {
   const el = document.createElement("div");
   el.className = [
@@ -503,16 +505,24 @@ function buildCard(
   const metaEl = buildCardMeta(card, config);
   if (metaEl) el.appendChild(metaEl);
 
-  // Click handler (FR-21/FR-22).
-  el.addEventListener("click", () => handleCardClick(card));
-
-  // Keyboard activation: Enter or Space (NFR-07).
-  el.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      handleCardClick(card);
-    }
-  });
+  // Click / keyboard activation (FR-21/FR-22, NFR-07).
+  // When onSelect is provided and the card is a file (not a directory):
+  //   single click / Space → select + preview only
+  //   double click / Enter → open in tab (same as default)
+  // Directories always navigate on single click regardless of preview mode.
+  if (onSelect && card.kind === "file") {
+    el.addEventListener("click", () => onSelect(card, el));
+    el.addEventListener("dblclick", () => handleCardClick(card));
+    el.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") { e.preventDefault(); handleCardClick(card); }
+      else if (e.key === " ") { e.preventDefault(); onSelect(card, el); }
+    });
+  } else {
+    el.addEventListener("click", () => handleCardClick(card));
+    el.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardClick(card); }
+    });
+  }
 
   // ── Checkbox overlay (Step 04) ──────────────────────────────────────────────
   // Must be appended last so z-index places it above other card content.
@@ -577,40 +587,62 @@ function appendCardsToGrid(
   config: FolderViewConfig,
   scrollRoot: HTMLElement,
   checkboxCtx?: CheckboxContext,
+  onSelect?: (card: FolderCard, el: HTMLElement) => void,
 ): void {
+  // WeakMap for reverse-lookup from element → card (used by arrow-nav onFocus).
+  const cardMap = new WeakMap<HTMLElement, FolderCard>();
+
+  const addCard = (card: FolderCard): HTMLElement => {
+    const el = buildCard(card, config, checkboxCtx, onSelect);
+    cardMap.set(el, card);
+    return el;
+  };
+
   if (cards.length <= LAZY_BATCH_SIZE) {
-    for (const card of cards) grid.appendChild(buildCard(card, config, checkboxCtx));
-    return;
+    for (const card of cards) grid.appendChild(addCard(card));
+  } else {
+    for (const card of cards.slice(0, LAZY_BATCH_SIZE)) {
+      grid.appendChild(addCard(card));
+    }
+
+    let rendered = LAZY_BATCH_SIZE;
+    const sentinel = document.createElement("div");
+    sentinel.className = "fv-load-sentinel";
+    grid.appendChild(sentinel);
+
+    // CRITICAL (C-6): checkboxCtx and cardMap are captured by reference.
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries[0].isIntersecting) return;
+      const batch = cards.slice(rendered, rendered + LAZY_BATCH_SIZE);
+      for (const card of batch) {
+        grid.insertBefore(addCard(card), sentinel);
+      }
+      rendered += batch.length;
+      if (rendered >= cards.length) {
+        observer.disconnect();
+        sentinel.remove();
+      }
+    }, { root: scrollRoot, rootMargin: "200px 0px" });
+
+    observer.observe(sentinel);
   }
 
-  for (const card of cards.slice(0, LAZY_BATCH_SIZE)) {
-    grid.appendChild(buildCard(card, config, checkboxCtx));
-  }
-
-  let rendered = LAZY_BATCH_SIZE;
-  const sentinel = document.createElement("div");
-  sentinel.className = "fv-load-sentinel";
-  grid.appendChild(sentinel);
-
-  // CRITICAL (C-6): checkboxCtx is captured by reference.
-  // checkboxCtx.rowCheckboxes and checkboxCtx.sectionPaths are the same array
-  // objects that were allocated in makeCheckboxCtx. The closure captures the
-  // object reference, not a snapshot, so lazily-added checkboxes are visible
-  // to updateMasterCheckboxState (which reads sectionPaths.filter(...)).
-  const observer = new IntersectionObserver((entries) => {
-    if (!entries[0].isIntersecting) return;
-    const batch = cards.slice(rendered, rendered + LAZY_BATCH_SIZE);
-    for (const card of batch) {
-      grid.insertBefore(buildCard(card, config, checkboxCtx), sentinel);
-    }
-    rendered += batch.length;
-    if (rendered >= cards.length) {
-      observer.disconnect();
-      sentinel.remove();
-    }
-  }, { root: scrollRoot, rootMargin: "200px 0px" });
-
-  observer.observe(sentinel);
+  // Arrow-key navigation — always enabled (plan requirement).
+  // getColCount queries the live computed style at event time.
+  attachArrowNavigation(
+    grid,
+    ".folder-view-card",
+    () => {
+      try {
+        const templateCols = getComputedStyle(grid).gridTemplateColumns;
+        if (!templateCols || templateCols === "none") return 1;
+        return templateCols.split(" ").length || 1;
+      } catch { return 1; }
+    },
+    onSelect
+      ? (el) => { const c = cardMap.get(el); if (c) onSelect(c, el); }
+      : undefined,
+  );
 }
 
 /**
@@ -639,6 +671,7 @@ function buildSection(
   config: FolderViewConfig,
   scrollRoot: HTMLElement,
   checkboxCtx?: CheckboxContext,
+  onSelect?: (card: FolderCard, el: HTMLElement) => void,
 ): HTMLElement {
   const section = document.createElement("div");
   section.className = "folder-view-section";
@@ -675,7 +708,7 @@ function buildSection(
   if (config.layoutMode === "flex") grid.classList.add("fv-flex-mode");
   grid.setAttribute("role", "list");
 
-  appendCardsToGrid(cards, grid, config, scrollRoot, checkboxCtx);
+  appendCardsToGrid(cards, grid, config, scrollRoot, checkboxCtx, onSelect);
 
   section.appendChild(grid);
   return section;
@@ -723,34 +756,52 @@ export function renderFolderCards(
   host.className = "folder-view-host";
   if (!config.contentAreaOverride) host.classList.add("folder-view-host--constrained");
 
-  // Step 03: Attach toolbar as first child of host when bulk context is provided.
-  // The toolbar is already fully constructed in tab.ts; this positions it above
-  // the description block and all section content, matching the table layout.
-  // The toolbar starts hidden (no fv-bulk-toolbar--visible); it becomes visible
-  // only when syncToolbar() is called after a checkbox change.
-  if (context?.toolbarRefs) {
-    host.appendChild(context.toolbarRefs.toolbar);
+  // Preview pane — when config.previewPane is true, restructure host as a
+  // flex column: pane (top) + scrollable main area (bottom).
+  // When false, contentTarget === host and DOM is unchanged.
+  let contentTarget: HTMLElement = host;
+  let selectCard: ((card: FolderCard, el: HTMLElement) => void) | undefined;
+  let selectedEl: HTMLElement | null = null;
+
+  if (config.previewPane) {
+    host.classList.add("fv-host--with-preview");
+    host.style.setProperty("--fvp-height", config.previewHeight);
+    const previewHandle = buildPreviewPane();
+    host.appendChild(previewHandle.pane);
+
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "folder-view-main";
+    host.appendChild(mainWrapper);
+    contentTarget = mainWrapper;
+
+    selectCard = (card: FolderCard, el: HTMLElement) => {
+      selectedEl?.classList.remove("fv-card--selected");
+      selectedEl = el;
+      el.classList.add("fv-card--selected");
+      previewHandle.update(card);
+    };
   }
 
-  // Step 3 (original): Description block (FR-11/FR-24).
+  // Toolbar — attach to contentTarget so it sits inside the scrollable area.
+  if (context?.toolbarRefs) {
+    contentTarget.appendChild(context.toolbarRefs.toolbar);
+  }
+
+  // Description block (FR-11/FR-24).
   if (config.body.trim()) {
     const desc = document.createElement("div");
     desc.className = "folder-view-description";
-
     const renderMd = (window as any).__MARKABLE_RENDER_MD__ as
       ((md: string) => string) | undefined;
-
     if (renderMd) {
-      // EC-14: sanitize rendered HTML before injecting into DOM.
       desc.innerHTML = stripScripts(renderMd(config.body));
     } else {
       desc.textContent = config.body;
     }
-
-    host.appendChild(desc);
+    contentTarget.appendChild(desc);
   }
 
-  // Step 4: Apply exclude filter (FVB-05), then separate and sort.
+  // Apply exclude filter (FVB-05), then separate and sort.
   const visibleCards = applyExcludeFilter(cards, config.exclude);
 
   const dirCards  = visibleCards.filter(c => c.kind === "directory");
@@ -763,17 +814,17 @@ export function renderFolderCards(
   const showDirs  = config.showFolders && dirCards.length > 0;
   const showFiles = config.showFiles  && fileCards.length > 0;
 
-  // Step 5: Empty state (FR-26, EC-06).
+  // Empty state (FR-26, EC-06).
   if (!showDirs && !showFiles) {
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
     empty.textContent = "This folder is empty.";
-    host.appendChild(empty);
+    contentTarget.appendChild(empty);
     container.appendChild(host);
     return;
   }
 
-  // Step 6: Build per-section CheckboxContext when bulk context is provided.
+  // Build per-section CheckboxContext when bulk context is provided.
   //
   // Why per-section: each section has its own master checkbox, and the master
   // checkbox state is computed from its section's sectionPaths only. Sharing
@@ -819,15 +870,19 @@ export function renderFolderCards(
   const dirLabel  = config.foldersTitle || "Folders";
   const fileLabel = config.filesTitle   || "Files";
 
-  // Step 7: Render sections — subfolders always before files (FR-18).
+  // Render sections — subfolders always before files (FR-18).
   if (showDirs) {
     const checkboxCtx = makeCheckboxCtx(dirCards, dirLabel);
-    host.appendChild(buildSection(config.foldersTitle || null, dirCards, config, host, checkboxCtx));
+    contentTarget.appendChild(
+      buildSection(config.foldersTitle || null, dirCards, config, contentTarget, checkboxCtx, selectCard),
+    );
   }
 
   if (showFiles) {
     const checkboxCtx = makeCheckboxCtx(fileCards, fileLabel);
-    host.appendChild(buildSection(config.filesTitle || null, fileCards, config, host, checkboxCtx));
+    contentTarget.appendChild(
+      buildSection(config.filesTitle || null, fileCards, config, contentTarget, checkboxCtx, selectCard),
+    );
   }
 
   container.appendChild(host);

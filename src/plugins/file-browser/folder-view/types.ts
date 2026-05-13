@@ -179,6 +179,10 @@ export interface FolderViewConfig {
    * and extraFields for the purposes of column rendering in table-renderer.ts.
    */
   fields: string[] | null;
+  /** Show a rendered preview pane above the card grid / table. Default: false. */
+  previewPane: boolean;
+  /** CSS height value for the preview pane (e.g. "60%"). Default: "60%". */
+  previewHeight: string;
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────

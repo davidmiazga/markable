@@ -463,4 +463,118 @@ export const FOLDER_VIEW_CSS = `
   font-size: 11px;
   color: var(--text-secondary, rgba(128,128,128,.55));
 }
+
+/* ── Preview pane split layout ───────────────────────────────────────── */
+
+/* Host becomes a flex column when preview pane is active. */
+.folder-view-host.fv-host--with-preview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+  padding: 0;
+}
+
+/* Scrollable content area below the pane (grid / table + toolbar + description). */
+.folder-view-main {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 20px 24px 32px;
+  box-sizing: border-box;
+}
+
+/* ── Preview pane element ─────────────────────────────────────────────── */
+
+.fvp-pane {
+  flex: 0 0 var(--fvp-height, 60%);
+  overflow-y: auto;
+  min-height: 80px;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.2));
+  display: flex;
+  flex-direction: column;
+}
+
+.fvp-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  border-bottom: 1px solid var(--border-color-subtle, rgba(128,128,128,.1));
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fvp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* Rendered markdown content */
+.fvp-md-content {
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 680px;
+  margin: 0 auto;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Image preview */
+.fvp-image-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+}
+.fvp-image-content img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Empty / placeholder / no-preview text */
+.fvp-empty {
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  font-size: 13px;
+  text-align: center;
+  padding-top: 32px;
+}
+
+/* Icon for non-image / non-text previews */
+.fvp-other-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0 8px;
+  opacity: 0.35;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+}
+.fvp-other-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  display: block;
+}
+
+/* ── Preview-selection highlight ─────────────────────────────────────── */
+
+/* Applied to the card element or table row when selected for preview. */
+.folder-view-card.fv-card--selected {
+  outline: 2px solid var(--accent-color, #4a9eff);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent, #4a9eff) 8%, var(--bg-secondary, transparent));
+}
+
+.fv-row.fv-card--selected {
+  background: color-mix(in srgb, var(--accent, #4a9eff) 8%, transparent);
+  outline: none;
+}
 `;

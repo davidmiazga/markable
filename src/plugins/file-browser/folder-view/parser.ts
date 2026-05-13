@@ -423,6 +423,8 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     contentAreaOverride: true,
     extraFields: [],
     fields: null,   // null = legacy flag-based column mode (AD-6, EC-01)
+    previewPane:   false,
+    previewHeight: "60%",
   };
 
   try {
@@ -563,6 +565,13 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     // contentAreaOverride: only explicit "false" disables full-width mode.
     const contentAreaOverride = (fm["content-area-override"] ?? "true") !== "false";
 
+    // preview-pane: only explicit "true" enables.
+    const previewPane = (fm["preview-pane"] ?? "false").trim().toLowerCase() === "true";
+
+    // preview-height: CSS height value for the preview pane. Default "60%".
+    const rawPreviewHeight = (fm["preview-height"] ?? "60%").trim();
+    const previewHeight = rawPreviewHeight || "60%";
+
     // Populate config.fields and conditionally derive extraFields from it (FR-06).
     // When fields: is present and non-empty, config.extraFields is derived from
     // the non-builtin items in fields: so the enrichment guard in tab.ts
@@ -585,6 +594,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       showName, showPreview, showExtensions, showFolders, showFiles,
       foldersTitle, filesTitle, showTags, showCount, exclude,
       contentAreaOverride, extraFields: resolvedExtraFields, fields,
+      previewPane, previewHeight,
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

@@ -43,6 +43,8 @@ function makeConfig(overrides: Partial<FolderViewConfig> = {}): FolderViewConfig
     contentAreaOverride: true,
     extraFields: [],
     fields: null,
+    previewPane:   false,
+    previewHeight: "60%",
     ...overrides,
   };
 }

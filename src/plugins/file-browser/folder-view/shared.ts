@@ -28,6 +28,49 @@ export function applyExcludeFilter(cards: FolderCard[], exclude: string[]): Fold
 }
 
 /**
+ * Attach keyboard arrow-key navigation to a container of focusable items.
+ *
+ * Delegates a `keydown` listener on `container`. ArrowDown/Up move by
+ * `getColCount()` positions (so Up/Down skip a full grid row). ArrowRight/Left
+ * are active only when `getColCount() > 1` (i.e. multi-column grids); they are
+ * no-ops in single-column views such as the folder table.
+ *
+ * Always enabled: arrow navigation works regardless of whether a preview pane
+ * is shown. When `onFocus` is provided, it is called after the new element
+ * receives focus so callers can update preview state.
+ *
+ * @param container    - Scrollable host; `keydown` listener is attached here.
+ * @param itemSelector - CSS selector for focusable item elements inside `container`.
+ * @param getColCount  - Returns the current column count (called at event time).
+ * @param onFocus      - Optional callback after moving focus; receives the new element.
+ */
+export function attachArrowNavigation(
+  container: HTMLElement,
+  itemSelector: string,
+  getColCount: () => number,
+  onFocus?: (el: HTMLElement) => void,
+): void {
+  container.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" &&
+        e.key !== "ArrowUp"   && e.key !== "ArrowDown") return;
+    const items = Array.from(container.querySelectorAll<HTMLElement>(itemSelector));
+    if (items.length === 0) return;
+    const idx = items.indexOf(document.activeElement as HTMLElement);
+    if (idx === -1) return;
+    e.preventDefault();
+    const cols = getColCount();
+    let next = idx;
+    if      (e.key === "ArrowRight" && cols > 1) next = Math.min(idx + 1, items.length - 1);
+    else if (e.key === "ArrowLeft"  && cols > 1) next = Math.max(idx - 1, 0);
+    else if (e.key === "ArrowDown")              next = Math.min(idx + cols, items.length - 1);
+    else if (e.key === "ArrowUp")                next = Math.max(idx - cols, 0);
+    if (next === idx) return;
+    items[next].focus();
+    onFocus?.(items[next]);
+  });
+}
+
+/**
  * Remove <script> elements and inline event handlers from an HTML string.
  *
  * Used before assigning user-controlled markdown to innerHTML (EC-14).

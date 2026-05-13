@@ -3008,6 +3008,8 @@ const FOLDER_VIEW_STARTER = [
   "  max-height: 200",
   "  # name-asc, name-desc, modified-asc, modified-desc",
   "  sort: name-asc",
+  "  # preview-pane: true    # show rendered preview above the grid (false by default)",
+  "  # preview-height: 60%   # height of the preview pane",
   "  # full = show preview, none = compact name-and-date grid",
   "  card-preview: full",
   "  folders-title: Folders",

@@ -19,7 +19,9 @@
 import type { FolderViewConfig, FolderCard, FolderSortOrder, ExtraField } from "./types";
 import { sortCards, getFileIconForCard, formatModified } from "./renderer";
 import { ICON_FOLDER } from "../icons/material/index";
-import { stripScripts, applyExcludeFilter } from "./shared";
+import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
+import { buildPreviewPane } from "./preview-pane";
+import type { PreviewPaneHandle } from "./preview-pane";
 import { buildCheckboxTd, buildMasterCheckboxTh }
   from "./bulk-selection";
 import type { SelectionState } from "./bulk-selection";
@@ -277,6 +279,7 @@ function buildFileRow(
   config: FolderViewConfig,
   extraFields: ExtraField[],
   resolvedFields: string[] | null,
+  onActivate?: (card: FolderCard, tr: HTMLTableRowElement) => void,
 ): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.className = "fv-row";
@@ -398,10 +401,21 @@ function buildFileRow(
     }
   }
 
-  tr.addEventListener("click", () => handleRowClick(card));
-  tr.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleRowClick(card); }
-  });
+  // When onActivate is provided (preview pane active):
+  //   single click / Space → select + preview only
+  //   Enter → open in tab (same as default)
+  if (onActivate) {
+    tr.addEventListener("click", () => onActivate(card, tr));
+    tr.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") { e.preventDefault(); handleRowClick(card); }
+      else if (e.key === " ") { e.preventDefault(); onActivate(card, tr); }
+    });
+  } else {
+    tr.addEventListener("click", () => handleRowClick(card));
+    tr.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleRowClick(card); }
+    });
+  }
 
   return tr;
 }
@@ -454,6 +468,7 @@ function buildSectionTable(
   isFiles: boolean,
   selectionState: SelectionState | undefined,
   syncToolbar: (() => void) | undefined,
+  onActivate?: (card: FolderCard, tr: HTMLTableRowElement) => void,
 ): HTMLElement {
   const { col: initCol, dir: initDir } = parseSortOrder(config.sort);
   // Folders only sort by name; if config had a modified sort, default to asc-name.
@@ -686,14 +701,19 @@ function buildSectionTable(
   // same field list as the immediately-rendered rows.
   const extraFieldsForRow = isFiles ? config.extraFields : [];
 
+  // WeakMap for reverse-lookup from row element → FolderCard (arrow-nav onFocus).
+  const rowCardMap = new WeakMap<HTMLTableRowElement, FolderCard>();
+
   /**
-   * Wraps the row builders to optionally prepend the checkbox cell.
-   * Checkbox is only added when selectionState is provided ("select" in fields:).
+   * Wraps the row builders to optionally prepend the checkbox cell and
+   * register the row in rowCardMap for arrow-navigation lookups.
    */
   const buildRow = (card: FolderCard): HTMLTableRowElement => {
     const tr = isFiles
-      ? buildFileRow(card, config, extraFieldsForRow, resolvedFields)
+      ? buildFileRow(card, config, extraFieldsForRow, resolvedFields, onActivate)
       : buildFolderRow(card, config, resolvedFields);
+
+    rowCardMap.set(tr, card);
 
     if (selectionState && masterInput) {
       // Build checkbox cell and prepend as leftmost cell in the row.
@@ -810,6 +830,15 @@ function buildSectionTable(
     }
   }
 
+  // Arrow-key navigation — always enabled on the tbody (plan requirement).
+  // Single-column view: Up/Down navigate rows; Left/Right are no-ops (cols=1).
+  attachArrowNavigation(tbody, ".fv-row", () => 1,
+    (el) => {
+      const card = rowCardMap.get(el as HTMLTableRowElement);
+      if (card && onActivate) onActivate(card, el as HTMLTableRowElement);
+    },
+  );
+
   table.appendChild(tbody);
   section.appendChild(table);
   return section;
@@ -852,6 +881,34 @@ export function renderFolderTable(
   host.className = "folder-view-host";
   if (!config.contentAreaOverride) host.classList.add("folder-view-host--constrained");
 
+  // Preview pane — when config.previewPane is true, restructure host as a
+  // flex column: pane (top) + scrollable main area (bottom).
+  // When false, contentTarget === host and DOM is unchanged.
+  let contentTarget: HTMLElement = host;
+  let previewHandle: PreviewPaneHandle | null = null;
+  let selectedTr: HTMLElement | null = null;
+
+  if (config.previewPane) {
+    host.classList.add("fv-host--with-preview");
+    host.style.setProperty("--fvp-height", config.previewHeight);
+    previewHandle = buildPreviewPane();
+    host.appendChild(previewHandle.pane);
+
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "folder-view-main";
+    host.appendChild(mainWrapper);
+    contentTarget = mainWrapper;
+  }
+
+  const onActivate = previewHandle
+    ? (card: FolderCard, tr: HTMLTableRowElement) => {
+        selectedTr?.classList.remove("fv-card--selected");
+        selectedTr = tr;
+        tr.classList.add("fv-card--selected");
+        previewHandle!.update(card);
+      }
+    : undefined;
+
   // ── Bulk selection + toolbar ──────────────────────────────────────────────
   // context is only provided when "select" is in fields: (tab.ts gates this).
   // When absent, toolbar and checkboxes are fully suppressed.
@@ -859,7 +916,7 @@ export function renderFolderTable(
   const syncToolbar    = context?.syncToolbar;
 
   if (context) {
-    host.appendChild(context.toolbarRefs.toolbar);
+    contentTarget.appendChild(context.toolbarRefs.toolbar);
   }
 
   const visibleCards = applyExcludeFilter(cards, config.exclude);
@@ -875,7 +932,7 @@ export function renderFolderTable(
     } else {
       desc.textContent = config.body;
     }
-    host.appendChild(desc);
+    contentTarget.appendChild(desc);
   }
 
   const showDirs  = config.showFolders && dirCards.length > 0;
@@ -885,19 +942,19 @@ export function renderFolderTable(
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
     empty.textContent = "This folder is empty.";
-    host.appendChild(empty);
+    contentTarget.appendChild(empty);
     container.appendChild(host);
     return;
   }
 
   if (showDirs) {
-    host.appendChild(
-      buildSectionTable(config.foldersTitle || null, dirCards, config, host, false, selectionState, syncToolbar),
+    contentTarget.appendChild(
+      buildSectionTable(config.foldersTitle || null, dirCards, config, contentTarget, false, selectionState, syncToolbar, onActivate),
     );
   }
   if (showFiles) {
-    host.appendChild(
-      buildSectionTable(config.filesTitle || null, fileCards, config, host, true, selectionState, syncToolbar),
+    contentTarget.appendChild(
+      buildSectionTable(config.filesTitle || null, fileCards, config, contentTarget, true, selectionState, syncToolbar, onActivate),
     );
   }
 
