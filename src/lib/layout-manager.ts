@@ -33,6 +33,8 @@ export interface LayoutMeta {
   appliesTo: "single" | "collection" | "any";
   /** True only for layouts that render inline above the CM editor (e.g. Notion Page). */
   inline: boolean;
+  /** Short identifier written to `layout:` YAML field. Defaults to the filename stem. */
+  slug: string;
   filePath: string;
   body: string;
 }
@@ -150,6 +152,7 @@ name: "Notion Page"
 description: "Full-width cover, large icon, and clean reading layout"
 applies-to: "single"
 inline: true
+slug: notion
 ---
 <style>
 .np-wrapper{width:100%}
@@ -196,6 +199,7 @@ export function parseLayoutFrontmatter(src: string, filePath: string): LayoutMet
   let description = "";
   let appliesTo: LayoutMeta["appliesTo"] = "any";
   let inline = false;
+  let slug = stem;
   let body = src;
 
   if (src.startsWith("---")) {
@@ -214,12 +218,14 @@ export function parseLayoutFrontmatter(src: string, filePath: string): LayoutMet
           appliesTo = value;
         } else if (key === "inline") {
           inline = value === "true";
+        } else if (key === "slug" && value) {
+          slug = value;
         }
       }
     }
   }
 
-  return { name, description, appliesTo, inline, filePath, body };
+  return { name, description, appliesTo, inline, slug, filePath, body };
 }
 
 // ── Layout discovery ───────────────────────────────────────────────────────────
@@ -809,7 +815,7 @@ interface LayoutFieldDef {
 }
 
 const LAYOUT_CONFIG: Record<string, LayoutFieldDef[]> = {
-  "notion-page": [
+  "notion": [
     { key: "cover", label: "Cover Image", type: "image" },
     { key: "icon", label: "Icon (image or SVG)", type: "image" },
     { key: "icon-themed", label: "Make icon theme-aware (SVG fills → currentColor)", type: "checkbox" },
@@ -822,13 +828,14 @@ const LAYOUT_CONFIG: Record<string, LayoutFieldDef[]> = {
  */
 async function showLayoutConfigWizard(
   filePath: string,
-  stem: string,
+  _stem: string,
   layout: LayoutMeta,
   deps: LayoutDeps,
 ): Promise<void> {
-  const fields = LAYOUT_CONFIG[stem];
+  const slug = layout.slug;
+  const fields = LAYOUT_CONFIG[slug];
   if (!fields) {
-    void setLayoutInFile(filePath, stem, layout, deps);
+    void setLayoutInFile(filePath, slug, layout, deps);
     return;
   }
 
@@ -931,7 +938,7 @@ async function showLayoutConfigWizard(
 
     applyBtn.addEventListener("click", async () => {
       overlay.remove();
-      const toWrite: Record<string, string> = { layout: stem };
+      const toWrite: Record<string, string> = { layout: slug };
       for (const field of fields) {
         const val = selected[field.key];
         if (!val) continue;
@@ -953,7 +960,7 @@ async function showLayoutConfigWizard(
         if (!readResult.ok) { resolve(); return; }
         baseForWizard = readResult.value;
       }
-      const newContent = insertLayoutFields(toggleLayoutConfigFields(baseForWizard, stem), toWrite);
+      const newContent = insertLayoutFields(toggleLayoutConfigFields(baseForWizard, slug), toWrite);
 
       if (deps.onFileUpdated) {
         deps.onFileUpdated(filePath, newContent);

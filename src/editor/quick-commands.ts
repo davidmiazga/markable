@@ -15,6 +15,7 @@ import { Prec, type Extension } from "@codemirror/state";
 
 export interface QuickCommandDeps {
   openLayoutPicker: () => void;
+  enterPreviewMode: () => void;
 }
 
 interface QuickCommand {
@@ -36,7 +37,7 @@ const slashKeymap = keymap.of([
 ]);
 
 // ── Table starter ──────────────────────────────────────────────────────────────
-const TABLE_STARTER = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |";
+const TABLE_STARTER = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n";
 
 // ── Command builder ────────────────────────────────────────────────────────────
 function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
@@ -55,8 +56,9 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
       apply(view, from, to) {
         view.dispatch({
           changes: { from, to, insert: TABLE_STARTER },
-          selection: { anchor: from + 2 },
+          selection: { anchor: from + TABLE_STARTER.length },
         });
+        deps.enterPreviewMode();
       },
     },
     {

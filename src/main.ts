@@ -1204,6 +1204,7 @@ async function initApp() {
       effects: StateEffect.appendConfig.of(
         buildQuickCommandExtension({
           openLayoutPicker: () => { if (_layoutDeps) void openLayoutPicker(_layoutDeps); },
+          enterPreviewMode: () => { if (!previewEnabled) togglePreview(); },
         }),
       ),
     });
