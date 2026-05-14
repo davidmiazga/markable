@@ -572,6 +572,14 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     const rawPreviewHeight = (fm["preview-height"] ?? "60%").trim();
     const previewHeight = rawPreviewHeight || "60%";
 
+    // cover: relative path to a cover image; absent when not declared.
+    const coverRaw = (fm["cover"] ?? "").trim();
+    const cover = coverRaw || undefined;
+
+    // icon: emoji or relative path; absent when not declared.
+    const iconRaw = (fm["icon"] ?? "").trim();
+    const icon = iconRaw || undefined;
+
     // Populate config.fields and conditionally derive extraFields from it (FR-06).
     // When fields: is present and non-empty, config.extraFields is derived from
     // the non-builtin items in fields: so the enrichment guard in tab.ts
@@ -595,6 +603,8 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       foldersTitle, filesTitle, showTags, showCount, exclude,
       contentAreaOverride, extraFields: resolvedExtraFields, fields,
       previewPane, previewHeight,
+      ...(cover !== undefined ? { cover } : {}),
+      ...(icon  !== undefined ? { icon  } : {}),
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

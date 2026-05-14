@@ -714,6 +714,62 @@ function buildSection(
   return section;
 }
 
+// ── Page header (cover + icon) ────────────────────────────────────────────────
+
+function isImagePath(s: string): boolean {
+  const dot = s.lastIndexOf(".");
+  return dot !== -1 && IMAGE_EXTS.has(s.slice(dot).toLowerCase());
+}
+
+function resolveFolderPath(folderPath: string, rel: string): string {
+  if (rel.startsWith("/")) return rel;
+  if (rel.startsWith("./")) return folderPath + rel.slice(1);
+  return folderPath + "/" + rel;
+}
+
+/**
+ * Build the `.folder-view-page-header` element containing an optional cover
+ * image and optional page icon. Returns null when neither is configured.
+ */
+function buildPageHeader(
+  config: FolderViewConfig,
+  folderPath: string,
+): HTMLElement | null {
+  if (!config.cover && !config.icon) return null;
+
+  const convertFileSrc = (window as any).__MARKABLE_CONVERT_FILE_SRC__;
+  const header = document.createElement("div");
+  header.className = "folder-view-page-header";
+
+  if (config.cover) {
+    const coverEl = document.createElement("img");
+    coverEl.className = "folder-view-cover";
+    coverEl.alt = "";
+    const absPath = resolveFolderPath(folderPath, config.cover);
+    coverEl.src = convertFileSrc ? (convertFileSrc(absPath) as string) : absPath;
+    coverEl.onerror = () => { coverEl.style.display = "none"; };
+    header.appendChild(coverEl);
+  }
+
+  if (config.icon) {
+    const iconEl = document.createElement("div");
+    iconEl.className = "folder-view-page-icon";
+    if (isImagePath(config.icon)) {
+      const img = document.createElement("img");
+      img.alt = "";
+      const absPath = resolveFolderPath(folderPath, config.icon);
+      img.src = convertFileSrc ? (convertFileSrc(absPath) as string) : absPath;
+      img.onerror = () => { iconEl.style.display = "none"; };
+      iconEl.appendChild(img);
+    } else {
+      iconEl.textContent = config.icon;
+    }
+    header.appendChild(iconEl);
+  }
+
+  return header;
+}
+
 // ── Public renderer ───────────────────────────────────────────────────────────
 
 /**
@@ -739,15 +795,14 @@ function buildSection(
  * @param config      - Validated FolderViewConfig from parseFolderMd().
  * @param cards       - Immediate children from collectChildren() (unsorted).
  * @param container   - The DOM element to render into (cleared on entry).
- * @param _folderPath - Absolute path of the folder (unused in this renderer;
- *                      present to satisfy the FolderLayoutRenderer contract).
+ * @param folderPath  - Absolute path of the folder; used for resolving cover/icon paths.
  * @param context     - Optional shared bulk wiring from tab.ts (Step 01).
  */
 export function renderFolderCards(
   config: FolderViewConfig,
   cards: FolderCard[],
   container: HTMLElement,
-  _folderPath: string,
+  folderPath: string,
   context?: BulkContext,
 ): void {
   container.innerHTML = "";
@@ -782,6 +837,10 @@ export function renderFolderCards(
       previewHandle.update(card);
     };
   }
+
+  // Page header — cover image + page icon, above everything else.
+  const pageHeader = buildPageHeader(config, folderPath);
+  if (pageHeader) contentTarget.appendChild(pageHeader);
 
   // Toolbar — attach to contentTarget so it sits inside the scrollable area.
   if (context?.toolbarRefs) {

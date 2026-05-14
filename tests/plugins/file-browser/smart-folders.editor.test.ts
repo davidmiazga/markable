@@ -136,16 +136,19 @@ describe("rule row elements", () => {
 // ── Value controls ────────────────────────────────────────────────────────────
 
 describe("extension value control", () => {
-  it("renders a select populated from distinctExtensions when type=extension", () => {
+  it("renders a text input with datalist populated from distinctExtensions when type=extension", () => {
     const def: SmartFolderDef = {
       id: "sf-1",
       name: "Ext test",
       rules: [{ type: "extension", operator: "is", value: ".pdf" }],
     };
     const el = buildEditorElement(def, makeCtx());
-    const extSelect = el.querySelector<HTMLSelectElement>(".sf-value select");
-    expect(extSelect).not.toBeNull();
-    const options = Array.from(extSelect!.options).map((o) => o.value);
+    const extInput = el.querySelector<HTMLInputElement>(".sf-value input[list]");
+    expect(extInput).not.toBeNull();
+    const listId = extInput!.getAttribute("list");
+    const datalist = el.querySelector<HTMLDataListElement>(`#${listId}`);
+    expect(datalist).not.toBeNull();
+    const options = Array.from(datalist!.options).map((o) => o.value);
     expect(options).toContain(".md");
     expect(options).toContain(".pdf");
   });

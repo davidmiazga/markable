@@ -78,6 +78,7 @@ import {
   openFolderViewTab as _openFolderViewTab,
   buildFolderViewRenderFn,
 } from "./folder-view/tab";
+import { openTemplatePicker, type TemplateDefinition } from "../../lib/template-picker";
 
 // Smart Folders — bundled inline by Rollup (step_01 & step_02).
 import type { SmartFolderDef } from "./smart-folders/types";
@@ -1949,10 +1950,13 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = 
         );
         return;
       }
-      // Normal file open path.
+      // Normal file open path. Use __MARKABLE_OPEN_FILE_IN_TAB__ so that files
+      // with a `layout:` YAML field auto-apply their layout on open.
       const lpath = path.toLowerCase();
       if (lpath.endsWith(".md") || lpath.endsWith(".txt")) {
-        void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+        const openFn = (window as any).__MARKABLE_OPEN_FILE_IN_TAB__;
+        if (typeof openFn === "function") openFn(path);
+        else void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
       } else {
         void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
       }
@@ -2876,6 +2880,12 @@ function buildFileContextMenuItems(
       },
     },
     { separator: true, label: "", handler: null },
+    ...(path.toLowerCase().endsWith(".md") ? [{
+      label: "Apply Layout…",
+      handler: () => {
+        (window as any).__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__?.(path);
+      },
+    }] : []),
     {
       label: "Move to…",
       handler: null,
@@ -2944,13 +2954,13 @@ function buildDirContextMenuItems(
         showInlineCreateInput(path, container, vaultId);
       },
     },
-    // FR-35: "Create Folder View…" when no _folder.md; "Reset Folder View…" when one exists.
-    // Both appear between "New Note" and "New Folder".
+    // FR-35: "New Folder View…" opens template picker when no _folder.md exists;
+    // "Reset Folder View…" writes the plain starter directly (no picker).
     {
-      label: hasFolderView ? "Reset Folder View…" : "Create Folder View…",
+      label: hasFolderView ? "Reset Folder View…" : "New Folder View…",
       handler: hasFolderView
         ? () => { void resetFolderViewFile(path, container, vaultId); }
-        : () => { void createFolderViewFile(path, container, vaultId); },
+        : () => { openFolderViewPicker(path, container, vaultId); },
     },
     {
       label: "New Folder",
@@ -2981,6 +2991,221 @@ function buildDirContextMenuItems(
       },
     },
   ];
+}
+
+// ── Folder view templates ─────────────────────────────────────────────────────
+
+const HUB_PAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
+  <rect x="0" y="0" width="400" height="80" fill="#2d5a8e" rx="6"/>
+  <rect x="0" y="60" width="400" height="20" fill="#1a1a1a"/>
+  <rect x="16" y="52" width="48" height="48" fill="#1a1a1a" rx="6" stroke="#3a3a3a" stroke-width="1"/>
+  <text x="40" y="84" text-anchor="middle" font-size="24" fill="#e0e0e0">📁</text>
+  <text x="20" y="122" font-size="14" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">My Project</text>
+  <text x="20" y="138" font-size="9" fill="#888" font-family="sans-serif">Add a description here…</text>
+  <rect x="20" y="152" width="110" height="76" fill="#252525" rx="5"/>
+  <rect x="20" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
+  <text x="75" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
+  <text x="75" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note A</text>
+  <rect x="145" y="152" width="110" height="76" fill="#252525" rx="5"/>
+  <rect x="145" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
+  <text x="200" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
+  <text x="200" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note B</text>
+  <rect x="270" y="152" width="110" height="76" fill="#252525" rx="5"/>
+  <rect x="270" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
+  <text x="325" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
+  <text x="325" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note C</text>
+</svg>`;
+
+const MEDIA_GALLERY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
+  <text x="20" y="30" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Media Gallery</text>
+  <rect x="20" y="44" width="115" height="86" fill="#2d4a2d" rx="4"/>
+  <text x="78" y="91" text-anchor="middle" font-size="22" fill="#4a8" font-family="sans-serif">🖼</text>
+  <rect x="143" y="44" width="115" height="86" fill="#4a3020" rx="4"/>
+  <text x="200" y="91" text-anchor="middle" font-size="22" fill="#c84" font-family="sans-serif">🌅</text>
+  <rect x="266" y="44" width="115" height="86" fill="#2a2a4a" rx="4"/>
+  <text x="323" y="91" text-anchor="middle" font-size="22" fill="#48c" font-family="sans-serif">🏙</text>
+  <rect x="20" y="138" width="115" height="86" fill="#3a2a4a" rx="4"/>
+  <text x="78" y="185" text-anchor="middle" font-size="22" fill="#a48" font-family="sans-serif">🌸</text>
+  <rect x="143" y="138" width="115" height="86" fill="#2a3a2a" rx="4"/>
+  <text x="200" y="185" text-anchor="middle" font-size="22" fill="#8a4" font-family="sans-serif">🌿</text>
+  <rect x="266" y="138" width="115" height="86" fill="#3a2a20" rx="4"/>
+  <text x="323" y="185" text-anchor="middle" font-size="22" fill="#ca6" font-family="sans-serif">🍂</text>
+</svg>`;
+
+const PROJECT_TABLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
+  <text x="20" y="28" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Project Table</text>
+  <rect x="20" y="36" width="360" height="22" fill="#252525" rx="3"/>
+  <text x="30" y="51" font-size="8" fill="#888" font-family="sans-serif">Name</text>
+  <text x="170" y="51" font-size="8" fill="#888" font-family="sans-serif">Modified</text>
+  <text x="270" y="51" font-size="8" fill="#888" font-family="sans-serif">Tags</text>
+  <line x1="20" y1="58" x2="380" y2="58" stroke="#333" stroke-width="1"/>
+  <rect x="20" y="60" width="360" height="18" fill="#1e1e1e"/>
+  <text x="30" y="73" font-size="8" fill="#ccc" font-family="sans-serif">Meeting Notes</text>
+  <text x="170" y="73" font-size="8" fill="#888" font-family="sans-serif">May 12</text>
+  <rect x="268" y="63" width="30" height="10" fill="#2d4a2d" rx="3"/>
+  <text x="283" y="71" text-anchor="middle" font-size="7" fill="#4a8" font-family="sans-serif">work</text>
+  <rect x="20" y="78" width="360" height="18" fill="#222"/>
+  <text x="30" y="91" font-size="8" fill="#ccc" font-family="sans-serif">Research Notes</text>
+  <text x="170" y="91" font-size="8" fill="#888" font-family="sans-serif">May 10</text>
+  <rect x="268" y="81" width="36" height="10" fill="#2a3040" rx="3"/>
+  <text x="286" y="89" text-anchor="middle" font-size="7" fill="#68a" font-family="sans-serif">reading</text>
+  <rect x="20" y="96" width="360" height="18" fill="#1e1e1e"/>
+  <text x="30" y="109" font-size="8" fill="#ccc" font-family="sans-serif">Draft Article</text>
+  <text x="170" y="109" font-size="8" fill="#888" font-family="sans-serif">May 8</text>
+  <rect x="268" y="99" width="28" height="10" fill="#3a2020" rx="3"/>
+  <text x="282" y="107" text-anchor="middle" font-size="7" fill="#c66" font-family="sans-serif">draft</text>
+  <rect x="20" y="114" width="360" height="18" fill="#222"/>
+  <text x="30" y="127" font-size="8" fill="#ccc" font-family="sans-serif">Project Plan</text>
+  <text x="170" y="127" font-size="8" fill="#888" font-family="sans-serif">May 5</text>
+  <rect x="20" y="132" width="360" height="18" fill="#1e1e1e"/>
+  <text x="30" y="145" font-size="8" fill="#ccc" font-family="sans-serif">Archive</text>
+  <text x="170" y="145" font-size="8" fill="#888" font-family="sans-serif">Apr 30</text>
+</svg>`;
+
+const SIMPLE_INDEX_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
+  <text x="20" y="28" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Simple Index</text>
+  ${[0,1,2,3,4,5,6].map(i => `
+  <rect x="20" y="${40 + i * 26}" width="360" height="20" fill="${i % 2 === 0 ? "#1e1e1e" : "#222"}" rx="3"/>
+  <text x="34" y="${54 + i * 26}" font-size="9" fill="#ccc" font-family="sans-serif">📄 Note ${i + 1}</text>
+  <text x="340" y="${54 + i * 26}" text-anchor="end" font-size="8" fill="#666" font-family="sans-serif">May ${12 - i}</text>`).join("")}
+</svg>`;
+
+/** Starter template definitions shown in the "New Folder View…" picker. */
+const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
+  {
+    id: "hub-page",
+    name: "Hub Page",
+    description: "Cover image, icon, description, and a card grid below — Notion-style dashboard.",
+    previewSvg: HUB_PAGE_SVG,
+    data: [
+      "---",
+      "layout:",
+      "  type: folder-cards",
+      "  content-area-override: true",
+      "  card-width: 160",
+      "  aspect-ratio: 1/1",
+      "  fit: cover",
+      "  sort: name-asc",
+      "# cover: ./cover.png   # replace with a relative path to your cover image",
+      "# icon: 📁             # replace with an emoji or a relative image path",
+      "---",
+      "",
+      "Welcome to this folder. Edit this description to add notes about its contents.",
+    ].join("\n"),
+  },
+  {
+    id: "media-gallery",
+    name: "Media Gallery",
+    description: "Wide image cards with metadata — ideal for photo or asset folders.",
+    previewSvg: MEDIA_GALLERY_SVG,
+    data: [
+      "---",
+      "layout:",
+      "  type: folder-cards",
+      "  content-area-override: true",
+      "  card-width: 200",
+      "  aspect-ratio: 4/3",
+      "  fit: cover",
+      "  sort: modified-desc",
+      "  card-preview: full",
+      "fields:",
+      "  - name",
+      "  - modified",
+      "---",
+    ].join("\n"),
+  },
+  {
+    id: "project-table",
+    name: "Project Table",
+    description: "Spreadsheet-style table with sortable columns, tags, and bulk select.",
+    previewSvg: PROJECT_TABLE_SVG,
+    data: [
+      "---",
+      "layout:",
+      "  type: folder-table",
+      "  content-area-override: false",
+      "  sort: modified-desc",
+      "fields:",
+      "  - name",
+      "  - modified",
+      "  - tags",
+      "  - select",
+      "---",
+    ].join("\n"),
+  },
+  {
+    id: "simple-index",
+    name: "Simple Index",
+    description: "Compact card grid — name and date only, no preview images.",
+    previewSvg: SIMPLE_INDEX_SVG,
+    data: [
+      "---",
+      "layout:",
+      "  type: folder-cards",
+      "  content-area-override: false",
+      "  card-width: 160",
+      "  card-preview: none",
+      "  sort: name-asc",
+      "fields:",
+      "  - name",
+      "  - modified",
+      "---",
+    ].join("\n"),
+  },
+];
+
+/**
+ * Open the template picker and create _folder.md with the chosen template.
+ * Replaces the old direct-write behaviour of createFolderViewFile for new
+ * folder view creation. "Reset Folder View…" still uses createFolderViewFile.
+ */
+function openFolderViewPicker(
+  dirPath: string,
+  container: HTMLElement | null,
+  vaultId: string,
+): void {
+  openTemplatePicker({
+    title: "New Folder View",
+    createLabel: "Create",
+    templates: FOLDER_VIEW_TEMPLATES,
+    onSelect: (tpl) => { void writeFolderViewTemplate(dirPath, tpl.data, container, vaultId); },
+  });
+}
+
+/**
+ * Write the chosen template content to _folder.md and open the folder view tab.
+ * Same error-handling pattern as createFolderViewFile.
+ */
+async function writeFolderViewTemplate(
+  dirPath: string,
+  content: string,
+  container: HTMLElement | null,
+  _vaultId: string,
+): Promise<void> {
+  const folderMdPath = dirPath + "/_folder.md";
+  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vaultIndex = vaultManager?.getVaultIndex?.();
+  const existingEntry = (vaultIndex?.entries ?? []).find(
+    (e: any) => e.path === folderMdPath
+  );
+  if (existingEntry) {
+    openFolderViewTab(dirPath);
+    return;
+  }
+  try {
+    await (window as any).__TAURI_INTERNALS__?.invoke?.(
+      "write_file",
+      { path: folderMdPath, content },
+    );
+  } catch (err) {
+    if (container) showInlineError(container, `Could not create _folder.md: ${String(err)}`);
+    return;
+  }
+  openFolderViewTab(dirPath);
 }
 
 /** Default _folder.md content written by both create and reset actions. */
@@ -3027,6 +3252,8 @@ const FOLDER_VIEW_STARTER = [
   "# extra-fields: adds custom frontmatter keys as additional fields.",
   "# extra-fields:",
   "#   - status",
+  "# cover: ./cover.png   # relative path to a cover image (shown as a banner)",
+  "# icon: 📁             # emoji or relative image path shown above the description",
   "---",
   "",
 ].join("\n");

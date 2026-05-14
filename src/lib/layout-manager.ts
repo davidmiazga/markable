@@ -12,7 +12,8 @@
  * The wikipedia.layout.md starter is written there on first launch.
  */
 
-import { readFile, writeFile, ensureDirectory, listMdFiles } from "./bridge";
+import { readFile, writeFile, ensureDirectory, listMdFiles, openAssetDialog } from "./bridge";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { render, stripScripts, wireDataPathListeners, wireAnchorLinks } from "./layout-engine";
 import type { TemplateContext, VaultFileEntry, TocEntry } from "./layout-engine";
 import { marked, Marked, Token } from "marked";
@@ -20,6 +21,8 @@ import type { VaultIndex } from "./vault-types";
 import type { MetaStore } from "./meta-manager";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { openTemplatePicker } from "./template-picker";
+import type { TemplateDefinition } from "./template-picker";
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -44,6 +47,13 @@ export interface LayoutDeps {
   /** Update layout content without switching into layout view (save-triggered refresh). */
   refreshLayoutView: (renderFn: (el: HTMLElement) => void) => void;
   getCurrentFilePath: () => string | null;
+  /**
+   * Called after layout-manager writes a `layout:` key into a file's YAML.
+   * The host (main.ts) should update the open tab's in-memory doc so the editor
+   * reflects the change; if the file is the currently active tab, also dispatch
+   * the new content to the CM6 editor so saves don't clobber the YAML update.
+   */
+  onFileUpdated?: (filePath: string, newContent: string) => void;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -126,6 +136,46 @@ applies-to: "collection"
 </div>
 {{/each}}
 </div>
+`,
+
+  "notion-page.layout.md": `---
+name: "Notion Page"
+description: "Full-width cover, large icon, and clean reading layout"
+applies-to: "single"
+---
+<style>
+.np-wrapper{width:100%}
+.np-cover{width:100%;height:220px;object-fit:cover;object-position:center;display:block}
+.np-page{max-width:860px;margin:0 auto;padding:0 0 48px;color:var(--text-primary)}
+.np-icon-row{padding:0 32px}
+.np-icon{font-size:64px;line-height:1;display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.np-icon-img{width:64px;height:64px;object-fit:contain;display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.np-icon-svg{display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.np-icon-svg svg{width:64px;height:64px;display:block}
+.np-title{font-size:2.2em;font-weight:700;margin:12px 32px 4px;color:var(--text-primary);line-height:1.2}
+.np-body{padding:0 32px;font-size:15px;line-height:1.7}
+.np-body h1,.np-body h2,.np-body h3{margin-top:1.5em;margin-bottom:.4em}
+.np-body h2{border-bottom:1px solid var(--border-color);padding-bottom:4px}
+.np-body p{margin:.6em 0}
+.np-body a{color:var(--accent-color,#4a9eff)}
+.np-body img{max-width:100%;border-radius:4px}
+</style>
+{{#if file}}
+<div class="np-wrapper">
+  {{#if file.yaml._coverSrc}}
+  <img class="np-cover" src="{{file.yaml._coverSrc}}" alt="" onerror="this.style.display='none'">
+  {{/if}}
+<div class="np-page">
+  <div class="np-icon-row">
+    {{#if file.yaml._iconSvgContent}}<div class="np-icon-svg">{{{file.yaml._iconSvgContent}}}</div>{{/if}}
+    {{#if file.yaml._iconImgSrc}}<img class="np-icon-img" src="{{file.yaml._iconImgSrc}}" alt="" onerror="this.style.display='none'">{{/if}}
+    {{#if file.yaml._iconText}}<span class="np-icon">{{file.yaml._iconText}}</span>{{/if}}
+  </div>
+  <h1 class="np-title">{{file.title}}</h1>
+  <div class="np-body">{{{file.rendered}}}</div>
+</div>
+</div>
+{{/if}}
 `,
 };
 
@@ -391,12 +441,52 @@ export async function buildLayoutContext(
       // Look up modified from vault index if available.
       const indexEntry = index?.entries.find((e) => e.path === filePath);
 
+      const icon = yaml.icon as string | undefined;
+      const cover = yaml.cover as string | undefined;
+      const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+      const resolveAssetSrc = (value: string): string => {
+        const abs = value.startsWith("/") ? value : `${fileDir}/${value.replace(/^\.\//, "")}`;
+        return convertFileSrc(abs);
+      };
+
+      const _iconIsImagePath = icon ? /\.(svg|png|jpg|jpeg|webp|gif)$/i.test(icon) : false;
+      const _iconIsSvg = icon ? /\.svg$/i.test(icon) : false;
+
+      // SVG: inline the markup — asset:// protocol doesn't serve SVG with the
+      // correct MIME type, so <img src="asset://...svg"> silently fails.
+      let _iconSvgContent: string | undefined;
+      let _iconImgSrc: string | undefined;
+      if (icon && _iconIsImagePath) {
+        if (_iconIsSvg) {
+          const absIcon = icon.startsWith("/") ? icon : `${fileDir}/${icon.replace(/^\.\//, "")}`;
+          const svgResult = await readFile(absIcon);
+          if (svgResult.ok) {
+            const iconThemed = yaml["icon-themed"] === "true" || yaml["icon-themed"] === true;
+            _iconSvgContent = iconThemed
+              ? adaptSvgFillsToCurrentColor(svgResult.value)
+              : svgResult.value;
+          }
+        } else {
+          _iconImgSrc = resolveAssetSrc(icon);
+        }
+      }
+
+      // Mutually exclusive — at most one is set, so templates avoid {{else}}.
+      const yamlWithMeta = {
+        ...yaml,
+        _coverSrc: cover ? resolveAssetSrc(cover) : undefined,
+        _iconSvgContent,
+        _iconImgSrc,
+        _iconText: icon && !_iconIsImagePath ? icon : undefined,
+      };
+
       fileCtx = {
         title: (yaml.title as string) || stem,
         content: cleanBody,
         rendered: _markedWithIds.parse(cleanBody) as string,
         tags: Array.isArray(yaml.tags) ? (yaml.tags as string[]) : [],
-        yaml,
+        yaml: yamlWithMeta,
         path: filePath,
         name: stem,
         modified: indexEntry?.modified ?? 0,
@@ -453,6 +543,25 @@ export async function applyLayout(
   });
 }
 
+// ── SVG theme adaptation ───────────────────────────────────────────────────────
+
+/**
+ * Replace hardcoded fill values in an SVG string with `currentColor` so the
+ * icon inherits its colour from the surrounding CSS `color` property.
+ * `fill="none"` and `fill="transparent"` are preserved intentionally.
+ */
+function adaptSvgFillsToCurrentColor(svg: string): string {
+  svg = svg.replace(/\bfill="([^"]*)"/g, (_m, val) => {
+    const v = val.trim().toLowerCase();
+    return v === "none" || v === "transparent" ? _m : 'fill="currentColor"';
+  });
+  svg = svg.replace(/\bfill\s*:\s*([^;}"'\s][^;}"']*)/g, (_m, val) => {
+    const v = val.trim().toLowerCase();
+    return v === "none" || v === "transparent" ? _m : "fill:currentColor";
+  });
+  return svg;
+}
+
 // ── Layout field helpers ───────────────────────────────────────────────────────
 
 /**
@@ -481,10 +590,11 @@ export async function showLayoutForFile(
   const layoutName = extractLayoutField(docContent);
   if (!layoutName) return false;
   const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
+  const needle = layoutName.toLowerCase();
   const target = all.find(
     (l) =>
-      l.name.toLowerCase() === layoutName.toLowerCase() ||
-      l.filePath.endsWith(`/${layoutName}.layout.md`),
+      l.name.toLowerCase().includes(needle) ||
+      l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
   );
   if (!target) return false;
   void applyLayout(target, filePath, deps, { docContent });
@@ -507,10 +617,11 @@ export async function checkAndApplyLayoutOnSave(
   if (!layoutName) return;
 
   const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
+  const needle = layoutName.toLowerCase();
   const target = all.find(
     (l) =>
-      l.name.toLowerCase() === layoutName.toLowerCase() ||
-      l.filePath.endsWith(`/${layoutName}.layout.md`),
+      l.name.toLowerCase().includes(needle) ||
+      l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
   );
   if (!target) return;
   void applyLayout(target, filePath, deps, { activate: false });
@@ -526,81 +637,309 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// ── Picker UI ──────────────────────────────────────────────────────────────────
+// ── Layout picker UI ───────────────────────────────────────────────────────────
 
-let _pickerOpen = false;
-let _overlayEl: HTMLElement | null = null;
+const LAYOUT_PREVIEW_SVGS: Record<string, string> = {
+  "wikipedia.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
+    <rect width="400" height="280" fill="#1a1a1a"/>
+    <rect x="20" y="18" width="240" height="14" rx="3" fill="#ccc"/>
+    <rect x="20" y="38" width="120" height="2" rx="1" fill="#555"/>
+    <rect x="20" y="50" width="100" height="8" rx="2" fill="#666"/>
+    <rect x="20" y="62" width="80" height="8" rx="2" fill="#666"/>
+    <rect x="20" y="74" width="90" height="8" rx="2" fill="#666"/>
+    <rect x="240" y="50" width="140" height="80" rx="3" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="248" y="58" width="124" height="50" rx="2" fill="#333"/>
+    <rect x="248" y="114" width="60" height="6" rx="1" fill="#555"/>
+    <rect x="248" y="124" width="80" height="5" rx="1" fill="#555"/>
+    <rect x="20" y="94" width="210" height="6" rx="1" fill="#555"/>
+    <rect x="20" y="106" width="200" height="6" rx="1" fill="#555"/>
+    <rect x="20" y="118" width="215" height="6" rx="1" fill="#555"/>
+    <rect x="20" y="138" width="180" height="10" rx="2" fill="#888"/>
+    <rect x="20" y="154" width="360" height="6" rx="1" fill="#555"/>
+    <rect x="20" y="166" width="350" height="6" rx="1" fill="#555"/>
+    <rect x="20" y="178" width="355" height="6" rx="1" fill="#555"/>
+  </svg>`,
 
-/** Open the layout picker modal. No-op if already open or no layouts found. */
-export async function openLayoutPicker(deps: LayoutDeps): Promise<void> {
-  if (_pickerOpen) return;
+  "bookshelf.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
+    <rect width="400" height="280" fill="#1a1a1a"/>
+    <rect x="20" y="18" width="140" height="12" rx="3" fill="#ccc"/>
+    <rect x="20" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="20" y="40" width="113" height="48" rx="4" fill="#333"/>
+    <rect x="27" y="94" width="70" height="7" rx="2" fill="#888"/>
+    <rect x="27" y="106" width="50" height="5" rx="1" fill="#555"/>
+    <rect x="143" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="143" y="40" width="113" height="48" rx="4" fill="#2a3040"/>
+    <rect x="150" y="94" width="70" height="7" rx="2" fill="#888"/>
+    <rect x="150" y="106" width="50" height="5" rx="1" fill="#555"/>
+    <rect x="266" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="266" y="40" width="113" height="48" rx="4" fill="#302520"/>
+    <rect x="273" y="94" width="70" height="7" rx="2" fill="#888"/>
+    <rect x="273" y="106" width="50" height="5" rx="1" fill="#555"/>
+    <rect x="20" y="136" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="20" y="136" width="113" height="48" rx="4" fill="#203030"/>
+    <rect x="27" y="190" width="70" height="7" rx="2" fill="#888"/>
+    <rect x="143" y="136" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
+    <rect x="143" y="136" width="113" height="48" rx="4" fill="#2a2535"/>
+    <rect x="150" y="190" width="70" height="7" rx="2" fill="#888"/>
+  </svg>`,
+
+  "notion-page.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
+    <rect width="400" height="280" fill="#1a1a1a"/>
+    <rect x="0" y="0" width="400" height="90" rx="0" fill="#2a3040"/>
+    <rect x="28" y="72" width="44" height="44" rx="8" fill="#1a1a1a"/>
+    <text x="50" y="104" text-anchor="middle" font-size="26">📝</text>
+    <rect x="30" y="128" width="220" height="16" rx="3" fill="#ddd"/>
+    <rect x="30" y="154" width="340" height="6" rx="1" fill="#555"/>
+    <rect x="30" y="166" width="330" height="6" rx="1" fill="#555"/>
+    <rect x="30" y="178" width="335" height="6" rx="1" fill="#555"/>
+    <rect x="30" y="198" width="160" height="9" rx="2" fill="#777"/>
+    <rect x="30" y="214" width="340" height="6" rx="1" fill="#555"/>
+    <rect x="30" y="226" width="320" height="6" rx="1" fill="#555"/>
+  </svg>`,
+};
+
+/**
+ * Insert or replace multiple keys in a file's YAML front matter.
+ * Keys are written in the order provided. If no front matter exists, a minimal block is prepended.
+ */
+function insertLayoutFields(content: string, fields: Record<string, string>): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---(\n|$)/);
+  if (fmMatch) {
+    let fmBlock = fmMatch[1];
+    for (const [key, value] of Object.entries(fields)) {
+      if (new RegExp(`^${key}:`, "m").test(fmBlock)) {
+        fmBlock = fmBlock.replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`);
+      } else {
+        fmBlock += `\n${key}: ${value}`;
+      }
+    }
+    return content.replace(/^---\n([\s\S]*?)\n---(\n|$)/, `---\n${fmBlock}\n---\n`);
+  }
+  const fieldLines = Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("\n");
+  return `---\n${fieldLines}\n---\n\n${content}`;
+}
+
+function insertLayoutField(content: string, stem: string): string {
+  return insertLayoutFields(content, { layout: stem });
+}
+
+/**
+ * Write the `layout:` field into a file's YAML front matter and immediately
+ * render the layout view. If the file is open in the editor (main.ts wires
+ * `deps.onFileUpdated`), the in-memory doc is updated so saves preserve the
+ * change. For files not currently open, the update is written to disk.
+ */
+async function setLayoutInFile(
+  filePath: string,
+  layoutStem: string,
+  layout: LayoutMeta,
+  deps: LayoutDeps,
+): Promise<void> {
+  const result = await readFile(filePath);
+  if (!result.ok) return;
+  const newContent = insertLayoutField(result.value, layoutStem);
+
+  if (deps.onFileUpdated) {
+    deps.onFileUpdated(filePath, newContent);
+  } else {
+    await writeFile(filePath, newContent);
+  }
+
+  void applyLayout(layout, filePath, deps, { docContent: newContent });
+}
+
+// ── Layout config wizard ───────────────────────────────────────────────────────
+
+interface LayoutFieldDef {
+  key: string;
+  label: string;
+  type?: "image" | "checkbox";
+}
+
+const LAYOUT_CONFIG: Record<string, LayoutFieldDef[]> = {
+  "notion-page": [
+    { key: "cover", label: "Cover Image", type: "image" },
+    { key: "icon", label: "Icon (image or SVG)", type: "image" },
+    { key: "icon-themed", label: "Make icon theme-aware (SVG fills → currentColor)", type: "checkbox" },
+  ],
+};
+
+/**
+ * Show a config wizard for layouts that have optional fields (cover, icon, etc.).
+ * If the layout has no config, writes the `layout:` key directly and renders.
+ */
+async function showLayoutConfigWizard(
+  filePath: string,
+  stem: string,
+  layout: LayoutMeta,
+  deps: LayoutDeps,
+): Promise<void> {
+  const fields = LAYOUT_CONFIG[stem];
+  if (!fields) {
+    void setLayoutInFile(filePath, stem, layout, deps);
+    return;
+  }
+
+  const selected: Record<string, string> = {};
+  const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "layout-config-overlay";
+    overlay.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;display:flex;align-items:center;justify-content:center;";
+
+    const card = document.createElement("div");
+    card.style.cssText =
+      "background:var(--bg-secondary,#2a2a3a);border:1px solid var(--border-color,#444);border-radius:8px;padding:24px;min-width:360px;max-width:480px;";
+
+    const title = document.createElement("h3");
+    title.textContent = `Configure ${layout.name}`;
+    title.style.cssText = "margin:0 0 4px;color:var(--text-primary,#ccc);font-size:15px;font-weight:600;";
+    const subtitle = document.createElement("p");
+    subtitle.textContent = "These fields are optional — skip either to leave it unset.";
+    subtitle.style.cssText = "margin:0 0 18px;color:var(--text-secondary,#888);font-size:12px;";
+    card.appendChild(title);
+    card.appendChild(subtitle);
+
+    for (const field of fields) {
+      const row = document.createElement("div");
+
+      if (field.type === "checkbox") {
+        row.style.cssText = "margin-bottom:14px;display:flex;align-items:center;gap:8px;";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.id = `wiz-${field.key}`;
+        cb.style.cssText = "width:14px;height:14px;cursor:pointer;accent-color:var(--accent-color,#4a9eff);";
+        const lbl = document.createElement("label");
+        lbl.htmlFor = `wiz-${field.key}`;
+        lbl.textContent = field.label;
+        lbl.style.cssText = "color:var(--text-secondary,#888);font-size:12px;cursor:pointer;user-select:none;";
+        cb.addEventListener("change", () => {
+          if (cb.checked) selected[field.key] = "true";
+          else delete selected[field.key];
+        });
+        row.appendChild(cb);
+        row.appendChild(lbl);
+      } else {
+        row.style.cssText = "margin-bottom:14px;";
+        const labelEl = document.createElement("div");
+        labelEl.textContent = field.label;
+        labelEl.style.cssText = "color:var(--text-secondary,#888);font-size:12px;margin-bottom:6px;";
+        row.appendChild(labelEl);
+
+        const btnRow = document.createElement("div");
+        btnRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+
+        const btn = document.createElement("button");
+        btn.textContent = "Choose…";
+        btn.style.cssText =
+          "background:var(--bg-primary,#1e1e1e);color:var(--text-primary,#ccc);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px;white-space:nowrap;flex-shrink:0;";
+
+        const pathEl = document.createElement("span");
+        pathEl.textContent = "Not set";
+        pathEl.style.cssText =
+          "color:var(--text-tertiary,#666);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;";
+
+        btn.addEventListener("click", async () => {
+          const result = await openAssetDialog();
+          if (!result.cancelled) {
+            selected[field.key] = result.path;
+            pathEl.textContent = result.path.split("/").pop() ?? result.path;
+            pathEl.title = result.path;
+            pathEl.style.color = "var(--text-primary,#ccc)";
+          }
+        });
+
+        btnRow.appendChild(btn);
+        btnRow.appendChild(pathEl);
+        row.appendChild(btnRow);
+      }
+
+      card.appendChild(row);
+    }
+
+    const footer = document.createElement("div");
+    footer.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:20px;";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText =
+      "background:transparent;color:var(--text-secondary,#888);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 14px;cursor:pointer;font-size:13px;";
+
+    const applyBtn = document.createElement("button");
+    applyBtn.textContent = "Apply";
+    applyBtn.style.cssText =
+      "background:var(--accent-color,#4a9eff);color:#fff;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:500;";
+
+    cancelBtn.addEventListener("click", () => {
+      overlay.remove();
+      resolve();
+    });
+
+    applyBtn.addEventListener("click", async () => {
+      overlay.remove();
+      const toWrite: Record<string, string> = { layout: stem };
+      for (const field of fields) {
+        const val = selected[field.key];
+        if (!val) continue;
+        if (field.type === "checkbox") {
+          toWrite[field.key] = val;
+        } else {
+          toWrite[field.key] = val.startsWith(fileDir + "/")
+            ? "./" + val.slice(fileDir.length + 1)
+            : val;
+        }
+      }
+
+      const readResult = await readFile(filePath);
+      if (!readResult.ok) { resolve(); return; }
+      const newContent = insertLayoutFields(readResult.value, toWrite);
+
+      if (deps.onFileUpdated) {
+        deps.onFileUpdated(filePath, newContent);
+      } else {
+        await writeFile(filePath, newContent);
+      }
+
+      void applyLayout(layout, filePath, deps, { docContent: newContent });
+      resolve();
+    });
+
+    footer.appendChild(cancelBtn);
+    footer.appendChild(applyBtn);
+    card.appendChild(footer);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  });
+}
+
+/** Open the layout picker modal. No-op if already open or no layouts found.
+ *  Pass `targetFilePath` to apply the layout to a specific file rather than
+ *  the currently active tab (used from the file-browser right-click menu). */
+export async function openLayoutPicker(deps: LayoutDeps, targetFilePath?: string): Promise<void> {
   const layouts = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
   if (layouts.length === 0) return;
 
-  _pickerOpen = true;
-  let selectedIdx = 0;
+  const filePath = targetFilePath ?? deps.getCurrentFilePath();
 
-  const overlay = document.createElement("div");
-  overlay.className = "templates-overlay layouts-picker-overlay";
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-modal", "true");
-  overlay.setAttribute("aria-label", "Open with Layout");
+  const templates: TemplateDefinition<LayoutMeta>[] = layouts.map((l) => {
+    const stem = l.filePath.split("/").pop()!.replace(".layout.md", "");
+    const previewSvg = LAYOUT_PREVIEW_SVGS[stem + ".layout.md"] ??
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280"><rect width="400" height="280" fill="#1a1a1a"/><text x="200" y="145" text-anchor="middle" fill="#666" font-size="13">${escapeHtml(l.name)}</text></svg>`;
+    return { id: stem, name: l.name, description: l.description, previewSvg, data: l };
+  });
 
-  function renderItems(): void {
-    const card = overlay.querySelector(".templates-card");
-    if (!card) return;
-    card.querySelector(".layouts-picker-list")?.remove();
-    const list = document.createElement("div");
-    list.className = "layouts-picker-list";
-    list.innerHTML = layouts.map((l, i) => `
-      <button class="templates-item layouts-picker-item${i === selectedIdx ? " selected" : ""}" data-idx="${i}">
-        <span class="layouts-picker-name">${escapeHtml(l.name)}</span>
-        <span class="layouts-picker-desc">${escapeHtml(l.description)}</span>
-      </button>
-    `).join("");
-    card.appendChild(list);
-    list.querySelectorAll<HTMLButtonElement>(".templates-item").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        selectedIdx = parseInt(btn.dataset.idx ?? "0", 10);
-        applyAndClose();
-      });
-    });
-  }
-
-  function applyAndClose(): void {
-    void applyLayout(layouts[selectedIdx], deps.getCurrentFilePath(), deps);
-    closePicker();
-  }
-
-  overlay.innerHTML = `<div class="templates-card"><div class="templates-header">Open with Layout</div></div>`;
-  document.body.appendChild(overlay);
-  _overlayEl = overlay;
-  renderItems();
-
-  function handleKeydown(e: KeyboardEvent): void {
-    if (!_pickerOpen) return;
-    switch (e.key) {
-      case "ArrowDown": e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, layouts.length - 1); renderItems(); break;
-      case "ArrowUp":   e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); renderItems(); break;
-      case "Enter":     e.preventDefault(); applyAndClose(); break;
-      case "Escape":    e.preventDefault(); closePicker(); break;
-    }
-  }
-
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) closePicker(); });
-  document.addEventListener("keydown", handleKeydown);
-  (overlay as unknown as Record<string, unknown>)["_keydownHandler"] = handleKeydown;
-}
-
-function closePicker(): void {
-  if (!_pickerOpen) return;
-  _pickerOpen = false;
-  if (_overlayEl) {
-    const handler = (_overlayEl as unknown as Record<string, unknown>)["_keydownHandler"];
-    if (typeof handler === "function") document.removeEventListener("keydown", handler as EventListener);
-    _overlayEl.remove();
-    _overlayEl = null;
-  }
+  openTemplatePicker<LayoutMeta>({
+    title: "Apply Layout",
+    createLabel: "Apply",
+    templates,
+    onSelect: (tpl) => {
+      if (!filePath) return;
+      const stem = tpl.data.filePath.split("/").pop()!.replace(".layout.md", "");
+      void showLayoutConfigWizard(filePath, stem, tpl.data, deps);
+    },
+  });
 }
 
 // ── CM6 auto-render extension ──────────────────────────────────────────────────

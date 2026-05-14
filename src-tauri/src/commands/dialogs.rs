@@ -176,6 +176,29 @@ pub async fn save_image_dialog(
     })
 }
 
+/// Open file picker dialog filtered to common image and vector formats.
+/// Used by the layout config wizard when the user selects a cover image or icon.
+#[tauri::command]
+pub async fn open_asset_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = mpsc::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("Images & SVG", &["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"])
+        .add_filter("All Files", &["*"])
+        .pick_file(move |path| {
+            let path_string = path.map(|p| p.to_string());
+            let _ = tx.send(path_string);
+        });
+
+    rx.recv().map_err(|e| {
+        eprintln!("open_asset_dialog error: {}", e);
+        format!("File dialog failed: {}", e)
+    })
+}
+
 /// Open folder picker dialog for selecting a directory.
 ///
 /// # Arguments

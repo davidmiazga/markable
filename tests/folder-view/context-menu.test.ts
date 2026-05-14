@@ -5,7 +5,7 @@
  *
  * Covers:
  *   FR-34: "Open Folder View" injected as the first item when hasFolderView=true.
- *   FR-35: "Create Folder View…" injected between "New Note" and "New Folder"
+ *   FR-35: "New Folder View…" injected between "New Note" and "New Folder"
  *          when hasFolderView=false; absent when hasFolderView=true.
  *   FR-35/FR-36: createFolderViewFile writes starter template and opens editor.
  *   EC-16: createFolderViewFile opens existing file instead of overwriting it.
@@ -68,7 +68,7 @@ describe("buildDirContextMenuItems — folder-view injection", () => {
   it("FR-35: hasFolderView=false → 'Create Folder View…' item is present", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
-    expect(items.some(i => i.label === "Create Folder View…")).toBe(true);
+    expect(items.some(i => i.label === "New Folder View…")).toBe(true);
   });
 
   it("FR-35 position: 'Create Folder View…' appears between 'New Note' and 'New Folder'", () => {
@@ -76,13 +76,13 @@ describe("buildDirContextMenuItems — folder-view injection", () => {
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
     const labels = items.map(i => i.label);
     const noteIdx = labels.indexOf("New Note");
-    const createFVIdx = labels.indexOf("Create Folder View…");
+    const createFVIdx = labels.indexOf("New Folder View…");
     const folderIdx = labels.indexOf("New Folder");
     // All three must exist.
     expect(noteIdx).toBeGreaterThanOrEqual(0);
     expect(createFVIdx).toBeGreaterThanOrEqual(0);
     expect(folderIdx).toBeGreaterThanOrEqual(0);
-    // "Create Folder View…" must sit between "New Note" and "New Folder".
+    // "New Folder View…" must sit between "New Note" and "New Folder".
     expect(createFVIdx).toBeGreaterThan(noteIdx);
     expect(createFVIdx).toBeLessThan(folderIdx);
   });
@@ -90,7 +90,7 @@ describe("buildDirContextMenuItems — folder-view injection", () => {
   it("FR-35 toggle: hasFolderView=true → 'Create Folder View…' replaced by 'Reset Folder View…'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    expect(items.some(i => i.label === "Create Folder View…")).toBe(false);
+    expect(items.some(i => i.label === "New Folder View…")).toBe(false);
     expect(items.some(i => i.label === "Reset Folder View…")).toBe(true);
   });
 

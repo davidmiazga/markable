@@ -258,7 +258,8 @@ export function matchRule(
 
     case "title": {
       const needle = rule.value.toLowerCase();
-      if (!needle) return rule.operator === "does not contain";
+      // Empty needle: every string contains "", so "contains" matches all; "does not contain" matches none.
+      if (!needle) return rule.operator === "contains";
       const haystack = (candidate.title + " " + candidate.name).toLowerCase();
       const has      = haystack.includes(needle);
       return rule.operator === "contains" ? has : !has;

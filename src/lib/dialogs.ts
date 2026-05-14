@@ -79,6 +79,20 @@ export async function saveFileDialog(suggestedFilename?: string): Promise<Dialog
  *   - { cancelled: false, path: string } — User selected a folder
  *   - { cancelled: true } — User cancelled the dialog
  */
+/**
+ * Open file picker filtered to images and SVG files.
+ * Used by the layout config wizard (cover image, page icon).
+ */
+export async function openAssetDialog(): Promise<DialogResult> {
+  try {
+    const path = await invoke<string | null>("open_asset_dialog");
+    return path ? { cancelled: false, path } : { cancelled: true };
+  } catch (error) {
+    console.error("openAssetDialog error:", error);
+    return { cancelled: true };
+  }
+}
+
 export async function openFolderDialog(defaultPath?: string): Promise<DialogResult> {
   try {
     const path = await invoke<string | null>("open_folder_dialog", {

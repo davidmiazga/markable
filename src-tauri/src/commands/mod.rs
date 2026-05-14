@@ -14,7 +14,7 @@ pub mod themes;
 pub mod vault;
 
 pub use daily_note::{check_paths_exist, create_daily_note};
-pub use dialogs::{open_file_dialog, open_folder_dialog, save_file_dialog, save_html_dialog, save_image_dialog};
+pub use dialogs::{open_asset_dialog, open_file_dialog, open_folder_dialog, save_file_dialog, save_html_dialog, save_image_dialog};
 pub use file_ops::{
     create_directory,
     create_file,

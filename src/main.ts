@@ -347,8 +347,23 @@ async function openHelpFileInTab(filename: string, title: string): Promise<void>
 async function openFile(): Promise<void> {
   const result = await openFileDialog();
   if (result.cancelled) return;
-  await tabManager.openFileInTab(result.path);
+  await openAndMaybeLayout(result.path);
   await refreshRecentFilesMenu();
+}
+
+/**
+ * Open a file in a new tab and auto-apply its `layout:` YAML field if present.
+ *
+ * Replaces direct tabManager.openFileInTab() calls so the layout field is
+ * honoured whenever a file is opened — not just when the user presses Cmd-E.
+ */
+async function openAndMaybeLayout(path: string): Promise<boolean> {
+  const opened = await tabManager.openFileInTab(path);
+  if (opened && _layoutDeps) {
+    const tab = tabManager.getActiveTab();
+    if (tab?.filePath === path) void showLayoutForFile(path, tab.doc, _layoutDeps);
+  }
+  return opened;
 }
 
 /**
@@ -362,7 +377,7 @@ async function openFile(): Promise<void> {
  * @param path  Absolute path to the file to open.
  */
 async function openFileByPath(path: string): Promise<void> {
-  await tabManager.openFileInTab(path);
+  await openAndMaybeLayout(path);
   await refreshRecentFilesMenu();
 }
 
@@ -381,7 +396,7 @@ async function openFileByPath(path: string): Promise<void> {
  * @param path  Absolute path that appeared in the recent-files list.
  */
 async function openRecentFileByPath(path: string): Promise<void> {
-  const opened = await tabManager.openFileInTab(path);
+  const opened = await openAndMaybeLayout(path);
 
   if (!opened) {
     // false means either duplicate-activated or read-failed. Distinguish by
@@ -1171,6 +1186,12 @@ async function initApp() {
       showLayoutView: (renderFn) => tabManager.enterLayoutView(renderFn),
       refreshLayoutView: (renderFn) => tabManager.refreshLayoutView(renderFn),
       getCurrentFilePath: () => tabManager.getActiveFilePath(),
+      onFileUpdated: (path, content) => {
+        tabManager.updateTabDoc(path, content);
+        if (tabManager.getActiveFilePath() === path && editor) {
+          editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: content } });
+        }
+      },
     };
     injectLayoutsCSS();
     injectSidebarCSS();
@@ -1178,6 +1199,10 @@ async function initApp() {
       effects: StateEffect.appendConfig.of(buildAutoRenderExtension(_layoutDeps)),
     });
     void ensureStarterLayouts(appDataDir);
+    (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__"] =
+      (path: string) => { if (_layoutDeps) void openLayoutPicker(_layoutDeps, path); };
+    (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_FILE_IN_TAB__"] =
+      (path: string) => void openAndMaybeLayout(path);
   }
 
   // Attach dirty-state tracking to the editor via updateListener.

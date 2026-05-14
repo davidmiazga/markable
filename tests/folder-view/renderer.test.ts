@@ -1389,6 +1389,73 @@ describe("CSS classes and FOLDER_VIEW_STARTER (Step 06)", () => {
     expect(card.style.position).toBe("relative");
   });
 
+  // ── Page header (cover + icon) ──────────────────────────────────────────────
+
+  it("page header absent when neither cover nor icon is set", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig(), [], container, "/vault");
+    expect(container.querySelector(".folder-view-page-header")).toBeNull();
+  });
+
+  it("page header present when cover is set", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ cover: "./banner.png" }), [], container, "/vault");
+    const header = container.querySelector(".folder-view-page-header");
+    expect(header).not.toBeNull();
+    expect(header!.querySelector(".folder-view-cover")).not.toBeNull();
+  });
+
+  it("page header present when icon is set", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ icon: "🏠" }), [], container, "/vault");
+    const header = container.querySelector(".folder-view-page-header");
+    expect(header).not.toBeNull();
+    expect(header!.querySelector(".folder-view-page-icon")).not.toBeNull();
+  });
+
+  it("page header present with both cover and icon", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ cover: "./banner.png", icon: "📁" }), [], container, "/vault");
+    const header = container.querySelector(".folder-view-page-header")!;
+    expect(header.querySelector(".folder-view-cover")).not.toBeNull();
+    expect(header.querySelector(".folder-view-page-icon")).not.toBeNull();
+  });
+
+  it("icon emoji is set via textContent (XSS guard)", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ icon: "<script>alert(1)</script>" }), [], container, "/vault");
+    const iconEl = container.querySelector(".folder-view-page-icon")!;
+    // textContent sets the literal string; no script tag in innerHTML
+    expect(iconEl.querySelector("script")).toBeNull();
+    expect(iconEl.textContent).toBe("<script>alert(1)</script>");
+  });
+
+  it("icon image path renders an img element", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ icon: "./icon.svg" }), [], container, "/vault");
+    const iconEl = container.querySelector(".folder-view-page-icon")!;
+    expect(iconEl.querySelector("img")).not.toBeNull();
+  });
+
+  it("cover img src resolves folderPath + relative path", () => {
+    (window as any).__MARKABLE_CONVERT_FILE_SRC__ = (p: string) => `asset://${p}`;
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ cover: "./header.png" }), [], container, "/my/folder");
+    const coverImg = container.querySelector<HTMLImageElement>(".folder-view-cover")!;
+    expect(coverImg.src).toBe("asset:///my/folder/header.png");
+    delete (window as any).__MARKABLE_CONVERT_FILE_SRC__;
+  });
+
+  it("page header comes before description block", () => {
+    const container = makeContainer();
+    renderFolderCards(makeConfig({ icon: "📁", body: "Some description" }), [], container, "/vault");
+    const host = container.querySelector(".folder-view-host")!;
+    const children = Array.from(host.children);
+    const headerIdx = children.findIndex(el => el.classList.contains("folder-view-page-header"));
+    const descIdx   = children.findIndex(el => el.classList.contains("folder-view-description"));
+    expect(headerIdx).toBeLessThan(descIdx);
+  });
+
   // C-8: FOLDER_VIEW_STARTER no longer says "folder-table only".
   it("C-8: FOLDER_VIEW_STARTER does not contain 'folder-table only'", async () => {
     // Dynamically import to avoid circular dependency with plugin file.

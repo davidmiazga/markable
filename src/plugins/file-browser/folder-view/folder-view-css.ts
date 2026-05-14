@@ -601,4 +601,48 @@ export const FOLDER_VIEW_CSS = `
   background: color-mix(in srgb, var(--accent, #4a9eff) 8%, transparent);
   outline: none;
 }
+
+/* ── Page header (cover image + icon) ───────────────────────────────── */
+
+.folder-view-page-header {
+  position: relative;
+  margin: -20px -24px 0;
+}
+
+.folder-view-cover {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  object-position: center;
+}
+
+.folder-view-page-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin: 12px 0 8px 4px;
+  font-size: 48px;
+  line-height: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* When a cover is present, the icon overlaps its bottom edge */
+.folder-view-page-header .folder-view-cover + .folder-view-page-icon {
+  margin-top: -32px;
+  margin-left: 20px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 2px 8px var(--shadow-color, rgba(0,0,0,.15));
+}
+
+.folder-view-page-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 `;

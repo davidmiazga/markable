@@ -859,3 +859,63 @@ describe("fields: extraction", () => {
     expect(cfg.fields).toEqual(["modified"]);
   });
 });
+
+describe("cover: and icon: parsing", () => {
+  it("cover: relative path is parsed verbatim", () => {
+    const content = [
+      "---", "layout: folder-cards", "cover: ./header.png", "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.cover).toBe("./header.png");
+  });
+
+  it("cover: absent → config.cover is undefined", () => {
+    const content = ["---", "layout: folder-cards", "---"].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.cover).toBeUndefined();
+  });
+
+  it("icon: emoji value is parsed verbatim", () => {
+    const content = [
+      "---", "layout: folder-cards", "icon: 🏠", "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.icon).toBe("🏠");
+  });
+
+  it("icon: relative path is parsed verbatim", () => {
+    const content = [
+      "---", "layout: folder-cards", "icon: ./icon.svg", "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.icon).toBe("./icon.svg");
+  });
+
+  it("icon: absent → config.icon is undefined", () => {
+    const content = ["---", "layout: folder-cards", "---"].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.icon).toBeUndefined();
+  });
+
+  it("cover: and icon: coexist with other fields", () => {
+    const content = [
+      "---",
+      "layout: folder-cards",
+      "cover: ./banner.jpg",
+      "icon: 📁",
+      "title: My Folder",
+      "---",
+    ].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.cover).toBe("./banner.jpg");
+    expect(cfg.icon).toBe("📁");
+    expect(cfg.title).toBe("My Folder");
+  });
+
+  it("cover: empty string → config.cover is undefined", () => {
+    const content = ["---", "layout: folder-cards", "cover:", "---"].join("\n");
+    const cfg = parseFolderMd(content, "F");
+    expect(cfg.cover).toBeUndefined();
+  });
+});
+

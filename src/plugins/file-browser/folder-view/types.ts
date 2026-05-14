@@ -89,6 +89,10 @@ export interface FolderMdFrontMatter {
   exclude?: string[];
   /** "false" constrains the view to the editor content-area max-width. Default: "true" (full width). */
   "content-area-override"?: string;
+  /** Relative path to a cover image displayed as a full-width banner above the description. */
+  cover?: string;
+  /** Emoji character or relative path to an icon image displayed above the description. */
+  icon?: string;
   /**
    * Raw YAML value for the extra-fields sequence (string[] or object[]).
    * Extracted before normalizeFm() and processed into ExtraField[] by parseFolderMd().
@@ -183,6 +187,10 @@ export interface FolderViewConfig {
   previewPane: boolean;
   /** CSS height value for the preview pane (e.g. "60%"). Default: "60%". */
   previewHeight: string;
+  /** Relative path to a cover image for the page header. Absent when not declared. */
+  cover?: string;
+  /** Emoji or relative path to a page icon displayed above the description. Absent when not declared. */
+  icon?: string;
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────

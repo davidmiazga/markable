@@ -292,9 +292,8 @@ describe("showTabContextMenu / closeTabContextMenu", () => {
     const tab = makeTab({ filePath: "/vault/note.md" });
     showTabContextMenu(tab, 100, 100);
 
-    const items = document.querySelectorAll(".context-menu-item");
-    // Last item = "Reveal in Finder"
-    const revealItem = items[items.length - 1] as HTMLElement;
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".context-menu-item"));
+    const revealItem = items.find(el => el.textContent?.includes("Reveal in Finder"))!;
     revealItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
 
     expect(mockRevealInFinder).toHaveBeenCalledWith("/vault/note.md");

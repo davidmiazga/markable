@@ -1704,6 +1704,22 @@ export class TabManager {
   getTabCount(): number {
     return this.tabs.length;
   }
+
+  /**
+   * Update the stored doc content for an open tab without going through the editor.
+   *
+   * Used when layout-manager writes a `layout:` field directly to a file's YAML.
+   * Marks the tab dirty so the user knows a save is needed. If the tab is the
+   * currently active one, the caller is also responsible for updating the live
+   * CM6 editor state.
+   */
+  updateTabDoc(filePath: string, newContent: string): void {
+    const tab = this.tabs.find((t) => t.filePath === filePath);
+    if (!tab) return;
+    tab.doc = newContent;
+    tab.isDirty = true;
+    this._notifyRenderer();
+  }
 }
 
 // ── Module-level singleton ─────────────────────────────────────────────────────
