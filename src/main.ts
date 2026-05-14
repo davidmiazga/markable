@@ -1184,6 +1184,7 @@ async function initApp() {
       refreshLayoutView: (renderFn) => tabManager.refreshLayoutView(renderFn),
       exitLayoutView: () => tabManager.exitLayoutView(),
       getCurrentFilePath: () => tabManager.getActiveFilePath(),
+      getActiveFileContent: () => editor?.state.doc.toString() ?? null,
       onFileUpdated: (path, content) => {
         tabManager.updateTabDoc(path, content);
         if (tabManager.getActiveFilePath() === path && editor) {

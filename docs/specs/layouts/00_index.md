@@ -1,6 +1,6 @@
 ---
 title: Layouts Feature — Master Blueprint
-last-updated: "2026-05-06"
+last-updated: "2026-05-14"
 review-cadence-days: 14
 status: active
 ---
@@ -128,6 +128,7 @@ No Rust files change. All file I/O uses existing `read_file`, `write_file`,
 | step_02 | Layout engine | `layout-engine.ts` — tokenizer, evaluator, context builder, filters, embed, partial |
 | step_03 | Layouts plugin | `layouts.plugin.ts` — sidebar, picker, auto-render, first-run starters, build wiring |
 | step_04 | Tests | `tests/tabs/custom-tab.test.ts` + `tests/plugins/layouts/layout-engine.test.ts` |
+| step_05 | Inline layout CSS | How to style any inline (`applies-to: single`) layout in Typora mode; Wikipedia CSS as reference implementation |
 
 ---
 
@@ -243,9 +244,24 @@ All 29 ACs from `active_task.md` are addressed:
 - [x] step_01 complete and tests green
 - [x] step_02 complete and tests green
 - [x] step_03 complete and `npm run build:plugins && npm run sync:plugins` passes
-- [x] step_04 complete — `npm run test:run` passes with no regressions (3507 passed, 39 skipped)
+- [x] step_04 complete — `npm run test:run` passes with no regressions (4207 passed, 39 skipped)
+- [x] step_05 complete — `data-inline-layout` hook + Wikipedia Typora CSS; 4207 tests still green
 - [x] All 29 ACs verified
 - [ ] `docs/requirements/active_task.md` status updated to `reference`
+
+### Post-launch fixes (2026-05-14)
+
+The initial implementation had an architectural gap: inline layouts (`applies-to: single`, `inline: true`)
+had no way to style the Typora editor because CM6 doesn't create real `<h1>`–`<h6>` elements.
+The template `<style>` block works for panel rendering but is never applied to the live editor.
+
+**Root cause fix:**
+- `buildLayoutInlineExtension` now sets `editorParent.dataset.inlineLayout = stem`
+  (e.g. `"wikipedia"`) when an inline layout is active, and clears it on deactivation.
+- `injectLayoutsCSS()` now contains Wikipedia-specific rules scoped to
+  `#editor[data-inline-layout="wikipedia"]` targeting `.cm-live-h1 span` etc.
+
+See `step_05_inline-layout-css.md` for the repeatable process to add CSS for any new inline layout.
 
 ---
 

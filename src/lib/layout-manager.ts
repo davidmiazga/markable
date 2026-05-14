@@ -31,6 +31,8 @@ export interface LayoutMeta {
   name: string;
   description: string;
   appliesTo: "single" | "collection" | "any";
+  /** True only for layouts that render inline above the CM editor (e.g. Notion Page). */
+  inline: boolean;
   filePath: string;
   body: string;
 }
@@ -49,6 +51,8 @@ export interface LayoutDeps {
   /** Exit layout view and return to the editor (used by inline layouts). */
   exitLayoutView?: () => void;
   getCurrentFilePath: () => string | null;
+  /** Return the live editor content for the active file (unsaved changes included). */
+  getActiveFileContent?: () => string | null;
   /**
    * Called after layout-manager writes a `layout:` key into a file's YAML.
    * The host (main.ts) should update the open tab's in-memory doc so the editor
@@ -72,6 +76,7 @@ export const STARTER_LAYOUTS: Record<string, string> = {
 name: "Wikipedia"
 description: "Serif title, jump-link TOC, inline sidebars"
 applies-to: "single"
+inline: true
 ---
 <style>
 .wiki-page{max-width:980px;margin:0 auto;padding:20px 28px;color:var(--text-primary)}
@@ -144,6 +149,7 @@ applies-to: "collection"
 name: "Notion Page"
 description: "Full-width cover, large icon, and clean reading layout"
 applies-to: "single"
+inline: true
 ---
 <style>
 .np-wrapper{width:100%}
@@ -189,6 +195,7 @@ export function parseLayoutFrontmatter(src: string, filePath: string): LayoutMet
   let name = stem;
   let description = "";
   let appliesTo: LayoutMeta["appliesTo"] = "any";
+  let inline = false;
   let body = src;
 
   if (src.startsWith("---")) {
@@ -205,12 +212,14 @@ export function parseLayoutFrontmatter(src: string, filePath: string): LayoutMet
         else if (key === "description") description = value;
         else if (key === "applies-to" && (value === "single" || value === "collection" || value === "any")) {
           appliesTo = value;
+        } else if (key === "inline") {
+          inline = value === "true";
         }
       }
     }
   }
 
-  return { name, description, appliesTo, filePath, body };
+  return { name, description, appliesTo, inline, filePath, body };
 }
 
 // ── Layout discovery ───────────────────────────────────────────────────────────
@@ -525,6 +534,9 @@ export async function applyLayout(
   deps: LayoutDeps,
   options: { activate?: boolean; docContent?: string } = {},
 ): Promise<void> {
+  // Inline layouts are rendered by buildLayoutInlineExtension — no panel needed.
+  if (layoutMeta.inline) return;
+
   const ctx = await buildLayoutContext(filePath, deps, options.docContent);
   const vaultRoot = deps.getActiveVaultRoot();
 
@@ -539,12 +551,7 @@ export async function applyLayout(
 
   const safeHtml = stripScripts(rawHtml);
 
-  // Inline layouts (notion-page) are always edited in Typora mode — never show the panel.
-  const isInlineLayout = layoutMeta.name.toLowerCase().includes("notion") ||
-    layoutMeta.filePath.includes("notion");
-  const showFn = (options.activate === false || isInlineLayout)
-    ? deps.refreshLayoutView
-    : deps.showLayoutView;
+  const showFn = options.activate === false ? deps.refreshLayoutView : deps.showLayoutView;
   showFn((el) => {
     el.innerHTML = safeHtml;
     wireDataPathListeners(el);
@@ -606,11 +613,8 @@ export async function showLayoutForFile(
       l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
   );
   if (!target) return false;
-  // Inline layouts (notion-page) are always edited in Typora mode — Cmd-E
-  // should toggle code ↔ Typora instead of activating the panel.
-  const isInlineLayout = target.name.toLowerCase().includes("notion") ||
-    target.filePath.includes("notion");
-  if (isInlineLayout) return false;
+  // Inline layouts are always edited in Typora mode — Cmd-E toggles code ↔ Typora.
+  if (target.inline) return false;
   void applyLayout(target, filePath, deps, { docContent });
   return true;
 }
@@ -638,7 +642,8 @@ export async function checkAndApplyLayoutOnSave(
       l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
   );
   if (!target) return;
-  void applyLayout(target, filePath, deps, { activate: false });
+  // activate: false → only refresh an already-visible panel (don't interrupt editing on save).
+  void applyLayout(target, filePath, deps, { activate: false, docContent });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -733,8 +738,33 @@ function insertLayoutFields(content: string, fields: Record<string, string>): st
   return `---\n${fieldLines}\n---\n\n${content}`;
 }
 
+/**
+ * Comment out config fields that don't belong to `newStem` and uncomment those
+ * that do — so switching layouts preserves values for when the user switches back.
+ *
+ * e.g. switching notion-page → wikipedia:  `cover: ./img.jpg` → `# cover: ./img.jpg`
+ * e.g. switching wikipedia → notion-page:  `# cover: ./img.jpg` → `cover: ./img.jpg`
+ */
+function toggleLayoutConfigFields(content: string, newStem: string): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---(\n|$)/);
+  if (!fmMatch) return content;
+  const newKeys = new Set((LAYOUT_CONFIG[newStem] ?? []).map((f) => f.key));
+  const allKeys = Object.values(LAYOUT_CONFIG).flatMap((fs) => fs.map((f) => f.key));
+  let fmBlock = fmMatch[1];
+  for (const key of allKeys) {
+    if (newKeys.has(key)) {
+      // Uncomment: `# key: val` → `key: val`
+      fmBlock = fmBlock.replace(new RegExp(`^#\\s*${key}:([^\n]*)`, "m"), `${key}:$1`);
+    } else {
+      // Comment out: `key: val` → `# key: val`
+      fmBlock = fmBlock.replace(new RegExp(`^${key}:([^\n]*)`, "m"), `# ${key}:$1`);
+    }
+  }
+  return content.replace(/^---\n[\s\S]*?\n---(\n|$)/, `---\n${fmBlock}\n---\n`);
+}
+
 function insertLayoutField(content: string, stem: string): string {
-  return insertLayoutFields(content, { layout: stem });
+  return insertLayoutFields(toggleLayoutConfigFields(content, stem), { layout: stem });
 }
 
 /**
@@ -749,9 +779,17 @@ async function setLayoutInFile(
   layout: LayoutMeta,
   deps: LayoutDeps,
 ): Promise<void> {
-  const result = await readFile(filePath);
-  if (!result.ok) return;
-  const newContent = insertLayoutField(result.value, layoutStem);
+  // Prefer live editor content (includes unsaved changes) over the disk version.
+  const liveContent = deps.getActiveFileContent?.();
+  let baseContent: string;
+  if (liveContent !== null && liveContent !== undefined) {
+    baseContent = liveContent;
+  } else {
+    const result = await readFile(filePath);
+    if (!result.ok) return;
+    baseContent = result.value;
+  }
+  const newContent = insertLayoutField(baseContent, layoutStem);
 
   if (deps.onFileUpdated) {
     deps.onFileUpdated(filePath, newContent);
@@ -824,7 +862,7 @@ async function showLayoutConfigWizard(
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.id = `wiz-${field.key}`;
-        cb.style.cssText = "width:14px;height:14px;cursor:pointer;accent-color:var(--accent-color,#4a9eff);";
+        cb.className = "form-checkbox";
         const lbl = document.createElement("label");
         lbl.htmlFor = `wiz-${field.key}`;
         lbl.textContent = field.label;
@@ -906,9 +944,16 @@ async function showLayoutConfigWizard(
         }
       }
 
-      const readResult = await readFile(filePath);
-      if (!readResult.ok) { resolve(); return; }
-      const newContent = insertLayoutFields(readResult.value, toWrite);
+      const liveBase = deps.getActiveFileContent?.();
+      let baseForWizard: string;
+      if (liveBase !== null && liveBase !== undefined) {
+        baseForWizard = liveBase;
+      } else {
+        const readResult = await readFile(filePath);
+        if (!readResult.ok) { resolve(); return; }
+        baseForWizard = readResult.value;
+      }
+      const newContent = insertLayoutFields(toggleLayoutConfigFields(baseForWizard, stem), toWrite);
 
       if (deps.onFileUpdated) {
         deps.onFileUpdated(filePath, newContent);
@@ -972,11 +1017,16 @@ export function buildAutoRenderExtension(deps: LayoutDeps): Extension {
     if (!layoutName) return;
 
     const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
+    const needle = layoutName.toLowerCase();
     const target = all.find(
-      (l) => l.name === layoutName || l.filePath.endsWith(`/${layoutName}.layout.md`),
+      (l) =>
+        l.name.toLowerCase().includes(needle) ||
+        l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
     );
     if (!target) return;
-    void applyLayout(target, currentPath, deps, { activate: false });
+    // Inline layouts handle themselves via buildLayoutInlineExtension.
+    // Panel layouts should activate immediately when the file is opened/switched to.
+    void applyLayout(target, currentPath, deps);
   });
 }
 
@@ -1012,15 +1062,10 @@ export function buildLayoutInlineExtension(deps: LayoutDeps): Extension {
     const doc = update.state.doc.toString();
     const layoutName = extractLayoutField(doc);
 
-    const supportsInline = isPreviewMode && layoutName != null && layoutName.toLowerCase().includes("notion");
-
-    if (!supportsInline) {
-      if (_inlineHeader) {
-        _inlineHeader.remove();
-        _inlineHeader = null;
-        _inlineHeaderSig = null;
-      }
+    if (!isPreviewMode || !layoutName) {
+      if (_inlineHeader) { _inlineHeader.remove(); _inlineHeader = null; _inlineHeaderSig = null; }
       editorParent.classList.remove("notion-layout-active");
+      delete editorParent.dataset.inlineLayout;
       return;
     }
 
@@ -1033,14 +1078,30 @@ export function buildLayoutInlineExtension(deps: LayoutDeps): Extension {
     const cover = getVal("cover");
     const icon = getVal("icon");
     const iconThemed = getVal("icon-themed");
-    const sig = `${currentPath}|${cover}|${icon}|${iconThemed}`;
-
-    editorParent.classList.add("notion-layout-active");
-    // Ensure the panel view is not showing — notion-page is always inline-editable.
-    deps.exitLayoutView?.();
+    const sig = `${currentPath}|${layoutName}|${cover}|${icon}|${iconThemed}`;
 
     if (sig === _inlineHeaderSig && _inlineHeader) return;
     _inlineHeaderSig = sig;
+
+    // Only inline layouts render a header above the editor; panel layouts use showLayoutView.
+    const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
+    if (gen !== _inlineHeaderGen) return;
+    const needle = layoutName.toLowerCase();
+    const target = all.find(
+      (l) =>
+        l.name.toLowerCase().includes(needle) ||
+        l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
+    );
+    if (!target?.inline) {
+      if (_inlineHeader) { _inlineHeader.remove(); _inlineHeader = null; }
+      editorParent.classList.remove("notion-layout-active");
+      delete editorParent.dataset.inlineLayout;
+      return;
+    }
+
+    const layoutStem = target.filePath.split("/").pop()!.replace(".layout.md", "");
+    editorParent.dataset.inlineLayout = layoutStem;
+    editorParent.classList.add("notion-layout-active");
 
     if (!_inlineHeader) {
       _inlineHeader = document.createElement("div");
@@ -1109,6 +1170,22 @@ export function injectLayoutsCSS(): void {
 .layouts-picker-name { font-size: 13px; color: var(--text-primary, #ccc); }
 .layouts-picker-desc { font-size: 11px; color: var(--text-secondary, #888); margin-top: 2px; }
 
+/* ── Shared form checkbox (wizard + any layout config UI) ── */
+.form-checkbox {
+  appearance: none; -webkit-appearance: none;
+  width: 18px; height: 18px; flex-shrink: 0;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px; background: transparent; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.form-checkbox:checked {
+  background: var(--link-color, #4a9eff);
+  border-color: var(--link-color, #4a9eff);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 8'%3E%3Cpath d='M1 4l3 3 5-6' stroke='%23fff' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: center; background-size: 65%;
+}
+.form-checkbox:focus-visible { outline: 2px solid var(--link-color, #4a9eff); outline-offset: 2px; }
+
 /* ── Notion layout: inline header above the Typora editor ── */
 #editor.notion-layout-active { display: flex !important; flex-direction: column; overflow: hidden !important; }
 #editor.notion-layout-active > .cm-editor { flex: 1; min-height: 0; height: auto !important; }
@@ -1120,6 +1197,19 @@ export function injectLayoutsCSS(): void {
 .np-inline-header .np-icon { font-size: 64px; line-height: 1; display: block; }
 .np-inline-header .np-icon-img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; display: block; }
 #editor.notion-layout-active .cm-content { padding-left: 80px !important; padding-right: 80px !important; max-width: 860px; margin: 0 auto; box-sizing: border-box; }
+
+/* ── Wikipedia layout: Typora-mode typography ── */
+/* CM6 Typora headings render as .cm-live-hN lines containing <span> elements — not real <hN> tags. */
+#editor[data-inline-layout="wikipedia"] .cm-live-h1 span,
+#editor[data-inline-layout="wikipedia"] .cm-live-h2 span,
+#editor[data-inline-layout="wikipedia"] .cm-live-h3 span,
+#editor[data-inline-layout="wikipedia"] .cm-live-h4 span { font-family: Georgia, "Linux Libertine", "Times New Roman", serif; }
+#editor[data-inline-layout="wikipedia"] .cm-live-h1 span { font-size: 1.95em; font-weight: normal; }
+#editor[data-inline-layout="wikipedia"] .cm-live-h2 span { font-size: 1.5em; font-weight: normal; }
+#editor[data-inline-layout="wikipedia"] .cm-live-h3 span { font-size: 1.2em; font-weight: bold; }
+#editor[data-inline-layout="wikipedia"] .cm-live-h2 { border-bottom: 1px solid var(--border-color, #a2a9b1); padding-bottom: 3px; margin-bottom: 2px; }
+#editor[data-inline-layout="wikipedia"] .cm-content { max-width: 980px !important; padding-left: 40px !important; padding-right: 40px !important; font-family: sans-serif; font-size: 14px; line-height: 1.6; }
 `;
+
   document.head.appendChild(style);
 }
