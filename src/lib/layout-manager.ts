@@ -46,6 +46,8 @@ export interface LayoutDeps {
   showLayoutView: (renderFn: (el: HTMLElement) => void) => void;
   /** Update layout content without switching into layout view (save-triggered refresh). */
   refreshLayoutView: (renderFn: (el: HTMLElement) => void) => void;
+  /** Exit layout view and return to the editor (used by inline layouts). */
+  exitLayoutView?: () => void;
   getCurrentFilePath: () => string | null;
   /**
    * Called after layout-manager writes a `layout:` key into a file's YAML.
@@ -150,8 +152,8 @@ applies-to: "single"
 .np-icon-row{padding:0 32px}
 .np-icon{font-size:64px;line-height:1;display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .np-icon-img{width:64px;height:64px;object-fit:contain;display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
-.np-icon-svg{display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
-.np-icon-svg svg{width:64px;height:64px;display:block}
+.np-icon-svg{display:inline-block;margin-top:-32px;background:var(--bg-primary,#1e1e1e);border-radius:100%;padding:19px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.np-icon-svg svg{width:55px;height:55px;display:block}
 .np-title{font-size:2.2em;font-weight:700;margin:12px 32px 4px;color:var(--text-primary);line-height:1.2}
 .np-body{padding:0 32px;font-size:15px;line-height:1.7}
 .np-body h1,.np-body h2,.np-body h3{margin-top:1.5em;margin-bottom:.4em}
@@ -386,6 +388,11 @@ function extractToc(body: string): TocEntry[] {
   return result;
 }
 
+function resolveAssetSrc(value: string, fileDir = ""): string {
+  const abs = value.startsWith("/") ? value : `${fileDir}/${value.replace(/^\.\//, "")}`;
+  return convertFileSrc(abs);
+}
+
 // ── Context builder ────────────────────────────────────────────────────────────
 
 /** Build a TemplateContext from vault state, meta store, and optionally a file. */
@@ -445,10 +452,7 @@ export async function buildLayoutContext(
       const cover = yaml.cover as string | undefined;
       const fileDir = filePath.split("/").slice(0, -1).join("/");
 
-      const resolveAssetSrc = (value: string): string => {
-        const abs = value.startsWith("/") ? value : `${fileDir}/${value.replace(/^\.\//, "")}`;
-        return convertFileSrc(abs);
-      };
+      // resolveAssetSrc is a module-level helper — see below
 
       const _iconIsImagePath = icon ? /\.(svg|png|jpg|jpeg|webp|gif)$/i.test(icon) : false;
       const _iconIsSvg = icon ? /\.svg$/i.test(icon) : false;
@@ -468,14 +472,14 @@ export async function buildLayoutContext(
               : svgResult.value;
           }
         } else {
-          _iconImgSrc = resolveAssetSrc(icon);
+          _iconImgSrc = resolveAssetSrc(icon, fileDir);
         }
       }
 
       // Mutually exclusive — at most one is set, so templates avoid {{else}}.
       const yamlWithMeta = {
         ...yaml,
-        _coverSrc: cover ? resolveAssetSrc(cover) : undefined,
+        _coverSrc: cover ? resolveAssetSrc(cover, fileDir) : undefined,
         _iconSvgContent,
         _iconImgSrc,
         _iconText: icon && !_iconIsImagePath ? icon : undefined,
@@ -535,7 +539,12 @@ export async function applyLayout(
 
   const safeHtml = stripScripts(rawHtml);
 
-  const showFn = options.activate === false ? deps.refreshLayoutView : deps.showLayoutView;
+  // Inline layouts (notion-page) are always edited in Typora mode — never show the panel.
+  const isInlineLayout = layoutMeta.name.toLowerCase().includes("notion") ||
+    layoutMeta.filePath.includes("notion");
+  const showFn = (options.activate === false || isInlineLayout)
+    ? deps.refreshLayoutView
+    : deps.showLayoutView;
   showFn((el) => {
     el.innerHTML = safeHtml;
     wireDataPathListeners(el);
@@ -597,6 +606,11 @@ export async function showLayoutForFile(
       l.filePath.split("/").pop()!.replace(".layout.md", "").includes(needle),
   );
   if (!target) return false;
+  // Inline layouts (notion-page) are always edited in Typora mode — Cmd-E
+  // should toggle code ↔ Typora instead of activating the panel.
+  const isInlineLayout = target.name.toLowerCase().includes("notion") ||
+    target.filePath.includes("notion");
+  if (isInlineLayout) return false;
   void applyLayout(target, filePath, deps, { docContent });
   return true;
 }
@@ -962,7 +976,106 @@ export function buildAutoRenderExtension(deps: LayoutDeps): Extension {
       (l) => l.name === layoutName || l.filePath.endsWith(`/${layoutName}.layout.md`),
     );
     if (!target) return;
-    void applyLayout(target, currentPath, deps);
+    void applyLayout(target, currentPath, deps, { activate: false });
+  });
+}
+
+// ── Inline layout header (Typora-compatible editing) ─────────────────────────
+
+let _inlineHeader: HTMLElement | null = null;
+let _inlineHeaderSig: string | null = null;
+let _inlineHeaderGen = 0;
+let _inlineHeaderQuickSig: string | null = null;
+
+/**
+ * Injects a cover/icon header directly above the CodeMirror editor whenever
+ * the active file has `layout: notion-page` in its YAML front matter.
+ *
+ * The editor itself stays in Typora editing mode — no panel switch occurs.
+ * The header is removed automatically when the layout is cleared or the tab
+ * switches to a file without a supported layout.
+ */
+export function buildLayoutInlineExtension(deps: LayoutDeps): Extension {
+  return EditorView.updateListener.of(async (update) => {
+    const editorParent = update.view.dom.parentElement;
+    if (!editorParent) return;
+
+    const isPreviewMode = editorParent.classList.contains("preview-mode");
+    const currentPath = deps.getCurrentFilePath();
+    const quickSig = `${currentPath}|${isPreviewMode}`;
+
+    // Skip if neither preview-mode state, path, nor doc content changed
+    if (quickSig === _inlineHeaderQuickSig && !update.docChanged) return;
+    _inlineHeaderQuickSig = quickSig;
+
+    const gen = ++_inlineHeaderGen;
+    const doc = update.state.doc.toString();
+    const layoutName = extractLayoutField(doc);
+
+    const supportsInline = isPreviewMode && layoutName != null && layoutName.toLowerCase().includes("notion");
+
+    if (!supportsInline) {
+      if (_inlineHeader) {
+        _inlineHeader.remove();
+        _inlineHeader = null;
+        _inlineHeaderSig = null;
+      }
+      editorParent.classList.remove("notion-layout-active");
+      return;
+    }
+
+    const fmMatch = doc.match(/^---\n([\s\S]*?)\n---/);
+    const fmText = fmMatch ? fmMatch[1] : "";
+    const getVal = (key: string): string | undefined => {
+      const m = fmText.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+      return m ? m[1].trim() : undefined;
+    };
+    const cover = getVal("cover");
+    const icon = getVal("icon");
+    const iconThemed = getVal("icon-themed");
+    const sig = `${currentPath}|${cover}|${icon}|${iconThemed}`;
+
+    editorParent.classList.add("notion-layout-active");
+    // Ensure the panel view is not showing — notion-page is always inline-editable.
+    deps.exitLayoutView?.();
+
+    if (sig === _inlineHeaderSig && _inlineHeader) return;
+    _inlineHeaderSig = sig;
+
+    if (!_inlineHeader) {
+      _inlineHeader = document.createElement("div");
+      _inlineHeader.className = "np-inline-header";
+      editorParent.insertBefore(_inlineHeader, update.view.dom);
+    }
+
+    const fileDir = currentPath ? currentPath.replace(/\/[^/]+$/, "") : "";
+
+    const coverHtml = cover
+      ? `<img class="np-cover" src="${resolveAssetSrc(cover, fileDir)}" alt="" onerror="this.style.display='none'">`
+      : "";
+
+    if (icon && /\.svg$/i.test(icon)) {
+      _inlineHeader.innerHTML = coverHtml + `<div class="np-icon-row"><div class="np-icon-svg"></div></div>`;
+      const absIcon = icon.startsWith("/") ? icon : `${fileDir}/${icon.replace(/^\.\//, "")}`;
+      const svgResult = await readFile(absIcon);
+      if (gen !== _inlineHeaderGen || !_inlineHeader) return;
+      if (svgResult.ok) {
+        const content = iconThemed === "true" ? adaptSvgFillsToCurrentColor(svgResult.value) : svgResult.value;
+        const iconEl = _inlineHeader.querySelector(".np-icon-svg");
+        if (iconEl) iconEl.innerHTML = content;
+      }
+    } else {
+      let iconHtml = "";
+      if (icon) {
+        if (/\.(png|jpg|jpeg|webp|gif)$/i.test(icon)) {
+          iconHtml = `<img class="np-icon-img" src="${resolveAssetSrc(icon, fileDir)}" alt="" onerror="this.style.display='none'">`;
+        } else {
+          iconHtml = `<span class="np-icon">${icon}</span>`;
+        }
+      }
+      if (gen !== _inlineHeaderGen || !_inlineHeader) return;
+      _inlineHeader.innerHTML = coverHtml + (iconHtml ? `<div class="np-icon-row">${iconHtml}</div>` : "");
+    }
   });
 }
 
@@ -995,6 +1108,18 @@ export function injectLayoutsCSS(): void {
 .layouts-picker-item { display: flex; flex-direction: column; text-align: left; }
 .layouts-picker-name { font-size: 13px; color: var(--text-primary, #ccc); }
 .layouts-picker-desc { font-size: 11px; color: var(--text-secondary, #888); margin-top: 2px; }
+
+/* ── Notion layout: inline header above the Typora editor ── */
+#editor.notion-layout-active { display: flex !important; flex-direction: column; overflow: hidden !important; }
+#editor.notion-layout-active > .cm-editor { flex: 1; min-height: 0; height: auto !important; }
+.np-inline-header { flex-shrink: 0; width: 100%; }
+.np-inline-header .np-cover { width: 100%; height: 220px; object-fit: cover; object-position: center; display: block; }
+.np-inline-header .np-icon-row { padding: 0 80px; margin-top: -32px; position: relative; z-index: 1; }
+.np-inline-header .np-icon-svg { display: inline-block; background: var(--bg-primary, #1e1e1e); border-radius: 100%; padding: 19px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+.np-inline-header .np-icon-svg svg { width: 55px; height: 55px; display: block; }
+.np-inline-header .np-icon { font-size: 64px; line-height: 1; display: block; }
+.np-inline-header .np-icon-img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; display: block; }
+#editor.notion-layout-active .cm-content { padding-left: 80px !important; padding-right: 80px !important; max-width: 860px; margin: 0 auto; box-sizing: border-box; }
 `;
   document.head.appendChild(style);
 }

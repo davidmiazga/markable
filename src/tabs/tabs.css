@@ -678,7 +678,7 @@
 
 /* Show host, hide editor when a custom tab is active. */
 body.has-custom-tab #editor {
-  display: none;
+  display: none !important;
 }
 
 body.has-custom-tab #custom-tab-host {
@@ -686,9 +686,10 @@ body.has-custom-tab #custom-tab-host {
 }
 
 /* Show host, hide editor when an editor tab is in layout view mode (has-layout-view).
-   Reuses #custom-tab-host as the render container — mutually exclusive with has-custom-tab. */
+   Reuses #custom-tab-host as the render container — mutually exclusive with has-custom-tab.
+   !important overrides #editor.notion-layout-active { display: flex !important }. */
 body.has-layout-view #editor {
-  display: none;
+  display: none !important;
 }
 
 body.has-layout-view #custom-tab-host {

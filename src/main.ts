@@ -110,8 +110,10 @@ import {
 } from "./lib/meta-manager";
 import type { MetaStore } from "./lib/meta-manager";
 import { getAppDataDir } from "./lib/bridge";
+import { buildQuickCommandExtension } from "./editor/quick-commands";
 import {
   buildAutoRenderExtension,
+  buildLayoutInlineExtension,
   checkAndApplyLayoutOnSave,
   showLayoutForFile,
   openLayoutPicker,
@@ -358,12 +360,7 @@ async function openFile(): Promise<void> {
  * honoured whenever a file is opened — not just when the user presses Cmd-E.
  */
 async function openAndMaybeLayout(path: string): Promise<boolean> {
-  const opened = await tabManager.openFileInTab(path);
-  if (opened && _layoutDeps) {
-    const tab = tabManager.getActiveTab();
-    if (tab?.filePath === path) void showLayoutForFile(path, tab.doc, _layoutDeps);
-  }
-  return opened;
+  return tabManager.openFileInTab(path);
 }
 
 /**
@@ -1185,6 +1182,7 @@ async function initApp() {
       getMetaStore: () => (window as unknown as Record<string, unknown>)["__MARKABLE_META__"] as MetaStore | null,
       showLayoutView: (renderFn) => tabManager.enterLayoutView(renderFn),
       refreshLayoutView: (renderFn) => tabManager.refreshLayoutView(renderFn),
+      exitLayoutView: () => tabManager.exitLayoutView(),
       getCurrentFilePath: () => tabManager.getActiveFilePath(),
       onFileUpdated: (path, content) => {
         tabManager.updateTabDoc(path, content);
@@ -1197,6 +1195,16 @@ async function initApp() {
     injectSidebarCSS();
     editor.dispatch({
       effects: StateEffect.appendConfig.of(buildAutoRenderExtension(_layoutDeps)),
+    });
+    editor.dispatch({
+      effects: StateEffect.appendConfig.of(buildLayoutInlineExtension(_layoutDeps)),
+    });
+    editor.dispatch({
+      effects: StateEffect.appendConfig.of(
+        buildQuickCommandExtension({
+          openLayoutPicker: () => { if (_layoutDeps) void openLayoutPicker(_layoutDeps); },
+        }),
+      ),
     });
     void ensureStarterLayouts(appDataDir);
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__"] =
