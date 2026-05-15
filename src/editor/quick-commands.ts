@@ -5,13 +5,24 @@
  * A floating popup appears with matching commands; keyboard and mouse select.
  *
  * Commands:
- *   /layout  — open the layout picker
- *   /table   — insert a starter 3-column table
- *   /date    — insert today's date (YYYY-MM-DD)
+ *   /layout        — open the layout picker
+ *   /table         — insert a starter 3-column table
+ *   /date          — insert today's date (YYYY-MM-DD)
+ *   /tasks         — insert a task list item (- [ ] )
+ *   /code          — insert a fenced code block
+ *   /callout       — insert a NOTE callout
+ *   /callout-tip   — insert a TIP callout
+ *   /callout-warning   — insert a WARNING callout
+ *   /callout-important — insert an IMPORTANT callout
+ *   /divider       — insert a horizontal rule
+ *   /quote         — insert a blockquote prefix
+ *   /sidebar       — insert a right-floating sidebar block
+ *   /sidebar-left  — insert a left-floating sidebar block
  */
 
 import { type ViewUpdate, EditorView, keymap } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
+import { insertHorizontalRule, toggleLinePrefix } from "./format";
 
 export interface QuickCommandDeps {
   openLayoutPicker: () => void;
@@ -36,8 +47,15 @@ const slashKeymap = keymap.of([
   { key: "Escape",    run: ()     => { if (!_active) return false; _active.close();  return true; } },
 ]);
 
-// ── Table starter ──────────────────────────────────────────────────────────────
-const TABLE_STARTER = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n";
+// ── Starters ───────────────────────────────────────────────────────────────────
+const TABLE_STARTER   = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n";
+const CODE_FENCE      = "```\n\n```";
+const SIDEBAR_RIGHT   = "```sidebar\n\n```";
+const SIDEBAR_LEFT    = "```sidebar-left\n\n```";
+
+function callout(type: string): string {
+  return `> [!${type}]\n> \n`;
+}
 
 // ── Command builder ────────────────────────────────────────────────────────────
 function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
@@ -57,6 +75,113 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
         view.dispatch({
           changes: { from, to, insert: TABLE_STARTER },
           selection: { anchor: from + TABLE_STARTER.length },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "tasks",
+      description: "Start a task list",
+      apply(view, from, to) {
+        const insert = "- [ ] \n- [ ] \n- [ ] \n";
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + 6 },
+        });
+      },
+    },
+    {
+      name: "code",
+      description: "Insert a code block",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: CODE_FENCE },
+          selection: { anchor: from + 4 },
+        });
+      },
+    },
+    {
+      name: "callout",
+      description: "Insert a NOTE callout",
+      apply(view, from, to) {
+        const text = callout("NOTE");
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "callout-tip",
+      description: "Insert a TIP callout",
+      apply(view, from, to) {
+        const text = callout("TIP");
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "callout-warning",
+      description: "Insert a WARNING callout",
+      apply(view, from, to) {
+        const text = callout("WARNING");
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "callout-important",
+      description: "Insert an IMPORTANT callout",
+      apply(view, from, to) {
+        const text = callout("IMPORTANT");
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "divider",
+      description: "Insert a horizontal rule",
+      apply(view, from, to) {
+        view.dispatch({ changes: { from, to, insert: "" } });
+        insertHorizontalRule(view);
+      },
+    },
+    {
+      name: "quote",
+      description: "Insert a blockquote",
+      apply(view, from, to) {
+        view.dispatch({ changes: { from, to, insert: "" } });
+        toggleLinePrefix(view, "> ");
+      },
+    },
+    {
+      name: "sidebar",
+      description: "Insert a right-floating sidebar",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: SIDEBAR_RIGHT },
+          selection: { anchor: from + SIDEBAR_RIGHT.indexOf("\n") + 1 },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "sidebar-left",
+      description: "Insert a left-floating sidebar",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: SIDEBAR_LEFT },
+          selection: { anchor: from + SIDEBAR_LEFT.indexOf("\n") + 1 },
         });
         deps.enterPreviewMode();
       },

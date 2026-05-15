@@ -69,6 +69,7 @@ vi.mock("../../src/editor/live-preview", () => ({
   tablePreviewField: {},
   fencedCodePreviewField: {},
   viewModeField: {},
+
 }));
 
 // Mock sidebar-manager.

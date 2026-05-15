@@ -1156,11 +1156,13 @@ export function injectSidebarCSS(): void {
   const style = document.createElement("style");
   style.id = id;
   style.textContent = `
-.cm-sidebar-preview{border:1px solid var(--border-color);background:var(--bg-secondary);border-radius:4px;padding:10px 14px;margin:8px 0;font-size:13px}
-.cm-sidebar-preview img{max-width:100%;display:block;margin:4px auto}
-.cm-sidebar-preview table{width:100%;border-collapse:collapse}
-.cm-sidebar-preview td{padding:3px 6px;border-top:1px solid var(--border-color);vertical-align:top}
-.cm-sidebar-preview td:first-child{color:var(--text-secondary)}
+.cm-sidebar-preview,.cm-sidebar-left{width:220px;box-sizing:border-box;border:1px solid var(--border-color);background:var(--bg-secondary);border-radius:4px;padding:10px 14px;font-size:13px}
+.cm-sidebar-preview{float:right;margin:0 0 16px 20px;clear:right}
+.cm-sidebar-left{float:left;margin:0 20px 16px 0;clear:left}
+.cm-sidebar-preview img,.cm-sidebar-left img{max-width:100%;display:block;margin:4px auto}
+.cm-sidebar-preview table,.cm-sidebar-left table{width:100%;border-collapse:collapse}
+.cm-sidebar-preview td,.cm-sidebar-left td{padding:3px 6px;border-top:1px solid var(--border-color);vertical-align:top}
+.cm-sidebar-preview td:first-child,.cm-sidebar-left td:first-child{color:var(--text-secondary)}
 `;
   document.head.appendChild(style);
 }

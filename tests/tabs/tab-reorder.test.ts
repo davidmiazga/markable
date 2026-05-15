@@ -50,6 +50,7 @@ vi.mock("../../src/editor/live-preview", () => ({
   tablePreviewField: {},
   fencedCodePreviewField: {},
   viewModeField: {},
+
 }));
 
 vi.mock("../../src/sidebar/sidebar-manager", () => ({ toggleSide: vi.fn() }));

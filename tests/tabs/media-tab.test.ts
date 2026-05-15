@@ -73,6 +73,7 @@ vi.mock("../../src/editor/live-preview", () => ({
   tablePreviewField: {},
   fencedCodePreviewField: {},
   viewModeField: {},
+
 }));
 
 // Mock sidebar-manager (toggleSide is called by setMode for vertical mode)

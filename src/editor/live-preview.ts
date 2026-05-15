@@ -153,27 +153,45 @@ function resolveImageSrc(src: string): string {
   return src;
 }
 
+/**
+ * Interactive task checkbox — same pattern as TableWidget (sort buttons) and
+ * FootnoteRefWidget elsewhere in this file:
+ *   - ignoreEvent(): false  → CM6 routes events to the widget DOM
+ *   - toDOM(view): use the view ref directly
+ *   - mousedown listener: preventDefault() then view.dispatch()
+ *
+ * Previous attempts used ignoreEvent(): true, which blocked the click path
+ * the widget needed.
+ */
 class CheckboxWidget extends WidgetType {
-  constructor(private checked: boolean) {
-    super();
-  }
+  // charPos is the document offset of the ' '/'x' character inside [ ]/[x]
+  constructor(private readonly checked: boolean, private readonly charPos: number) { super(); }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
+    // Wrap in a span so we can extend the hit area with padding without
+    // resizing the visible checkbox. Span (not <label>) avoids the native
+    // toggle-on-click that would race with our view.dispatch().
+    const wrap = document.createElement("span");
+    wrap.className = "cm-live-checkbox-wrap";
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = this.checked;
     cb.className = "cm-live-checkbox";
-    cb.disabled = true;
-    return cb;
+    wrap.appendChild(cb);
+    wrap.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      view.dispatch({
+        changes: { from: this.charPos, to: this.charPos + 1, insert: this.checked ? " " : "x" },
+      });
+    });
+    return wrap;
   }
 
   eq(other: CheckboxWidget): boolean {
-    return this.checked === other.checked;
+    return this.checked === other.checked && this.charPos === other.charPos;
   }
 
-  ignoreEvent(): boolean {
-    return true;
-  }
+  ignoreEvent(): boolean { return false; }
 }
 
 class HorizontalRuleWidget extends WidgetType {
@@ -412,6 +430,7 @@ function getActiveLines(state: EditorState): Set<number> {
   return active;
 }
 
+
 function handleHeading(
   node: SyntaxNodeRef,
   state: EditorState,
@@ -555,57 +574,28 @@ function handleBulletItem(
   state: EditorState,
   decorations: Range<Decoration>[]
 ) {
-  const cursor = node.node.cursor();
-  if (!cursor.firstChild()) return;
+  const line = state.doc.lineAt(node.from);
+  const taskMatch = line.text.match(/^([-*+]\s)\[([ xX])\]\s?/);
 
-  // Check if this is a task list item (has Task child)
-  let isTask = false;
-  let taskChecked = false;
-  const cursorCopy = node.node.cursor();
-  if (cursorCopy.firstChild()) {
-    do {
-      if (cursorCopy.name === "Task") {
-        isTask = true;
-        // Check for TaskMarker inside Task
-        const taskCursor = cursorCopy.node.cursor();
-        if (taskCursor.firstChild()) {
-          do {
-            if (taskCursor.name === "TaskMarker") {
-              const markerText = state.doc.sliceString(taskCursor.from, taskCursor.to);
-              taskChecked = markerText === "[x]" || markerText === "[X]";
-            }
-          } while (taskCursor.nextSibling());
-        }
-      }
-    } while (cursorCopy.nextSibling());
-  }
-
-  if (isTask) {
-    // Hide "- [ ] " or "- [x] " prefix
-    const line = state.doc.lineAt(node.from);
-    const match = line.text.match(/^[-*+]\s\[[ xX]\]\s?/);
-    if (match) {
-      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
-    }
-    // Add checkbox widget
+  if (taskMatch) {
+    const taskChecked = taskMatch[2].toLowerCase() === "x";
+    const charPos = line.from + taskMatch[1].length + 1; // position of ' '/'x' inside [ ]
+    decorations.push(Decoration.replace({}).range(line.from, line.from + taskMatch[0].length));
     decorations.push(
-      Decoration.widget({
-        widget: new CheckboxWidget(taskChecked),
-        side: -1,
-      }).range(line.from)
+      Decoration.widget({ widget: new CheckboxWidget(taskChecked, charPos), side: -1 }).range(line.from)
     );
     decorations.push(
       Decoration.line({ class: taskChecked ? "cm-live-task cm-live-task-checked" : "cm-live-task" }).range(line.from)
     );
-  } else {
-    // Regular bullet — hide "- " and apply bullet style
-    const line = state.doc.lineAt(node.from);
-    const match = line.text.match(/^[-*+]\s/);
-    if (match) {
-      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
-    }
-    decorations.push(Decoration.line({ class: "cm-live-bullet" }).range(line.from));
+    return;
   }
+
+  // Regular bullet — hide "- " and apply bullet style
+  const bulletMatch = line.text.match(/^[-*+]\s/);
+  if (bulletMatch) {
+    decorations.push(Decoration.replace({}).range(line.from, line.from + bulletMatch[0].length));
+  }
+  decorations.push(Decoration.line({ class: "cm-live-bullet" }).range(line.from));
 }
 
 function handleOrderedItem(
@@ -761,11 +751,11 @@ class FencedCodeWidget extends WidgetType {
 }
 
 class SidebarWidget extends WidgetType {
-  constructor(readonly src: string) { super(); }
-  eq(other: SidebarWidget): boolean { return this.src === other.src; }
+  constructor(readonly src: string, readonly side: "right" | "left" = "right") { super(); }
+  eq(other: SidebarWidget): boolean { return this.src === other.src && this.side === other.side; }
   toDOM(): HTMLElement {
     const wrap = document.createElement("aside");
-    wrap.className = "cm-sidebar-preview";
+    wrap.className = this.side === "left" ? "cm-sidebar-left" : "cm-sidebar-preview";
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
     /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -814,7 +804,15 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
 
       if (lang.toLowerCase() === "sidebar") {
         decorations.push(
-          Decoration.replace({ widget: new SidebarWidget(code.trim()), block: true })
+          Decoration.replace({ widget: new SidebarWidget(code.trim(), "right"), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (lang.toLowerCase() === "sidebar-left") {
+        decorations.push(
+          Decoration.replace({ widget: new SidebarWidget(code.trim(), "left"), block: true })
             .range(node.from, node.to)
         );
         return false;
