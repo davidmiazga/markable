@@ -232,7 +232,7 @@ class QuickCommandsPlugin {
       this.popup = document.createElement("div");
       this.popup.className = "slash-cmd-popup";
       this.popup.style.cssText =
-        "position:fixed;z-index:10000;background:var(--bg-secondary,#2a2a3a);border:1px solid var(--border-color,#444);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:220px;overflow:hidden;";
+        "position:fixed;z-index:10000;background:var(--bg-secondary,#2a2a3a);border:1px solid var(--border-color,#444);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.4);width:480px;padding:6px;display:flex;flex-wrap:wrap;gap:4px;";
       document.body.appendChild(this.popup);
       _active = this;
     }
@@ -252,17 +252,21 @@ class QuickCommandsPlugin {
     this.popup.innerHTML = "";
     this.filtered.forEach((cmd, i) => {
       const item = document.createElement("div");
+      item.className = "slash-cmd-chip";
+      const selected = i === this.selectedIdx;
       item.style.cssText =
-        `padding:8px 12px;cursor:pointer;display:flex;flex-direction:column;gap:2px;` +
-        (i === this.selectedIdx ? "background:var(--accent-subtle,rgba(74,158,255,.15));" : "");
+        "padding:3px 8px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:baseline;gap:5px;border:1px solid var(--border-color,#444);white-space:nowrap;line-height:1.4;" +
+        (selected
+          ? "background:var(--accent-subtle,rgba(74,158,255,.18));border-color:var(--accent-color,#4a9eff);"
+          : "background:transparent;");
 
       const name = document.createElement("span");
       name.textContent = "/" + cmd.name;
-      name.style.cssText = "font-size:13px;color:var(--text-primary,#ccc);font-weight:500;";
+      name.style.cssText = "font-size:12px;color:var(--text-primary,#ccc);font-weight:500;";
 
       const desc = document.createElement("span");
       desc.textContent = cmd.description;
-      desc.style.cssText = "font-size:11px;color:var(--text-secondary,#888);";
+      desc.style.cssText = "font-size:10px;color:var(--text-secondary,#888);";
 
       item.appendChild(name);
       item.appendChild(desc);
@@ -279,10 +283,11 @@ class QuickCommandsPlugin {
   move(delta: number) {
     if (!this.popup || this.filtered.length === 0) return;
     this.selectedIdx = (this.selectedIdx + delta + this.filtered.length) % this.filtered.length;
-    const items = this.popup.querySelectorAll<HTMLElement>("div");
+    const items = this.popup.querySelectorAll<HTMLElement>(".slash-cmd-chip");
     items.forEach((el, i) => {
-      el.style.background =
-        i === this.selectedIdx ? "var(--accent-subtle,rgba(74,158,255,.15))" : "";
+      const selected = i === this.selectedIdx;
+      el.style.background = selected ? "var(--accent-subtle,rgba(74,158,255,.18))" : "transparent";
+      el.style.borderColor = selected ? "var(--accent-color,#4a9eff)" : "var(--border-color,#444)";
     });
   }
 
