@@ -18,6 +18,9 @@
  *   /quote         — insert a blockquote prefix
  *   /sidebar       — insert a right-floating sidebar block
  *   /sidebar-left  — insert a left-floating sidebar block
+ *   /link          — insert a hyperlink placeholder
+ *   /image         — insert an image placeholder
+ *   /frontmatter   — insert a YAML front-matter block
  */
 
 import { type ViewUpdate, EditorView, keymap } from "@codemirror/view";
@@ -184,6 +187,37 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
           selection: { anchor: from + SIDEBAR_LEFT.indexOf("\n") + 1 },
         });
         deps.enterPreviewMode();
+      },
+    },
+    {
+      name: "link",
+      description: "Insert a hyperlink",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: "[]()" },
+          selection: { anchor: from + 1 },
+        });
+      },
+    },
+    {
+      name: "image",
+      description: "Insert an image",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: "![]()" },
+          selection: { anchor: from + 2 },
+        });
+      },
+    },
+    {
+      name: "frontmatter",
+      description: "Insert YAML front matter",
+      apply(view, from, to) {
+        const insert = "---\n\n---\n";
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + 4 },
+        });
       },
     },
     {
