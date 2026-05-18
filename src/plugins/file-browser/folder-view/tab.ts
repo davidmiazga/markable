@@ -22,6 +22,9 @@ import { buildFolderViewSet } from "./detection";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
 import { renderFolderTable } from "./table-renderer";
+import { renderFolderList } from "./list-renderer";
+import { renderFolderTimeline } from "./timeline-renderer";
+import { renderFolderKanban } from "./kanban-renderer";
 import { extractFrontmatterKeys } from "./frontmatter-reader";
 import { createSelectionState } from "./bulk-selection";
 import { buildToolbar, updateToolbar, showResult } from "./bulk-toolbar";
@@ -104,8 +107,11 @@ export function escapeHtml(str: string): string {
  * The renderFolderCards function is imported from renderer.ts.
  */
 export const LAYOUT_RENDERERS: Record<string, FolderLayoutRenderer> = {
-  "folder-cards": renderFolderCards,
-  "folder-table": renderFolderTable,
+  "folder-cards":    renderFolderCards,
+  "folder-table":    renderFolderTable,
+  "folder-list":     renderFolderList,
+  "folder-timeline": renderFolderTimeline,
+  "folder-kanban":   renderFolderKanban,
 };
 
 // ── Children collection (FR-19, AD-5, EC-22) ─────────────────────────────────

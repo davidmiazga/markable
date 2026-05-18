@@ -645,4 +645,200 @@ export const FOLDER_VIEW_CSS = `
   height: 100%;
   object-fit: contain;
 }
+
+/* ── List view (folder-list layout) ────────────────────────────────────── */
+
+.fv-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.fv-list-row:hover {
+  background: var(--hover-bg, rgba(128,128,128,.08));
+}
+.fv-list-row:focus-visible {
+  outline: 2px solid var(--accent-color, #4a9eff);
+  outline-offset: -2px;
+}
+
+.fv-list-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  color: var(--text-secondary, rgba(128,128,128,.65));
+}
+.fv-list-icon svg {
+  display: block;
+  fill: currentColor;
+  width: 100%;
+  height: 100%;
+}
+
+.fv-list-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.fv-list-tags {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.fv-list-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  white-space: nowrap;
+}
+
+/* ── Timeline view (folder-timeline layout) ─────────────────────────────── */
+
+/*
+ * .fv-timeline-track: outer wrapper that anchors the vertical rail line.
+ * The ::before pseudo-element draws the 2px orange line down the left side,
+ * starting and ending roughly at the first and last circle's center.
+ */
+.fv-timeline-track {
+  position: relative;
+}
+
+.fv-timeline-track::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 18px;
+  bottom: 18px;
+  width: 6px;
+  background: var(--accent-color, #ff6b35);
+  pointer-events: none;
+}
+
+.fv-timeline-group {
+  margin-bottom: 4px;
+}
+
+/*
+ * .fv-timeline-heading: flex row containing the circle (::before) + label text.
+ * The ::before creates the orange dot centred on the rail line.
+ */
+.fv-timeline-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 6px;
+  position: relative;
+  z-index: 1;
+}
+
+.fv-timeline-heading::before {
+  content: '';
+  display: block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bg-primary, #1a1a2e);
+  border: 5px solid var(--accent-color, #ff6b35);
+  margin-left: 6px;
+  position: relative;
+  z-index: 1;
+}
+
+.fv-timeline-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary, rgba(128,128,128,.65));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Indent rows to clear the timeline rail */
+.fv-timeline-rows {
+  padding-left: 36px;
+  padding-bottom: 4px;
+}
+
+/* ── Kanban view (folder-kanban layout) ─────────────────────────────────── */
+
+.fv-kanban-board {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 4px 0 16px;
+  overflow-x: auto;
+}
+
+.fv-kanban-col {
+  flex: 0 0 220px;
+  min-width: 0;
+  background: var(--bg-secondary, rgba(128,128,128,.04));
+  border: 1px solid var(--border-color, rgba(128,128,128,.2));
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.fv-kanban-col-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.15));
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary, rgba(128,128,128,.04));
+  z-index: 1;
+}
+
+.fv-kanban-col-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, rgba(128,128,128,.75));
+  text-transform: capitalize;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fv-kanban-col-count {
+  font-size: 11px;
+  color: var(--text-secondary, rgba(128,128,128,.55));
+  background: var(--bg-tertiary, rgba(128,128,128,.1));
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+/* Rows inside kanban columns have lighter horizontal padding */
+.fv-kanban-col .fv-list-row {
+  padding: 4px 10px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-color-subtle, rgba(128,128,128,.06));
+}
+.fv-kanban-col .fv-list-row:last-child {
+  border-bottom: none;
+}
+.fv-kanban-col .fv-list-row:hover {
+  background: var(--hover-bg, rgba(128,128,128,.08));
+}
 `;

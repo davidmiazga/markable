@@ -460,6 +460,12 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       ? (rawExclude as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
       : [];
 
+    // kanban-order: string sequence for explicit kanban column ordering.
+    const rawKanbanOrder = rawFm["kanban-order"];
+    const kanbanOrder: string[] | undefined = Array.isArray(rawKanbanOrder)
+      ? (rawKanbanOrder as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
+      : undefined;
+
     // Extract extra-fields sequence (FR-06). Uses a dedicated pre-pass so the
     // field works whether it appears at top-level or nested under layout:.
     const rawExtraFields = extractExtraFieldsRaw(yamlBlock.split("\n"));
@@ -580,6 +586,10 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     const iconRaw = (fm["icon"] ?? "").trim();
     const icon = iconRaw || undefined;
 
+    // kanban-field: YAML key used to group columns in folder-kanban layout.
+    const kanbanFieldRaw = (fm["kanban-field"] ?? "").trim();
+    const kanbanField = kanbanFieldRaw || undefined;
+
     // Populate config.fields and conditionally derive extraFields from it (FR-06).
     // When fields: is present and non-empty, config.extraFields is derived from
     // the non-builtin items in fields: so the enrichment guard in tab.ts
@@ -596,6 +606,15 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
         .map(f => ({ key: f, label: f.charAt(0).toUpperCase() + f.slice(1) }));
     }
 
+    // When kanban-field is set, ensure the field key is in extraFields so the
+    // enrichment phase in tab.ts reads frontmatter values into card.meta.
+    if (kanbanField && !resolvedExtraFields.some(f => f.key === kanbanField)) {
+      resolvedExtraFields = [
+        ...resolvedExtraFields,
+        { key: kanbanField, label: kanbanField.charAt(0).toUpperCase() + kanbanField.slice(1) },
+      ];
+    }
+
     return {
       layout, title, sort, cardWidth, layoutMode, showModified, body,
       aspectRatio, fit, minHeight, maxHeight,
@@ -603,8 +622,10 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       foldersTitle, filesTitle, showTags, showCount, exclude,
       contentAreaOverride, extraFields: resolvedExtraFields, fields,
       previewPane, previewHeight,
-      ...(cover !== undefined ? { cover } : {}),
-      ...(icon  !== undefined ? { icon  } : {}),
+      ...(cover       !== undefined ? { cover }       : {}),
+      ...(icon        !== undefined ? { icon  }       : {}),
+      ...(kanbanField !== undefined ? { kanbanField } : {}),
+      ...(kanbanOrder !== undefined ? { kanbanOrder } : {}),
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

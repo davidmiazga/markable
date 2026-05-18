@@ -1,0 +1,148 @@
+/**
+ * list-renderer.ts — Compact single-column list renderer for the "folder-list" layout.
+ *
+ * Exports renderFolderList() and buildListRow() (reused by timeline-renderer and
+ * kanban-renderer). Each file/folder renders as one horizontal row: icon, name,
+ * optional tags, optional modified date.
+ *
+ * @module folder-view/list-renderer
+ */
+
+import type { FolderViewConfig, FolderCard } from "./types";
+import { sortCards, getFileIconForCard, formatModified } from "./renderer";
+import { applyExcludeFilter } from "./shared";
+import { ICON_FOLDER } from "../icons/material/index";
+
+// ── Click handler ─────────────────────────────────────────────────────────────
+
+function openCard(card: FolderCard): void {
+  const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+  const fb     = (window as any).__MARKABLE_FILE_BROWSER__;
+  if (card.kind === "directory") {
+    fb?.expandDirectory?.(card.path);
+    if (card.hasFolderView) {
+      (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(card.path);
+    }
+  } else {
+    const lp = card.path.toLowerCase();
+    if (lp.endsWith(".md") || lp.endsWith(".txt")) {
+      void tabMgr?.openFileInTab?.(card.path);
+    } else {
+      void tabMgr?.openMediaInTab?.(card.path);
+    }
+  }
+}
+
+// ── Row builder (exported for reuse by timeline-renderer and kanban-renderer) ──
+
+/**
+ * Build one `.fv-list-row` element for a card.
+ *
+ * Exported so timeline-renderer.ts and kanban-renderer.ts can reuse the same
+ * row layout without duplicating the DOM construction logic.
+ */
+export function buildListRow(card: FolderCard, config: FolderViewConfig): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "fv-list-row";
+  row.setAttribute("role", "button");
+  row.setAttribute("tabindex", "0");
+  row.setAttribute("aria-label", card.name);
+
+  // Icon
+  const iconEl = document.createElement("span");
+  iconEl.className = "fv-list-icon";
+  iconEl.innerHTML = card.kind === "directory" ? ICON_FOLDER : getFileIconForCard(card.ext);
+  row.appendChild(iconEl);
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "fv-list-name";
+  // Always show the file extension. .md files are stored as stems so append
+  // the extension explicitly; all other files already include it in card.name.
+  const displayName = (card.kind === "file" && card.ext === ".md")
+    ? card.name + ".md"
+    : card.name;
+  nameEl.textContent = displayName;
+  row.appendChild(nameEl);
+
+  // Tag chips (optional)
+  if (config.showTags && card.tags && card.tags.length > 0) {
+    const tagsEl = document.createElement("span");
+    tagsEl.className = "fv-list-tags";
+    card.tags.slice(0, 3).forEach(tag => {
+      const chip = document.createElement("span");
+      chip.className = "folder-view-tag-chip";
+      chip.textContent = tag;
+      tagsEl.appendChild(chip);
+    });
+    row.appendChild(tagsEl);
+  }
+
+  // Modified date (optional, right-aligned via flex)
+  if (config.showModified && card.modified > 0) {
+    const metaEl = document.createElement("span");
+    metaEl.className = "fv-list-meta";
+    metaEl.textContent = formatModified(card.modified);
+    row.appendChild(metaEl);
+  }
+
+  row.addEventListener("click", () => openCard(card));
+  row.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(card); }
+  });
+
+  return row;
+}
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+
+export function renderFolderList(
+  config: FolderViewConfig,
+  cards: FolderCard[],
+  container: HTMLElement,
+): void {
+  container.innerHTML = "";
+  const host = document.createElement("div");
+  host.className = "folder-view-host"
+    + (config.contentAreaOverride ? "" : " folder-view-host--constrained");
+  container.appendChild(host);
+
+  const visible = applyExcludeFilter(cards, config.exclude);
+  if (visible.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "folder-view-empty";
+    empty.textContent = "No files in this folder.";
+    host.appendChild(empty);
+    return;
+  }
+
+  const dirs  = visible.filter(c => c.kind === "directory");
+  const files = visible.filter(c => c.kind === "file");
+  sortCards(dirs,  config.sort);
+  sortCards(files, config.sort);
+
+  if (config.showFolders && dirs.length > 0) {
+    const section = document.createElement("div");
+    section.className = "folder-view-section";
+    if (config.foldersTitle) {
+      const h = document.createElement("div");
+      h.className = "folder-view-section-title";
+      h.textContent = config.foldersTitle;
+      section.appendChild(h);
+    }
+    dirs.forEach(c => section.appendChild(buildListRow(c, config)));
+    host.appendChild(section);
+  }
+
+  if (config.showFiles && files.length > 0) {
+    const section = document.createElement("div");
+    section.className = "folder-view-section";
+    if (config.filesTitle) {
+      const h = document.createElement("div");
+      h.className = "folder-view-section-title";
+      h.textContent = config.filesTitle;
+      section.appendChild(h);
+    }
+    files.forEach(c => section.appendChild(buildListRow(c, config)));
+    host.appendChild(section);
+  }
+}

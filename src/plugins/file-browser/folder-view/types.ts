@@ -103,6 +103,10 @@ export interface FolderMdFrontMatter {
    * Extracted by extractFieldsRaw() in parser.ts.
    */
   "fields"?: unknown;
+  /** YAML frontmatter key used to group columns in the folder-kanban layout. */
+  "kanban-field"?: string;
+  /** Raw YAML value for the kanban-order: sequence (string[] after parsing). */
+  "kanban-order"?: unknown;
 }
 
 /**
@@ -191,6 +195,10 @@ export interface FolderViewConfig {
   cover?: string;
   /** Emoji or relative path to a page icon displayed above the description. Absent when not declared. */
   icon?: string;
+  /** YAML frontmatter key used to group columns in the folder-kanban layout (e.g. "status"). */
+  kanbanField?: string;
+  /** Explicit column order for folder-kanban. Alphabetical when absent. */
+  kanbanOrder?: string[];
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────
