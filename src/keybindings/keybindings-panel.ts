@@ -1,6 +1,7 @@
 import "./keybindings-panel.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentSettings, updateSettings } from "../lib/settings";
+import { attachModalKeyboard } from "../lib/modal-keyboard";
 
 // ---------------------------------------------------------------------------
 // Command definitions
@@ -96,6 +97,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "vault-manage", label: "Manage Vaults", defaultKey: "", section: "View" },
   // Layouts — core capability; always available regardless of plugin state.
   { id: "layouts-open-picker", label: "Open with Layout\u2026", defaultKey: "", section: "View" },
+  { id: "apply-view",          label: "Apply View",            defaultKey: "", section: "View" },
+  { id: "apply-layout",        label: "Apply Layout",          defaultKey: "", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },
@@ -312,6 +315,7 @@ function setupSearchBar(barEl: HTMLElement): void {
 // ---------------------------------------------------------------------------
 
 let panelElement: HTMLElement | null = null;
+let keyboardDetach: (() => void) | null = null;
 let bodyElement: HTMLElement | null = null;
 let isOpen = false;
 let activeRecording: (() => void) | null = null;
@@ -675,9 +679,6 @@ export function createKeybindingsPanel(): void {
 
   overlay.querySelector(".settings-backdrop")!.addEventListener("click", closeKeybindingsPanel);
   overlay.querySelector(".settings-close-btn")?.addEventListener("click", closeKeybindingsPanel);
-  overlay.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeKeybindingsPanel();
-  });
 }
 
 export function openKeybindingsPanel(): void {
@@ -689,7 +690,11 @@ export function openKeybindingsPanel(): void {
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;
-  searchInputEl?.focus();
+  keyboardDetach = attachModalKeyboard({
+    modal: panelElement,
+    onClose: closeKeybindingsPanel,
+    initialFocus: () => searchInputEl,
+  });
 }
 
 export function closeKeybindingsPanel(): void {
@@ -698,6 +703,8 @@ export function closeKeybindingsPanel(): void {
   panelElement.classList.add("hidden");
   panelElement.setAttribute("aria-hidden", "true");
   isOpen = false;
+  keyboardDetach?.();
+  keyboardDetach = null;
 }
 
 export function toggleKeybindingsPanel(): void {

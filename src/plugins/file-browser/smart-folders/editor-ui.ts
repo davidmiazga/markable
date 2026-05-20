@@ -21,6 +21,7 @@
  */
 
 import type { SmartFolderDef, SmartFolderRule, SmartFolderRuleType } from "./types";
+import { attachModalKeyboard } from "../../../lib/modal-keyboard";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -463,9 +464,7 @@ export function buildEditorElement(initial: SmartFolderDef, ctx: EditorContext):
   closeBtn.addEventListener("click", () => doCancel());
   cancelBtn.addEventListener("click", () => doCancel());
 
-  overlay.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") doCancel();
-  });
+  attachModalKeyboard({ modal: overlay, onClose: doCancel });
 
   return overlay;
 }

@@ -882,6 +882,14 @@ function handleAction(action: string): void {
       if (_layoutDeps) void openLayoutPicker(_layoutDeps);
       break;
 
+    case "apply-view":
+    case "apply-layout": {
+      const path = (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] as string | null | undefined;
+      const open = (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_ASSIGN_MODAL__"] as ((p: string) => void) | undefined;
+      if (path && typeof open === "function") open(path);
+      break;
+    }
+
     default: {
       if (action.startsWith("recent-file-")) {
         const idx = parseInt(action.replace("recent-file-", ""), 10);

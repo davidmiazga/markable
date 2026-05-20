@@ -20,6 +20,7 @@ import {
   LAYOUT_PREVIEW_SVGS,
 } from "./layout-manager";
 import type { LayoutDeps } from "./layout-manager";
+import { attachModalKeyboard } from "./modal-keyboard";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -674,6 +675,14 @@ export async function openAssignModal(
   const previewPaneDefault = !hasExplicitPreviewPane && current.slug === "view-cards";
   let optPreviewPane: boolean = hasExplicitPreviewPane ? initialOpts.previewPane : previewPaneDefault;
 
+  // Grid layout cell style: controls whether the starter fence inserted on first
+  // apply uses ```grid (plain) or ```grid-card (cards with background + border).
+  // Only used when applying the grid layout to a file that has no existing
+  // ```grid* fence. Defaults to whichever fence already exists in the file, or
+  // "grid" if none.
+  let optGridStyle: "grid" | "grid-card" =
+    fileContent.includes("```grid-card") ? "grid-card" : "grid";
+
   // ── Overlay & panel ────────────────────────────────────────────────────────
 
   const overlay = document.createElement("div");
@@ -790,6 +799,62 @@ export async function openAssignModal(
 
   function renderOptionsArea(slug: string | null): void {
     optionsArea.innerHTML = "";
+
+    // Grid layout: show a "Cell style" radio group (Grid vs Grid Card) using
+    // the same .am-item + .am-radio pattern as the main layout/view list, so
+    // it visually matches the rest of the modal.
+    if (slug === "grid") {
+      optionsArea.classList.remove("is-hidden");
+      const styleGroup = document.createElement("div");
+      styleGroup.className = "am-opt-group";
+      const styleLabel = document.createElement("div");
+      styleLabel.className = "am-opt-group-label";
+      styleLabel.textContent = "Cell style";
+      styleGroup.appendChild(styleLabel);
+      const radios = document.createElement("div");
+      radios.setAttribute("role", "radiogroup");
+      radios.setAttribute("aria-label", "Cell style");
+      const GRID_OPTS: Array<{ value: "grid" | "grid-card"; label: string }> = [
+        { value: "grid",      label: "Grid" },
+        { value: "grid-card", label: "Grid Card" },
+      ];
+      const rows: Array<{ value: "grid" | "grid-card"; el: HTMLElement }> = [];
+      for (const opt of GRID_OPTS) {
+        const item = document.createElement("div");
+        item.className = "am-item";
+        item.setAttribute("role", "radio");
+        const isSelected = optGridStyle === opt.value;
+        item.setAttribute("aria-checked", String(isSelected));
+        item.setAttribute("tabindex", isSelected ? "0" : "-1");
+        if (isSelected) item.classList.add("is-selected");
+        const radioDot = document.createElement("span");
+        radioDot.className = "am-radio";
+        item.appendChild(radioDot);
+        const labelEl = document.createElement("span");
+        labelEl.textContent = opt.label;
+        item.appendChild(labelEl);
+        item.addEventListener("click", () => {
+          optGridStyle = opt.value;
+          for (const r of rows) {
+            const isSel = r.value === opt.value;
+            r.el.classList.toggle("is-selected", isSel);
+            r.el.setAttribute("aria-checked", String(isSel));
+            r.el.setAttribute("tabindex", isSel ? "0" : "-1");
+          }
+        });
+        radios.appendChild(item);
+        rows.push({ value: opt.value, el: item });
+      }
+      styleGroup.appendChild(radios);
+      optionsArea.appendChild(styleGroup);
+
+      const note = document.createElement("div");
+      note.className = "am-opt-note";
+      note.textContent = "Applies to the starter fence inserted on first apply. Existing ```grid fences are left unchanged.";
+      optionsArea.appendChild(note);
+      return;
+    }
+
     if (!slug?.startsWith("view-")) {
       optionsArea.classList.add("is-hidden");
       return;
@@ -894,7 +959,9 @@ export async function openAssignModal(
   function selectSlug(slug: string | null): void {
     selectedSlug = slug;
     for (const { el, slug: s } of allItems) {
-      el.classList.toggle("is-selected", s === slug);
+      const isSel = s === slug;
+      el.classList.toggle("is-selected", isSel);
+      el.setAttribute("tabindex", isSel ? "0" : "-1");
     }
     // When the user picks view-cards and has never explicitly set the preview
     // pane option (no key in the file), default to ON.
@@ -1057,7 +1124,7 @@ export async function openAssignModal(
         deps,
       );
     } else {
-      await applyLayoutToFile(filePath, selectedSlug, deps);
+      await applyLayoutToFile(filePath, selectedSlug, deps, { gridStyle: optGridStyle });
     }
   });
   footer.appendChild(applyBtn);
@@ -1067,7 +1134,12 @@ export async function openAssignModal(
 
   document.body.appendChild(overlay);
 
-  overlay.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") closeModal();
+  attachModalKeyboard({
+    modal: overlay,
+    onClose: closeModal,
+    lists: [
+      { container: listEl,      itemSelector: ".am-item" },
+      { container: optionsArea, itemSelector: ".am-item" },
+    ],
   });
 }

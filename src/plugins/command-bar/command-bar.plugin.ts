@@ -203,6 +203,8 @@ const REQUIRES_FILE_IDS = new Set([
   "edit-goto-line",
   "edit-find",
   "edit-find-replace",
+  "apply-view",
+  "apply-layout",
 ]);
 
 /** Default plugin settings applied when no saved data exists. */

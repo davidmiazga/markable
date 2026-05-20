@@ -20,6 +20,7 @@ import type { UnifiedPluginDef } from "../index";
 import { DEFAULT_ENABLED_PLUGINS, WORKFLOW_PLUGINS } from "../index";
 import { getCurrentSettings } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
+import { attachModalKeyboard } from "../../lib/modal-keyboard";
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
@@ -39,16 +40,8 @@ let onToggle: ((id: string, enabled: boolean) => Promise<void>) | null = null;
 /** Reload callback wired by createPluginsPanel (optional). */
 let onReload: (() => Promise<void>) | null = null;
 
-/**
- * Guard flag that prevents adding the Escape keydown listener more than once.
- *
- * LOW finding (code review): if createPluginsPanel() were ever called twice
- * (e.g. during hot-reload in development), each call would register a new
- * keydown handler. The handlers cannot be removed because they are anonymous
- * closures. The guard ensures at most one listener is registered per session,
- * regardless of how many times createPluginsPanel() is called.
- */
-let keydownListenerRegistered = false;
+/** Detach handle for the keyboard helper while the panel is open. */
+let keyboardDetach: (() => void) | null = null;
 
 /**
  * Per-section collapsed state (session-only, not persisted to settings).
@@ -111,23 +104,6 @@ export function createPluginsPanel(
   overlay.querySelector(".settings-close-btn")
     ?.addEventListener("click", closePluginsPanel);
 
-  // Guard against registering the Escape handler more than once if
-  // createPluginsPanel() is ever called multiple times in the same session
-  // (e.g. during dev hot-reload). Anonymous listeners cannot be removed, so
-  // a second registration would double-fire on every keydown event.
-  if (!keydownListenerRegistered) {
-    keydownListenerRegistered = true;
-    document.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        e.preventDefault();
-        if (currentView === "detail") {
-          showListView();
-        } else {
-          closePluginsPanel();
-        }
-      }
-    });
-  }
 }
 
 /**
@@ -142,7 +118,14 @@ export function openPluginsPanel(states: Record<string, boolean>): void {
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;
-  (panelElement.querySelector(".settings-panel") as HTMLElement)?.focus();
+  keyboardDetach = attachModalKeyboard({
+    modal: panelElement,
+    // In detail view, Escape steps back to the list before fully closing.
+    onClose: () => {
+      if (currentView === "detail") showListView();
+      else closePluginsPanel();
+    },
+  });
 }
 
 /** Close the plugins panel. */
@@ -152,6 +135,8 @@ export function closePluginsPanel(): void {
   panelElement.setAttribute("aria-hidden", "true");
   isOpen = false;
   currentView = "list";
+  keyboardDetach?.();
+  keyboardDetach = null;
 }
 
 /**

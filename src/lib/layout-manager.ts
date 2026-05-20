@@ -1284,6 +1284,7 @@ export async function applyLayoutToFile(
   filePath: string,
   slug: string,
   deps: LayoutDeps,
+  opts?: { gridStyle?: "grid" | "grid-card" },
 ): Promise<void> {
   const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
   const target = all.find(
@@ -1298,9 +1299,10 @@ export async function applyLayoutToFile(
     const r = liveContent == null ? await readFile(filePath) : null;
     const existingContent: string = liveContent ?? (r?.ok ? r.value : "");
     if (!existingContent.includes("```grid")) {
+      const fenceTag = opts?.gridStyle === "grid-card" ? "```grid-card" : "```grid";
       const starterFence = [
         "",
-        "```grid",
+        fenceTag,
         "3x3",
         "## Cell 1",
         "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",

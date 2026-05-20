@@ -13,10 +13,12 @@ import { updateRecentFilesMenu } from "../lib/bridge";
 // singleton from the tabs facade — settings-panel.ts is not a plugin so it is
 // permitted to import from the tabs module directly.
 import { tabManager } from "../tabs";
+import { attachModalKeyboard } from "../lib/modal-keyboard";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
 let isOpen = false;
+let keyboardDetach: (() => void) | null = null;
 
 interface ThemeCallbacks {
   getThemeOrder: () => string[];
@@ -191,7 +193,10 @@ export function openSettingsPanel(): void {
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;
-  (panelElement.querySelector(".settings-panel") as HTMLElement)?.focus();
+  keyboardDetach = attachModalKeyboard({
+    modal: panelElement,
+    onClose: closeSettingsPanel,
+  });
 }
 
 export function closeSettingsPanel(): void {
@@ -199,6 +204,8 @@ export function closeSettingsPanel(): void {
   panelElement.classList.add("hidden");
   panelElement.setAttribute("aria-hidden", "true");
   isOpen = false;
+  keyboardDetach?.();
+  keyboardDetach = null;
 }
 
 export function isSettingsPanelOpen(): boolean {
@@ -236,13 +243,6 @@ function wireEvents(): void {
     ?.addEventListener("click", closeSettingsPanel);
   panelElement.querySelector(".settings-close-btn")
     ?.addEventListener("click", closeSettingsPanel);
-
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && isOpen) {
-      e.preventDefault();
-      closeSettingsPanel();
-    }
-  });
 
   // Theme picker
   const themeSelect = panelElement.querySelector("#settings-theme-select") as HTMLSelectElement;
