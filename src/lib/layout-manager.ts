@@ -12,7 +12,7 @@
  * The wikipedia.layout.md starter is written there on first launch.
  */
 
-import { readFile, writeFile, ensureDirectory, listMdFiles, openAssetDialog } from "./bridge";
+import { readFile, writeFile, deleteFile, ensureDirectory, listMdFiles, openAssetDialog } from "./bridge";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { render, stripScripts, wireDataPathListeners, wireAnchorLinks } from "./layout-engine";
 import type { TemplateContext, VaultFileEntry, TocEntry } from "./layout-engine";
@@ -121,30 +121,12 @@ inline: true
 {{/if}}
 `,
 
-  "bookshelf.layout.md": `---
-name: "Bookshelf"
-description: "Responsive card grid of all vault files"
-applies-to: "collection"
+  "grid.layout.md": `---
+name: "Grid"
+description: "Inline grid blocks — write \`\`\`grid codefences anywhere in the file"
+applies-to: "single"
+inline: true
 ---
-<style>
-.shelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; padding: 8px 24px; }
-.shelf-card { background: var(--bg-secondary, #2a2a3a); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; cursor: pointer; transition: background 0.15s; }
-.shelf-card:hover { background: var(--bg-hover, #333); }
-.shelf-card-title { font-weight: 600; color: var(--text-primary); font-size: 14px; margin-bottom: 6px; }
-.shelf-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.shelf-tag { background: var(--bg-primary); border-radius: 3px; padding: 2px 6px; font-size: 11px; color: var(--text-secondary); }
-</style>
-<h2 style="color:var(--text-primary);padding:16px 24px 0">{{vault.name}}</h2>
-<div class="shelf-grid">
-{{#each vault.files}}
-<div class="shelf-card" data-path="{{this.path}}">
-  <div class="shelf-card-title">{{this.title}}</div>
-  <div class="shelf-card-tags">
-    {{#each this.tags}}<span class="shelf-tag">{{this}}</span>{{/each}}
-  </div>
-</div>
-{{/each}}
-</div>
 `,
 
   "notion-page.layout.md": `---
@@ -302,6 +284,8 @@ export async function ensureStarterLayouts(appDataDir: string): Promise<void> {
         console.warn("[layout-manager] Error writing starter layout:", filename, err);
       }
     }
+    // Clean up renamed/removed starter layouts from existing installs.
+    void deleteFile(`${dir}/bookshelf.layout.md`);
   } catch {
     // Silent — App Support write failure is non-fatal.
   }
@@ -664,7 +648,7 @@ function escapeHtml(s: string): string {
 
 // ── Layout picker UI ───────────────────────────────────────────────────────────
 
-const LAYOUT_PREVIEW_SVGS: Record<string, string> = {
+export const LAYOUT_PREVIEW_SVGS: Record<string, string> = {
   "wikipedia.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
     <rect width="400" height="280" fill="#1a1a1a"/>
     <rect x="20" y="18" width="240" height="14" rx="3" fill="#ccc"/>
@@ -685,27 +669,33 @@ const LAYOUT_PREVIEW_SVGS: Record<string, string> = {
     <rect x="20" y="178" width="355" height="6" rx="1" fill="#555"/>
   </svg>`,
 
-  "bookshelf.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
+  "grid.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
     <rect width="400" height="280" fill="#1a1a1a"/>
-    <rect x="20" y="18" width="140" height="12" rx="3" fill="#ccc"/>
-    <rect x="20" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
-    <rect x="20" y="40" width="113" height="48" rx="4" fill="#333"/>
-    <rect x="27" y="94" width="70" height="7" rx="2" fill="#888"/>
-    <rect x="27" y="106" width="50" height="5" rx="1" fill="#555"/>
-    <rect x="143" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
-    <rect x="143" y="40" width="113" height="48" rx="4" fill="#2a3040"/>
-    <rect x="150" y="94" width="70" height="7" rx="2" fill="#888"/>
-    <rect x="150" y="106" width="50" height="5" rx="1" fill="#555"/>
-    <rect x="266" y="40" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
-    <rect x="266" y="40" width="113" height="48" rx="4" fill="#302520"/>
-    <rect x="273" y="94" width="70" height="7" rx="2" fill="#888"/>
-    <rect x="273" y="106" width="50" height="5" rx="1" fill="#555"/>
-    <rect x="20" y="136" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
-    <rect x="20" y="136" width="113" height="48" rx="4" fill="#203030"/>
-    <rect x="27" y="190" width="70" height="7" rx="2" fill="#888"/>
-    <rect x="143" y="136" width="113" height="80" rx="4" fill="#252525" stroke="#444" stroke-width="1"/>
-    <rect x="143" y="136" width="113" height="48" rx="4" fill="#2a2535"/>
-    <rect x="150" y="190" width="70" height="7" rx="2" fill="#888"/>
+    <rect x="16" y="12" width="90" height="10" rx="3" fill="#888"/>
+    <rect x="16" y="34" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="24" y="50" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="24" y="62" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="140" y="34" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="148" y="50" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="148" y="62" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="264" y="34" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="272" y="50" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="272" y="62" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="16" y="114" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="24" y="130" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="24" y="142" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="140" y="114" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="148" y="130" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="148" y="142" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="264" y="114" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="272" y="130" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="272" y="142" width="44" height="5" rx="1" fill="#444"/>
+    <rect x="16" y="194" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="24" y="210" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="140" y="194" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="148" y="210" width="66" height="7" rx="2" fill="#666"/>
+    <rect x="264" y="194" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
+    <rect x="272" y="210" width="66" height="7" rx="2" fill="#666"/>
   </svg>`,
 
   "notion-page.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
@@ -734,6 +724,9 @@ function insertLayoutFields(content: string, fields: Record<string, string>): st
     for (const [key, value] of Object.entries(fields)) {
       if (new RegExp(`^${key}:`, "m").test(fmBlock)) {
         fmBlock = fmBlock.replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`);
+      } else if (key === "layout") {
+        // Always place layout: as the first key so it's visible at a glance.
+        fmBlock = `${key}: ${value}\n` + fmBlock;
       } else {
         fmBlock += `\n${key}: ${value}`;
       }
@@ -1167,6 +1160,32 @@ export function injectSidebarCSS(): void {
   document.head.appendChild(style);
 }
 
+/** Inject grid codefence widget CSS into document head. Idempotent. */
+export function injectGridCSS(): void {
+  const id = "__markable_grid_css__";
+  if (document.getElementById(id)) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = `
+.cm-grid-wrapper{container-type:inline-size;width:100%}
+.cm-grid{display:grid;gap:8px;padding:4px 0;width:100%;box-sizing:border-box}
+@container(max-width:300px){.cm-grid{grid-template-columns:1fr!important}}
+.cm-grid-cell{padding:12px 14px;box-sizing:border-box;overflow:hidden;min-height:60px}
+.cm-grid-cell>*:first-child{margin-top:0}
+.cm-grid-cell>*:last-child{margin-bottom:0}
+.cm-grid-cell--card{background:var(--bg-secondary,#232333);border:1px solid var(--border-color,rgba(255,255,255,.1));border-radius:4px}
+.cm-grid-cell--placeholder{border:1px dashed var(--border-color,rgba(255,255,255,.15));border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-muted,#555);font-size:12px;font-style:italic;min-height:60px}
+.cm-grid-cell h1{font-size:var(--heading-h1-size,2em);font-weight:var(--heading-h1-weight,700);color:var(--text-primary,#ccc);margin:0 0 6px}
+.cm-grid-cell h2{font-size:var(--heading-h2-size,1.5em);font-weight:var(--heading-h2-weight,600);color:var(--text-primary,#ccc);margin:0 0 6px}
+.cm-grid-cell h3{font-size:var(--heading-h3-size,1.25em);font-weight:var(--heading-h3-weight,600);color:var(--text-primary,#ccc);margin:0 0 6px}
+.cm-grid-cell h4{font-size:var(--heading-h4-size,1.1em);font-weight:var(--heading-h4-weight,600);color:var(--text-primary,#ccc);margin:0 0 4px}
+.cm-grid-cell h5{font-size:var(--heading-h5-size,1em);font-weight:var(--heading-h5-weight,600);color:var(--text-primary,#ccc);margin:0 0 4px}
+.cm-grid-cell h6{font-size:var(--heading-h6-size,.9em);font-weight:var(--heading-h6-weight,600);color:var(--text-secondary,#999);margin:0 0 4px}
+.cm-grid-cell p{color:var(--text-primary,#ccc);margin:0 0 6px}
+`;
+  document.head.appendChild(style);
+}
+
 /** Inject layouts CSS into document head. Idempotent. */
 export function injectLayoutsCSS(): void {
   if (document.getElementById(STYLE_ID)) return;
@@ -1221,4 +1240,108 @@ export function injectLayoutsCSS(): void {
 `;
 
   document.head.appendChild(style);
+}
+
+// ── assign-modal utilities ─────────────────────────────────────────────────────
+
+/**
+ * Remove the layout: frontmatter key (flat or nested block) from content.
+ * Handles `layout: view-cards` and `layout:\n  type: view-cards\n  ...` formats.
+ */
+export function stripLayoutBlock(content: string): string {
+  const fmEnd = content.indexOf("\n---");
+  if (!content.startsWith("---\n") || fmEnd === -1) return content;
+  const fmBody = content.slice(4, fmEnd);
+  const stripped = fmBody.replace(/^layout:[^\n]*(?:\n[ \t]+[^\n]*)*/m, "");
+  return "---\n" + stripped + content.slice(fmEnd);
+}
+
+/** Remove the layout: field from a file's YAML and exit any active layout view. */
+export async function removeLayoutFromFile(
+  filePath: string,
+  deps: LayoutDeps,
+): Promise<void> {
+  const liveContent = deps.getActiveFileContent?.();
+  let baseContent: string;
+  if (liveContent != null) {
+    baseContent = liveContent;
+  } else {
+    const result = await readFile(filePath);
+    if (!result.ok) return;
+    baseContent = result.value;
+  }
+  const newContent = stripLayoutBlock(baseContent);
+  if (deps.onFileUpdated) {
+    deps.onFileUpdated(filePath, newContent);
+  } else {
+    await writeFile(filePath, newContent);
+  }
+  deps.exitLayoutView?.();
+}
+
+/** Find a typography layout by slug and apply it to a file. */
+export async function applyLayoutToFile(
+  filePath: string,
+  slug: string,
+  deps: LayoutDeps,
+): Promise<void> {
+  const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
+  const target = all.find(
+    (l) => l.filePath.split("/").pop()!.replace(".layout.md", "") === slug,
+  );
+  if (!target) return;
+
+  // For the Grid layout, also ensure a starter grid codefence exists in the body
+  // so the user immediately sees a rendered grid rather than a blank file.
+  if (slug === "grid") {
+    const liveContent = deps.getActiveFileContent?.();
+    const r = liveContent == null ? await readFile(filePath) : null;
+    const existingContent: string = liveContent ?? (r?.ok ? r.value : "");
+    if (!existingContent.includes("```grid")) {
+      const starterFence = [
+        "",
+        "```grid",
+        "3x3",
+        "## Cell 1",
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+        "---",
+        "## Cell 2",
+        "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+        "---",
+        "## Cell 3",
+        "Ut enim ad minim veniam, quis nostrud exercitation.",
+        "---",
+        "## Cell 4",
+        "Ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+        "---",
+        "## Cell 5",
+        "Duis aute irure dolor in reprehenderit in voluptate velit.",
+        "---",
+        "## Cell 6",
+        "Esse cillum dolore eu fugiat nulla pariatur.",
+        "---",
+        "## Cell 7",
+        "Excepteur sint occaecat cupidatat non proident.",
+        "---",
+        "## Cell 8",
+        "Sunt in culpa qui officia deserunt mollit anim id est laborum.",
+        "---",
+        "## Cell 9",
+        "Nemo enim ipsam voluptatem quia voluptas sit aspernatur.",
+        "```",
+        "",
+      ].join("\n");
+      const withFence = existingContent.trimEnd() + "\n" + starterFence;
+      const withLayout = insertLayoutField(withFence, slug);
+      if (deps.onFileUpdated) {
+        deps.onFileUpdated(filePath, withLayout);
+      } else {
+        await writeFile(filePath, withLayout);
+      }
+      void applyLayout(target, filePath, deps, { docContent: withLayout });
+      return;
+    }
+  }
+
+  void setLayoutInFile(filePath, slug, target, deps);
 }

@@ -15,6 +15,8 @@
 import type { FolderViewConfig, FolderCard } from "./types";
 import { applyExcludeFilter } from "./shared";
 import { buildListRow } from "./list-renderer";
+import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
+import type { PreviewPaneHandle } from "./preview-pane";
 
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +34,7 @@ export function renderFolderKanban(
   if (!config.kanbanField) {
     const notice = document.createElement("div");
     notice.className = "folder-view-fallback-notice";
-    notice.textContent = "folder-kanban requires a kanban-field: setting in _folder.md.";
+    notice.textContent = "view-kanban requires a kanban-field: setting in the view definition file.";
     host.appendChild(notice);
     return;
   }
@@ -75,10 +77,35 @@ export function renderFolderKanban(
     orderedKeys = [...columnMap.keys()].sort((a, b) => a.localeCompare(b));
   }
 
+  let contentTarget: HTMLElement = host;
+  let previewHandle: PreviewPaneHandle | null = null;
+  let selectedRow: HTMLElement | null = null;
+
+  if (config.previewPane) {
+    host.classList.add("fv-host--with-preview");
+    host.style.setProperty("--fvp-height", config.previewHeight);
+    previewHandle = buildPreviewPane();
+    host.appendChild(previewHandle.pane);
+    host.appendChild(attachPaneResizeHandle(host, previewHandle.pane));
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "folder-view-main";
+    host.appendChild(mainWrapper);
+    contentTarget = mainWrapper;
+  }
+
+  const onSelect = previewHandle
+    ? (card: FolderCard, el: HTMLElement) => {
+        selectedRow?.classList.remove("fv-card--selected");
+        selectedRow = el;
+        el.classList.add("fv-card--selected");
+        previewHandle!.update(card);
+      }
+    : undefined;
+
   // Render board
   const board = document.createElement("div");
   board.className = "fv-kanban-board";
-  host.appendChild(board);
+  contentTarget.appendChild(board);
 
   for (const key of orderedKeys) {
     const colCards = columnMap.get(key)!;
@@ -99,7 +126,7 @@ export function renderFolderKanban(
     header.appendChild(count);
 
     col.appendChild(header);
-    colCards.forEach(c => col.appendChild(buildListRow(c, config)));
+    colCards.forEach(c => col.appendChild(buildListRow(c, config, onSelect)));
     board.appendChild(col);
   }
 }

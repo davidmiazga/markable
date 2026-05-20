@@ -196,13 +196,11 @@ function buildCardMeta(card: FolderCard, config: FolderViewConfig): HTMLElement 
 
   } else {
     // ── Legacy mode ───────────────────────────────────────────────────────────
-    // Show modified date only. Tags are rendered as chip elements in buildCard
-    // (the .folder-view-card-tags block) — adding them here would double-render.
-    if (config.showModified && card.kind === "file" && card.modified > 0) {
-      parts.push(formatModified(card.modified));
-    }
-
-    if (parts.length === 0) return null;
+    // Nothing to add here: the date is rendered by the .folder-view-card-date
+    // block in buildCard (lines ~494-499), and tags are rendered as chip
+    // elements in the .folder-view-card-tags block.  Adding either here would
+    // produce duplicates.
+    return null;
   }
 
   const meta = document.createElement("div");

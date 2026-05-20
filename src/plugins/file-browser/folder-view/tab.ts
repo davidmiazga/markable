@@ -107,6 +107,13 @@ export function escapeHtml(str: string): string {
  * The renderFolderCards function is imported from renderer.ts.
  */
 export const LAYOUT_RENDERERS: Record<string, FolderLayoutRenderer> = {
+  // Primary view-* keys (new canonical names)
+  "view-cards":    renderFolderCards,
+  "view-table":    renderFolderTable,
+  "view-list":     renderFolderList,
+  "view-timeline": renderFolderTimeline,
+  "view-kanban":   renderFolderKanban,
+  // Backwards-compatible folder-* aliases
   "folder-cards":    renderFolderCards,
   "folder-table":    renderFolderTable,
   "folder-list":     renderFolderList,
@@ -562,15 +569,16 @@ async function renderFolderViewTabAsync(
  */
 export function buildFolderViewRenderFn(
   folderPath: string,
+  viewFilePath?: string,
 ): (container: HTMLElement) => void {
-  const folderMdPath = folderPath + "/_folder.md";
+  const mdPath = viewFilePath ?? (folderPath + "/_folder.md");
   return (container: HTMLElement): void => {
     // Fetch a fresh vault index at render time so newly added/deleted files
     // in the folder appear correctly (avoids using a stale captured index).
     const liveIndex =
       (window as any).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.() ?? null;
     container.innerHTML = `<div class="folder-view-loading">Loading…</div>`;
-    void renderFolderViewTabAsync(folderPath, folderMdPath, liveIndex, container);
+    void renderFolderViewTabAsync(folderPath, mdPath, liveIndex, container);
   };
 }
 
@@ -594,10 +602,10 @@ export function buildFolderViewRenderFn(
  *
  * @param folderPath - Absolute path of the folder whose view to open.
  */
-export function openFolderViewTab(folderPath: string): void {
-  const folderMdPath = folderPath + "/_folder.md";
+export function openFolderViewTab(folderPath: string, viewFilePath?: string): void {
+  const mdPath = viewFilePath ?? (folderPath + "/_folder.md");
   const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
-  void tabMgr?.openFileInTab?.(folderMdPath)?.then?.(() => {
-    tabMgr?.enterLayoutView?.(buildFolderViewRenderFn(folderPath));
+  void tabMgr?.openFileInTab?.(mdPath)?.then?.(() => {
+    tabMgr?.enterLayoutView?.(buildFolderViewRenderFn(folderPath, viewFilePath));
   });
 }

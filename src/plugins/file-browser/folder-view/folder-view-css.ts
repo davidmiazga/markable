@@ -54,12 +54,21 @@ export const FOLDER_VIEW_CSS = `
   line-height: 1.6;
 }
 .folder-view-description p { margin: 0 0 8px; }
-.folder-view-description h1,
-.folder-view-description h2,
-.folder-view-description h3 {
+
+/* Headings inside folder view description and preview pane inherit the theme's
+   weight/size variables so they respect thin/light theme settings. */
+.folder-view-description :is(h1,h2,h3,h4,h5,h6),
+.fvp-md-content :is(h1,h2,h3,h4,h5,h6) {
   margin: 0 0 10px;
-  color: var(--text-primary);
+  color: var(--heading-color, var(--text-primary));
+  line-height: 1.25;
 }
+.folder-view-description h1, .fvp-md-content h1 { font-size: var(--heading-h1-size, 2em);   font-weight: var(--heading-h1-weight, 200); }
+.folder-view-description h2, .fvp-md-content h2 { font-size: var(--heading-h2-size, 1.6em);  font-weight: var(--heading-h2-weight, 200); }
+.folder-view-description h3, .fvp-md-content h3 { font-size: var(--heading-h3-size, 1.35em); font-weight: var(--heading-h3-weight, 300); }
+.folder-view-description h4, .fvp-md-content h4 { font-size: var(--heading-h4-size, 1.15em); font-weight: var(--heading-h4-weight, 400); }
+.folder-view-description h5, .fvp-md-content h5 { font-size: var(--heading-h5-size, 1em);    font-weight: var(--heading-h5-weight, 600); }
+.folder-view-description h6, .fvp-md-content h6 { font-size: var(--heading-h6-size, 0.9em);  font-weight: var(--heading-h6-weight, 600); }
 
 /* ── Section wrapper ──────────────────────────────────────────────────── */
 
@@ -307,6 +316,12 @@ export const FOLDER_VIEW_CSS = `
   color: var(--accent-color);
 }
 
+/* view-*.md file entries: same accent treatment as _folder.md */
+.tree-node-is-view-md .tree-node-icon,
+.tree-node-is-view-md .tree-node-label {
+  color: var(--accent-color);
+}
+
 .tree-node-fv-badge {
   margin-left: auto;
   width: 20px;
@@ -317,6 +332,7 @@ export const FOLDER_VIEW_CSS = `
   justify-content: center;
   opacity: 0.75;
   color: var(--accent-color);
+  cursor: pointer;
 }
 .tree-node-fv-badge svg {
   display: block;
@@ -324,6 +340,31 @@ export const FOLDER_VIEW_CSS = `
   width: 100%;
   height: 100%;
 }
+
+/* ── Ghost assign button (appears on hover for regular .md files) ─── */
+
+.tree-node-assign-btn {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  color: var(--text-secondary, #888);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.tree-node-assign-btn svg {
+  display: block;
+  fill: currentColor;
+  width: 100%;
+  height: 100%;
+}
+.tree-node:hover .tree-node-assign-btn { opacity: 0.35; }
+.tree-node-assign-btn:hover { opacity: 1 !important; background: var(--bg-hover, rgba(255,255,255,.07)); }
 
 /* ── Card metadata line (.fv-card-meta) ─────────────────────────────── */
 

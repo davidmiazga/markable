@@ -1173,8 +1173,9 @@ describe("metadata line — fv-card-meta (Step 05)", () => {
     });
   });
 
-  // EC-1A: legacy mode, showModified=true, card has modified timestamp.
-  it("EC-1A: legacy mode — showModified=true → .fv-card-meta shows date string", () => {
+  // EC-1A: legacy mode, showModified=true — date appears in .folder-view-card-date,
+  // NOT in .fv-card-meta (which is reserved for fields: mode).
+  it("EC-1A: legacy mode — showModified=true → .folder-view-card-date shows date, no .fv-card-meta", () => {
     const container = makeContainer();
     const card = makeFileCard("note", ".md", 1_000_000);
     renderFolderCards(
@@ -1183,9 +1184,11 @@ describe("metadata line — fv-card-meta (Step 05)", () => {
       container,
       "/vault",
     );
-    const meta = container.querySelector(".fv-card-meta");
-    expect(meta).not.toBeNull();
-    expect(meta?.textContent?.length).toBeGreaterThan(0);
+    const dateEl = container.querySelector(".folder-view-card-date");
+    expect(dateEl).not.toBeNull();
+    expect(dateEl?.textContent?.length).toBeGreaterThan(0);
+    // .fv-card-meta must be absent in legacy mode to avoid rendering the date twice.
+    expect(container.querySelector(".fv-card-meta")).toBeNull();
   });
 
   // EC-1B: legacy mode, neither flag → no meta line.

@@ -1,0 +1,4 @@
+1.  Change 1: Change the keyword from 'folder-' to 'view-'. This is because we are moving away from just folders only. A folder ('_folder.md') or any X.md file will be compatible, hence we should focus our naming on 'view-'.
+2. Change 2: Again, focus on 'view-*.md'
+3. Change 3: Again, focus on 'view-*.md'
+4. Change 4: KEEP IT CLEAN! I do NOT want to clutter the main interface with this solution. We can however, put this into the file-browswer. We should limit this to one icon and have editing be a right-click. This keeps things clean. If needed, we can provide a separate plugin that provides more of a discoverability angle which puts buttons in a sidepanel for users to more easily see and click for their 'view-' needs along with a link to a README.md explainer. 

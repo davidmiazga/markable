@@ -15,6 +15,8 @@ import type { FolderViewConfig, FolderCard } from "./types";
 import { applyExcludeFilter } from "./shared";
 import { sortCards } from "./renderer";
 import { buildListRow } from "./list-renderer";
+import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
+import type { PreviewPaneHandle } from "./preview-pane";
 
 // ── Time group logic ──────────────────────────────────────────────────────────
 
@@ -51,12 +53,37 @@ export function renderFolderTimeline(
     + (config.contentAreaOverride ? "" : " folder-view-host--constrained");
   container.appendChild(host);
 
+  let contentTarget: HTMLElement = host;
+  let previewHandle: PreviewPaneHandle | null = null;
+  let selectedRow: HTMLElement | null = null;
+
+  if (config.previewPane) {
+    host.classList.add("fv-host--with-preview");
+    host.style.setProperty("--fvp-height", config.previewHeight);
+    previewHandle = buildPreviewPane();
+    host.appendChild(previewHandle.pane);
+    host.appendChild(attachPaneResizeHandle(host, previewHandle.pane));
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "folder-view-main";
+    host.appendChild(mainWrapper);
+    contentTarget = mainWrapper;
+  }
+
+  const onSelect = previewHandle
+    ? (card: FolderCard, el: HTMLElement) => {
+        selectedRow?.classList.remove("fv-card--selected");
+        selectedRow = el;
+        el.classList.add("fv-card--selected");
+        previewHandle!.update(card);
+      }
+    : undefined;
+
   const visible = applyExcludeFilter(cards, config.exclude);
   if (visible.length === 0) {
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
     empty.textContent = "No files in this folder.";
-    host.appendChild(empty);
+    contentTarget.appendChild(empty);
     return;
   }
 
@@ -71,8 +98,8 @@ export function renderFolderTimeline(
       h.className = "folder-view-section-title";
       h.textContent = config.foldersTitle || "Folders";
       section.appendChild(h);
-      dirs.forEach(c => section.appendChild(buildListRow(c, config)));
-      host.appendChild(section);
+      dirs.forEach(c => section.appendChild(buildListRow(c, config, onSelect)));
+      contentTarget.appendChild(section);
     }
   }
 
@@ -92,7 +119,7 @@ export function renderFolderTimeline(
 
   const track = document.createElement("div");
   track.className = "fv-timeline-track";
-  host.appendChild(track);
+  contentTarget.appendChild(track);
 
   for (const group of GROUP_ORDER) {
     const groupCards = grouped.get(group)!;
@@ -111,7 +138,7 @@ export function renderFolderTimeline(
 
     const rows = document.createElement("div");
     rows.className = "fv-timeline-rows";
-    groupCards.forEach(c => rows.appendChild(buildListRow(c, config)));
+    groupCards.forEach(c => rows.appendChild(buildListRow(c, config, onSelect)));
     section.appendChild(rows);
 
     track.appendChild(section);

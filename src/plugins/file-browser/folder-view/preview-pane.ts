@@ -149,7 +149,9 @@ export function buildPreviewPane(): PreviewPaneHandle {
     if (!card) { showEmptyState(); return; }
 
     header.style.display = "";
-    header.textContent = card.name + (card.ext ? `  ${card.ext}` : "");
+    // .md card.name is the stem only; all other types already include the extension.
+    const nameWithExt = card.ext === ".md" ? card.name + card.ext : card.name;
+    header.textContent = nameWithExt;
 
     if (card.kind === "directory") {
       body.innerHTML = "";

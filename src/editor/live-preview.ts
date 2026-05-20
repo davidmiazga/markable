@@ -765,6 +765,68 @@ class SidebarWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
+class GridWidget extends WidgetType {
+  constructor(private raw: string, private card = false) { super(); }
+  eq(other: GridWidget): boolean { return this.raw === other.raw && this.card === other.card; }
+
+  toDOM(): HTMLElement {
+    const lines = this.raw.split("\n");
+
+    // Optional first line sets dimensions: "3x3", "3x2", "4" (square), or omitted → 3x3
+    let cols = 3;
+    let rows = 3;
+    let contentStart = 0;
+    const dimMatch = lines[0]?.trim().match(/^(\d+)(?:x(\d+))?$/);
+    if (dimMatch) {
+      cols = Math.max(1, parseInt(dimMatch[1], 10));
+      rows = dimMatch[2] ? Math.max(1, parseInt(dimMatch[2], 10)) : cols;
+      contentStart = 1;
+    }
+    const totalCells = cols * rows;
+
+    // Split remaining lines on bare "---" separators to get per-cell markdown
+    const bodyLines = lines.slice(contentStart);
+    const cellTexts: string[] = [];
+    let current: string[] = [];
+    for (const line of bodyLines) {
+      if (line.trim() === "---") {
+        cellTexts.push(current.join("\n").trim());
+        current = [];
+      } else {
+        current.push(line);
+      }
+    }
+    if (current.some(l => l.trim())) cellTexts.push(current.join("\n").trim());
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-grid-wrapper";
+
+    const grid = document.createElement("div");
+    grid.className = "cm-grid";
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    wrapper.appendChild(grid);
+
+    for (let i = 0; i < totalCells; i++) {
+      const cell = document.createElement("div");
+      const text = cellTexts[i] ?? "";
+      if (text) {
+        cell.className = this.card ? "cm-grid-cell cm-grid-cell--card" : "cm-grid-cell";
+        cell.innerHTML = renderMd ? renderMd(text) : `<pre>${text}</pre>`;
+      } else {
+        cell.className = "cm-grid-cell cm-grid-cell--placeholder";
+        cell.textContent = "Empty";
+      }
+      grid.appendChild(cell);
+    }
+    return wrapper;
+  }
+  ignoreEvent(): boolean { return false; }
+}
+
 function buildFencedCodeDecorations(state: EditorState): DecorationSet {
   const activeLines = getActiveLines(state);
   const decorations: Range<Decoration>[] = [];
@@ -813,6 +875,22 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
       if (lang.toLowerCase() === "sidebar-left") {
         decorations.push(
           Decoration.replace({ widget: new SidebarWidget(code.trim(), "left"), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (lang.toLowerCase() === "grid") {
+        decorations.push(
+          Decoration.replace({ widget: new GridWidget(code, false), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (lang.toLowerCase() === "grid-card") {
+        decorations.push(
+          Decoration.replace({ widget: new GridWidget(code, true), block: true })
             .range(node.from, node.to)
         );
         return false;

@@ -12,6 +12,8 @@ import type { FolderViewConfig, FolderCard } from "./types";
 import { sortCards, getFileIconForCard, formatModified } from "./renderer";
 import { applyExcludeFilter } from "./shared";
 import { ICON_FOLDER } from "../icons/material/index";
+import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
+import type { PreviewPaneHandle } from "./preview-pane";
 
 // ── Click handler ─────────────────────────────────────────────────────────────
 
@@ -41,7 +43,11 @@ function openCard(card: FolderCard): void {
  * Exported so timeline-renderer.ts and kanban-renderer.ts can reuse the same
  * row layout without duplicating the DOM construction logic.
  */
-export function buildListRow(card: FolderCard, config: FolderViewConfig): HTMLElement {
+export function buildListRow(
+  card: FolderCard,
+  config: FolderViewConfig,
+  onSelect?: (card: FolderCard, el: HTMLElement) => void,
+): HTMLElement {
   const row = document.createElement("div");
   row.className = "fv-list-row";
   row.setAttribute("role", "button");
@@ -85,10 +91,19 @@ export function buildListRow(card: FolderCard, config: FolderViewConfig): HTMLEl
     row.appendChild(metaEl);
   }
 
-  row.addEventListener("click", () => openCard(card));
-  row.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(card); }
-  });
+  if (onSelect && card.kind === "file") {
+    row.addEventListener("click", () => onSelect(card, row));
+    row.addEventListener("dblclick", () => openCard(card));
+    row.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") { e.preventDefault(); openCard(card); }
+      else if (e.key === " ") { e.preventDefault(); onSelect(card, row); }
+    });
+  } else {
+    row.addEventListener("click", () => openCard(card));
+    row.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(card); }
+    });
+  }
 
   return row;
 }
@@ -106,12 +121,37 @@ export function renderFolderList(
     + (config.contentAreaOverride ? "" : " folder-view-host--constrained");
   container.appendChild(host);
 
+  let contentTarget: HTMLElement = host;
+  let previewHandle: PreviewPaneHandle | null = null;
+  let selectedRow: HTMLElement | null = null;
+
+  if (config.previewPane) {
+    host.classList.add("fv-host--with-preview");
+    host.style.setProperty("--fvp-height", config.previewHeight);
+    previewHandle = buildPreviewPane();
+    host.appendChild(previewHandle.pane);
+    host.appendChild(attachPaneResizeHandle(host, previewHandle.pane));
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "folder-view-main";
+    host.appendChild(mainWrapper);
+    contentTarget = mainWrapper;
+  }
+
+  const onSelect = previewHandle
+    ? (card: FolderCard, el: HTMLElement) => {
+        selectedRow?.classList.remove("fv-card--selected");
+        selectedRow = el;
+        el.classList.add("fv-card--selected");
+        previewHandle!.update(card);
+      }
+    : undefined;
+
   const visible = applyExcludeFilter(cards, config.exclude);
   if (visible.length === 0) {
     const empty = document.createElement("div");
     empty.className = "folder-view-empty";
     empty.textContent = "No files in this folder.";
-    host.appendChild(empty);
+    contentTarget.appendChild(empty);
     return;
   }
 
@@ -129,8 +169,8 @@ export function renderFolderList(
       h.textContent = config.foldersTitle;
       section.appendChild(h);
     }
-    dirs.forEach(c => section.appendChild(buildListRow(c, config)));
-    host.appendChild(section);
+    dirs.forEach(c => section.appendChild(buildListRow(c, config, onSelect)));
+    contentTarget.appendChild(section);
   }
 
   if (config.showFiles && files.length > 0) {
@@ -142,7 +182,7 @@ export function renderFolderList(
       h.textContent = config.filesTitle;
       section.appendChild(h);
     }
-    files.forEach(c => section.appendChild(buildListRow(c, config)));
-    host.appendChild(section);
+    files.forEach(c => section.appendChild(buildListRow(c, config, onSelect)));
+    contentTarget.appendChild(section);
   }
 }

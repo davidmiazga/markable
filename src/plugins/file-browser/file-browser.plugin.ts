@@ -910,8 +910,8 @@ let _lastFolderViewSet: Set<string> = new Set();
  *
  * @param path - Absolute path of the folder to open.
  */
-const openFolderViewTab = (path: string): void => {
-  _openFolderViewTab(path);
+const openFolderViewTab = (path: string, viewFilePath?: string): void => {
+  _openFolderViewTab(path, viewFilePath);
 };
 
 // ── Settings persistence ──────────────────────────────────────────────────────
@@ -1650,11 +1650,53 @@ function buildTreeUl(
       badge.className = "tree-node-fv-badge";
       badge.setAttribute("aria-hidden", "true");
       badge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
+      badge.addEventListener("click", (e: MouseEvent) => {
+        e.stopPropagation();
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path + "/_folder.md");
+      });
       el.appendChild(badge);
     }
     // Style _folder.md file entries to visually match their parent folder-view directory.
     if (path.endsWith("/_folder.md") || path.endsWith("\\_folder.md")) {
       el.classList.add("tree-node-is-folder-md");
+    }
+    // Style view-*.md file entries (view definition files with view-* layout).
+    const basename = path.split("/").pop() ?? path.split("\\").pop() ?? "";
+    const isNamedViewFile =
+      el.getAttribute("data-type") === "file" &&
+      (
+        (basename.startsWith("view-") && basename.endsWith(".md")) ||
+        basename === "_folder.md"
+      );
+    if (basename.startsWith("view-") && basename.endsWith(".md")) {
+      el.classList.add("tree-node-is-view-md");
+    }
+    if (isNamedViewFile) {
+      // Solid badge — click opens the assign modal (which has "Open View" inside)
+      const viewBadge = document.createElement("span");
+      viewBadge.className = "tree-node-fv-badge";
+      viewBadge.setAttribute("aria-hidden", "true");
+      viewBadge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
+      viewBadge.addEventListener("click", (e: MouseEvent) => {
+        e.stopPropagation();
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+      });
+      el.appendChild(viewBadge);
+    } else if (
+      el.getAttribute("data-type") === "file" &&
+      (path.toLowerCase().endsWith(".md") || path.toLowerCase().endsWith(".markdown"))
+    ) {
+      // Ghost assign button on all other .md files — visible on hover
+      const assignBtn = document.createElement("span");
+      assignBtn.className = "tree-node-assign-btn";
+      assignBtn.setAttribute("aria-hidden", "true");
+      assignBtn.title = "Assign view or layout";
+      assignBtn.innerHTML = wrapSvg(ICON_PREVIEW, 12);
+      assignBtn.addEventListener("click", (e: MouseEvent) => {
+        e.stopPropagation();
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+      });
+      el.appendChild(assignBtn);
     }
     attachNodeListeners(el, vaultId, hasFolderView);
   }
@@ -1944,6 +1986,20 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = 
         (window as any).__MARKABLE_TAB_MANAGER__?.exitLayoutView?.();
         // Ensure code view: _folder.md has no Typora preview state.
         (window as any).__MARKABLE_ENSURE_CODE_VIEW__?.();
+        _selectedFolderPath = null;
+        window.dispatchEvent(
+          new CustomEvent("markable-folder-selected", { detail: { path: null } })
+        );
+        return;
+      }
+      // view-*.md files: open directly in view mode (fast path — no frontmatter read needed).
+      const fileBasename = path.split("/").pop() ?? path.split("\\").pop() ?? "";
+      if (fileBasename.startsWith("view-") && fileBasename.endsWith(".md")) {
+        const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        const parentDir = lastSep > 0 ? path.slice(0, lastSep) : "";
+        if (parentDir) {
+          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, path);
+        }
         _selectedFolderPath = null;
         window.dispatchEvent(
           new CustomEvent("markable-folder-selected", { detail: { path: null } })
@@ -2845,7 +2901,38 @@ function buildFileContextMenuItems(
   const parentDir = getParentDir(path);
   const container = _panelContainer;
 
+  const fileBasename = path.split("/").pop() ?? path.split("\\").pop() ?? "";
+  const isFolderMd = fileBasename === "_folder.md";
+  const isViewFile = !isFolderMd && fileBasename.startsWith("view-") && fileBasename.endsWith(".md");
+  const isViewDefinition = isFolderMd || isViewFile;
+
+  // View definition file items injected at the top of the context menu.
+  const viewFileItems: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> =
+    isViewDefinition
+      ? [
+          {
+            label: isFolderMd ? "Open Folder View" : "Open View",
+            handler: () => openFolderViewTab(parentDir, path),
+          },
+          {
+            label: isViewFile ? "Edit View Definition" : "Edit View Source",
+            handler: () => {
+              void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+              (window as any).__MARKABLE_TAB_MANAGER__?.exitLayoutView?.();
+            },
+          },
+          {
+            label: "Change Assignment…",
+            handler: () => {
+              (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+            },
+          },
+          { separator: true, label: "", handler: null },
+        ]
+      : [];
+
   return [
+    ...viewFileItems,
     {
       label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
@@ -2880,10 +2967,10 @@ function buildFileContextMenuItems(
       },
     },
     { separator: true, label: "", handler: null },
-    ...(path.toLowerCase().endsWith(".md") ? [{
-      label: "Apply Layout…",
+    ...(path.toLowerCase().endsWith(".md") && !isViewDefinition ? [{
+      label: "Assign View or Layout…",
       handler: () => {
-        (window as any).__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__?.(path);
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
       },
     }] : []),
     {
@@ -2936,6 +3023,12 @@ function buildDirContextMenuItems(
     hasFolderView
       ? [
           { label: "Open Folder View", handler: () => openFolderViewTab(path) },
+          {
+            label: "Change View Type…",
+            handler: () => {
+              (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path + "/_folder.md");
+            },
+          },
           { separator: true, label: "", handler: null },
         ]
       : [];
@@ -3084,7 +3177,7 @@ const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
     data: [
       "---",
       "layout:",
-      "  type: folder-cards",
+      "  type: view-cards",
       "  content-area-override: true",
       "  card-width: 160",
       "  aspect-ratio: 1/1",
@@ -3105,7 +3198,7 @@ const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
     data: [
       "---",
       "layout:",
-      "  type: folder-cards",
+      "  type: view-cards",
       "  content-area-override: true",
       "  card-width: 200",
       "  aspect-ratio: 4/3",
@@ -3126,7 +3219,7 @@ const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
     data: [
       "---",
       "layout:",
-      "  type: folder-table",
+      "  type: view-table",
       "  content-area-override: false",
       "  sort: modified-desc",
       "fields:",
@@ -3145,7 +3238,7 @@ const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
     data: [
       "---",
       "layout:",
-      "  type: folder-cards",
+      "  type: view-cards",
       "  content-area-override: false",
       "  card-width: 160",
       "  card-preview: none",
@@ -3215,45 +3308,49 @@ const FOLDER_VIEW_STARTER = [
   "# set title: My Folder to override the tab display name",
   "# exclude:",
   "#   - draft.md",
-  "# uncomment to hide specific files from the card grid",
+  "# uncomment exclude to hide specific files from the view",
   "layout:",
-  "  # folder-cards (default) or folder-table (compact sortable list)",
-  "  type: folder-cards",
-  "  # false = constrain to the editor content-area width",
+  "  type: view-cards",
+  "  # view-cards, view-table, view-list, view-timeline, view-kanban",
   "  content-area-override: true",
-  "  # grid = consistent columns, flex = fluid smooth resize",
+  "  # false = constrain to the editor content-area width",
   "  mode: grid",
-  "  # minimum card width in px",
+  "  # grid = consistent columns, flex = fluid smooth resize",
   "  card-width: 160",
-  "  # e.g. 16/9, 4/3, 1.5, original",
+  "  # minimum card width in px",
   "  aspect-ratio: 1/1",
-  "  # cover, contain, 80% auto, auto 60%, 70% 50%",
+  "  # e.g. 16/9, 4/3, 1.5, original",
   "  fit: cover",
+  "  # cover, contain, 80% auto, auto 60%, 70% 50%",
   "  min-height: 40",
   "  max-height: 200",
-  "  # name-asc, name-desc, modified-asc, modified-desc",
   "  sort: name-asc",
-  "  # preview-pane: true    # show rendered preview above the grid (false by default)",
-  "  # preview-height: 60%   # height of the preview pane",
-  "  # full = show preview, none = compact name-and-date grid",
+  "  # name-asc, name-desc, modified-asc, modified-desc",
   "  card-preview: full",
+  "  # full = show preview, none = compact name-and-date grid",
+  "  preview-pane: false",
+  "  # show rendered preview above the grid (true / false)",
+  "  # preview-height: 60%",
+  "  # height of the preview pane",
   "  folders-title: Folders",
   "  files-title:",
   "  # set files-title: Notes to show a heading above the Files section",
-  "# fields: controls which data appears below each card name (folder-cards)",
-  "# or which columns appear in the table (folder-table), in declaration order.",
+  "# kanban-field: status",
+  "# kanban-order:",
+  "#   - todo",
+  "#   - doing",
+  "#   - done",
+  "# uncomment kanban settings when using view-kanban",
   "# fields:",
   "#   - name",
   "#   - modified",
   "#   - tags",
   "#   - status",
-  "#   - select  # uncomment to enable bulk-select checkboxes",
-  "# add any frontmatter key as a custom field (e.g. status from YAML front matter)",
-  "# extra-fields: adds custom frontmatter keys as additional fields.",
+  "#   - select",
+  "# fields: controls columns (view-table) or data below card names (view-cards)",
   "# extra-fields:",
   "#   - status",
-  "# cover: ./cover.png   # relative path to a cover image (shown as a banner)",
-  "# icon: 📁             # emoji or relative image path shown above the description",
+  "# uncomment extra-fields to include custom frontmatter/YAML data",
   "---",
   "",
 ].join("\n");
@@ -3831,6 +3928,10 @@ function attachDragDropListeners(el: HTMLElement, _vaultId: string): void {
 
     el.addEventListener("pointerdown", (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // Don't capture the pointer when the click originated on an interactive child
+      // (badge, assign button, or other button). setPointerCapture would redirect the
+      // synthesized click to el, bypassing the child's own click handler entirely.
+      if ((e.target as Element).closest(".tree-node-fv-badge,.tree-node-assign-btn,button")) return;
       startX = e.clientX;
       startY = e.clientY;
       dragActive = false;
@@ -4293,9 +4394,9 @@ const plugin = {
       },
     };
 
-    // Register __MARKABLE_OPEN_FOLDER_VIEW_TAB__ so renderer.ts can call
-    // openFolderViewTab without a direct import (breaks the circular dep: tab.ts
-    // imports renderer.ts; renderer.ts must NOT import tab.ts — AD-10).
+    // Register __MARKABLE_OPEN_FOLDER_VIEW_TAB__ so renderer.ts and main.ts can
+    // call openFolderViewTab without a direct import (circular dep guard AD-10).
+    // Accepts optional second argument: viewFilePath for non-_folder.md view files.
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFolderViewTab;
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);

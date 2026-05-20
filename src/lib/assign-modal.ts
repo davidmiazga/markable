@@ -1,0 +1,1073 @@
+/**
+ * assign-modal.ts — Unified "View or Layout" assignment modal.
+ *
+ * openAssignModal(filePath, deps) lets the user assign a view-* layout
+ * (renders the parent directory's files as a collection) or a typography
+ * layout (styles this file's own content) to any .md file.  The two
+ * categories share the same `layout:` frontmatter field and are therefore
+ * mutually exclusive — selecting one clears the other.
+ *
+ * For _folder.md and view-*.md files the Layouts section is grayed out to
+ * discourage applying typography layouts to directory-scoped view files.
+ */
+
+import { readFile, writeFile } from "./bridge";
+import {
+  discoverLayouts,
+  applyLayoutToFile,
+  removeLayoutFromFile,
+  stripLayoutBlock,
+  LAYOUT_PREVIEW_SVGS,
+} from "./layout-manager";
+import type { LayoutDeps } from "./layout-manager";
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const OVERLAY_ID = "__assign-modal-overlay__";
+const STYLE_ID   = "__am-styles__";
+
+const VIEW_TYPES: Array<{
+  slug: string;
+  name: string;
+  description: string;
+  requiresField?: boolean;
+}> = [
+  {
+    slug: "view-cards",
+    name: "Cards",
+    description: "Grid of file cards with image preview thumbnails. Great for visual collections of images or notes.",
+  },
+  {
+    slug: "view-table",
+    name: "Table",
+    description: "Sortable table with configurable columns. Best for structured notes with frontmatter metadata.",
+  },
+  {
+    slug: "view-list",
+    name: "List",
+    description: "Compact single-column rows showing filename, type, and date. Fast and minimal.",
+  },
+  {
+    slug: "view-timeline",
+    name: "Timeline",
+    description: "Files grouped by recency with a vertical orange rail and date headings.",
+  },
+  {
+    slug: "view-kanban",
+    name: "Kanban",
+    description: "Columns grouped by a frontmatter field value. Only shows files that have that field set.",
+    requiresField: true,
+  },
+];
+
+// ── Preview SVGs ───────────────────────────────────────────────────────────────
+
+const VIEW_PREVIEW_SVGS: Record<string, string> = {
+  "view-cards":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="14" y="14" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="145" y="14" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="276" y="14" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="14" y="104" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="145" y="104" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="276" y="104" width="110" height="76" rx="6" fill="#252540" stroke="#333360" stroke-width="1"/><rect x="20" y="79" width="70" height="6" rx="3" fill="#444466"/><rect x="151" y="79" width="70" height="6" rx="3" fill="#444466"/><rect x="282" y="79" width="70" height="6" rx="3" fill="#444466"/><rect x="20" y="169" width="70" height="6" rx="3" fill="#444466"/><rect x="151" y="169" width="70" height="6" rx="3" fill="#444466"/><rect x="282" y="169" width="70" height="6" rx="3" fill="#444466"/><text x="200" y="218" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Cards</text></svg>`,
+
+  "view-table":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="12" y="16" width="376" height="26" rx="3" fill="#2a2a4a"/><rect x="20" y="23" width="50" height="10" rx="3" fill="#5566aa"/><rect x="90" y="23" width="70" height="10" rx="3" fill="#5566aa"/><rect x="180" y="23" width="70" height="10" rx="3" fill="#5566aa"/><rect x="270" y="23" width="60" height="10" rx="3" fill="#5566aa"/><rect x="12" y="46" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="12" y="74" width="376" height="24" rx="2" fill="#232340"/><rect x="12" y="102" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="12" y="130" width="376" height="24" rx="2" fill="#232340"/><rect x="12" y="158" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="20" y="54" width="44" height="7" rx="3" fill="#444466"/><rect x="90" y="54" width="55" height="7" rx="3" fill="#444466"/><rect x="20" y="82" width="38" height="7" rx="3" fill="#444466"/><rect x="90" y="82" width="62" height="7" rx="3" fill="#444466"/><rect x="20" y="110" width="50" height="7" rx="3" fill="#444466"/><rect x="90" y="110" width="48" height="7" rx="3" fill="#444466"/><rect x="20" y="138" width="42" height="7" rx="3" fill="#444466"/><rect x="20" y="166" width="48" height="7" rx="3" fill="#444466"/><text x="200" y="218" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Table</text></svg>`,
+
+  "view-list":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="12" y="16" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="48" width="376" height="28" rx="3" fill="#1e1e38"/><rect x="12" y="80" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="112" width="376" height="28" rx="3" fill="#1e1e38"/><rect x="12" y="144" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="176" width="376" height="28" rx="3" fill="#1e1e38"/><circle cx="28" cy="30" r="5" fill="#5566aa"/><circle cx="28" cy="62" r="5" fill="#5566aa"/><circle cx="28" cy="94" r="5" fill="#5566aa"/><circle cx="28" cy="126" r="5" fill="#5566aa"/><circle cx="28" cy="158" r="5" fill="#5566aa"/><circle cx="28" cy="190" r="5" fill="#5566aa"/><rect x="42" y="24" width="100" height="7" rx="3" fill="#666688"/><rect x="42" y="56" width="80" height="7" rx="3" fill="#666688"/><rect x="42" y="88" width="120" height="7" rx="3" fill="#666688"/><rect x="42" y="120" width="90" height="7" rx="3" fill="#666688"/><rect x="42" y="152" width="110" height="7" rx="3" fill="#666688"/><rect x="42" y="184" width="95" height="7" rx="3" fill="#666688"/><rect x="312" y="24" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="56" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="88" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="120" width="56" height="7" rx="3" fill="#444455"/><text x="200" y="230" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">List</text></svg>`,
+
+  "view-timeline":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="30" y="12" width="6" height="220" rx="3" fill="#ff6600" opacity="0.6"/><circle cx="33" cy="28" r="7" stroke="#ff6600" stroke-width="4" fill="#1a1a2e"/><rect x="52" y="20" width="70" height="12" rx="3" fill="#5566aa"/><rect x="52" y="42" width="280" height="24" rx="3" fill="#232340"/><rect x="52" y="70" width="280" height="24" rx="3" fill="#1e1e38"/><circle cx="33" cy="110" r="7" stroke="#ff6600" stroke-width="4" fill="#1a1a2e"/><rect x="52" y="102" width="55" height="12" rx="3" fill="#5566aa"/><rect x="52" y="122" width="280" height="24" rx="3" fill="#232340"/><rect x="52" y="150" width="280" height="24" rx="3" fill="#1e1e38"/><rect x="52" y="178" width="280" height="24" rx="3" fill="#232340"/><rect x="62" y="50" width="100" height="7" rx="3" fill="#555577"/><rect x="62" y="78" width="80" height="7" rx="3" fill="#555577"/><rect x="62" y="130" width="120" height="7" rx="3" fill="#555577"/><rect x="62" y="158" width="90" height="7" rx="3" fill="#555577"/><rect x="62" y="186" width="105" height="7" rx="3" fill="#555577"/><text x="200" y="252" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Timeline</text></svg>`,
+
+  "view-kanban":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="8" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="141" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="274" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="16" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="149" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="282" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="16" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="16" y="96" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="149" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="282" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="282" y="96" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="22" y="50" width="70" height="7" rx="3" fill="#555577"/><rect x="22" y="104" width="55" height="7" rx="3" fill="#555577"/><rect x="155" y="50" width="65" height="7" rx="3" fill="#555577"/><rect x="288" y="50" width="60" height="7" rx="3" fill="#555577"/><rect x="288" y="104" width="75" height="7" rx="3" fill="#555577"/><text x="200" y="240" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Kanban</text></svg>`,
+};
+
+// ── CSS ────────────────────────────────────────────────────────────────────────
+
+const AM_CSS = `
+.am-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+}
+.am-backdrop {
+  position: absolute; inset: 0; background: rgba(0,0,0,.5);
+}
+.am-panel {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column;
+  width: 680px; max-width: 96vw; max-height: 88vh;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, rgba(255,255,255,.1));
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  overflow: hidden;
+}
+.am-header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-color, rgba(255,255,255,.08));
+  flex-shrink: 0;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+}
+.am-header-info { flex: 1; min-width: 0; }
+.am-title {
+  font-size: 13px; font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+  margin: 0 0 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.am-current { font-size: 11px; color: var(--text-secondary, #888); }
+.am-current-value { color: var(--link-color, #4a9eff); font-weight: 500; }
+.am-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-secondary, #888); font-size: 18px;
+  line-height: 1; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.am-close:hover { background: var(--bg-hover, rgba(255,255,255,.07)); }
+.am-body { display: flex; flex: 1; min-height: 0; }
+.am-list {
+  width: 220px; flex-shrink: 0; overflow-y: auto; padding: 8px 0;
+  border-right: 1px solid var(--border-color, rgba(255,255,255,.08));
+}
+.am-section { padding: 10px 12px 4px; }
+.am-section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  color: var(--text-tertiary, #666); text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.am-section-desc {
+  font-size: 10px; color: var(--text-tertiary, #666);
+  line-height: 1.4; margin-bottom: 6px;
+}
+.am-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; cursor: pointer;
+  color: var(--text-secondary, #aaa); font-size: 12px;
+  user-select: none;
+}
+.am-item:hover { background: var(--bg-hover, rgba(255,255,255,.05)); color: var(--text-primary, #e0e0e0); }
+.am-item.is-selected { background: var(--bg-hover, rgba(255,255,255,.07)); color: var(--text-primary, #e0e0e0); }
+.am-item.is-selected .am-radio { background: var(--link-color, #4a9eff); border-color: var(--link-color, #4a9eff); }
+.am-item.is-selected .am-radio::after { display: block; }
+.am-radio {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid var(--text-tertiary, #666);
+  background: transparent; flex-shrink: 0; position: relative;
+}
+.am-radio::after {
+  content: ""; display: none;
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: #fff;
+}
+.am-section-disabled { opacity: .42; pointer-events: none; }
+.am-section-disabled-items .am-item { opacity: .42; pointer-events: none; }
+.am-disabled-note {
+  font-size: 10px; color: var(--text-tertiary, #666);
+  padding: 1px 14px 6px; font-style: italic;
+}
+.am-kanban-row {
+  padding: 4px 14px 8px; display: none;
+  align-items: center; gap: 6px;
+}
+.am-kanban-row.is-visible { display: flex; }
+.am-kanban-label { font-size: 11px; color: var(--text-tertiary, #666); white-space: nowrap; }
+.am-kanban-input {
+  flex: 1; min-width: 0;
+  background: var(--bg-secondary, #2a2a3a);
+  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  padding: 4px 8px; font-size: 11px; color: var(--text-primary, #ccc); outline: none;
+}
+.am-kanban-input:focus { border-color: var(--link-color, #4a9eff); }
+.am-divider { height: 1px; background: var(--border-color, rgba(255,255,255,.07)); margin: 6px 12px; }
+.am-preview {
+  flex: 1; min-width: 0; overflow: hidden;
+  padding: 16px 14px; display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-start;
+  background: var(--bg-secondary, #181825);
+}
+.am-preview-svg {
+  width: 100%; max-width: 340px;
+  border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border-color, rgba(255,255,255,.06));
+}
+.am-preview-svg svg { display: block; width: 100%; height: auto; }
+.am-preview-name {
+  font-size: 13px; font-weight: 600; color: var(--text-primary, #e0e0e0);
+  margin-top: 12px; text-align: center;
+}
+.am-preview-desc {
+  font-size: 11px; color: var(--text-secondary, #888);
+  margin-top: 6px; text-align: center; line-height: 1.5; max-width: 280px;
+}
+.am-preview-placeholder {
+  font-size: 12px; color: var(--text-tertiary, #555);
+  margin-top: 60px; text-align: center;
+}
+.am-footer {
+  display: flex; align-items: center; justify-content: flex-end;
+  padding: 10px 16px; gap: 8px;
+  border-top: 1px solid var(--border-color, rgba(255,255,255,.08));
+  flex-shrink: 0;
+}
+.am-footer-left { margin-right: auto; display: flex; gap: 6px; }
+.am-btn {
+  background: transparent; border: 1px solid var(--border-color, #444);
+  border-radius: 5px; padding: 6px 14px;
+  font-size: 12px; cursor: pointer; color: var(--text-secondary, #aaa);
+}
+.am-btn:hover { background: var(--bg-hover, rgba(255,255,255,.07)); color: var(--text-primary, #e0e0e0); }
+.am-btn-primary {
+  background: var(--link-color, #4a9eff); border-color: transparent;
+  color: #fff; font-weight: 600;
+}
+.am-btn-primary:hover { opacity: .88; }
+
+/* ── View options panel (below description in preview pane) ─────────────── */
+.am-options {
+  width: 100%; max-width: 340px;
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--border-color, rgba(255,255,255,.08));
+  text-align: left;
+}
+.am-options.is-hidden { display: none; }
+.am-opt-group { margin-bottom: 10px; }
+.am-opt-group:last-child { margin-bottom: 0; }
+.am-opt-group-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-tertiary, #666);
+  margin-bottom: 5px;
+}
+.am-sort-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+.am-sort-pill {
+  padding: 3px 9px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border-color, rgba(255,255,255,.15));
+  color: var(--text-secondary, #aaa); background: transparent;
+  line-height: 1.6; user-select: none;
+}
+.am-sort-pill:hover { color: var(--text-primary, #e0e0e0); background: var(--bg-hover, rgba(255,255,255,.06)); }
+.am-sort-pill.is-active {
+  background: var(--link-color, #4a9eff); border-color: transparent; color: #fff;
+}
+.am-opt-checks { display: flex; flex-direction: column; gap: 5px; }
+.am-opt-check {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11px; color: var(--text-secondary, #aaa);
+  cursor: pointer; user-select: none;
+}
+.am-opt-check input[type="checkbox"] {
+  width: 12px; height: 12px; cursor: pointer; accent-color: var(--link-color, #4a9eff);
+}
+.am-opt-note {
+  font-size: 10px; color: var(--text-tertiary, #555);
+  line-height: 1.55; font-style: italic; margin-top: 2px;
+}
+.am-opt-note code {
+  font-style: normal; font-family: monospace;
+  background: rgba(255,255,255,.06); padding: 0 3px; border-radius: 3px;
+  font-size: 10px;
+}
+`;
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function escHtml(s: string): string {
+  return s.replace(/[&<>'"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!),
+  );
+}
+
+/** Read view-specific options from file frontmatter. */
+function readViewOptions(content: string): {
+  sort: string;
+  showModified: boolean;
+  showImagePreview: boolean;
+  showExtensions: boolean;
+  previewPane: boolean;
+} {
+  const defaults = { sort: "name-asc", showModified: true, showImagePreview: true, showExtensions: true, previewPane: false };
+  if (!content.startsWith("---")) return defaults;
+  const fmEnd = content.indexOf("\n---", 3);
+  if (fmEnd === -1) return defaults;
+  const fm = content.slice(4, fmEnd);
+
+  const sortM        = fm.match(/^sort:\s*(\S+)/m);
+  const modifiedM    = fm.match(/^show-modified:\s*(\S+)/m);
+  const previewM     = fm.match(/^card-preview:\s*(\S+)/m);
+  const extensionsM  = fm.match(/^show-extensions:\s*(\S+)/m);
+  const paneM        = fm.match(/^preview-pane:\s*(\S+)/m);
+
+  return {
+    sort:             sortM       ? sortM[1].trim()                          : "name-asc",
+    showModified:     modifiedM   ? modifiedM[1].trim()   !== "false"        : true,
+    showImagePreview: previewM    ? previewM[1].trim()    !== "none"         : true,
+    showExtensions:   extensionsM ? extensionsM[1].trim() !== "false"        : true,
+    previewPane:      paneM       ? paneM[1].trim()       === "true"         : false,
+  };
+}
+
+/** Remove a single key from YAML frontmatter (no-op if absent). */
+function removeFmKey(content: string, key: string): string {
+  const fmEnd = content.indexOf("\n---");
+  if (!content.startsWith("---\n") || fmEnd === -1) return content;
+  const fmBody = content.slice(4, fmEnd);
+  const cleaned = fmBody.replace(new RegExp(`^${key}:[^\n]*\n?`, "m"), "");
+  return "---\n" + cleaned + content.slice(fmEnd);
+}
+
+/**
+ * Detect the current assignment from file frontmatter.
+ * Handles flat (`layout: view-cards`) and nested (`layout:\n  type: view-cards`) formats.
+ */
+function readCurrentAssignment(content: string): {
+  kind: "view" | "layout" | "none";
+  slug: string | null;
+  kanbanField: string;
+} {
+  if (!content.startsWith("---")) return { kind: "none", slug: null, kanbanField: "" };
+  const fmEnd = content.indexOf("\n---", 3);
+  if (fmEnd === -1) return { kind: "none", slug: null, kanbanField: "" };
+  const fm = content.slice(4, fmEnd);
+
+  // Flat: `layout: <slug>` (single-line value)
+  const flatM = fm.match(/^layout:\s*(\S[^\n]*?)$/m);
+  const flatSlug = flatM ? flatM[1].trim().replace(/^["']|["']$/g, "") : null;
+
+  // Nested: `layout:\n  type: <slug>`
+  const hasLayoutBlock = /^layout:\s*$/m.test(fm);
+  const typeM = hasLayoutBlock ? fm.match(/^\s+type:\s*(\S+)/m) : null;
+  const nestedSlug = !flatSlug && typeM ? typeM[1].trim() : null;
+
+  const slug = flatSlug || nestedSlug || null;
+  if (!slug) return { kind: "none", slug: null, kanbanField: "" };
+
+  const kfM = fm.match(/^kanban-field:\s*(\S+)/m);
+  const kanbanField = kfM ? kfM[1].trim() : "";
+
+  const kind = slug.startsWith("view-") ? "view" : "layout";
+  return { kind, slug, kanbanField };
+}
+
+/** Add or replace a key in YAML frontmatter. */
+function upsertFmKey(content: string, key: string, value: string, prepend = false): string {
+  const fmEnd = content.indexOf("\n---");
+  if (!content.startsWith("---\n") || fmEnd === -1) {
+    return `---\n${key}: ${value}\n---\n\n${content}`;
+  }
+  const fmBody = content.slice(4, fmEnd);
+  const re = new RegExp(`^${key}:[^\n]*`, "m");
+  const newFm = re.test(fmBody)
+    ? fmBody.replace(re, `${key}: ${value}`)
+    : prepend
+      ? `${key}: ${value}\n` + fmBody
+      : fmBody + `\n${key}: ${value}`;
+  return "---\n" + newFm + content.slice(fmEnd);
+}
+
+/** Extract the body text (everything after the closing ---) from a file. */
+function extractBody(content: string): string {
+  if (!content.startsWith("---")) return content.trim();
+  const fmEnd = content.indexOf("\n---", 3);
+  if (fmEnd === -1) return "";
+  return content.slice(fmEnd + 4).replace(/^\n/, "").trimEnd();
+}
+
+/**
+ * Build a complete, commented YAML starter for the given view type.
+ *
+ * The user's chosen option values are written as active keys; options that
+ * match their defaults appear as commented lines so the user can see what's
+ * available without cluttering the frontmatter.
+ *
+ * Uses flat `layout: view-slug` format (the assign-modal standard).
+ * The nested `layout:\n  type:` format used by FOLDER_VIEW_STARTER is only
+ * kept for the legacy "New Folder View…" flow.
+ */
+function buildViewStarter(
+  slug: string,
+  sort: string,
+  showModified: boolean,
+  showImagePreview: boolean,
+  showExtensions: boolean,
+  previewPane: boolean,
+  kanbanField: string,
+): string {
+  // Emit `key: value` when the value is non-default; `# key: <default>` otherwise.
+  const sm   = showModified   ? "# show-modified: false"    : "show-modified: false";
+  const ext  = showExtensions ? "# show-extensions: false"  : "show-extensions: false";
+  const pane = previewPane    ? "preview-pane: true"        : "# preview-pane: false";
+
+  const shared = [
+    "# title:",
+    "# set to override the tab display name",
+    "# exclude:",
+    "#   - draft.md",
+    "# uncomment to hide specific files from the view",
+  ].join("\n");
+
+  switch (slug) {
+    case "view-cards":
+      return [
+        "---",
+        "layout: view-cards",
+        `sort: ${sort}`,
+        "# name-asc, name-desc, modified-asc, modified-desc",
+        "card-width: 160",
+        "# minimum card width in px",
+        "aspect-ratio: 1/1",
+        "# e.g. 16/9, 4/3, original",
+        "fit: cover",
+        "# cover, contain, 80% auto, auto 60%",
+        showImagePreview ? "# card-preview: none" : "card-preview: none",
+        "# full = show image thumbnails,  none = compact name-only grid",
+        sm,
+        ext,
+        pane,
+        "# preview-pane: true shows a rendered preview above the grid",
+        "# folders-title: Folders",
+        "# files-title:",
+        "# set files-title: Notes to show a heading above the Files section",
+        shared,
+        "# fields:",
+        "#   - name",
+        "#   - modified",
+        "#   - tags",
+        "# controls data shown below card names; omit for defaults",
+        "# extra-fields:",
+        "#   - status",
+        "# adds custom frontmatter values shown below card names",
+        "---",
+        "",
+      ].join("\n");
+
+    case "view-table":
+      return [
+        "---",
+        "layout: view-table",
+        `sort: ${sort}`,
+        "# name-asc, name-desc, modified-asc, modified-desc",
+        sm,
+        pane,
+        "# preview-pane: true shows a rendered preview above the table",
+        shared,
+        "# fields:",
+        "#   - name",
+        "#   - modified",
+        "#   - tags",
+        "#   - status",
+        "# explicit column list; omit to show all built-in columns",
+        "# extra-fields:",
+        "#   - status",
+        "#   - priority",
+        "# adds custom frontmatter columns to the table",
+        "---",
+        "",
+      ].join("\n");
+
+    case "view-list":
+      return [
+        "---",
+        "layout: view-list",
+        `sort: ${sort}`,
+        "# name-asc, name-desc, modified-asc, modified-desc",
+        sm,
+        ext,
+        pane,
+        "# preview-pane: true shows a rendered preview above the list",
+        shared,
+        "---",
+        "",
+      ].join("\n");
+
+    case "view-timeline":
+      return [
+        "---",
+        "layout: view-timeline",
+        "# files are grouped by recency — sort is always chronological",
+        sm,
+        pane,
+        "# preview-pane: true shows a rendered preview above the timeline",
+        shared,
+        "---",
+        "",
+      ].join("\n");
+
+    case "view-kanban":
+      return [
+        "---",
+        "layout: view-kanban",
+        `kanban-field: ${kanbanField.trim() || "status"}`,
+        "# the frontmatter field used to group files into columns",
+        "# kanban-order:",
+        "#   - todo",
+        "#   - doing",
+        "#   - done",
+        "# explicit column order; omit to sort columns alphabetically",
+        sm,
+        pane,
+        "# preview-pane: true shows a rendered preview above the board",
+        shared,
+        "# extra-fields:",
+        "#   - priority",
+        "# adds extra frontmatter values shown on each card",
+        "---",
+        "",
+      ].join("\n");
+
+    default:
+      return `---\nlayout: ${slug}\n---\n\n`;
+  }
+}
+
+/** Write a view assignment to the file's frontmatter and open the view. */
+async function applyViewAssignment(
+  filePath: string,
+  slug: string,
+  kanbanField: string,
+  sort: string,
+  showModified: boolean,
+  showImagePreview: boolean,
+  showExtensions: boolean,
+  previewPane: boolean,
+  deps: LayoutDeps,
+): Promise<void> {
+  const liveContent = deps.getActiveFileContent?.();
+  let base: string;
+  if (liveContent != null) {
+    base = liveContent;
+  } else {
+    const r = await readFile(filePath);
+    if (!r.ok) return;
+    base = r.value;
+  }
+
+  // Detect the existing view type so we know whether the slug is changing.
+  const existingSlug = readCurrentAssignment(base).slug;
+  const isNewType = existingSlug !== slug;
+
+  let next: string;
+  if (isNewType) {
+    // View type is changing (or file has no view yet): write a full commented
+    // starter template with the user's chosen options baked in, then re-append
+    // any body text that was below the old frontmatter.
+    const body = extractBody(base);
+    const starter = buildViewStarter(slug, sort, showModified, showImagePreview, showExtensions, previewPane, kanbanField);
+    next = body ? starter + body + "\n" : starter;
+  } else {
+    // Same view type — user is tweaking options only.  Update individual keys
+    // in-place so existing customisations (fields:, exclude:, etc.) are kept.
+    next = stripLayoutBlock(base);
+    next = upsertFmKey(next, "layout", slug, true);
+
+    if (slug === "view-kanban" && kanbanField.trim()) {
+      next = upsertFmKey(next, "kanban-field", kanbanField.trim());
+    }
+
+    // Sort: always write the user's choice (default "name-asc" is explicit).
+    if (slug !== "view-timeline") {
+      next = upsertFmKey(next, "sort", sort);
+    }
+
+    // show-modified: write "false" to override default-true; remove the key
+    // when re-enabled so the frontmatter stays minimal.
+    if (!showModified) {
+      next = upsertFmKey(next, "show-modified", "false");
+    } else {
+      next = removeFmKey(next, "show-modified");
+    }
+
+    // card-preview (cards only): write "none" to hide thumbnails; remove the
+    // key when enabled so other views aren't affected by a stale value.
+    if (slug === "view-cards" && !showImagePreview) {
+      next = upsertFmKey(next, "card-preview", "none");
+    } else {
+      next = removeFmKey(next, "card-preview");
+    }
+
+    // show-extensions (cards/list): write "false" to hide; remove to re-enable.
+    if (!showExtensions) {
+      next = upsertFmKey(next, "show-extensions", "false");
+    } else {
+      next = removeFmKey(next, "show-extensions");
+    }
+
+    // preview-pane: write "true" to enable; remove the key when disabled so
+    // the frontmatter stays minimal (default is false).
+    if (previewPane) {
+      next = upsertFmKey(next, "preview-pane", "true");
+    } else {
+      next = removeFmKey(next, "preview-pane");
+    }
+  }
+
+  // Always write to disk so the vault watcher fires and the file tree badge
+  // updates without requiring a restart.
+  const writeResult = await writeFile(filePath, next);
+  if (!writeResult.ok) return;
+
+  // Also sync the in-memory editor state if the file is currently open.
+  deps.onFileUpdated?.(filePath, next);
+
+  // Force an immediate vault re-index so the badge appears right away rather
+  // than waiting for the file-watcher debounce (~300 ms).
+  void (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+
+  const sep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const parentDir = sep > 0 ? filePath.slice(0, sep) : "";
+  if (parentDir) {
+    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, filePath);
+  }
+}
+
+// ── Modal ──────────────────────────────────────────────────────────────────────
+
+function injectStyles(): void {
+  if (document.getElementById(STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = STYLE_ID;
+  s.textContent = AM_CSS;
+  document.head.appendChild(s);
+}
+
+function closeModal(): void {
+  document.getElementById(OVERLAY_ID)?.remove();
+}
+
+/**
+ * Open the unified View or Layout assignment modal for a .md file.
+ *
+ * Reads the file's current `layout:` frontmatter value, shows a two-panel
+ * modal (radio list + preview), and writes the chosen assignment on confirm.
+ * Views and layouts are shown in separate sections; selecting one clears the
+ * other. For view-*.md and _folder.md files the Layouts section is grayed.
+ */
+export async function openAssignModal(
+  filePath: string,
+  deps: LayoutDeps,
+): Promise<void> {
+  if (document.getElementById(OVERLAY_ID)) return;
+  injectStyles();
+
+  // Fetch file content and layout list concurrently
+  const [fileResult, allLayouts] = await Promise.all([
+    readFile(filePath),
+    discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot()),
+  ]);
+  const fileContent = fileResult.ok ? fileResult.value : "";
+  const current = readCurrentAssignment(fileContent);
+
+  const basename = filePath.split("/").pop() ?? filePath.split("\\").pop() ?? "";
+  // For _folder.md and view-*.md, the Layouts section is read-only/grayed
+  const isFolderScopedFile =
+    basename === "_folder.md" ||
+    (basename.startsWith("view-") && basename.endsWith(".md"));
+
+  let selectedSlug: string | null = current.slug;
+  let kanbanFieldValue: string = current.kanbanField;
+
+  // View-specific display options (read from existing frontmatter, or defaults)
+  const initialOpts = readViewOptions(fileContent);
+  let optSort:             string  = initialOpts.sort;
+  let optShowModified:     boolean = initialOpts.showModified;
+  let optShowImagePreview: boolean = initialOpts.showImagePreview;
+  let optShowExtensions:   boolean = initialOpts.showExtensions;
+  // Default preview pane to ON for cards view when the file has no explicit
+  // preview-pane: key. Covers (a) opening an existing cards view file that
+  // predates this option, and (b) assigning cards for the first time.
+  const hasExplicitPreviewPane = fileContent.includes("preview-pane:");
+  const previewPaneDefault = !hasExplicitPreviewPane && current.slug === "view-cards";
+  let optPreviewPane: boolean = hasExplicitPreviewPane ? initialOpts.previewPane : previewPaneDefault;
+
+  // ── Overlay & panel ────────────────────────────────────────────────────────
+
+  const overlay = document.createElement("div");
+  overlay.id = OVERLAY_ID;
+  overlay.className = "am-overlay";
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "am-backdrop";
+  backdrop.addEventListener("click", closeModal);
+  overlay.appendChild(backdrop);
+
+  const panel = document.createElement("div");
+  panel.className = "am-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  panel.setAttribute("aria-label", "View or Layout");
+  overlay.appendChild(panel);
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+
+  const header = document.createElement("div");
+  header.className = "am-header";
+
+  const headerInfo = document.createElement("div");
+  headerInfo.className = "am-header-info";
+  const titleEl = document.createElement("div");
+  titleEl.className = "am-title";
+  titleEl.textContent = basename;
+  titleEl.title = filePath;
+  headerInfo.appendChild(titleEl);
+  const currentEl = document.createElement("div");
+  currentEl.className = "am-current";
+  if (current.slug) {
+    currentEl.innerHTML = `Currently: <span class="am-current-value">${escHtml(current.slug)}</span>`;
+  } else {
+    currentEl.textContent = "Currently: No view or layout assigned";
+  }
+  headerInfo.appendChild(currentEl);
+  header.appendChild(headerInfo);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "am-close";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", closeModal);
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  // ── Body ───────────────────────────────────────────────────────────────────
+
+  const body = document.createElement("div");
+  body.className = "am-body";
+  panel.appendChild(body);
+
+  // Preview panel (right)
+  const previewArea = document.createElement("div");
+  previewArea.className = "am-preview";
+  const previewSvgEl = document.createElement("div");
+  previewSvgEl.className = "am-preview-svg";
+  const previewNameEl = document.createElement("div");
+  previewNameEl.className = "am-preview-name";
+  const previewDescEl = document.createElement("div");
+  previewDescEl.className = "am-preview-desc";
+  const optionsArea = document.createElement("div");
+  optionsArea.className = "am-options is-hidden";
+  previewArea.appendChild(previewSvgEl);
+  previewArea.appendChild(previewNameEl);
+  previewArea.appendChild(previewDescEl);
+  previewArea.appendChild(optionsArea);
+
+  // List panel (left)
+  const listEl = document.createElement("div");
+  listEl.className = "am-list";
+  body.appendChild(listEl);
+  body.appendChild(previewArea);
+
+  // Item registry for selection management
+  const allItems: Array<{ el: HTMLElement; slug: string | null }> = [];
+
+  let kanbanRowEl: HTMLElement | null = null;
+
+  function updatePreview(slug: string | null): void {
+    renderOptionsArea(slug);
+    if (!slug) {
+      previewSvgEl.innerHTML = "";
+      previewNameEl.textContent = "";
+      previewDescEl.innerHTML = `<span class="am-preview-placeholder">Select a view or layout to preview</span>`;
+      return;
+    }
+    const vt = VIEW_TYPES.find((v) => v.slug === slug);
+    if (vt) {
+      previewSvgEl.innerHTML = VIEW_PREVIEW_SVGS[slug] ?? "";
+      previewNameEl.textContent = vt.name;
+      previewDescEl.textContent = vt.description;
+      return;
+    }
+    const lt = allLayouts.find(
+      (l) => l.filePath.split("/").pop()!.replace(".layout.md", "") === slug,
+    );
+    if (lt) {
+      const svgKey = lt.filePath.split("/").pop()!;
+      const svg = LAYOUT_PREVIEW_SVGS[svgKey] ??
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><text x="200" y="138" text-anchor="middle" fill="#555" font-size="13" font-family="sans-serif">${escHtml(lt.name)}</text></svg>`;
+      previewSvgEl.innerHTML = svg;
+      previewNameEl.textContent = lt.name;
+      previewDescEl.textContent = lt.description;
+      return;
+    }
+    // "None" slug (null)
+    previewSvgEl.innerHTML = "";
+    previewNameEl.textContent = "Remove assignment";
+    previewDescEl.textContent = "Clear the layout or view from this file's frontmatter.";
+  }
+
+  function renderOptionsArea(slug: string | null): void {
+    optionsArea.innerHTML = "";
+    if (!slug?.startsWith("view-")) {
+      optionsArea.classList.add("is-hidden");
+      return;
+    }
+    optionsArea.classList.remove("is-hidden");
+
+    // ── Sort order (not shown for timeline — always chronological) ──────────
+    if (slug !== "view-timeline") {
+      const sortGroup = document.createElement("div");
+      sortGroup.className = "am-opt-group";
+      const sortLabel = document.createElement("div");
+      sortLabel.className = "am-opt-group-label";
+      sortLabel.textContent = "Sort";
+      sortGroup.appendChild(sortLabel);
+      const pillRow = document.createElement("div");
+      pillRow.className = "am-sort-pills";
+      const SORT_OPTS: Array<{ value: string; label: string }> = [
+        { value: "name-asc",      label: "Name ↑" },
+        { value: "name-desc",     label: "Name ↓" },
+        { value: "modified-asc",  label: "Date ↑" },
+        { value: "modified-desc", label: "Date ↓" },
+      ];
+      for (const opt of SORT_OPTS) {
+        const pill = document.createElement("span");
+        pill.className = "am-sort-pill" + (optSort === opt.value ? " is-active" : "");
+        pill.textContent = opt.label;
+        pill.addEventListener("click", () => {
+          optSort = opt.value;
+          pillRow.querySelectorAll(".am-sort-pill").forEach((p) =>
+            p.classList.toggle("is-active", (p as HTMLElement).textContent === opt.label),
+          );
+        });
+        pillRow.appendChild(pill);
+      }
+      sortGroup.appendChild(pillRow);
+      optionsArea.appendChild(sortGroup);
+    }
+
+    // ── Checkboxes ──────────────────────────────────────────────────────────
+    const checkGroup = document.createElement("div");
+    checkGroup.className = "am-opt-group";
+    const checkLabel = document.createElement("div");
+    checkLabel.className = "am-opt-group-label";
+    checkLabel.textContent = "Show";
+    checkGroup.appendChild(checkLabel);
+    const checks = document.createElement("div");
+    checks.className = "am-opt-checks";
+    checkGroup.appendChild(checks);
+    optionsArea.appendChild(checkGroup);
+
+    function addCheck(label: string, checked: boolean, onChange: (v: boolean) => void): void {
+      const row = document.createElement("label");
+      row.className = "am-opt-check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.addEventListener("change", () => onChange(cb.checked));
+      cb.addEventListener("click", (e) => e.stopPropagation());
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(label));
+      checks.appendChild(row);
+    }
+
+    // "Date modified" — all views
+    addCheck("Date modified", optShowModified, (v) => { optShowModified = v; });
+
+    // "Image preview" — cards only
+    if (slug === "view-cards") {
+      addCheck("Image preview", optShowImagePreview, (v) => { optShowImagePreview = v; });
+    }
+
+    // "File extensions" — cards and list
+    if (slug === "view-cards" || slug === "view-list") {
+      addCheck("File extensions", optShowExtensions, (v) => { optShowExtensions = v; });
+    }
+
+    // "Preview pane" — all views
+    addCheck("Preview pane", optPreviewPane, (v) => { optPreviewPane = v; });
+
+    // ── Extra-fields note (table and kanban) ────────────────────────────────
+    // extra-fields lets you add frontmatter columns to the view. Because it's
+    // a YAML sequence (not a simple key:value), it's not editable here — users
+    // add it directly to the frontmatter. The note below explains the syntax.
+    if (slug === "view-table" || slug === "view-kanban") {
+      const noteGroup = document.createElement("div");
+      noteGroup.className = "am-opt-group";
+      const noteLabel = document.createElement("div");
+      noteLabel.className = "am-opt-group-label";
+      noteLabel.textContent = "Custom columns";
+      noteGroup.appendChild(noteLabel);
+      const note = document.createElement("div");
+      note.className = "am-opt-note";
+      note.innerHTML =
+        slug === "view-table"
+          ? `Add <code>extra-fields: [status, priority]</code> to the frontmatter to include custom metadata columns in the table.`
+          : `Add <code>extra-fields: [status]</code> to the frontmatter to show extra metadata on each kanban card.`;
+      noteGroup.appendChild(note);
+      optionsArea.appendChild(noteGroup);
+    }
+  }
+
+  function selectSlug(slug: string | null): void {
+    selectedSlug = slug;
+    for (const { el, slug: s } of allItems) {
+      el.classList.toggle("is-selected", s === slug);
+    }
+    // When the user picks view-cards and has never explicitly set the preview
+    // pane option (no key in the file), default to ON.
+    if (slug === "view-cards" && !hasExplicitPreviewPane) {
+      optPreviewPane = true;
+    }
+    updatePreview(slug);
+    if (kanbanRowEl) {
+      kanbanRowEl.classList.toggle("is-visible", slug === "view-kanban");
+    }
+  }
+
+  function addItem(label: string, slug: string | null, disabled = false): HTMLElement {
+    const item = document.createElement("div");
+    item.className = "am-item";
+    if (disabled) item.style.cssText = "opacity:.42;pointer-events:none;";
+    if (slug === selectedSlug) item.classList.add("is-selected");
+    const radio = document.createElement("span");
+    radio.className = "am-radio";
+    item.appendChild(radio);
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    item.appendChild(labelEl);
+    if (!disabled) item.addEventListener("click", () => selectSlug(slug));
+    listEl.appendChild(item);
+    allItems.push({ el: item, slug });
+    return item;
+  }
+
+  // ── VIEWS section ──────────────────────────────────────────────────────────
+
+  const viewSection = document.createElement("div");
+  viewSection.className = "am-section";
+  const viewLabel = document.createElement("div");
+  viewLabel.className = "am-section-label";
+  viewLabel.textContent = "Views";
+  viewSection.appendChild(viewLabel);
+  const viewDesc = document.createElement("div");
+  viewDesc.className = "am-section-desc";
+  viewDesc.textContent = "Renders this directory's files as a collection";
+  viewSection.appendChild(viewDesc);
+  listEl.appendChild(viewSection);
+
+  for (const vt of VIEW_TYPES) {
+    addItem(vt.name, vt.slug);
+    if (vt.requiresField) {
+      kanbanRowEl = document.createElement("div");
+      kanbanRowEl.className = "am-kanban-row";
+      if (selectedSlug === "view-kanban") kanbanRowEl.classList.add("is-visible");
+      const kfl = document.createElement("label");
+      kfl.className = "am-kanban-label";
+      kfl.textContent = "kanban-field:";
+      kanbanRowEl.appendChild(kfl);
+      const kfi = document.createElement("input");
+      kfi.type = "text";
+      kfi.className = "am-kanban-input";
+      kfi.placeholder = "e.g. status";
+      kfi.value = kanbanFieldValue;
+      kfi.addEventListener("input", () => { kanbanFieldValue = kfi.value; });
+      kfi.addEventListener("click", (e) => e.stopPropagation());
+      kanbanRowEl.appendChild(kfi);
+      listEl.appendChild(kanbanRowEl);
+    }
+  }
+
+  // ── LAYOUTS section ─────────────────────────────────────────────────────────
+
+  const div1 = document.createElement("div");
+  div1.className = "am-divider";
+  listEl.appendChild(div1);
+
+  const layoutSection = document.createElement("div");
+  layoutSection.className = "am-section";
+  if (isFolderScopedFile) layoutSection.classList.add("am-section-disabled");
+  const layoutLabel = document.createElement("div");
+  layoutLabel.className = "am-section-label";
+  layoutLabel.textContent = "Layouts";
+  layoutSection.appendChild(layoutLabel);
+  const layoutDesc = document.createElement("div");
+  layoutDesc.className = "am-section-desc";
+  layoutDesc.textContent = "Styles this file's own content";
+  layoutSection.appendChild(layoutDesc);
+  if (isFolderScopedFile) {
+    const note = document.createElement("div");
+    note.className = "am-disabled-note";
+    note.textContent = "Not applicable for view definition files";
+    layoutSection.appendChild(note);
+  }
+  listEl.appendChild(layoutSection);
+
+  if (allLayouts.length === 0 && !isFolderScopedFile) {
+    const emptyNote = document.createElement("div");
+    emptyNote.className = "am-disabled-note";
+    emptyNote.textContent = "No layouts found in App Support/layouts/";
+    listEl.appendChild(emptyNote);
+  } else {
+    for (const lt of allLayouts) {
+      const stem = lt.filePath.split("/").pop()!.replace(".layout.md", "");
+      addItem(lt.name, stem, isFolderScopedFile);
+    }
+  }
+
+  // ── NONE section ───────────────────────────────────────────────────────────
+
+  const div2 = document.createElement("div");
+  div2.className = "am-divider";
+  listEl.appendChild(div2);
+
+  addItem("None (remove)", null);
+
+  // ── Footer ─────────────────────────────────────────────────────────────────
+
+  const footer = document.createElement("div");
+  footer.className = "am-footer";
+  panel.appendChild(footer);
+
+  const footerLeft = document.createElement("div");
+  footerLeft.className = "am-footer-left";
+  if (current.kind === "view" && current.slug) {
+    const openViewBtn = document.createElement("button");
+    openViewBtn.className = "am-btn";
+    openViewBtn.textContent = "Open View";
+    openViewBtn.addEventListener("click", () => {
+      closeModal();
+      const sep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+      const parentDir = sep > 0 ? filePath.slice(0, sep) : "";
+      if (parentDir) (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, filePath);
+    });
+    footerLeft.appendChild(openViewBtn);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "am-btn";
+    editBtn.textContent = "Edit Source";
+    editBtn.addEventListener("click", () => {
+      closeModal();
+      (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(filePath);
+      (window as any).__MARKABLE_TAB_MANAGER__?.exitLayoutView?.();
+    });
+    footerLeft.appendChild(editBtn);
+  }
+  footer.appendChild(footerLeft);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "am-btn";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", closeModal);
+  footer.appendChild(cancelBtn);
+
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "am-btn am-btn-primary";
+  applyBtn.textContent = "Apply";
+  applyBtn.addEventListener("click", async () => {
+    closeModal();
+    if (selectedSlug === null) {
+      await removeLayoutFromFile(filePath, deps);
+    } else if (selectedSlug.startsWith("view-")) {
+      await applyViewAssignment(
+        filePath, selectedSlug, kanbanFieldValue,
+        optSort, optShowModified, optShowImagePreview, optShowExtensions, optPreviewPane,
+        deps,
+      );
+    } else {
+      await applyLayoutToFile(filePath, selectedSlug, deps);
+    }
+  });
+  footer.appendChild(applyBtn);
+
+  // Initial state
+  updatePreview(selectedSlug);
+
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") closeModal();
+  });
+}

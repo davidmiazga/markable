@@ -120,8 +120,10 @@ import {
   ensureStarterLayouts,
   injectLayoutsCSS,
   injectSidebarCSS,
+  injectGridCSS,
 } from "./lib/layout-manager";
 import type { LayoutDeps } from "./lib/layout-manager";
+import { openAssignModal } from "./lib/assign-modal";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -354,13 +356,38 @@ async function openFile(): Promise<void> {
 }
 
 /**
+ * Return true when the file content declares a `view-*` layout in its YAML
+ * front-matter. Handles both flat (`layout: view-foo`) and nested (`type: view-foo`
+ * under a `layout:` block) forms. Used to decide whether to auto-enter view mode.
+ */
+function hasViewLayout(content: string): boolean {
+  if (!content.trimStart().startsWith("---")) return false;
+  const closeIdx = content.indexOf("\n---", 3);
+  if (closeIdx === -1) return false;
+  const block = content.slice(3, closeIdx);
+  return /^layout:\s*view-\S/m.test(block) || /\btype:\s*view-\S/m.test(block);
+}
+
+/**
  * Open a file in a new tab and auto-apply its `layout:` YAML field if present.
  *
  * Replaces direct tabManager.openFileInTab() calls so the layout field is
  * honoured whenever a file is opened — not just when the user presses Cmd-E.
+ * When the file declares a `view-*` layout, enters folder view mode automatically.
  */
 async function openAndMaybeLayout(path: string): Promise<boolean> {
-  return tabManager.openFileInTab(path);
+  const opened = await tabManager.openFileInTab(path);
+  if (opened && path.endsWith(".md") && editor) {
+    const content = editor.state.doc.toString();
+    if (hasViewLayout(content)) {
+      const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+      const parentDir = lastSep > 0 ? path.slice(0, lastSep) : "";
+      if (parentDir) {
+        (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, path);
+      }
+    }
+  }
+  return opened;
 }
 
 /**
@@ -700,10 +727,14 @@ function handleAction(action: string): void {
           // _folder.md: Cmd-E always means "show folder view" — never regular preview.
           // The folder view is the layout view for this file; regular Typora preview
           // is not a valid state for _folder.md.
-          const sep = filePath.includes("/") ? "/" : "\\";
           const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : sep;
+          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : "/";
           (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir);
+        } else if (filePath && editor && hasViewLayout(editor.state.doc.toString())) {
+          // Any file with a view-* layout: Cmd-E enters view mode.
+          const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : "/";
+          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, filePath);
         } else if (filePath) {
           // Normal file: check for a layout field; if found enter layout view, else toggle preview.
           void (async () => {
@@ -1194,6 +1225,7 @@ async function initApp() {
     };
     injectLayoutsCSS();
     injectSidebarCSS();
+    injectGridCSS();
     editor.dispatch({
       effects: StateEffect.appendConfig.of(buildAutoRenderExtension(_layoutDeps)),
     });
@@ -1211,6 +1243,8 @@ async function initApp() {
     void ensureStarterLayouts(appDataDir);
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__"] =
       (path: string) => { if (_layoutDeps) void openLayoutPicker(_layoutDeps, path); };
+    (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_ASSIGN_MODAL__"] =
+      (path: string) => { if (_layoutDeps) void openAssignModal(path, _layoutDeps); };
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_FILE_IN_TAB__"] =
       (path: string) => void openAndMaybeLayout(path);
   }
