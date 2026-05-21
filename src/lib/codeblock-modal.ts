@@ -21,6 +21,7 @@ import {
   mountSelectForm,
   type SelectBuilderInitial,
   type SelectFormState,
+  type ContentWidth,
 } from "./select-builder";
 import { buildGridStarterFence } from "./layout-manager";
 import type { RuleRowContext } from "./rule-row";
@@ -136,8 +137,8 @@ function injectStyles(): void {
 
 export type BlockKind = "sidebar" | "grid" | "select";
 
-export interface SidebarFormState { side: "right" | "left"; body: string; }
-export interface GridFormState { cols: number; rows: number; cellStyle: "grid" | "grid-card"; }
+export interface SidebarFormState { side: "right" | "left"; body: string; contentWidth: ContentWidth; }
+export interface GridFormState { cols: number; rows: number; cellStyle: "grid" | "grid-card"; contentWidth: ContentWidth; }
 
 export interface CodeBlockModalOptions {
   /** Pre-fill values when editing an existing block. */
@@ -155,14 +156,21 @@ export interface CodeBlockModalOptions {
 
 // ── Fence builders ───────────────────────────────────────────────────────────
 
+function widthSuffix(w: ContentWidth): string {
+  return w === "wide" ? " wide" : w === "full" ? " full" : "";
+}
+
 export function buildSidebarFence(s: SidebarFormState): string {
   const lang = s.side === "left" ? "sidebar-left" : "sidebar";
   const body = s.body.trim() || "Side note.";
-  return ["```" + lang, body, "```"].join("\n");
+  return ["```" + lang + widthSuffix(s.contentWidth), body, "```"].join("\n");
 }
 
 export function buildGridFence(g: GridFormState): string {
-  return buildGridStarterFence({ cols: g.cols, rows: g.rows, cellStyle: g.cellStyle });
+  const fence = buildGridStarterFence({ cols: g.cols, rows: g.rows, cellStyle: g.cellStyle });
+  if (g.contentWidth === "normal") return fence;
+  // The starter fence begins with "```grid" or "```grid-card"; append the width modifier.
+  return fence.replace(/^```(grid|grid-card)(\b|$)/, "```$1" + widthSuffix(g.contentWidth));
 }
 
 // ── Modal opener ─────────────────────────────────────────────────────────────
@@ -185,11 +193,13 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   const sidebarState: SidebarFormState = {
     side: opts.initial?.sidebar?.side ?? "right",
     body: opts.initial?.sidebar?.body ?? "",
+    contentWidth: opts.initial?.sidebar?.contentWidth ?? "normal",
   };
   const gridState: GridFormState = {
     cols:      opts.initial?.grid?.cols      ?? 3,
     rows:      opts.initial?.grid?.rows      ?? 3,
     cellStyle: opts.initial?.grid?.cellStyle ?? "grid",
+    contentWidth: opts.initial?.grid?.contentWidth ?? "normal",
   };
   // Lazy mount the select form; getState set after first render.
   let selectGetState: (() => SelectFormState) | null = null;
@@ -259,6 +269,37 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
     });
   }
 
+  function appendWidthRow(getCurrent: () => ContentWidth, onChange: (v: ContentWidth) => void): void {
+    const row = document.createElement("div");
+    row.className = "cbm-form-row";
+    const label = document.createElement("label");
+    label.textContent = "Content width";
+    row.appendChild(label);
+    const pillRow = document.createElement("div");
+    pillRow.className = "cbm-pill-row";
+    const opts: Array<{ value: ContentWidth; label: string }> = [
+      { value: "normal", label: "Normal" },
+      { value: "wide",   label: "Wide" },
+      { value: "full",   label: "Full" },
+    ];
+    const current = getCurrent();
+    for (const o of opts) {
+      const p = document.createElement("button");
+      p.type = "button";
+      p.className = "cbm-pill" + (o.value === current ? " is-active" : "");
+      p.textContent = o.label;
+      p.addEventListener("click", () => {
+        onChange(o.value);
+        pillRow.querySelectorAll(".cbm-pill").forEach((x) =>
+          x.classList.toggle("is-active", (x as HTMLElement).textContent === o.label),
+        );
+      });
+      pillRow.appendChild(p);
+    }
+    row.appendChild(pillRow);
+    formHost.appendChild(row);
+  }
+
   function renderSidebarForm(): void {
     const sideRow = document.createElement("div");
     sideRow.className = "cbm-form-row";
@@ -300,6 +341,8 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
     bodyArea.addEventListener("input", () => { sidebarState.body = bodyArea.value; });
     bodyRow.appendChild(bodyArea);
     formHost.appendChild(bodyRow);
+
+    appendWidthRow(() => sidebarState.contentWidth, (v) => { sidebarState.contentWidth = v; });
   }
 
   function renderGridForm(): void {
@@ -360,6 +403,8 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
     }
     styleRow.appendChild(stylePills);
     formHost.appendChild(styleRow);
+
+    appendWidthRow(() => gridState.contentWidth, (v) => { gridState.contentWidth = v; });
   }
 
   function renderSelectForm(): void {

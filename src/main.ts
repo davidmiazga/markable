@@ -133,6 +133,7 @@ import {
 } from "./editor/select-widget";
 import { openCodeBlockModal, type BlockKind } from "./lib/codeblock-modal";
 import type { RuleRowContext } from "./lib/rule-row";
+import { readContentWidthFromFrontmatter, applyPageContentWidth } from "./lib/page-width";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -424,6 +425,10 @@ async function openAndMaybeLayout(path: string): Promise<boolean> {
   const opened = await tabManager.openFileInTab(path);
   if (opened && path.endsWith(".md") && editor) {
     const content = editor.state.doc.toString();
+    // Page-level content-width: apply this file's frontmatter override (or
+    // clear it if absent). The updateListener keeps it in sync on edits;
+    // this initial apply covers the tab-open + tab-switch cases.
+    applyPageContentWidth(readContentWidthFromFrontmatter(content));
     if (hasViewLayout(content)) {
       const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
       const parentDir = lastSep > 0 ? path.slice(0, lastSep) : "";
@@ -952,7 +957,10 @@ function handleAction(action: string): void {
           "grid-card": "grid",
           "select": "select",
         };
-        const kind = langToKind[detected.lang];
+        // detected.lang may include a width modifier (e.g. "grid wide");
+        // strip it to look up the block kind.
+        const langFirst = detected.lang.split(/\s+/)[0];
+        const kind = langToKind[langFirst];
         openCodeBlockModal({
           ruleRowContext,
           initial: {
@@ -1411,6 +1419,12 @@ async function initApp() {
           // Single call — TabManager handles the title bar update and renderer
           // notification when the tab transitions from clean to dirty.
           tabManager.markActiveTabDirty();
+          // Re-read page-level content-width from the (possibly edited)
+          // frontmatter. Cheap regex on the head of the doc; runs on every
+          // doc change so the override updates live as the user edits the
+          // frontmatter block.
+          const head = update.state.doc.sliceString(0, Math.min(2000, update.state.doc.length));
+          applyPageContentWidth(readContentWidthFromFrontmatter(head));
         }
       })
     ),

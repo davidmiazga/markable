@@ -702,6 +702,60 @@ body.tab-mode-vertical #titlebar {
 }
 
 /* ============================================================
+   Theme heading defaults (real <h1>..<h6> elements)
+   ============================================================
+   Any rendered markdown that produces real heading elements
+   (sidebar widget, grid cells, preview pane, hover popovers, etc.)
+   picks up the theme's heading tokens here. Chrome titles override
+   via higher-specificity class selectors (e.g. .settings-title). */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--heading-color);
+  line-height: 1.3;
+}
+h1 { font-size: var(--heading-h1-size); font-weight: var(--heading-h1-weight); }
+h2 { font-size: var(--heading-h2-size); font-weight: var(--heading-h2-weight); }
+h3 { font-size: var(--heading-h3-size); font-weight: var(--heading-h3-weight); }
+h4 { font-size: var(--heading-h4-size); font-weight: var(--heading-h4-weight); }
+h5 { font-size: var(--heading-h5-size); font-weight: var(--heading-h5-weight); }
+h6 { font-size: var(--heading-h6-size); font-weight: var(--heading-h6-weight); }
+
+/* ============================================================
+   Block-level content-width overrides
+   ============================================================
+   Applied to the OUTER wrapper of a custom codeblock widget
+   (.cm-select-widget / .cm-sidebar-preview / .cm-grid-wrapper).
+   Block-level overrides are SUPPRESSED when the page itself has a
+   content-width override active (markable-page-content-width on the
+   document root) — page YAML wins per locked design. */
+:root {
+  --block-wide-width: 1400px;
+}
+.cm-block-width-wide {
+  max-width: var(--block-wide-width);
+  margin-left: auto;
+  margin-right: auto;
+}
+.cm-block-width-full {
+  width: 100vw;
+  max-width: none;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+}
+html.markable-page-content-width .cm-block-width-wide,
+html.markable-page-content-width .cm-block-width-full {
+  /* Suppress block overrides when a page-level width is in effect.
+     The block falls back to the page's max-width. */
+  max-width: var(--settings-content-max-width);
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  position: static;
+  left: auto;
+  transform: none;
+}
+
+/* ============================================================
    Global form controls -- canonical checkbox
    ============================================================
    Single source of truth for checkbox styling across the app. Custom

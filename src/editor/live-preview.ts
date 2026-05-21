@@ -751,12 +751,25 @@ class FencedCodeWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
+export type BlockWidth = "normal" | "wide" | "full";
+
+function widthClassFor(w: BlockWidth): string {
+  return w === "wide" ? " cm-block-width-wide" : w === "full" ? " cm-block-width-full" : "";
+}
+
 class SidebarWidget extends WidgetType {
-  constructor(readonly src: string, readonly side: "right" | "left" = "right") { super(); }
-  eq(other: SidebarWidget): boolean { return this.src === other.src && this.side === other.side; }
+  constructor(
+    readonly src: string,
+    readonly side: "right" | "left" = "right",
+    readonly width: BlockWidth = "normal",
+  ) { super(); }
+  eq(other: SidebarWidget): boolean {
+    return this.src === other.src && this.side === other.side && this.width === other.width;
+  }
   toDOM(): HTMLElement {
     const wrap = document.createElement("aside");
-    wrap.className = this.side === "left" ? "cm-sidebar-left" : "cm-sidebar-preview";
+    const base = this.side === "left" ? "cm-sidebar-left" : "cm-sidebar-preview";
+    wrap.className = base + widthClassFor(this.width);
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
     /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -767,8 +780,10 @@ class SidebarWidget extends WidgetType {
 }
 
 class GridWidget extends WidgetType {
-  constructor(private raw: string, private card = false) { super(); }
-  eq(other: GridWidget): boolean { return this.raw === other.raw && this.card === other.card; }
+  constructor(private raw: string, private card = false, private width: BlockWidth = "normal") { super(); }
+  eq(other: GridWidget): boolean {
+    return this.raw === other.raw && this.card === other.card && this.width === other.width;
+  }
 
   toDOM(): HTMLElement {
     const lines = this.raw.split("\n");
@@ -804,7 +819,7 @@ class GridWidget extends WidgetType {
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const wrapper = document.createElement("div");
-    wrapper.className = "cm-grid-wrapper";
+    wrapper.className = "cm-grid-wrapper" + widthClassFor(this.width);
 
     const grid = document.createElement("div");
     grid.className = "cm-grid";
@@ -865,39 +880,49 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
 
       const code = codeFrom >= 0 ? state.doc.sliceString(codeFrom, codeTo) : "";
 
-      if (lang.toLowerCase() === "sidebar") {
+      // Split the info string on whitespace: first token is the lang name,
+      // optional second token is a content-width modifier (wide / full).
+      const langLower = lang.toLowerCase();
+      const [langName, ...langRest] = langLower.split(/\s+/);
+      const modifier = langRest[0] ?? "";
+      const blockWidth: BlockWidth =
+        modifier === "wide" ? "wide" : modifier === "full" ? "full" : "normal";
+
+      if (langName === "sidebar") {
         decorations.push(
-          Decoration.replace({ widget: new SidebarWidget(code.trim(), "right"), block: true })
+          Decoration.replace({ widget: new SidebarWidget(code.trim(), "right", blockWidth), block: true })
             .range(node.from, node.to)
         );
         return false;
       }
 
-      if (lang.toLowerCase() === "sidebar-left") {
+      if (langName === "sidebar-left") {
         decorations.push(
-          Decoration.replace({ widget: new SidebarWidget(code.trim(), "left"), block: true })
+          Decoration.replace({ widget: new SidebarWidget(code.trim(), "left", blockWidth), block: true })
             .range(node.from, node.to)
         );
         return false;
       }
 
-      if (lang.toLowerCase() === "grid") {
+      if (langName === "grid") {
         decorations.push(
-          Decoration.replace({ widget: new GridWidget(code, false), block: true })
+          Decoration.replace({ widget: new GridWidget(code, false, blockWidth), block: true })
             .range(node.from, node.to)
         );
         return false;
       }
 
-      if (lang.toLowerCase() === "grid-card") {
+      if (langName === "grid-card") {
         decorations.push(
-          Decoration.replace({ widget: new GridWidget(code, true), block: true })
+          Decoration.replace({ widget: new GridWidget(code, true, blockWidth), block: true })
             .range(node.from, node.to)
         );
         return false;
       }
 
-      if (lang.toLowerCase() === "select") {
+      // Select's content-width lives inside the fence body (YAML key), so the
+      // dispatch passes the raw body unchanged — the widget parses it itself.
+      if (langName === "select") {
         decorations.push(
           Decoration.replace({ widget: new SelectWidget(code), block: true })
             .range(node.from, node.to)

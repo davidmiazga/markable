@@ -136,6 +136,9 @@ function injectStyles(): void {
 
 export type DisplayKind = "cards" | "table" | "list" | "timeline" | "kanban";
 
+/** Per-block content-width override. Page YAML wins via CSS cascade. */
+export type ContentWidth = "normal" | "wide" | "full";
+
 export interface SelectBuilderInitial {
   rules?: SmartFolderRule[];
   path?: string;
@@ -145,6 +148,7 @@ export interface SelectBuilderInitial {
   showExtensions?: boolean;
   previewPane?: boolean;
   kanbanField?: string;
+  contentWidth?: ContentWidth;
 }
 
 export interface SelectBuilderOptions {
@@ -194,6 +198,7 @@ export function buildSelectFenceFromState(state: {
   showExtensions: boolean;
   previewPane: boolean;
   kanbanField: string;
+  contentWidth: ContentWidth;
 }): string {
   const lines: string[] = ["```select"];
   if (state.path && state.path.trim()) lines.push(`path: ${state.path.trim()}`);
@@ -210,6 +215,9 @@ export function buildSelectFenceFromState(state: {
   if (state.previewPane) lines.push("preview-pane: true");
   if (state.display === "kanban" && state.kanbanField.trim()) {
     lines.push(`kanban-field: ${state.kanbanField.trim()}`);
+  }
+  if (state.contentWidth && state.contentWidth !== "normal") {
+    lines.push(`content-width: ${state.contentWidth}`);
   }
   lines.push("```");
   return lines.join("\n");
@@ -229,6 +237,7 @@ export interface SelectFormState {
   showExtensions: boolean;
   previewPane: boolean;
   kanbanField: string;
+  contentWidth: ContentWidth;
 }
 
 /**
@@ -264,6 +273,7 @@ export function mountSelectForm(
     showExtensions: initial.showExtensions ?? true,
     previewPane:    initial.previewPane ?? false,
     kanbanField:    initial.kanbanField ?? "",
+    contentWidth:   initial.contentWidth ?? "normal",
   };
 
   // ── Path section ───────────────────────────────────────────────────────────
@@ -407,6 +417,31 @@ export function mountSelectForm(
   }
   renderDisplayOptions();
   container.appendChild(displaySec);
+
+  // ── Content-width section ─────────────────────────────────────────────────
+  const widthSec = section("Content width");
+  const widthPills = document.createElement("div");
+  widthPills.className = "sb-display-pills";
+  widthSec.appendChild(widthPills);
+  const WIDTH_OPTS: Array<{ value: ContentWidth; label: string }> = [
+    { value: "normal", label: "Normal" },
+    { value: "wide",   label: "Wide" },
+    { value: "full",   label: "Full" },
+  ];
+  for (const w of WIDTH_OPTS) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "sb-display-pill" + (w.value === state.contentWidth ? " is-active" : "");
+    pill.textContent = w.label;
+    pill.addEventListener("click", () => {
+      state.contentWidth = w.value;
+      widthPills.querySelectorAll(".sb-display-pill").forEach((p) =>
+        p.classList.toggle("is-active", (p as HTMLElement).textContent === w.label),
+      );
+    });
+    widthPills.appendChild(pill);
+  }
+  container.appendChild(widthSec);
 
   return { getState: () => state };
 }

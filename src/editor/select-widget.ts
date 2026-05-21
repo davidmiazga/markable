@@ -115,11 +115,16 @@ function asStringArray(v: unknown): string[] | null {
   return null;
 }
 
+export type BlockContentWidth = "normal" | "wide" | "full";
+
+const VALID_BLOCK_WIDTHS = new Set<BlockContentWidth>(["normal", "wide", "full"]);
+
 /** Parse the fence body into a path, a display kind, and a FolderViewConfig. */
 export function parseSelectBody(body: string): {
   rawPath: string | null;
   display: string;
   config: FolderViewConfig;
+  contentWidth: BlockContentWidth;
 } {
   const lines = body.split("\n");
   const parsed = parseYamlLines(lines);
@@ -151,7 +156,12 @@ export function parseSelectBody(body: string): {
   const fields = asStringArray(parsed.fields);
   if (fields) config.fields = fields;
 
-  return { rawPath, display, config };
+  const cwRaw = asString(parsed["content-width"])?.toLowerCase() ?? "normal";
+  const contentWidth: BlockContentWidth = VALID_BLOCK_WIDTHS.has(cwRaw as BlockContentWidth)
+    ? (cwRaw as BlockContentWidth)
+    : "normal";
+
+  return { rawPath, display, config, contentWidth };
 }
 
 /**
@@ -181,6 +191,11 @@ export function parseSelectBodyForBuilder(body: string): SelectBuilderInitial {
 
   const kanbanField = asString(parsed["kanban-field"]);
   if (kanbanField) initial.kanbanField = kanbanField;
+
+  const cw = asString(parsed["content-width"])?.toLowerCase();
+  if (cw && VALID_BLOCK_WIDTHS.has(cw as BlockContentWidth)) {
+    initial.contentWidth = cw as BlockContentWidth;
+  }
 
   // `where:` is a list of `{type, operator, value}` mappings; parseYamlLines
   // returns it as Array<Record<string,string>> for the structured-sequence form.
@@ -383,7 +398,12 @@ export class SelectWidget extends WidgetType {
       inner.appendChild(errorBox(`Could not parse select block: ${String(err)}`));
       return wrapper;
     }
-    const { rawPath, display, config } = parsed;
+    const { rawPath, display, config, contentWidth } = parsed;
+
+    // Apply block-level content-width class (suppressed by page-level CSS
+    // when the page has its own content-width override).
+    if (contentWidth === "wide") wrapper.classList.add("cm-block-width-wide");
+    else if (contentWidth === "full") wrapper.classList.add("cm-block-width-full");
 
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const hostFile = (window as any).__MARKABLE_CURRENT_FILE__ as string | null | undefined;
@@ -476,7 +496,10 @@ export function findCustomFenceAtCursor(
         } while (cur.nextSibling());
       }
       const langLc = lang.toLowerCase();
-      if (!known.has(langLc)) return false;
+      // First token is the block kind; remainder may carry modifiers (e.g.
+      // " wide" / " full"). Match the first token against the known set.
+      const firstToken = langLc.split(/\s+/)[0];
+      if (!known.has(firstToken)) return false;
       const body = codeFrom >= 0 ? state.doc.sliceString(codeFrom, codeTo) : "";
       found = { from: node.from, to: node.to, body, lang: langLc };
       return false;
@@ -485,30 +508,37 @@ export function findCustomFenceAtCursor(
   return found;
 }
 
-/** Parse a Grid fence body into form state (rows × cols + cell style). */
+/** Parse a Grid fence info-string + body into form state. */
 export function parseGridFenceBody(
   body: string,
   lang: string,
-): { cols: number; rows: number; cellStyle: "grid" | "grid-card" } {
-  const cellStyle: "grid" | "grid-card" = lang === "grid-card" ? "grid-card" : "grid";
+): { cols: number; rows: number; cellStyle: "grid" | "grid-card"; contentWidth: BlockContentWidth } {
+  const [name, modifier] = lang.split(/\s+/);
+  const cellStyle: "grid" | "grid-card" = name === "grid-card" ? "grid-card" : "grid";
+  const contentWidth: BlockContentWidth =
+    modifier === "wide" ? "wide" : modifier === "full" ? "full" : "normal";
   const firstLine = body.split("\n").find((l) => l.trim()) ?? "";
   const m = firstLine.trim().match(/^(\d+)(?:x(\d+))?$/);
   if (m) {
     const cols = Math.max(1, parseInt(m[1], 10));
     const rows = m[2] ? Math.max(1, parseInt(m[2], 10)) : cols;
-    return { cols, rows, cellStyle };
+    return { cols, rows, cellStyle, contentWidth };
   }
-  return { cols: 3, rows: 3, cellStyle };
+  return { cols: 3, rows: 3, cellStyle, contentWidth };
 }
 
-/** Parse a Sidebar fence body into form state (side + body). */
+/** Parse a Sidebar fence info-string + body into form state. */
 export function parseSidebarFenceBody(
   body: string,
   lang: string,
-): { side: "right" | "left"; body: string } {
+): { side: "right" | "left"; body: string; contentWidth: BlockContentWidth } {
+  const [name, modifier] = lang.split(/\s+/);
+  const contentWidth: BlockContentWidth =
+    modifier === "wide" ? "wide" : modifier === "full" ? "full" : "normal";
   return {
-    side: lang === "sidebar-left" ? "left" : "right",
+    side: name === "sidebar-left" ? "left" : "right",
     body: body,
+    contentWidth,
   };
 }
 

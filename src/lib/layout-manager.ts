@@ -1114,10 +1114,13 @@ export function injectSidebarCSS(): void {
 .cm-sidebar-preview,.cm-sidebar-left{width:220px;box-sizing:border-box;border:1px solid var(--border-color);background:var(--bg-secondary);border-radius:4px;padding:10px 14px;font-size:13px}
 .cm-sidebar-preview{float:right;margin:0 0 16px 20px;clear:right}
 .cm-sidebar-left{float:left;margin:0 20px 16px 0;clear:left}
+.cm-sidebar-preview>*:first-child,.cm-sidebar-left>*:first-child{margin-top:0}
+.cm-sidebar-preview>*:last-child,.cm-sidebar-left>*:last-child{margin-bottom:0}
 .cm-sidebar-preview img,.cm-sidebar-left img{max-width:100%;display:block;margin:4px auto}
 .cm-sidebar-preview table,.cm-sidebar-left table{width:100%;border-collapse:collapse}
 .cm-sidebar-preview td,.cm-sidebar-left td{padding:3px 6px;border-top:1px solid var(--border-color);vertical-align:top}
 .cm-sidebar-preview td:first-child,.cm-sidebar-left td:first-child{color:var(--text-secondary)}
+/* Heading styling comes from the global h1..h6 rule in styles.css (theme tokens). */
 `;
   document.head.appendChild(style);
 }
@@ -1137,12 +1140,8 @@ export function injectGridCSS(): void {
 .cm-grid-cell>*:last-child{margin-bottom:0}
 .cm-grid-cell--card{background:var(--bg-secondary,#232333);border:1px solid var(--border-color,rgba(255,255,255,.1));border-radius:4px}
 .cm-grid-cell--placeholder{border:1px dashed var(--border-color,rgba(255,255,255,.15));border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-muted,#555);font-size:12px;font-style:italic;min-height:60px}
-.cm-grid-cell h1{font-size:var(--heading-h1-size,2em);font-weight:var(--heading-h1-weight,700);color:var(--text-primary,#ccc);margin:0 0 6px}
-.cm-grid-cell h2{font-size:var(--heading-h2-size,1.5em);font-weight:var(--heading-h2-weight,600);color:var(--text-primary,#ccc);margin:0 0 6px}
-.cm-grid-cell h3{font-size:var(--heading-h3-size,1.25em);font-weight:var(--heading-h3-weight,600);color:var(--text-primary,#ccc);margin:0 0 6px}
-.cm-grid-cell h4{font-size:var(--heading-h4-size,1.1em);font-weight:var(--heading-h4-weight,600);color:var(--text-primary,#ccc);margin:0 0 4px}
-.cm-grid-cell h5{font-size:var(--heading-h5-size,1em);font-weight:var(--heading-h5-weight,600);color:var(--text-primary,#ccc);margin:0 0 4px}
-.cm-grid-cell h6{font-size:var(--heading-h6-size,.9em);font-weight:var(--heading-h6-weight,600);color:var(--text-secondary,#999);margin:0 0 4px}
+/* Heading styling comes from the global h1..h6 rule in styles.css (theme tokens). */
+.cm-grid-cell h1,.cm-grid-cell h2,.cm-grid-cell h3,.cm-grid-cell h4,.cm-grid-cell h5,.cm-grid-cell h6{margin:0 0 6px}
 .cm-grid-cell p{color:var(--text-primary,#ccc);margin:0 0 6px}
 `;
   document.head.appendChild(style);
