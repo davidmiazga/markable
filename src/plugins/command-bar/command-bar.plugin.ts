@@ -203,7 +203,7 @@ const REQUIRES_FILE_IDS = new Set([
   "edit-goto-line",
   "edit-find",
   "edit-find-replace",
-  "apply-view",
+  "code-block",
   "apply-layout",
 ]);
 

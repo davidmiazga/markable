@@ -13,6 +13,7 @@ import { marked } from "marked";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
 import type { EvaluatedTable } from "./table-formula";
+import { SelectWidget } from "./select-widget";
 import hljs from "highlight.js/lib/core";
 import hljsJavascript from "highlight.js/lib/languages/javascript";
 import hljsTypescript from "highlight.js/lib/languages/typescript";
@@ -891,6 +892,14 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
       if (lang.toLowerCase() === "grid-card") {
         decorations.push(
           Decoration.replace({ widget: new GridWidget(code, true), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (lang.toLowerCase() === "select") {
+        decorations.push(
+          Decoration.replace({ widget: new SelectWidget(code), block: true })
             .range(node.from, node.to)
         );
         return false;

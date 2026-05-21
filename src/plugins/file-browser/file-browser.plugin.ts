@@ -1690,7 +1690,7 @@ function buildTreeUl(
       const assignBtn = document.createElement("span");
       assignBtn.className = "tree-node-assign-btn";
       assignBtn.setAttribute("aria-hidden", "true");
-      assignBtn.title = "Assign view or layout";
+      assignBtn.title = "Apply layout";
       assignBtn.innerHTML = wrapSvg(ICON_PREVIEW, 12);
       assignBtn.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
@@ -2922,7 +2922,7 @@ function buildFileContextMenuItems(
             },
           },
           {
-            label: "Change Assignment…",
+            label: "Change Layout…",
             handler: () => {
               (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
             },
@@ -2968,7 +2968,7 @@ function buildFileContextMenuItems(
     },
     { separator: true, label: "", handler: null },
     ...(path.toLowerCase().endsWith(".md") && !isViewDefinition ? [{
-      label: "Assign View or Layout…",
+      label: "Apply Layout…",
       handler: () => {
         (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
       },
@@ -3024,7 +3024,7 @@ function buildDirContextMenuItems(
       ? [
           { label: "Open Folder View", handler: () => openFolderViewTab(path) },
           {
-            label: "Change View Type…",
+            label: "Change Layout…",
             handler: () => {
               (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path + "/_folder.md");
             },
@@ -3303,55 +3303,17 @@ async function writeFolderViewTemplate(
 
 /** Default _folder.md content written by both create and reset actions. */
 const FOLDER_VIEW_STARTER = [
-  "---",
-  "title:",
-  "# set title: My Folder to override the tab display name",
-  "# exclude:",
-  "#   - draft.md",
-  "# uncomment exclude to hide specific files from the view",
-  "layout:",
-  "  type: view-cards",
-  "  # view-cards, view-table, view-list, view-timeline, view-kanban",
-  "  content-area-override: true",
-  "  # false = constrain to the editor content-area width",
-  "  mode: grid",
-  "  # grid = consistent columns, flex = fluid smooth resize",
-  "  card-width: 160",
-  "  # minimum card width in px",
-  "  aspect-ratio: 1/1",
-  "  # e.g. 16/9, 4/3, 1.5, original",
-  "  fit: cover",
-  "  # cover, contain, 80% auto, auto 60%, 70% 50%",
-  "  min-height: 40",
-  "  max-height: 200",
-  "  sort: name-asc",
-  "  # name-asc, name-desc, modified-asc, modified-desc",
-  "  card-preview: full",
-  "  # full = show preview, none = compact name-and-date grid",
-  "  preview-pane: false",
-  "  # show rendered preview above the grid (true / false)",
-  "  # preview-height: 60%",
-  "  # height of the preview pane",
-  "  folders-title: Folders",
-  "  files-title:",
-  "  # set files-title: Notes to show a heading above the Files section",
-  "# kanban-field: status",
-  "# kanban-order:",
-  "#   - todo",
-  "#   - doing",
-  "#   - done",
-  "# uncomment kanban settings when using view-kanban",
-  "# fields:",
-  "#   - name",
-  "#   - modified",
-  "#   - tags",
-  "#   - status",
-  "#   - select",
-  "# fields: controls columns (view-table) or data below card names (view-cards)",
-  "# extra-fields:",
-  "#   - status",
-  "# uncomment extra-fields to include custom frontmatter/YAML data",
-  "---",
+  "# Folder",
+  "",
+  "Write any markdown here. Embed one or more `select` blocks to display",
+  "files from this folder (or any path) using the chosen display type.",
+  "",
+  "```select",
+  "path: ./",
+  "display: cards",
+  "sort: name-asc",
+  "show-modified: true",
+  "```",
   "",
 ].join("\n");
 

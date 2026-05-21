@@ -303,15 +303,6 @@ function readViewOptions(content: string): {
   };
 }
 
-/** Remove a single key from YAML frontmatter (no-op if absent). */
-function removeFmKey(content: string, key: string): string {
-  const fmEnd = content.indexOf("\n---");
-  if (!content.startsWith("---\n") || fmEnd === -1) return content;
-  const fmBody = content.slice(4, fmEnd);
-  const cleaned = fmBody.replace(new RegExp(`^${key}:[^\n]*\n?`, "m"), "");
-  return "---\n" + cleaned + content.slice(fmEnd);
-}
-
 /**
  * Detect the current assignment from file frontmatter.
  * Handles flat (`layout: view-cards`) and nested (`layout:\n  type: view-cards`) formats.
@@ -345,178 +336,36 @@ function readCurrentAssignment(content: string): {
   return { kind, slug, kanbanField };
 }
 
-/** Add or replace a key in YAML frontmatter. */
-function upsertFmKey(content: string, key: string, value: string, prepend = false): string {
-  const fmEnd = content.indexOf("\n---");
-  if (!content.startsWith("---\n") || fmEnd === -1) {
-    return `---\n${key}: ${value}\n---\n\n${content}`;
+
+/** Build a ```select codefence string from the modal's chosen options. */
+export function buildSelectFence(opts: {
+  display: string;            // cards | table | list | timeline | kanban
+  path?: string | null;       // omitted → defaults to host file's directory at render time
+  sort: string;
+  showModified: boolean;
+  showImagePreview: boolean;  // cards only
+  showExtensions: boolean;
+  previewPane: boolean;
+  kanbanField: string;        // kanban only
+}): string {
+  const lines: string[] = ["```select"];
+  if (opts.path && opts.path.trim()) lines.push(`path: ${opts.path.trim()}`);
+  if (opts.display !== "timeline") lines.push(`sort: ${opts.sort}`);
+  lines.push(`display: ${opts.display}`);
+  if (!opts.showModified) lines.push("show-modified: false");
+  if (opts.display === "cards" && !opts.showImagePreview) lines.push("card-preview: none");
+  if ((opts.display === "cards" || opts.display === "list") && !opts.showExtensions) {
+    lines.push("show-extensions: false");
   }
-  const fmBody = content.slice(4, fmEnd);
-  const re = new RegExp(`^${key}:[^\n]*`, "m");
-  const newFm = re.test(fmBody)
-    ? fmBody.replace(re, `${key}: ${value}`)
-    : prepend
-      ? `${key}: ${value}\n` + fmBody
-      : fmBody + `\n${key}: ${value}`;
-  return "---\n" + newFm + content.slice(fmEnd);
-}
-
-/** Extract the body text (everything after the closing ---) from a file. */
-function extractBody(content: string): string {
-  if (!content.startsWith("---")) return content.trim();
-  const fmEnd = content.indexOf("\n---", 3);
-  if (fmEnd === -1) return "";
-  return content.slice(fmEnd + 4).replace(/^\n/, "").trimEnd();
-}
-
-/**
- * Build a complete, commented YAML starter for the given view type.
- *
- * The user's chosen option values are written as active keys; options that
- * match their defaults appear as commented lines so the user can see what's
- * available without cluttering the frontmatter.
- *
- * Uses flat `layout: view-slug` format (the assign-modal standard).
- * The nested `layout:\n  type:` format used by FOLDER_VIEW_STARTER is only
- * kept for the legacy "New Folder View…" flow.
- */
-function buildViewStarter(
-  slug: string,
-  sort: string,
-  showModified: boolean,
-  showImagePreview: boolean,
-  showExtensions: boolean,
-  previewPane: boolean,
-  kanbanField: string,
-): string {
-  // Emit `key: value` when the value is non-default; `# key: <default>` otherwise.
-  const sm   = showModified   ? "# show-modified: false"    : "show-modified: false";
-  const ext  = showExtensions ? "# show-extensions: false"  : "show-extensions: false";
-  const pane = previewPane    ? "preview-pane: true"        : "# preview-pane: false";
-
-  const shared = [
-    "# title:",
-    "# set to override the tab display name",
-    "# exclude:",
-    "#   - draft.md",
-    "# uncomment to hide specific files from the view",
-  ].join("\n");
-
-  switch (slug) {
-    case "view-cards":
-      return [
-        "---",
-        "layout: view-cards",
-        `sort: ${sort}`,
-        "# name-asc, name-desc, modified-asc, modified-desc",
-        "card-width: 160",
-        "# minimum card width in px",
-        "aspect-ratio: 1/1",
-        "# e.g. 16/9, 4/3, original",
-        "fit: cover",
-        "# cover, contain, 80% auto, auto 60%",
-        showImagePreview ? "# card-preview: none" : "card-preview: none",
-        "# full = show image thumbnails,  none = compact name-only grid",
-        sm,
-        ext,
-        pane,
-        "# preview-pane: true shows a rendered preview above the grid",
-        "# folders-title: Folders",
-        "# files-title:",
-        "# set files-title: Notes to show a heading above the Files section",
-        shared,
-        "# fields:",
-        "#   - name",
-        "#   - modified",
-        "#   - tags",
-        "# controls data shown below card names; omit for defaults",
-        "# extra-fields:",
-        "#   - status",
-        "# adds custom frontmatter values shown below card names",
-        "---",
-        "",
-      ].join("\n");
-
-    case "view-table":
-      return [
-        "---",
-        "layout: view-table",
-        `sort: ${sort}`,
-        "# name-asc, name-desc, modified-asc, modified-desc",
-        sm,
-        pane,
-        "# preview-pane: true shows a rendered preview above the table",
-        shared,
-        "# fields:",
-        "#   - name",
-        "#   - modified",
-        "#   - tags",
-        "#   - status",
-        "# explicit column list; omit to show all built-in columns",
-        "# extra-fields:",
-        "#   - status",
-        "#   - priority",
-        "# adds custom frontmatter columns to the table",
-        "---",
-        "",
-      ].join("\n");
-
-    case "view-list":
-      return [
-        "---",
-        "layout: view-list",
-        `sort: ${sort}`,
-        "# name-asc, name-desc, modified-asc, modified-desc",
-        sm,
-        ext,
-        pane,
-        "# preview-pane: true shows a rendered preview above the list",
-        shared,
-        "---",
-        "",
-      ].join("\n");
-
-    case "view-timeline":
-      return [
-        "---",
-        "layout: view-timeline",
-        "# files are grouped by recency — sort is always chronological",
-        sm,
-        pane,
-        "# preview-pane: true shows a rendered preview above the timeline",
-        shared,
-        "---",
-        "",
-      ].join("\n");
-
-    case "view-kanban":
-      return [
-        "---",
-        "layout: view-kanban",
-        `kanban-field: ${kanbanField.trim() || "status"}`,
-        "# the frontmatter field used to group files into columns",
-        "# kanban-order:",
-        "#   - todo",
-        "#   - doing",
-        "#   - done",
-        "# explicit column order; omit to sort columns alphabetically",
-        sm,
-        pane,
-        "# preview-pane: true shows a rendered preview above the board",
-        shared,
-        "# extra-fields:",
-        "#   - priority",
-        "# adds extra frontmatter values shown on each card",
-        "---",
-        "",
-      ].join("\n");
-
-    default:
-      return `---\nlayout: ${slug}\n---\n\n`;
+  if (opts.previewPane) lines.push("preview-pane: true");
+  if (opts.display === "kanban" && opts.kanbanField.trim()) {
+    lines.push(`kanban-field: ${opts.kanbanField.trim()}`);
   }
+  lines.push("```");
+  return lines.join("\n");
 }
 
-/** Write a view assignment to the file's frontmatter and open the view. */
+/** Append a select codefence to the given file's body. Writes via writeFile + onFileUpdated. */
 async function applyViewAssignment(
   filePath: string,
   slug: string,
@@ -538,82 +387,34 @@ async function applyViewAssignment(
     base = r.value;
   }
 
-  // Detect the existing view type so we know whether the slug is changing.
-  const existingSlug = readCurrentAssignment(base).slug;
-  const isNewType = existingSlug !== slug;
-
-  let next: string;
-  if (isNewType) {
-    // View type is changing (or file has no view yet): write a full commented
-    // starter template with the user's chosen options baked in, then re-append
-    // any body text that was below the old frontmatter.
-    const body = extractBody(base);
-    const starter = buildViewStarter(slug, sort, showModified, showImagePreview, showExtensions, previewPane, kanbanField);
-    next = body ? starter + body + "\n" : starter;
-  } else {
-    // Same view type — user is tweaking options only.  Update individual keys
-    // in-place so existing customisations (fields:, exclude:, etc.) are kept.
-    next = stripLayoutBlock(base);
-    next = upsertFmKey(next, "layout", slug, true);
-
-    if (slug === "view-kanban" && kanbanField.trim()) {
-      next = upsertFmKey(next, "kanban-field", kanbanField.trim());
-    }
-
-    // Sort: always write the user's choice (default "name-asc" is explicit).
-    if (slug !== "view-timeline") {
-      next = upsertFmKey(next, "sort", sort);
-    }
-
-    // show-modified: write "false" to override default-true; remove the key
-    // when re-enabled so the frontmatter stays minimal.
-    if (!showModified) {
-      next = upsertFmKey(next, "show-modified", "false");
-    } else {
-      next = removeFmKey(next, "show-modified");
-    }
-
-    // card-preview (cards only): write "none" to hide thumbnails; remove the
-    // key when enabled so other views aren't affected by a stale value.
-    if (slug === "view-cards" && !showImagePreview) {
-      next = upsertFmKey(next, "card-preview", "none");
-    } else {
-      next = removeFmKey(next, "card-preview");
-    }
-
-    // show-extensions (cards/list): write "false" to hide; remove to re-enable.
-    if (!showExtensions) {
-      next = upsertFmKey(next, "show-extensions", "false");
-    } else {
-      next = removeFmKey(next, "show-extensions");
-    }
-
-    // preview-pane: write "true" to enable; remove the key when disabled so
-    // the frontmatter stays minimal (default is false).
-    if (previewPane) {
-      next = upsertFmKey(next, "preview-pane", "true");
-    } else {
-      next = removeFmKey(next, "preview-pane");
-    }
+  // Strip any prior `layout: view-*` frontmatter so the file no longer
+  // takes over the page via the old YAML path.
+  const existing = readCurrentAssignment(base);
+  let body = base;
+  if (existing.slug && existing.slug.startsWith("view-")) {
+    body = stripLayoutBlock(base);
   }
 
-  // Always write to disk so the vault watcher fires and the file tree badge
-  // updates without requiring a restart.
+  const display = slug.replace(/^view-/, "");
+  const fence = buildSelectFence({
+    display,
+    sort,
+    showModified,
+    showImagePreview,
+    showExtensions,
+    previewPane,
+    kanbanField,
+  });
+
+  // Append the fence with a leading blank line for readability.
+  const next = body.trimEnd() + "\n\n" + fence + "\n";
+
   const writeResult = await writeFile(filePath, next);
   if (!writeResult.ok) return;
-
-  // Also sync the in-memory editor state if the file is currently open.
   deps.onFileUpdated?.(filePath, next);
 
-  // Force an immediate vault re-index so the badge appears right away rather
-  // than waiting for the file-watcher debounce (~300 ms).
-  void (window as any).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
-
-  const sep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-  const parentDir = sep > 0 ? filePath.slice(0, sep) : "";
-  if (parentDir) {
-    (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, filePath);
-  }
+  void (window as unknown as { __MARKABLE_VAULT_MANAGER__?: { reloadVaultIndex?: () => void } })
+    .__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
@@ -638,10 +439,43 @@ function closeModal(): void {
  * Views and layouts are shown in separate sections; selecting one clears the
  * other. For view-*.md and _folder.md files the Layouts section is grayed.
  */
+/**
+ * Parse a `select` codefence body for the option keys the modal cares about.
+ * Returns the same shape as `readViewOptions` plus the chosen display.
+ */
+function readSelectFenceOptions(body: string): {
+  slug: string;
+  sort: string;
+  showModified: boolean;
+  showImagePreview: boolean;
+  showExtensions: boolean;
+  previewPane: boolean;
+  kanbanField: string;
+} {
+  const get = (key: string): string | null => {
+    const re = new RegExp(`^${key}:\\s*(.+)$`, "m");
+    const m = body.match(re);
+    return m ? m[1].trim().replace(/\s+#.*$/, "") : null;
+  };
+  const display = (get("display") ?? "cards").toLowerCase();
+  return {
+    slug: `view-${display}`,
+    sort:             get("sort") ?? "name-asc",
+    showModified:     (get("show-modified")   ?? "true")  !== "false",
+    showImagePreview: (get("card-preview")    ?? "full")  !== "none",
+    showExtensions:   (get("show-extensions") ?? "true")  !== "false",
+    previewPane:      (get("preview-pane")    ?? "false") === "true",
+    kanbanField:      get("kanban-field") ?? "",
+  };
+}
+
 export async function openAssignModal(
   filePath: string,
   deps: LayoutDeps,
+  fenceEdit?: { body: string; onApply: (newFence: string) => void; onRemove?: () => void },
+  options?: { layoutsOnly?: boolean },
 ): Promise<void> {
+  const layoutsOnly = options?.layoutsOnly ?? false;
   if (document.getElementById(OVERLAY_ID)) return;
   injectStyles();
 
@@ -659,11 +493,14 @@ export async function openAssignModal(
     basename === "_folder.md" ||
     (basename.startsWith("view-") && basename.endsWith(".md"));
 
-  let selectedSlug: string | null = current.slug;
-  let kanbanFieldValue: string = current.kanbanField;
+  // In fence-edit mode, seed initial state from the fence body. Otherwise from file frontmatter.
+  const seed = fenceEdit ? readSelectFenceOptions(fenceEdit.body) : null;
+
+  let selectedSlug: string | null = seed ? seed.slug : current.slug;
+  let kanbanFieldValue: string = seed ? seed.kanbanField : current.kanbanField;
 
   // View-specific display options (read from existing frontmatter, or defaults)
-  const initialOpts = readViewOptions(fileContent);
+  const initialOpts = seed ?? readViewOptions(fileContent);
   let optSort:             string  = initialOpts.sort;
   let optShowModified:     boolean = initialOpts.showModified;
   let optShowImagePreview: boolean = initialOpts.showImagePreview;
@@ -673,15 +510,9 @@ export async function openAssignModal(
   // predates this option, and (b) assigning cards for the first time.
   const hasExplicitPreviewPane = fileContent.includes("preview-pane:");
   const previewPaneDefault = !hasExplicitPreviewPane && current.slug === "view-cards";
-  let optPreviewPane: boolean = hasExplicitPreviewPane ? initialOpts.previewPane : previewPaneDefault;
-
-  // Grid layout cell style: controls whether the starter fence inserted on first
-  // apply uses ```grid (plain) or ```grid-card (cards with background + border).
-  // Only used when applying the grid layout to a file that has no existing
-  // ```grid* fence. Defaults to whichever fence already exists in the file, or
-  // "grid" if none.
-  let optGridStyle: "grid" | "grid-card" =
-    fileContent.includes("```grid-card") ? "grid-card" : "grid";
+  let optPreviewPane: boolean = seed
+    ? seed.previewPane
+    : (hasExplicitPreviewPane ? initialOpts.previewPane : previewPaneDefault);
 
   // ── Overlay & panel ────────────────────────────────────────────────────────
 
@@ -698,7 +529,7 @@ export async function openAssignModal(
   panel.className = "am-panel";
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-modal", "true");
-  panel.setAttribute("aria-label", "View or Layout");
+  panel.setAttribute("aria-label", layoutsOnly ? "Apply Layout" : "View or Layout");
   overlay.appendChild(panel);
 
   // ── Header ─────────────────────────────────────────────────────────────────
@@ -799,61 +630,6 @@ export async function openAssignModal(
 
   function renderOptionsArea(slug: string | null): void {
     optionsArea.innerHTML = "";
-
-    // Grid layout: show a "Cell style" radio group (Grid vs Grid Card) using
-    // the same .am-item + .am-radio pattern as the main layout/view list, so
-    // it visually matches the rest of the modal.
-    if (slug === "grid") {
-      optionsArea.classList.remove("is-hidden");
-      const styleGroup = document.createElement("div");
-      styleGroup.className = "am-opt-group";
-      const styleLabel = document.createElement("div");
-      styleLabel.className = "am-opt-group-label";
-      styleLabel.textContent = "Cell style";
-      styleGroup.appendChild(styleLabel);
-      const radios = document.createElement("div");
-      radios.setAttribute("role", "radiogroup");
-      radios.setAttribute("aria-label", "Cell style");
-      const GRID_OPTS: Array<{ value: "grid" | "grid-card"; label: string }> = [
-        { value: "grid",      label: "Grid" },
-        { value: "grid-card", label: "Grid Card" },
-      ];
-      const rows: Array<{ value: "grid" | "grid-card"; el: HTMLElement }> = [];
-      for (const opt of GRID_OPTS) {
-        const item = document.createElement("div");
-        item.className = "am-item";
-        item.setAttribute("role", "radio");
-        const isSelected = optGridStyle === opt.value;
-        item.setAttribute("aria-checked", String(isSelected));
-        item.setAttribute("tabindex", isSelected ? "0" : "-1");
-        if (isSelected) item.classList.add("is-selected");
-        const radioDot = document.createElement("span");
-        radioDot.className = "am-radio";
-        item.appendChild(radioDot);
-        const labelEl = document.createElement("span");
-        labelEl.textContent = opt.label;
-        item.appendChild(labelEl);
-        item.addEventListener("click", () => {
-          optGridStyle = opt.value;
-          for (const r of rows) {
-            const isSel = r.value === opt.value;
-            r.el.classList.toggle("is-selected", isSel);
-            r.el.setAttribute("aria-checked", String(isSel));
-            r.el.setAttribute("tabindex", isSel ? "0" : "-1");
-          }
-        });
-        radios.appendChild(item);
-        rows.push({ value: opt.value, el: item });
-      }
-      styleGroup.appendChild(radios);
-      optionsArea.appendChild(styleGroup);
-
-      const note = document.createElement("div");
-      note.className = "am-opt-note";
-      note.textContent = "Applies to the starter fence inserted on first apply. Existing ```grid fences are left unchanged.";
-      optionsArea.appendChild(note);
-      return;
-    }
 
     if (!slug?.startsWith("view-")) {
       optionsArea.classList.add("is-hidden");
@@ -992,46 +768,52 @@ export async function openAssignModal(
   }
 
   // ── VIEWS section ──────────────────────────────────────────────────────────
+  // Hidden when `layoutsOnly` is set (eye-icon / page-level flow). Views are
+  // now codefence-driven (see select-builder); the page-level modal only
+  // controls typography layouts.
 
-  const viewSection = document.createElement("div");
-  viewSection.className = "am-section";
-  const viewLabel = document.createElement("div");
-  viewLabel.className = "am-section-label";
-  viewLabel.textContent = "Views";
-  viewSection.appendChild(viewLabel);
-  const viewDesc = document.createElement("div");
-  viewDesc.className = "am-section-desc";
-  viewDesc.textContent = "Renders this directory's files as a collection";
-  viewSection.appendChild(viewDesc);
-  listEl.appendChild(viewSection);
+  if (!layoutsOnly) {
+    const viewSection = document.createElement("div");
+    viewSection.className = "am-section";
+    const viewLabel = document.createElement("div");
+    viewLabel.className = "am-section-label";
+    viewLabel.textContent = "Views";
+    viewSection.appendChild(viewLabel);
+    const viewDesc = document.createElement("div");
+    viewDesc.className = "am-section-desc";
+    viewDesc.textContent = "Renders this directory's files as a collection";
+    viewSection.appendChild(viewDesc);
+    listEl.appendChild(viewSection);
 
-  for (const vt of VIEW_TYPES) {
-    addItem(vt.name, vt.slug);
-    if (vt.requiresField) {
-      kanbanRowEl = document.createElement("div");
-      kanbanRowEl.className = "am-kanban-row";
-      if (selectedSlug === "view-kanban") kanbanRowEl.classList.add("is-visible");
-      const kfl = document.createElement("label");
-      kfl.className = "am-kanban-label";
-      kfl.textContent = "kanban-field:";
-      kanbanRowEl.appendChild(kfl);
-      const kfi = document.createElement("input");
-      kfi.type = "text";
-      kfi.className = "am-kanban-input";
-      kfi.placeholder = "e.g. status";
-      kfi.value = kanbanFieldValue;
-      kfi.addEventListener("input", () => { kanbanFieldValue = kfi.value; });
-      kfi.addEventListener("click", (e) => e.stopPropagation());
-      kanbanRowEl.appendChild(kfi);
-      listEl.appendChild(kanbanRowEl);
+    for (const vt of VIEW_TYPES) {
+      addItem(vt.name, vt.slug);
+      if (vt.requiresField) {
+        kanbanRowEl = document.createElement("div");
+        kanbanRowEl.className = "am-kanban-row";
+        if (selectedSlug === "view-kanban") kanbanRowEl.classList.add("is-visible");
+        const kfl = document.createElement("label");
+        kfl.className = "am-kanban-label";
+        kfl.textContent = "kanban-field:";
+        kanbanRowEl.appendChild(kfl);
+        const kfi = document.createElement("input");
+        kfi.type = "text";
+        kfi.className = "am-kanban-input";
+        kfi.placeholder = "e.g. status";
+        kfi.value = kanbanFieldValue;
+        kfi.addEventListener("input", () => { kanbanFieldValue = kfi.value; });
+        kfi.addEventListener("click", (e) => e.stopPropagation());
+        kanbanRowEl.appendChild(kfi);
+        listEl.appendChild(kanbanRowEl);
+      }
     }
+
+    // ── LAYOUTS section divider ───────────────────────────────────────────
+    const div1 = document.createElement("div");
+    div1.className = "am-divider";
+    listEl.appendChild(div1);
   }
 
   // ── LAYOUTS section ─────────────────────────────────────────────────────────
-
-  const div1 = document.createElement("div");
-  div1.className = "am-divider";
-  listEl.appendChild(div1);
 
   const layoutSection = document.createElement("div");
   layoutSection.className = "am-section";
@@ -1115,6 +897,26 @@ export async function openAssignModal(
   applyBtn.textContent = "Apply";
   applyBtn.addEventListener("click", async () => {
     closeModal();
+    // Fence-edit mode: shortcut Apply to onApply (or onRemove for "remove assignment")
+    if (fenceEdit) {
+      if (selectedSlug === null) {
+        fenceEdit.onRemove?.();
+      } else if (selectedSlug.startsWith("view-")) {
+        const fence = buildSelectFence({
+          display: selectedSlug.replace(/^view-/, ""),
+          sort: optSort,
+          showModified: optShowModified,
+          showImagePreview: optShowImagePreview,
+          showExtensions: optShowExtensions,
+          previewPane: optPreviewPane,
+          kanbanField: kanbanFieldValue,
+        });
+        fenceEdit.onApply(fence);
+      }
+      // Picking a typography layout while editing a select fence is a no-op
+      // (layouts go in YAML, not codefences).
+      return;
+    }
     if (selectedSlug === null) {
       await removeLayoutFromFile(filePath, deps);
     } else if (selectedSlug.startsWith("view-")) {
@@ -1124,7 +926,7 @@ export async function openAssignModal(
         deps,
       );
     } else {
-      await applyLayoutToFile(filePath, selectedSlug, deps, { gridStyle: optGridStyle });
+      await applyLayoutToFile(filePath, selectedSlug, deps);
     }
   });
   footer.appendChild(applyBtn);

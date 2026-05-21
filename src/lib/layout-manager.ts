@@ -121,14 +121,6 @@ inline: true
 {{/if}}
 `,
 
-  "grid.layout.md": `---
-name: "Grid"
-description: "Inline grid blocks — write \`\`\`grid codefences anywhere in the file"
-applies-to: "single"
-inline: true
----
-`,
-
   "notion-page.layout.md": `---
 name: "Notion Page"
 description: "Full-width cover, large icon, and clean reading layout"
@@ -668,36 +660,6 @@ export const LAYOUT_PREVIEW_SVGS: Record<string, string> = {
     <rect x="20" y="166" width="350" height="6" rx="1" fill="#555"/>
     <rect x="20" y="178" width="355" height="6" rx="1" fill="#555"/>
   </svg>`,
-
-  "grid.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
-    <rect width="400" height="280" fill="#1a1a1a"/>
-    <rect x="16" y="12" width="90" height="10" rx="3" fill="#888"/>
-    <rect x="16" y="34" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="24" y="50" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="24" y="62" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="140" y="34" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="148" y="50" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="148" y="62" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="264" y="34" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="272" y="50" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="272" y="62" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="16" y="114" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="24" y="130" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="24" y="142" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="140" y="114" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="148" y="130" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="148" y="142" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="264" y="114" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="272" y="130" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="272" y="142" width="44" height="5" rx="1" fill="#444"/>
-    <rect x="16" y="194" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="24" y="210" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="140" y="194" width="110" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="148" y="210" width="66" height="7" rx="2" fill="#666"/>
-    <rect x="264" y="194" width="120" height="68" rx="4" fill="#232333" stroke="#333" stroke-width="1"/>
-    <rect x="272" y="210" width="66" height="7" rx="2" fill="#666"/>
-  </svg>`,
-
   "notion-page.layout.md": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280">
     <rect width="400" height="280" fill="#1a1a1a"/>
     <rect x="0" y="0" width="400" height="90" rx="0" fill="#2a3040"/>
@@ -1280,70 +1242,50 @@ export async function removeLayoutFromFile(
 }
 
 /** Find a typography layout by slug and apply it to a file. */
+/**
+ * Build a starter ```grid (or ```grid-card) codefence with a 3x3 lorem-ipsum
+ * cell layout. Exported so the CodeBlock modal's Grid form can reuse the same
+ * default body the legacy Grid layout used to inject.
+ */
+export function buildGridStarterFence(opts: {
+  cols?: number;
+  rows?: number;
+  cellStyle?: "grid" | "grid-card";
+} = {}): string {
+  const cols = Math.max(1, opts.cols ?? 3);
+  const rows = Math.max(1, opts.rows ?? 3);
+  const fenceTag = opts.cellStyle === "grid-card" ? "```grid-card" : "```grid";
+  const samples = [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+    "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Ut enim ad minim veniam, quis nostrud exercitation.",
+    "Ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+    "Duis aute irure dolor in reprehenderit in voluptate velit.",
+    "Esse cillum dolore eu fugiat nulla pariatur.",
+    "Excepteur sint occaecat cupidatat non proident.",
+    "Sunt in culpa qui officia deserunt mollit anim id est laborum.",
+    "Nemo enim ipsam voluptatem quia voluptas sit aspernatur.",
+  ];
+  const totalCells = cols * rows;
+  const lines: string[] = [fenceTag, `${cols}x${rows}`];
+  for (let i = 0; i < totalCells; i++) {
+    lines.push(`## Cell ${i + 1}`);
+    lines.push(samples[i % samples.length]);
+    if (i < totalCells - 1) lines.push("---");
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
 export async function applyLayoutToFile(
   filePath: string,
   slug: string,
   deps: LayoutDeps,
-  opts?: { gridStyle?: "grid" | "grid-card" },
 ): Promise<void> {
   const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
   const target = all.find(
     (l) => l.filePath.split("/").pop()!.replace(".layout.md", "") === slug,
   );
   if (!target) return;
-
-  // For the Grid layout, also ensure a starter grid codefence exists in the body
-  // so the user immediately sees a rendered grid rather than a blank file.
-  if (slug === "grid") {
-    const liveContent = deps.getActiveFileContent?.();
-    const r = liveContent == null ? await readFile(filePath) : null;
-    const existingContent: string = liveContent ?? (r?.ok ? r.value : "");
-    if (!existingContent.includes("```grid")) {
-      const fenceTag = opts?.gridStyle === "grid-card" ? "```grid-card" : "```grid";
-      const starterFence = [
-        "",
-        fenceTag,
-        "3x3",
-        "## Cell 1",
-        "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-        "---",
-        "## Cell 2",
-        "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-        "---",
-        "## Cell 3",
-        "Ut enim ad minim veniam, quis nostrud exercitation.",
-        "---",
-        "## Cell 4",
-        "Ullamco laboris nisi ut aliquip ex ea commodo consequat.",
-        "---",
-        "## Cell 5",
-        "Duis aute irure dolor in reprehenderit in voluptate velit.",
-        "---",
-        "## Cell 6",
-        "Esse cillum dolore eu fugiat nulla pariatur.",
-        "---",
-        "## Cell 7",
-        "Excepteur sint occaecat cupidatat non proident.",
-        "---",
-        "## Cell 8",
-        "Sunt in culpa qui officia deserunt mollit anim id est laborum.",
-        "---",
-        "## Cell 9",
-        "Nemo enim ipsam voluptatem quia voluptas sit aspernatur.",
-        "```",
-        "",
-      ].join("\n");
-      const withFence = existingContent.trimEnd() + "\n" + starterFence;
-      const withLayout = insertLayoutField(withFence, slug);
-      if (deps.onFileUpdated) {
-        deps.onFileUpdated(filePath, withLayout);
-      } else {
-        await writeFile(filePath, withLayout);
-      }
-      void applyLayout(target, filePath, deps, { docContent: withLayout });
-      return;
-    }
-  }
-
   void setLayoutInFile(filePath, slug, target, deps);
 }

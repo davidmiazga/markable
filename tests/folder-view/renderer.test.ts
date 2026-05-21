@@ -1459,23 +1459,18 @@ describe("CSS classes and FOLDER_VIEW_STARTER (Step 06)", () => {
     expect(headerIdx).toBeLessThan(descIdx);
   });
 
-  // C-8: FOLDER_VIEW_STARTER no longer says "folder-table only".
-  it("C-8: FOLDER_VIEW_STARTER does not contain 'folder-table only'", async () => {
-    // Dynamically import to avoid circular dependency with plugin file.
-    // The export is via the plugin's API surface (markable.FOLDER_VIEW_STARTER).
-    // We test via direct import of the constant from the plugin source.
-    const { default: _mod } = await import(
-      "../../src/plugins/file-browser/file-browser.plugin"
-    ) as any;
-    // The plugin registers itself via window globals; we just need the exported API.
-    // Actually FOLDER_VIEW_STARTER is not exported at module level but via the API.
-    // Fallback: check the source string directly.
+  // Phase 4 (codefence migration): FOLDER_VIEW_STARTER now emits a `select`
+  // codefence instead of the old YAML-driven `layout: view-cards` template.
+  it("FOLDER_VIEW_STARTER emits a select codefence (not YAML)", async () => {
     const pluginSource = await import(
       "../../src/plugins/file-browser/file-browser.plugin?raw"
     ) as any;
     const src: string = pluginSource.default ?? pluginSource;
+    // Find the FOLDER_VIEW_STARTER constant; just check the constant-level
+    // characteristics by matching its declaration neighborhood.
+    expect(src.includes("FOLDER_VIEW_STARTER")).toBe(true);
+    expect(src.includes("```select")).toBe(true);
+    expect(src.includes("display: cards")).toBe(true);
     expect(src.includes("folder-table only")).toBe(false);
-    expect(src.includes("fields:")).toBe(true);
-    expect(src.includes("extra-fields:")).toBe(true);
   });
 });

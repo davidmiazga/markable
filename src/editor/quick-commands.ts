@@ -30,6 +30,13 @@ import { insertHorizontalRule, toggleLinePrefix } from "./format";
 export interface QuickCommandDeps {
   openLayoutPicker: () => void;
   enterPreviewMode: () => void;
+  /** Open the CodeBlock modal. `preselect` jumps the type picker to that block. */
+  openCodeBlock: (
+    view: EditorView,
+    from: number,
+    to: number,
+    preselect?: "sidebar" | "grid" | "select",
+  ) => void;
 }
 
 interface QuickCommand {
@@ -69,6 +76,27 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
       apply(view, from, to) {
         view.dispatch({ changes: { from, to, insert: "" } });
         deps.openLayoutPicker();
+      },
+    },
+    {
+      name: "block",
+      description: "Insert a code block (sidebar, grid, select)",
+      apply(view, from, to) {
+        deps.openCodeBlock(view, from, to);
+      },
+    },
+    {
+      name: "select",
+      description: "Insert a Select block (filter files + display them)",
+      apply(view, from, to) {
+        deps.openCodeBlock(view, from, to, "select");
+      },
+    },
+    {
+      name: "grid",
+      description: "Insert a Grid block (NxM cell grid)",
+      apply(view, from, to) {
+        deps.openCodeBlock(view, from, to, "grid");
       },
     },
     {

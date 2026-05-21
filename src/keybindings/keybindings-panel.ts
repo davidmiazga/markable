@@ -97,7 +97,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "vault-manage", label: "Manage Vaults", defaultKey: "", section: "View" },
   // Layouts — core capability; always available regardless of plugin state.
   { id: "layouts-open-picker", label: "Open with Layout\u2026", defaultKey: "", section: "View" },
-  { id: "apply-view",          label: "Apply View",            defaultKey: "", section: "View" },
+  { id: "code-block",          label: "Insert or Edit CodeBlock",  defaultKey: "", section: "View" },
   { id: "apply-layout",        label: "Apply Layout",          defaultKey: "", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },

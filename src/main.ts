@@ -124,6 +124,15 @@ import {
 } from "./lib/layout-manager";
 import type { LayoutDeps } from "./lib/layout-manager";
 import { openAssignModal } from "./lib/assign-modal";
+import {
+  findSelectFenceRange,
+  findCustomFenceAtCursor,
+  parseSelectBodyForBuilder,
+  parseGridFenceBody,
+  parseSidebarFenceBody,
+} from "./editor/select-widget";
+import { openCodeBlockModal, type BlockKind } from "./lib/codeblock-modal";
+import type { RuleRowContext } from "./lib/rule-row";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -366,6 +375,42 @@ function hasViewLayout(content: string): boolean {
   if (closeIdx === -1) return false;
   const block = content.slice(3, closeIdx);
   return /^layout:\s*view-\S/m.test(block) || /\btype:\s*view-\S/m.test(block);
+}
+
+/**
+ * Collect tag and extension suggestions from the current vault index so the
+ * select-builder modal can populate its datalists. Returns empty arrays when
+ * the vault index is not yet available.
+ */
+function getRuleRowContext(): RuleRowContext {
+  const vm = (window as unknown as {
+    __MARKABLE_VAULT_MANAGER__?: { getVaultIndex?: () => unknown };
+  }).__MARKABLE_VAULT_MANAGER__;
+  const vaultIndex = vm?.getVaultIndex?.() as
+    | { entries?: Array<{ path: string; tags?: string[] }>; nonMdFiles?: Array<{ path?: string } | string> }
+    | null
+    | undefined;
+  if (!vaultIndex) return { knownTags: [], distinctExtensions: [] };
+  const tagSet = new Set<string>();
+  const extSet = new Set<string>();
+  const addExt = (p: string): void => {
+    const dot = p.lastIndexOf(".");
+    if (dot < 0) return;
+    const ext = p.slice(dot).toLowerCase();
+    if (ext.length > 1 && ext.length < 10) extSet.add(ext);
+  };
+  for (const entry of vaultIndex.entries ?? []) {
+    for (const tag of entry.tags ?? []) tagSet.add(tag);
+    addExt(entry.path);
+  }
+  for (const nf of vaultIndex.nonMdFiles ?? []) {
+    const p = typeof nf === "string" ? nf : nf.path;
+    if (p) addExt(p);
+  }
+  return {
+    knownTags: [...tagSet].sort(),
+    distinctExtensions: [...extSet].sort(),
+  };
 }
 
 /**
@@ -882,11 +927,59 @@ function handleAction(action: string): void {
       if (_layoutDeps) void openLayoutPicker(_layoutDeps);
       break;
 
-    case "apply-view":
     case "apply-layout": {
       const path = (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] as string | null | undefined;
       const open = (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_ASSIGN_MODAL__"] as ((p: string) => void) | undefined;
       if (path && typeof open === "function") open(path);
+      break;
+    }
+
+    // Cursor-aware Insert or Edit CodeBlock. If the cursor sits inside a
+    // recognized custom fence (sidebar / sidebar-left / grid / grid-card /
+    // select), the unified CodeBlock modal opens in edit mode pre-populated
+    // for that block type. Otherwise it opens in insert mode with a type
+    // picker.
+    case "code-block": {
+      if (!editor) break;
+      const ed = editor;
+      const ruleRowContext = getRuleRowContext();
+      const detected = findCustomFenceAtCursor(ed);
+      if (detected) {
+        const langToKind: Record<string, BlockKind> = {
+          "sidebar": "sidebar",
+          "sidebar-left": "sidebar",
+          "grid": "grid",
+          "grid-card": "grid",
+          "select": "select",
+        };
+        const kind = langToKind[detected.lang];
+        openCodeBlockModal({
+          ruleRowContext,
+          initial: {
+            kind,
+            sidebar: kind === "sidebar" ? parseSidebarFenceBody(detected.body, detected.lang) : undefined,
+            grid:    kind === "grid"    ? parseGridFenceBody(detected.body, detected.lang)    : undefined,
+            select:  kind === "select"  ? parseSelectBodyForBuilder(detected.body)            : undefined,
+          },
+          onApply: (newFence: string) => {
+            ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: newFence } });
+          },
+          onRemove: () => {
+            ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: "" } });
+          },
+        });
+      } else {
+        const cursorPos = ed.state.selection.main.head;
+        openCodeBlockModal({
+          ruleRowContext,
+          onApply: (newFence: string) => {
+            const line = ed.state.doc.lineAt(cursorPos);
+            const needLead = line.from !== cursorPos;
+            const insertText = (needLead ? "\n" : "") + newFence + "\n";
+            ed.dispatch({ changes: { from: cursorPos, to: cursorPos, insert: insertText } });
+          },
+        });
+      }
       break;
     }
 
@@ -1245,16 +1338,62 @@ async function initApp() {
         buildQuickCommandExtension({
           openLayoutPicker: () => { if (_layoutDeps) void openLayoutPicker(_layoutDeps); },
           enterPreviewMode: () => { if (!previewEnabled) togglePreview(); },
+          openCodeBlock: (view, from, to, preselect) => {
+            // Remove the trigger text first, then open the unified CodeBlock
+            // modal. `preselect` (when set) jumps the type picker to that
+            // kind — Select is the default when not specified.
+            view.dispatch({ changes: { from, to, insert: "" } });
+            const insertPos = from;
+            const onApply = (newFence: string): void => {
+              const line = view.state.doc.lineAt(insertPos);
+              const needLead = line.from !== insertPos;
+              const insertText = (needLead ? "\n" : "") + newFence + "\n";
+              view.dispatch({ changes: { from: insertPos, to: insertPos, insert: insertText } });
+            };
+            openCodeBlockModal({
+              ruleRowContext: getRuleRowContext(),
+              initial: preselect ? { kind: preselect } : undefined,
+              onApply,
+            });
+          },
         }),
       ),
     });
     void ensureStarterLayouts(appDataDir);
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_LAYOUT_PICKER_FOR_FILE__"] =
       (path: string) => { if (_layoutDeps) void openLayoutPicker(_layoutDeps, path); };
+    // Page-level eye-icon + right-click + Apply-Layout command all open the
+    // assign modal in layouts-only mode. Views moved to ```select codefences
+    // and are no longer assigned at the page level.
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_ASSIGN_MODAL__"] =
-      (path: string) => { if (_layoutDeps) void openAssignModal(path, _layoutDeps); };
+      (path: string) => {
+        if (_layoutDeps) void openAssignModal(path, _layoutDeps, undefined, { layoutsOnly: true });
+      };
     (window as unknown as Record<string, unknown>)["__MARKABLE_OPEN_FILE_IN_TAB__"] =
       (path: string) => void openAndMaybeLayout(path);
+
+    // Open the unified CodeBlock modal in edit mode for an existing select
+    // codefence. The widget's gear icon calls this with the EditorView and
+    // the fence body string. (Sidebar and Grid widgets don't have gears yet;
+    // the cursor-aware "Insert or Edit CodeBlock" command covers them.)
+    (window as unknown as Record<string, unknown>)["__MARKABLE_EDIT_SELECT_FENCE__"] =
+      (view: EditorView, body: string) => {
+        const range = findSelectFenceRange(view, body);
+        if (!range) return;
+        openCodeBlockModal({
+          initial: {
+            kind: "select",
+            select: parseSelectBodyForBuilder(body),
+          },
+          ruleRowContext: getRuleRowContext(),
+          onApply: (newFence: string) => {
+            view.dispatch({ changes: { from: range.from, to: range.to, insert: newFence } });
+          },
+          onRemove: () => {
+            view.dispatch({ changes: { from: range.from, to: range.to, insert: "" } });
+          },
+        });
+      };
   }
 
   // Attach dirty-state tracking to the editor via updateListener.

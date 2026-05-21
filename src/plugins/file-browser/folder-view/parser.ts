@@ -90,7 +90,7 @@ function parseFit(raw: string): string {
  * Splitting into sub-functions would require threading 3+ variables across boundaries
  * with no clarity gain over the flat sequential read.
  */
-function parseYamlLines(
+export function parseYamlLines(
   lines: string[],
 ): Record<string, string | Record<string, string> | (string | Record<string, string>)[]> {
   const result: Record<string, string | Record<string, string> | (string | Record<string, string>)[]> = {};
