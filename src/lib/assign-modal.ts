@@ -11,7 +11,7 @@
  * discourage applying typography layouts to directory-scoped view files.
  */
 
-import { readFile, writeFile } from "./bridge";
+import { readFile, writeFile, openAssetDialog } from "./bridge";
 import {
   discoverLayouts,
   applyLayoutToFile,
@@ -21,6 +21,7 @@ import {
 } from "./layout-manager";
 import type { LayoutDeps } from "./layout-manager";
 import { attachModalKeyboard } from "./modal-keyboard";
+import { getDisplaySpec } from "../plugins/file-browser/folder-view/display-options";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -44,11 +45,6 @@ const VIEW_TYPES: Array<{
     description: "Sortable table with configurable columns. Best for structured notes with frontmatter metadata.",
   },
   {
-    slug: "view-list",
-    name: "List",
-    description: "Compact single-column rows showing filename, type, and date. Fast and minimal.",
-  },
-  {
     slug: "view-timeline",
     name: "Timeline",
     description: "Files grouped by recency with a vertical orange rail and date headings.",
@@ -58,6 +54,11 @@ const VIEW_TYPES: Array<{
     name: "Kanban",
     description: "Columns grouped by a frontmatter field value. Only shows files that have that field set.",
     requiresField: true,
+  },
+  {
+    slug: "view-bookshelf",
+    name: "Bookshelf",
+    description: "Horizontal shelves of book-like items. Shows YAML `cover:` images when present; falls back to title spines.",
   },
 ];
 
@@ -70,14 +71,42 @@ const VIEW_PREVIEW_SVGS: Record<string, string> = {
   "view-table":
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="12" y="16" width="376" height="26" rx="3" fill="#2a2a4a"/><rect x="20" y="23" width="50" height="10" rx="3" fill="#5566aa"/><rect x="90" y="23" width="70" height="10" rx="3" fill="#5566aa"/><rect x="180" y="23" width="70" height="10" rx="3" fill="#5566aa"/><rect x="270" y="23" width="60" height="10" rx="3" fill="#5566aa"/><rect x="12" y="46" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="12" y="74" width="376" height="24" rx="2" fill="#232340"/><rect x="12" y="102" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="12" y="130" width="376" height="24" rx="2" fill="#232340"/><rect x="12" y="158" width="376" height="24" rx="2" fill="#1e1e38"/><rect x="20" y="54" width="44" height="7" rx="3" fill="#444466"/><rect x="90" y="54" width="55" height="7" rx="3" fill="#444466"/><rect x="20" y="82" width="38" height="7" rx="3" fill="#444466"/><rect x="90" y="82" width="62" height="7" rx="3" fill="#444466"/><rect x="20" y="110" width="50" height="7" rx="3" fill="#444466"/><rect x="90" y="110" width="48" height="7" rx="3" fill="#444466"/><rect x="20" y="138" width="42" height="7" rx="3" fill="#444466"/><rect x="20" y="166" width="48" height="7" rx="3" fill="#444466"/><text x="200" y="218" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Table</text></svg>`,
 
-  "view-list":
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="12" y="16" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="48" width="376" height="28" rx="3" fill="#1e1e38"/><rect x="12" y="80" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="112" width="376" height="28" rx="3" fill="#1e1e38"/><rect x="12" y="144" width="376" height="28" rx="3" fill="#232340"/><rect x="12" y="176" width="376" height="28" rx="3" fill="#1e1e38"/><circle cx="28" cy="30" r="5" fill="#5566aa"/><circle cx="28" cy="62" r="5" fill="#5566aa"/><circle cx="28" cy="94" r="5" fill="#5566aa"/><circle cx="28" cy="126" r="5" fill="#5566aa"/><circle cx="28" cy="158" r="5" fill="#5566aa"/><circle cx="28" cy="190" r="5" fill="#5566aa"/><rect x="42" y="24" width="100" height="7" rx="3" fill="#666688"/><rect x="42" y="56" width="80" height="7" rx="3" fill="#666688"/><rect x="42" y="88" width="120" height="7" rx="3" fill="#666688"/><rect x="42" y="120" width="90" height="7" rx="3" fill="#666688"/><rect x="42" y="152" width="110" height="7" rx="3" fill="#666688"/><rect x="42" y="184" width="95" height="7" rx="3" fill="#666688"/><rect x="312" y="24" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="56" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="88" width="56" height="7" rx="3" fill="#444455"/><rect x="312" y="120" width="56" height="7" rx="3" fill="#444455"/><text x="200" y="230" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">List</text></svg>`,
-
   "view-timeline":
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="30" y="12" width="6" height="220" rx="3" fill="#ff6600" opacity="0.6"/><circle cx="33" cy="28" r="7" stroke="#ff6600" stroke-width="4" fill="#1a1a2e"/><rect x="52" y="20" width="70" height="12" rx="3" fill="#5566aa"/><rect x="52" y="42" width="280" height="24" rx="3" fill="#232340"/><rect x="52" y="70" width="280" height="24" rx="3" fill="#1e1e38"/><circle cx="33" cy="110" r="7" stroke="#ff6600" stroke-width="4" fill="#1a1a2e"/><rect x="52" y="102" width="55" height="12" rx="3" fill="#5566aa"/><rect x="52" y="122" width="280" height="24" rx="3" fill="#232340"/><rect x="52" y="150" width="280" height="24" rx="3" fill="#1e1e38"/><rect x="52" y="178" width="280" height="24" rx="3" fill="#232340"/><rect x="62" y="50" width="100" height="7" rx="3" fill="#555577"/><rect x="62" y="78" width="80" height="7" rx="3" fill="#555577"/><rect x="62" y="130" width="120" height="7" rx="3" fill="#555577"/><rect x="62" y="158" width="90" height="7" rx="3" fill="#555577"/><rect x="62" y="186" width="105" height="7" rx="3" fill="#555577"/><text x="200" y="252" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Timeline</text></svg>`,
 
   "view-kanban":
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/><rect x="8" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="141" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="274" y="10" width="118" height="195" rx="6" fill="#232340"/><rect x="16" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="149" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="282" y="18" width="80" height="14" rx="3" fill="#5566aa"/><rect x="16" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="16" y="96" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="149" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="282" y="42" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="282" y="96" width="102" height="46" rx="4" fill="#1e1e38" stroke="#33335a" stroke-width="1"/><rect x="22" y="50" width="70" height="7" rx="3" fill="#555577"/><rect x="22" y="104" width="55" height="7" rx="3" fill="#555577"/><rect x="155" y="50" width="65" height="7" rx="3" fill="#555577"/><rect x="288" y="50" width="60" height="7" rx="3" fill="#555577"/><rect x="288" y="104" width="75" height="7" rx="3" fill="#555577"/><text x="200" y="240" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Kanban</text></svg>`,
+
+  "view-bookshelf":
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260"><rect width="400" height="260" fill="#1a1a2e"/>` +
+    // Shelf 1 (top)
+    `<rect x="20" y="20" width="40" height="70" rx="2" fill="#4a6fa5"/>` +
+    `<rect x="64" y="20" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="82" y="20" width="14" height="70" rx="2" fill="#3a4866"/>` +
+    `<rect x="100" y="20" width="40" height="70" rx="2" fill="#a55a4a"/>` +
+    `<rect x="144" y="20" width="40" height="70" rx="2" fill="#5a8a6f"/>` +
+    `<rect x="188" y="20" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="206" y="20" width="40" height="70" rx="2" fill="#9b8a5a"/>` +
+    `<rect x="250" y="20" width="14" height="70" rx="2" fill="#3a4866"/>` +
+    `<rect x="268" y="20" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="20" y="93" width="262" height="2" rx="1" fill="#555577"/>` +
+    // Shelf 2 (middle)
+    `<rect x="20" y="110" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="38" y="110" width="40" height="70" rx="2" fill="#7a4a8a"/>` +
+    `<rect x="82" y="110" width="40" height="70" rx="2" fill="#4a6fa5"/>` +
+    `<rect x="126" y="110" width="14" height="70" rx="2" fill="#3a4866"/>` +
+    `<rect x="144" y="110" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="162" y="110" width="40" height="70" rx="2" fill="#a55a4a"/>` +
+    `<rect x="206" y="110" width="40" height="70" rx="2" fill="#5a8a6f"/>` +
+    `<rect x="250" y="110" width="14" height="70" rx="2" fill="#2f3a55"/>` +
+    `<rect x="20" y="183" width="244" height="2" rx="1" fill="#555577"/>` +
+    // Shelf 3 (bottom)
+    `<rect x="20" y="200" width="40" height="40" rx="2" fill="#4a6fa5"/>` +
+    `<rect x="64" y="200" width="14" height="40" rx="2" fill="#2f3a55"/>` +
+    `<rect x="82" y="200" width="40" height="40" rx="2" fill="#a55a4a"/>` +
+    `<rect x="126" y="200" width="14" height="40" rx="2" fill="#3a4866"/>` +
+    `<rect x="20" y="243" width="122" height="2" rx="1" fill="#555577"/>` +
+    `<text x="320" y="250" text-anchor="middle" fill="#555577" font-size="11" font-family="sans-serif">Bookshelf</text></svg>`,
 };
 
 // ── CSS ────────────────────────────────────────────────────────────────────────
@@ -115,6 +144,23 @@ const AM_CSS = `
 }
 .am-current { font-size: 11px; color: var(--text-secondary, #888); }
 .am-current-value { color: var(--link-color, #4a9eff); font-weight: 500; }
+.am-preview-cancel { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--text-secondary, #888); margin-top: 40px; }
+.am-preview-cancel svg { width: 48px; height: 48px; fill: currentColor; opacity: .55; }
+.am-preview-cancel-text { font-size: 13px; font-weight: 500; color: var(--text-primary, #e0e0e0); text-align: center; }
+.am-config-row { margin-top: 10px; }
+.am-config-row-label { font-size: 11px; color: var(--text-secondary, #888); margin-bottom: 4px; }
+.am-config-row-buttons { display: flex; align-items: center; gap: 8px; }
+.am-config-btn {
+  background: var(--bg-primary, #1e1e1e); color: var(--text-primary, #ccc);
+  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  padding: 4px 10px; cursor: pointer; font-size: 11px; white-space: nowrap; flex-shrink: 0;
+}
+.am-config-btn:hover { background: var(--bg-hover, rgba(255,255,255,.07)); }
+.am-config-path {
+  color: var(--text-tertiary, #666); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;
+}
+.am-config-path.is-set { color: var(--text-primary, #ccc); }
 .am-close {
   background: none; border: none; cursor: pointer;
   color: var(--text-secondary, #888); font-size: 18px;
@@ -272,6 +318,23 @@ function escHtml(s: string): string {
   );
 }
 
+// Material Symbols: cancel (outlined) — used for the "None (remove)" preview.
+const CANCEL_ICON_SVG =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="m336-280 144-144 144 144 56-56-144-144 144-144-56-56-144 144-144-144-56 56 144 144-144 144 56 56ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-60q142 0 241-99.5T820-480q0-142-99-241t-241-99q-141 0-240.5 99T140-480q0 141 99.5 240.5T480-140Zm0-340Z"/></svg>`;
+
+/** Read notion-page sub-selection values (cover / icon / icon-themed) from frontmatter. */
+function readNotionFields(content: string): { cover: string; icon: string; iconThemed: boolean } {
+  const out = { cover: "", icon: "", iconThemed: false };
+  if (!content.startsWith("---")) return out;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return out;
+  const fm = content.slice(4, end);
+  out.cover = (fm.match(/^cover:\s*(.+)$/m)?.[1] ?? "").trim().replace(/^["']|["']$/g, "");
+  out.icon  = (fm.match(/^icon:\s*(.+)$/m)?.[1]  ?? "").trim().replace(/^["']|["']$/g, "");
+  out.iconThemed = /^icon-themed:\s*true\s*$/m.test(fm);
+  return out;
+}
+
 /** Read view-specific options from file frontmatter. */
 function readViewOptions(content: string): {
   sort: string;
@@ -337,7 +400,8 @@ function readCurrentAssignment(content: string): {
 
 /** Build a ```select codefence string from the modal's chosen options. */
 export function buildSelectFence(opts: {
-  display: string;            // cards | table | list | timeline | kanban
+  display: string;            // cards | table | timeline | kanban | bookshelf
+  displayOption?: string;     // sub-variant (e.g. "simple-list" under table)
   path?: string | null;       // omitted → defaults to host file's directory at render time
   sort: string;
   showModified: boolean;
@@ -345,14 +409,26 @@ export function buildSelectFence(opts: {
   showExtensions: boolean;
   previewPane: boolean;
   kanbanField: string;        // kanban only
+  groupBy?: string;           // bookshelf only
 }): string {
   const lines: string[] = ["```select"];
   if (opts.path && opts.path.trim()) lines.push(`path: ${opts.path.trim()}`);
   if (opts.display !== "timeline") lines.push(`sort: ${opts.sort}`);
   lines.push(`display: ${opts.display}`);
+  // Emit `option:` only when non-default so fences round-trip byte-stably.
+  const spec = getDisplaySpec(opts.display);
+  if (opts.displayOption && spec && opts.displayOption !== spec.defaultOption) {
+    lines.push(`option: ${opts.displayOption}`);
+  }
+  if (opts.display === "bookshelf" && opts.groupBy && opts.groupBy.trim()) {
+    lines.push(`group-by: ${opts.groupBy.trim()}`);
+  }
   if (!opts.showModified) lines.push("show-modified: false");
   if (opts.display === "cards" && !opts.showImagePreview) lines.push("card-preview: none");
-  if ((opts.display === "cards" || opts.display === "list") && !opts.showExtensions) {
+  const isCardsLike =
+    opts.display === "cards" ||
+    (opts.display === "table" && opts.displayOption === "simple-list");
+  if (isCardsLike && !opts.showExtensions) {
     lines.push("show-extensions: false");
   }
   if (opts.previewPane) lines.push("preview-pane: true");
@@ -367,7 +443,9 @@ export function buildSelectFence(opts: {
 async function applyViewAssignment(
   filePath: string,
   slug: string,
+  displayOption: string,
   kanbanField: string,
+  groupBy: string,
   sort: string,
   showModified: boolean,
   showImagePreview: boolean,
@@ -396,12 +474,14 @@ async function applyViewAssignment(
   const display = slug.replace(/^view-/, "");
   const fence = buildSelectFence({
     display,
+    displayOption,
     sort,
     showModified,
     showImagePreview,
     showExtensions,
     previewPane,
     kanbanField,
+    groupBy,
   });
 
   // Append the fence with a leading blank line for readability.
@@ -443,27 +523,42 @@ function closeModal(): void {
  */
 function readSelectFenceOptions(body: string): {
   slug: string;
+  displayOption: string;
   sort: string;
   showModified: boolean;
   showImagePreview: boolean;
   showExtensions: boolean;
   previewPane: boolean;
   kanbanField: string;
+  groupBy: string;
 } {
   const get = (key: string): string | null => {
     const re = new RegExp(`^${key}:\\s*(.+)$`, "m");
     const m = body.match(re);
     return m ? m[1].trim().replace(/\s+#.*$/, "") : null;
   };
-  const display = (get("display") ?? "cards").toLowerCase();
+  const rawDisplay = (get("display") ?? "cards").toLowerCase();
+  const rawOption = get("option");
+  // Resolve through display-options so a fence with `display: list` opens the
+  // modal as Table + Simple list, matching how the widget renders it.
+  const resolved = (() => {
+    if (rawDisplay === "list") return { display: "table", option: "simple-list" };
+    const spec = getDisplaySpec(rawDisplay);
+    if (!spec) return { display: "cards", option: "grid" };
+    const valid = new Set(spec.options.map((o) => o.slug));
+    const opt = rawOption && valid.has(rawOption) ? rawOption : spec.defaultOption;
+    return { display: spec.slug, option: opt };
+  })();
   return {
-    slug: `view-${display}`,
+    slug: `view-${resolved.display}`,
+    displayOption:    resolved.option,
     sort:             get("sort") ?? "name-asc",
     showModified:     (get("show-modified")   ?? "true")  !== "false",
     showImagePreview: (get("card-preview")    ?? "full")  !== "none",
     showExtensions:   (get("show-extensions") ?? "true")  !== "false",
     previewPane:      (get("preview-pane")    ?? "false") === "true",
     kanbanField:      get("kanban-field") ?? "",
+    groupBy:          get("group-by") ?? "",
   };
 }
 
@@ -494,8 +589,33 @@ export async function openAssignModal(
   // In fence-edit mode, seed initial state from the fence body. Otherwise from file frontmatter.
   const seed = fenceEdit ? readSelectFenceOptions(fenceEdit.body) : null;
 
-  let selectedSlug: string | null = seed ? seed.slug : current.slug;
+  // Normalize the current.slug (from YAML) to a layout stem. A file may have
+  // `layout: notion` (the YAML slug) where the layout file is notion-page.layout.md,
+  // so we accept either stem or yaml-slug here and store the stem internally.
+  function normalizeToStem(raw: string | null): string | null {
+    if (!raw) return null;
+    if (raw.startsWith("view-")) return raw;
+    const lt = allLayouts.find((l) => {
+      const stem = l.filePath.split("/").pop()!.replace(".layout.md", "");
+      return stem === raw || l.slug === raw;
+    });
+    return lt ? lt.filePath.split("/").pop()!.replace(".layout.md", "") : raw;
+  }
+
+  let selectedSlug: string | null = seed ? seed.slug : normalizeToStem(current.slug);
   let kanbanFieldValue: string = seed ? seed.kanbanField : current.kanbanField;
+  // Per-view sub-variant ("simple-list" under view-table, etc.). Seeded from
+  // the existing fence body in edit mode; defaults to the display's defaultOption.
+  let optDisplayOption: string = seed?.displayOption ?? "";
+  // Bookshelf group-by YAML key (e.g. "status" → one shelf per status value).
+  let groupByValue: string = seed?.groupBy ?? "";
+
+  // Notion Page sub-selections (cover image, icon, theme-aware) read from frontmatter.
+  // These render inline under the preview when notion-page is selected.
+  const initialNotion = readNotionFields(fileContent);
+  let optCover: string = initialNotion.cover;
+  let optIcon: string = initialNotion.icon;
+  let optIconThemed: boolean = initialNotion.iconThemed;
 
   // View-specific display options (read from existing frontmatter, or defaults)
   const initialOpts = seed ?? readViewOptions(fileContent);
@@ -527,7 +647,7 @@ export async function openAssignModal(
   panel.className = "am-panel";
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-modal", "true");
-  panel.setAttribute("aria-label", layoutsOnly ? "Apply Layout" : "View or Layout");
+  panel.setAttribute("aria-label", layoutsOnly ? "Apply Page Layout" : "View or Layout");
   overlay.appendChild(panel);
 
   // ── Header ─────────────────────────────────────────────────────────────────
@@ -544,10 +664,11 @@ export async function openAssignModal(
   headerInfo.appendChild(titleEl);
   const currentEl = document.createElement("div");
   currentEl.className = "am-current";
+  const currentPrefix = layoutsOnly ? "Current Page Layout:" : "Currently:";
   if (current.slug) {
-    currentEl.innerHTML = `Currently: <span class="am-current-value">${escHtml(current.slug)}</span>`;
+    currentEl.innerHTML = `${currentPrefix} <span class="am-current-value">${escHtml(current.slug)}</span>`;
   } else {
-    currentEl.textContent = "Currently: No view or layout assigned";
+    currentEl.textContent = layoutsOnly ? `${currentPrefix} not set` : "Currently: No view or layout assigned";
   }
   headerInfo.appendChild(currentEl);
   header.appendChild(headerInfo);
@@ -592,13 +713,21 @@ export async function openAssignModal(
   const allItems: Array<{ el: HTMLElement; slug: string | null }> = [];
 
   let kanbanRowEl: HTMLElement | null = null;
+  let bookshelfRowEl: HTMLElement | null = null;
 
   function updatePreview(slug: string | null): void {
     renderOptionsArea(slug);
+    // Restore default visibility (overridden in the None branch below)
+    previewSvgEl.style.display = "";
+    previewNameEl.style.display = "";
     if (!slug) {
+      // "None (remove)" — Material Cancel icon stacked over centered text.
       previewSvgEl.innerHTML = "";
+      previewSvgEl.style.display = "none";
       previewNameEl.textContent = "";
-      previewDescEl.innerHTML = `<span class="am-preview-placeholder">Select a view or layout to preview</span>`;
+      previewNameEl.style.display = "none";
+      previewDescEl.innerHTML =
+        `<div class="am-preview-cancel">${CANCEL_ICON_SVG}<div class="am-preview-cancel-text">Remove Page Layout</div></div>`;
       return;
     }
     const vt = VIEW_TYPES.find((v) => v.slug === slug);
@@ -608,9 +737,10 @@ export async function openAssignModal(
       previewDescEl.textContent = vt.description;
       return;
     }
-    const lt = allLayouts.find(
-      (l) => l.filePath.split("/").pop()!.replace(".layout.md", "") === slug,
-    );
+    const lt = allLayouts.find((l) => {
+      const stem = l.filePath.split("/").pop()!.replace(".layout.md", "");
+      return stem === slug || l.slug === slug;
+    });
     if (lt) {
       const svgKey = lt.filePath.split("/").pop()!;
       const svg = LAYOUT_PREVIEW_SVGS[svgKey] ??
@@ -620,14 +750,80 @@ export async function openAssignModal(
       previewDescEl.textContent = lt.description;
       return;
     }
-    // "None" slug (null)
+    // Unknown slug — show empty placeholder
     previewSvgEl.innerHTML = "";
-    previewNameEl.textContent = "Remove assignment";
-    previewDescEl.textContent = "Clear the layout or view from this file's frontmatter.";
+    previewNameEl.textContent = "";
+    previewDescEl.innerHTML = `<span class="am-preview-placeholder">Select a layout to preview</span>`;
   }
 
   function renderOptionsArea(slug: string | null): void {
     optionsArea.innerHTML = "";
+
+    // ── Notion Page sub-selections: cover image, icon, theme-aware ───────────
+    if (slug === "notion-page" || slug === "notion") {
+      optionsArea.classList.remove("is-hidden");
+      const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+      const addImagePicker = (label: string, getValue: () => string, setValue: (v: string) => void): void => {
+        const row = document.createElement("div");
+        row.className = "am-config-row";
+        const labelEl = document.createElement("div");
+        labelEl.className = "am-config-row-label";
+        labelEl.textContent = label;
+        row.appendChild(labelEl);
+        const btnRow = document.createElement("div");
+        btnRow.className = "am-config-row-buttons";
+        const btn = document.createElement("button");
+        btn.className = "am-config-btn";
+        btn.textContent = "Choose…";
+        const pathEl = document.createElement("span");
+        pathEl.className = "am-config-path";
+        const currentVal = getValue();
+        if (currentVal) {
+          pathEl.textContent = currentVal.split("/").pop() ?? currentVal;
+          pathEl.title = currentVal;
+          pathEl.classList.add("is-set");
+        } else {
+          pathEl.textContent = "Not set";
+        }
+        btn.addEventListener("click", async () => {
+          const result = await openAssetDialog();
+          if (!result.cancelled) {
+            const stored = result.path.startsWith(fileDir + "/")
+              ? "./" + result.path.slice(fileDir.length + 1)
+              : result.path;
+            setValue(stored);
+            pathEl.textContent = stored.split("/").pop() ?? stored;
+            pathEl.title = stored;
+            pathEl.classList.add("is-set");
+          }
+        });
+        btnRow.appendChild(btn);
+        btnRow.appendChild(pathEl);
+        row.appendChild(btnRow);
+        optionsArea.appendChild(row);
+      };
+
+      addImagePicker("Background image",       () => optCover, (v) => { optCover = v; });
+      addImagePicker("Icon (image or SVG)",    () => optIcon,  (v) => { optIcon  = v; });
+
+      // Theme-aware checkbox
+      const checkGroup = document.createElement("div");
+      checkGroup.className = "am-opt-group";
+      checkGroup.style.marginTop = "10px";
+      const row = document.createElement("label");
+      row.className = "am-opt-check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = optIconThemed;
+      cb.addEventListener("change", () => { optIconThemed = cb.checked; });
+      cb.addEventListener("click", (e) => e.stopPropagation());
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode("Make icon theme-aware (SVG fills → currentColor)"));
+      checkGroup.appendChild(row);
+      optionsArea.appendChild(checkGroup);
+      return;
+    }
 
     if (!slug?.startsWith("view-")) {
       optionsArea.classList.add("is-hidden");
@@ -692,6 +888,42 @@ export async function openAssignModal(
       checks.appendChild(row);
     }
 
+    // "Layout option" pill row — shown when the underlying display has >1 options.
+    const displaySlug = slug?.replace(/^view-/, "") ?? "";
+    const optSpec = getDisplaySpec(displaySlug);
+    if (optSpec && optSpec.options.length > 1) {
+      // Initialize to display default when not previously set or invalid.
+      const validSlugs = new Set(optSpec.options.map((o) => o.slug));
+      if (!validSlugs.has(optDisplayOption)) {
+        optDisplayOption = optSpec.defaultOption;
+      }
+      const optGroup = document.createElement("div");
+      optGroup.className = "am-opt-group";
+      const optLabelEl = document.createElement("div");
+      optLabelEl.className = "am-opt-group-label";
+      optLabelEl.textContent = "Layout option";
+      optGroup.appendChild(optLabelEl);
+      const pillRow = document.createElement("div");
+      pillRow.className = "am-sort-pills";
+      for (const o of optSpec.options) {
+        const pill = document.createElement("span");
+        pill.className = "am-sort-pill" + (optDisplayOption === o.slug ? " is-active" : "");
+        pill.textContent = o.label;
+        if (o.description) pill.title = o.description;
+        pill.addEventListener("click", () => {
+          optDisplayOption = o.slug;
+          pillRow.querySelectorAll(".am-sort-pill").forEach((p) =>
+            p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
+          );
+          // Re-render so option-dependent rows ("Show file extensions") refresh.
+          renderOptionsArea(slug);
+        });
+        pillRow.appendChild(pill);
+      }
+      optGroup.appendChild(pillRow);
+      optionsArea.appendChild(optGroup);
+    }
+
     // "Date modified" — all views
     addCheck("Date modified", optShowModified, (v) => { optShowModified = v; });
 
@@ -700,8 +932,8 @@ export async function openAssignModal(
       addCheck("Image preview", optShowImagePreview, (v) => { optShowImagePreview = v; });
     }
 
-    // "File extensions" — cards and list
-    if (slug === "view-cards" || slug === "view-list") {
+    // "File extensions" — cards and Table → Simple list
+    if (slug === "view-cards" || (slug === "view-table" && optDisplayOption === "simple-list")) {
       addCheck("File extensions", optShowExtensions, (v) => { optShowExtensions = v; });
     }
 
@@ -732,6 +964,10 @@ export async function openAssignModal(
 
   function selectSlug(slug: string | null): void {
     selectedSlug = slug;
+    // Reset option to the new display's default so an old "simple-list" from
+    // Table doesn't bleed into Kanban or Cards.
+    const newSpec = slug ? getDisplaySpec(slug.replace(/^view-/, "")) : null;
+    optDisplayOption = newSpec?.defaultOption ?? "";
     for (const { el, slug: s } of allItems) {
       const isSel = s === slug;
       el.classList.toggle("is-selected", isSel);
@@ -745,6 +981,9 @@ export async function openAssignModal(
     updatePreview(slug);
     if (kanbanRowEl) {
       kanbanRowEl.classList.toggle("is-visible", slug === "view-kanban");
+    }
+    if (bookshelfRowEl) {
+      bookshelfRowEl.classList.toggle("is-visible", slug === "view-bookshelf");
     }
   }
 
@@ -803,6 +1042,24 @@ export async function openAssignModal(
         kanbanRowEl.appendChild(kfi);
         listEl.appendChild(kanbanRowEl);
       }
+      if (vt.slug === "view-bookshelf") {
+        bookshelfRowEl = document.createElement("div");
+        bookshelfRowEl.className = "am-kanban-row";
+        if (selectedSlug === "view-bookshelf") bookshelfRowEl.classList.add("is-visible");
+        const gbl = document.createElement("label");
+        gbl.className = "am-kanban-label";
+        gbl.textContent = "group-by:";
+        bookshelfRowEl.appendChild(gbl);
+        const gbi = document.createElement("input");
+        gbi.type = "text";
+        gbi.className = "am-kanban-input";
+        gbi.placeholder = "e.g. status (optional)";
+        gbi.value = groupByValue;
+        gbi.addEventListener("input", () => { groupByValue = gbi.value; });
+        gbi.addEventListener("click", (e) => e.stopPropagation());
+        bookshelfRowEl.appendChild(gbi);
+        listEl.appendChild(bookshelfRowEl);
+      }
     }
 
     // ── LAYOUTS section divider ───────────────────────────────────────────
@@ -818,12 +1075,14 @@ export async function openAssignModal(
   if (isFolderScopedFile) layoutSection.classList.add("am-section-disabled");
   const layoutLabel = document.createElement("div");
   layoutLabel.className = "am-section-label";
-  layoutLabel.textContent = "Layouts";
+  layoutLabel.textContent = layoutsOnly ? "ASSIGN LAYOUT" : "Layouts";
   layoutSection.appendChild(layoutLabel);
-  const layoutDesc = document.createElement("div");
-  layoutDesc.className = "am-section-desc";
-  layoutDesc.textContent = "Styles this file's own content";
-  layoutSection.appendChild(layoutDesc);
+  if (!layoutsOnly) {
+    const layoutDesc = document.createElement("div");
+    layoutDesc.className = "am-section-desc";
+    layoutDesc.textContent = "Styles this file's own content";
+    layoutSection.appendChild(layoutDesc);
+  }
   if (isFolderScopedFile) {
     const note = document.createElement("div");
     note.className = "am-disabled-note";
@@ -851,6 +1110,16 @@ export async function openAssignModal(
   listEl.appendChild(div2);
 
   addItem("None (remove)", null);
+
+  // Default-select the first layout when opening in layoutsOnly mode and no
+  // layout is currently assigned.
+  if (layoutsOnly && selectedSlug === null && allLayouts.length > 0 && !isFolderScopedFile) {
+    const firstStem = allLayouts[0].filePath.split("/").pop()!.replace(".layout.md", "");
+    selectedSlug = firstStem;
+    for (const { el, slug: s } of allItems) {
+      el.classList.toggle("is-selected", s === firstStem);
+    }
+  }
 
   // ── Footer ─────────────────────────────────────────────────────────────────
 
@@ -902,12 +1171,14 @@ export async function openAssignModal(
       } else if (selectedSlug.startsWith("view-")) {
         const fence = buildSelectFence({
           display: selectedSlug.replace(/^view-/, ""),
+          displayOption: optDisplayOption,
           sort: optSort,
           showModified: optShowModified,
           showImagePreview: optShowImagePreview,
           showExtensions: optShowExtensions,
           previewPane: optPreviewPane,
           kanbanField: kanbanFieldValue,
+          groupBy: groupByValue,
         });
         fenceEdit.onApply(fence);
       }
@@ -919,12 +1190,20 @@ export async function openAssignModal(
       await removeLayoutFromFile(filePath, deps);
     } else if (selectedSlug.startsWith("view-")) {
       await applyViewAssignment(
-        filePath, selectedSlug, kanbanFieldValue,
+        filePath, selectedSlug, optDisplayOption, kanbanFieldValue, groupByValue,
         optSort, optShowModified, optShowImagePreview, optShowExtensions, optPreviewPane,
         deps,
       );
     } else {
-      await applyLayoutToFile(filePath, selectedSlug, deps);
+      // For notion-page, pass cover/icon/icon-themed as extra fields so they
+      // land in the YAML alongside `layout: notion-page` in one write.
+      const extraFields: Record<string, string> = {};
+      if (selectedSlug === "notion-page") {
+        if (optCover) extraFields.cover = optCover;
+        if (optIcon)  extraFields.icon  = optIcon;
+        if (optIconThemed) extraFields["icon-themed"] = "true";
+      }
+      await applyLayoutToFile(filePath, selectedSlug, deps, extraFields);
     }
   });
   footer.appendChild(applyBtn);

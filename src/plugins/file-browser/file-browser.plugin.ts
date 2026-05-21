@@ -42,8 +42,8 @@ import {
   ICON_FILE_CODE,
   ICON_CHEVRON,
   ICON_UNMOUNT,
-  ICON_PREVIEW,
   ICON_VISIBILITY,
+  ICON_DASHBOARD,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
@@ -75,6 +75,7 @@ import {
 import { buildFolderViewSet } from "./folder-view/detection";
 import { FOLDER_VIEW_CSS } from "./folder-view/folder-view-css";
 import { FOLDER_TABLE_CSS } from "./folder-view/folder-table-css";
+import { BOOKSHELF_CSS } from "./folder-view/bookshelf-css";
 import {
   openFolderViewTab as _openFolderViewTab,
   buildFolderViewRenderFn,
@@ -715,7 +716,7 @@ const FILE_BROWSER_CSS = `
   background: #e05252;
 }
 
-` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS;
+` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS;
 
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
@@ -1701,8 +1702,8 @@ function buildTreeUl(
       const assignBtn = document.createElement("span");
       assignBtn.className = "tree-node-assign-btn";
       assignBtn.setAttribute("aria-hidden", "true");
-      assignBtn.title = "Apply layout";
-      assignBtn.innerHTML = wrapSvg(ICON_PREVIEW, 12);
+      assignBtn.title = "Apply Page Layout";
+      assignBtn.innerHTML = wrapSvg(ICON_DASHBOARD, 12);
       assignBtn.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
         (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
@@ -2971,7 +2972,7 @@ function buildFileContextMenuItems(
     },
     { separator: true, label: "", handler: null },
     ...(path.toLowerCase().endsWith(".md") && !isViewDefinition ? [{
-      label: "Apply Layout…",
+      label: "Apply Page Layout…",
       handler: () => {
         (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
       },

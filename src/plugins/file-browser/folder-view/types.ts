@@ -199,6 +199,16 @@ export interface FolderViewConfig {
   kanbanField?: string;
   /** Explicit column order for folder-kanban. Alphabetical when absent. */
   kanbanOrder?: string[];
+  /**
+   * Chosen sub-variant of the current display (e.g. "simple-list" under table).
+   * Resolved via display-options.ts; absent means "use the display's defaultOption".
+   */
+  displayOption?: string;
+  /**
+   * YAML frontmatter key used to group items into shelves (Bookshelf display).
+   * Absent means a single ungrouped collection.
+   */
+  groupBy?: string;
 }
 
 // ── Card types ─────────────────────────────────────────────────────────────────

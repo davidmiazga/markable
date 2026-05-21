@@ -12,7 +12,7 @@
  * The wikipedia.layout.md starter is written there on first launch.
  */
 
-import { readFile, writeFile, deleteFile, ensureDirectory, listMdFiles, openAssetDialog } from "./bridge";
+import { readFile, writeFile, deleteFile, ensureDirectory, listMdFiles } from "./bridge";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { render, stripScripts, wireDataPathListeners, wireAnchorLinks } from "./layout-engine";
 import type { TemplateContext, VaultFileEntry, TocEntry } from "./layout-engine";
@@ -278,6 +278,9 @@ export async function ensureStarterLayouts(appDataDir: string): Promise<void> {
     }
     // Clean up renamed/removed starter layouts from existing installs.
     void deleteFile(`${dir}/bookshelf.layout.md`);
+    // Grid moved out of layouts (now a ```grid codefence widget) in the May
+    // 2026 migration; remove any stale starter file from earlier installs.
+    void deleteFile(`${dir}/grid.layout.md`);
   } catch {
     // Silent — App Support write failure is non-fatal.
   }
@@ -379,7 +382,12 @@ function extractToc(body: string): TocEntry[] {
   return result;
 }
 
-function resolveAssetSrc(value: string, fileDir = ""): string {
+/**
+ * Convert a YAML cover/icon path value (absolute, `./relative`, or bare relative)
+ * to a Tauri `asset://` URL. Exported for reuse by folder-view renderers
+ * (Bookshelf etc.) that surface cover images outside the layout-engine.
+ */
+export function resolveAssetSrc(value: string, fileDir = ""): string {
   const abs = value.startsWith("/") ? value : `${fileDir}/${value.replace(/^\.\//, "")}`;
   return convertFileSrc(abs);
 }
@@ -724,10 +732,6 @@ function toggleLayoutConfigFields(content: string, newStem: string): string {
   return content.replace(/^---\n[\s\S]*?\n---(\n|$)/, `---\n${fmBlock}\n---\n`);
 }
 
-function insertLayoutField(content: string, stem: string): string {
-  return insertLayoutFields(toggleLayoutConfigFields(content, stem), { layout: stem });
-}
-
 /**
  * Write the `layout:` field into a file's YAML front matter and immediately
  * render the layout view. If the file is open in the editor (main.ts wires
@@ -739,6 +743,7 @@ async function setLayoutInFile(
   layoutStem: string,
   layout: LayoutMeta,
   deps: LayoutDeps,
+  extraFields: Record<string, string> = {},
 ): Promise<void> {
   // Prefer live editor content (includes unsaved changes) over the disk version.
   const liveContent = deps.getActiveFileContent?.();
@@ -750,7 +755,10 @@ async function setLayoutInFile(
     if (!result.ok) return;
     baseContent = result.value;
   }
-  const newContent = insertLayoutField(baseContent, layoutStem);
+  const newContent = insertLayoutFields(
+    toggleLayoutConfigFields(baseContent, layoutStem),
+    { layout: layoutStem, ...extraFields },
+  );
 
   if (deps.onFileUpdated) {
     deps.onFileUpdated(filePath, newContent);
@@ -761,179 +769,21 @@ async function setLayoutInFile(
   void applyLayout(layout, filePath, deps, { docContent: newContent });
 }
 
-// ── Layout config wizard ───────────────────────────────────────────────────────
-
-interface LayoutFieldDef {
-  key: string;
-  label: string;
-  type?: "image" | "checkbox";
-}
-
-const LAYOUT_CONFIG: Record<string, LayoutFieldDef[]> = {
-  "notion": [
-    { key: "cover", label: "Cover Image", type: "image" },
-    { key: "icon", label: "Icon (image or SVG)", type: "image" },
-    { key: "icon-themed", label: "Make icon theme-aware (SVG fills → currentColor)", type: "checkbox" },
-  ],
-};
+// ── Layout config fields metadata ──────────────────────────────────────────────
 
 /**
- * Show a config wizard for layouts that have optional fields (cover, icon, etc.).
- * If the layout has no config, writes the `layout:` key directly and renders.
+ * Per-layout config field metadata. Used by `toggleLayoutConfigFields` so that
+ * switching layouts comments out fields belonging to the previous layout and
+ * uncomments fields belonging to the new one. The assign-modal UI renders the
+ * pickers for these fields inline (see `renderOptionsArea` in assign-modal.ts).
  */
-async function showLayoutConfigWizard(
-  filePath: string,
-  _stem: string,
-  layout: LayoutMeta,
-  deps: LayoutDeps,
-): Promise<void> {
-  const slug = layout.slug;
-  const fields = LAYOUT_CONFIG[slug];
-  if (!fields) {
-    void setLayoutInFile(filePath, slug, layout, deps);
-    return;
-  }
-
-  const selected: Record<string, string> = {};
-  const fileDir = filePath.split("/").slice(0, -1).join("/");
-
-  return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "layout-config-overlay";
-    overlay.style.cssText =
-      "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;display:flex;align-items:center;justify-content:center;";
-
-    const card = document.createElement("div");
-    card.style.cssText =
-      "background:var(--bg-secondary,#2a2a3a);border:1px solid var(--border-color,#444);border-radius:8px;padding:24px;min-width:360px;max-width:480px;";
-
-    const title = document.createElement("h3");
-    title.textContent = `Configure ${layout.name}`;
-    title.style.cssText = "margin:0 0 4px;color:var(--text-primary,#ccc);font-size:15px;font-weight:600;";
-    const subtitle = document.createElement("p");
-    subtitle.textContent = "These fields are optional — skip either to leave it unset.";
-    subtitle.style.cssText = "margin:0 0 18px;color:var(--text-secondary,#888);font-size:12px;";
-    card.appendChild(title);
-    card.appendChild(subtitle);
-
-    for (const field of fields) {
-      const row = document.createElement("div");
-
-      if (field.type === "checkbox") {
-        row.style.cssText = "margin-bottom:14px;display:flex;align-items:center;gap:8px;";
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.id = `wiz-${field.key}`;
-        cb.className = "form-checkbox";
-        const lbl = document.createElement("label");
-        lbl.htmlFor = `wiz-${field.key}`;
-        lbl.textContent = field.label;
-        lbl.style.cssText = "color:var(--text-secondary,#888);font-size:12px;cursor:pointer;user-select:none;";
-        cb.addEventListener("change", () => {
-          if (cb.checked) selected[field.key] = "true";
-          else delete selected[field.key];
-        });
-        row.appendChild(cb);
-        row.appendChild(lbl);
-      } else {
-        row.style.cssText = "margin-bottom:14px;";
-        const labelEl = document.createElement("div");
-        labelEl.textContent = field.label;
-        labelEl.style.cssText = "color:var(--text-secondary,#888);font-size:12px;margin-bottom:6px;";
-        row.appendChild(labelEl);
-
-        const btnRow = document.createElement("div");
-        btnRow.style.cssText = "display:flex;align-items:center;gap:8px;";
-
-        const btn = document.createElement("button");
-        btn.textContent = "Choose…";
-        btn.style.cssText =
-          "background:var(--bg-primary,#1e1e1e);color:var(--text-primary,#ccc);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px;white-space:nowrap;flex-shrink:0;";
-
-        const pathEl = document.createElement("span");
-        pathEl.textContent = "Not set";
-        pathEl.style.cssText =
-          "color:var(--text-tertiary,#666);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;";
-
-        btn.addEventListener("click", async () => {
-          const result = await openAssetDialog();
-          if (!result.cancelled) {
-            selected[field.key] = result.path;
-            pathEl.textContent = result.path.split("/").pop() ?? result.path;
-            pathEl.title = result.path;
-            pathEl.style.color = "var(--text-primary,#ccc)";
-          }
-        });
-
-        btnRow.appendChild(btn);
-        btnRow.appendChild(pathEl);
-        row.appendChild(btnRow);
-      }
-
-      card.appendChild(row);
-    }
-
-    const footer = document.createElement("div");
-    footer.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:20px;";
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Cancel";
-    cancelBtn.style.cssText =
-      "background:transparent;color:var(--text-secondary,#888);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 14px;cursor:pointer;font-size:13px;";
-
-    const applyBtn = document.createElement("button");
-    applyBtn.textContent = "Apply";
-    applyBtn.style.cssText =
-      "background:var(--accent-color,#4a9eff);color:#fff;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:500;";
-
-    cancelBtn.addEventListener("click", () => {
-      overlay.remove();
-      resolve();
-    });
-
-    applyBtn.addEventListener("click", async () => {
-      overlay.remove();
-      const toWrite: Record<string, string> = { layout: slug };
-      for (const field of fields) {
-        const val = selected[field.key];
-        if (!val) continue;
-        if (field.type === "checkbox") {
-          toWrite[field.key] = val;
-        } else {
-          toWrite[field.key] = val.startsWith(fileDir + "/")
-            ? "./" + val.slice(fileDir.length + 1)
-            : val;
-        }
-      }
-
-      const liveBase = deps.getActiveFileContent?.();
-      let baseForWizard: string;
-      if (liveBase !== null && liveBase !== undefined) {
-        baseForWizard = liveBase;
-      } else {
-        const readResult = await readFile(filePath);
-        if (!readResult.ok) { resolve(); return; }
-        baseForWizard = readResult.value;
-      }
-      const newContent = insertLayoutFields(toggleLayoutConfigFields(baseForWizard, slug), toWrite);
-
-      if (deps.onFileUpdated) {
-        deps.onFileUpdated(filePath, newContent);
-      } else {
-        await writeFile(filePath, newContent);
-      }
-
-      void applyLayout(layout, filePath, deps, { docContent: newContent });
-      resolve();
-    });
-
-    footer.appendChild(cancelBtn);
-    footer.appendChild(applyBtn);
-    card.appendChild(footer);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-  });
-}
+const NOTION_FIELDS = [{ key: "cover" }, { key: "icon" }, { key: "icon-themed" }];
+const LAYOUT_CONFIG: Record<string, Array<{ key: string }>> = {
+  // Keyed by both the file stem (notion-page) and the legacy yaml slug (notion)
+  // since either may appear as the active layout name.
+  "notion": NOTION_FIELDS,
+  "notion-page": NOTION_FIELDS,
+};
 
 /** Open the layout picker modal. No-op if already open or no layouts found.
  *  Pass `targetFilePath` to apply the layout to a specific file rather than
@@ -952,13 +802,15 @@ export async function openLayoutPicker(deps: LayoutDeps, targetFilePath?: string
   });
 
   openTemplatePicker<LayoutMeta>({
-    title: "Apply Layout",
+    title: "Apply Page Layout",
     createLabel: "Apply",
     templates,
     onSelect: (tpl) => {
       if (!filePath) return;
       const stem = tpl.data.filePath.split("/").pop()!.replace(".layout.md", "");
-      void showLayoutConfigWizard(filePath, stem, tpl.data, deps);
+      // Apply the layout immediately. Cover/icon sub-selections live in the
+      // assign-modal flow (right-click → Apply Page Layout), not this picker.
+      void setLayoutInFile(filePath, stem, tpl.data, deps);
     },
   });
 }
@@ -1280,11 +1132,12 @@ export async function applyLayoutToFile(
   filePath: string,
   slug: string,
   deps: LayoutDeps,
+  extraFields: Record<string, string> = {},
 ): Promise<void> {
   const all = await discoverLayouts(deps.appDataDir, deps.getActiveVaultRoot());
   const target = all.find(
     (l) => l.filePath.split("/").pop()!.replace(".layout.md", "") === slug,
   );
   if (!target) return;
-  void setLayoutInFile(filePath, slug, target, deps);
+  void setLayoutInFile(filePath, slug, target, deps, extraFields);
 }

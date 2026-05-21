@@ -5,7 +5,8 @@
  * A floating popup appears with matching commands; keyboard and mouse select.
  *
  * Commands:
- *   /layout        — open the layout picker
+ *   /layout        — open the page-layout picker
+ *   /block         — open the CodeBlock modal (covers /select, /sidebar, /grid)
  *   /table         — insert a starter 3-column table
  *   /date          — insert today's date (YYYY-MM-DD)
  *   /tasks         — insert a task list item (- [ ] )
@@ -16,7 +17,6 @@
  *   /callout-important — insert an IMPORTANT callout
  *   /divider       — insert a horizontal rule
  *   /quote         — insert a blockquote prefix
- *   /sidebar       — insert a right-floating sidebar block
  *   /sidebar-left  — insert a left-floating sidebar block
  *   /link          — insert a hyperlink placeholder
  *   /image         — insert an image placeholder
@@ -60,7 +60,6 @@ const slashKeymap = keymap.of([
 // ── Starters ───────────────────────────────────────────────────────────────────
 const TABLE_STARTER   = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n";
 const CODE_FENCE      = "```\n\n```";
-const SIDEBAR_RIGHT   = "```sidebar\n\n```";
 const SIDEBAR_LEFT    = "```sidebar-left\n\n```";
 
 function callout(type: string): string {
@@ -72,7 +71,7 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
   return [
     {
       name: "layout",
-      description: "Apply a layout to this file",
+      description: "Apply a page layout to this file",
       apply(view, from, to) {
         view.dispatch({ changes: { from, to, insert: "" } });
         deps.openLayoutPicker();
@@ -80,23 +79,9 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
     },
     {
       name: "block",
-      description: "Insert a code block (sidebar, grid, select)",
+      description: "Insert a /select, /sidebar, or /grid",
       apply(view, from, to) {
         deps.openCodeBlock(view, from, to);
-      },
-    },
-    {
-      name: "select",
-      description: "Insert a Select block (filter files + display them)",
-      apply(view, from, to) {
-        deps.openCodeBlock(view, from, to, "select");
-      },
-    },
-    {
-      name: "grid",
-      description: "Insert a Grid block (NxM cell grid)",
-      apply(view, from, to) {
-        deps.openCodeBlock(view, from, to, "grid");
       },
     },
     {
@@ -193,17 +178,6 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
       apply(view, from, to) {
         view.dispatch({ changes: { from, to, insert: "" } });
         toggleLinePrefix(view, "> ");
-      },
-    },
-    {
-      name: "sidebar",
-      description: "Insert a right-floating sidebar",
-      apply(view, from, to) {
-        view.dispatch({
-          changes: { from, to, insert: SIDEBAR_RIGHT },
-          selection: { anchor: from + SIDEBAR_RIGHT.indexOf("\n") + 1 },
-        });
-        deps.enterPreviewMode();
       },
     },
     {

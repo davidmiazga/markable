@@ -20,9 +20,10 @@ import { WidgetType, type EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { renderFolderCards } from "../plugins/file-browser/folder-view/renderer";
 import { renderFolderTable } from "../plugins/file-browser/folder-view/table-renderer";
-import { renderFolderList } from "../plugins/file-browser/folder-view/list-renderer";
 import { renderFolderTimeline } from "../plugins/file-browser/folder-view/timeline-renderer";
 import { renderFolderKanban } from "../plugins/file-browser/folder-view/kanban-renderer";
+import { renderFolderBookshelf } from "../plugins/file-browser/folder-view/bookshelf-renderer";
+import { resolveDisplayAndOption, getDisplaySpec } from "../plugins/file-browser/folder-view/display-options";
 import { collectChildren } from "../plugins/file-browser/folder-view/tab";
 import { parseYamlLines } from "../plugins/file-browser/folder-view/parser";
 import type {
@@ -36,14 +37,13 @@ import { matchRule } from "../plugins/file-browser/smart-folders/evaluator";
 import type { DisplayKind, SelectBuilderInitial } from "../lib/select-builder";
 
 const RENDERERS: Record<string, FolderLayoutRenderer> = {
-  cards:    renderFolderCards,
-  table:    renderFolderTable,
-  list:     renderFolderList,
-  timeline: renderFolderTimeline,
-  kanban:   renderFolderKanban,
+  cards:     renderFolderCards,
+  table:     renderFolderTable,
+  timeline:  renderFolderTimeline,
+  kanban:    renderFolderKanban,
+  bookshelf: renderFolderBookshelf,
 };
 
-const VALID_DISPLAYS = new Set(Object.keys(RENDERERS));
 const VALID_SORTS = new Set<FolderSortOrder>([
   "name-asc", "name-desc", "modified-asc", "modified-desc",
 ]);
@@ -132,9 +132,15 @@ export function parseSelectBody(body: string): {
 
   const rawPath = asString(parsed.path);
 
-  let display = asString(parsed.display) ?? "cards";
-  if (!VALID_DISPLAYS.has(display)) display = "cards";
+  const { display, option } = resolveDisplayAndOption(
+    asString(parsed.display) ?? "cards",
+    asString(parsed.option),
+  );
   config.layout = `view-${display}`;
+  config.displayOption = option;
+
+  const groupBy = asString(parsed["group-by"]);
+  if (groupBy) config.groupBy = groupBy;
 
   const sort = asString(parsed.sort);
   if (sort && VALID_SORTS.has(sort as FolderSortOrder)) {
@@ -179,8 +185,22 @@ export function parseSelectBodyForBuilder(body: string): SelectBuilderInitial {
   const path = asString(parsed.path);
   if (path !== null) initial.path = path;
 
-  const display = asString(parsed.display);
-  if (display && VALID_DISPLAYS.has(display)) initial.display = display as DisplayKind;
+  const rawDisplay = asString(parsed.display);
+  const rawOption = asString(parsed.option);
+  // Only thread display/option through the resolver when display: is actually
+  // set; otherwise leave initial.display undefined so the modal falls back to
+  // its own default.
+  if (rawDisplay) {
+    const resolved = resolveDisplayAndOption(rawDisplay, rawOption);
+    initial.display = resolved.display as DisplayKind;
+    const spec = getDisplaySpec(resolved.display);
+    if (spec && resolved.option !== spec.defaultOption) {
+      initial.displayOption = resolved.option;
+    }
+  }
+
+  const groupBy = asString(parsed["group-by"]);
+  if (groupBy) initial.groupBy = groupBy;
 
   const sort = asString(parsed.sort);
   if (sort) initial.sort = sort;

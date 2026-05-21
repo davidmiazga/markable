@@ -22,7 +22,7 @@ import { buildFolderViewSet } from "./detection";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
 import { renderFolderTable } from "./table-renderer";
-import { renderFolderList } from "./list-renderer";
+import { renderFolderListInternal } from "./list-renderer";
 import { renderFolderTimeline } from "./timeline-renderer";
 import { renderFolderKanban } from "./kanban-renderer";
 import { extractFrontmatterKeys } from "./frontmatter-reader";
@@ -110,13 +110,13 @@ export const LAYOUT_RENDERERS: Record<string, FolderLayoutRenderer> = {
   // Primary view-* keys (new canonical names)
   "view-cards":    renderFolderCards,
   "view-table":    renderFolderTable,
-  "view-list":     renderFolderList,
+  "view-list":     renderFolderListInternal,
   "view-timeline": renderFolderTimeline,
   "view-kanban":   renderFolderKanban,
   // Backwards-compatible folder-* aliases
   "folder-cards":    renderFolderCards,
   "folder-table":    renderFolderTable,
-  "folder-list":     renderFolderList,
+  "folder-list":     renderFolderListInternal,
   "folder-timeline": renderFolderTimeline,
   "folder-kanban":   renderFolderKanban,
 };

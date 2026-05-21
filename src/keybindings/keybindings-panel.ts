@@ -95,10 +95,10 @@ export const COMMANDS: CommandDef[] = [
   { id: "file-browser-toggle", label: "File Browser: Toggle Panel", defaultKey: "", section: "View" },
   // vault-ux step_05: Manage Vaults entry point — no default key; user binds via Keyboard Shortcuts.
   { id: "vault-manage", label: "Manage Vaults", defaultKey: "", section: "View" },
-  // Layouts — core capability; always available regardless of plugin state.
-  { id: "layouts-open-picker", label: "Open with Layout\u2026", defaultKey: "", section: "View" },
+  // Page Layouts — core capability; always available regardless of plugin state.
+  { id: "layouts-open-picker", label: "Open with Page Layout\u2026", defaultKey: "", section: "View" },
   { id: "code-block",          label: "Insert or Edit CodeBlock",  defaultKey: "", section: "View" },
-  { id: "apply-layout",        label: "Apply Layout",          defaultKey: "", section: "View" },
+  { id: "apply-layout",        label: "Apply Page Layout",     defaultKey: "", section: "View" },
   // Format
   { id: "format-bold",          label: "Bold",             defaultKey: "Cmd-B",        section: "Format" },
   { id: "format-italic",        label: "Italic",           defaultKey: "Cmd-I",        section: "Format" },

@@ -20,6 +20,7 @@ import {
 } from "./rule-row";
 import { attachModalKeyboard } from "./modal-keyboard";
 import type { SmartFolderRule } from "../plugins/file-browser/smart-folders/types";
+import { DISPLAY_REGISTRY, getDisplaySpec } from "../plugins/file-browser/folder-view/display-options";
 
 const OVERLAY_ID = "__select-builder-overlay__";
 const STYLE_ID   = "__sb-styles__";
@@ -134,7 +135,7 @@ function injectStyles(): void {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type DisplayKind = "cards" | "table" | "list" | "timeline" | "kanban";
+export type DisplayKind = "cards" | "table" | "timeline" | "kanban" | "bookshelf";
 
 /** Per-block content-width override. Page YAML wins via CSS cascade. */
 export type ContentWidth = "normal" | "wide" | "full";
@@ -143,6 +144,10 @@ export interface SelectBuilderInitial {
   rules?: SmartFolderRule[];
   path?: string;
   display?: DisplayKind;
+  /** Selected sub-variant for the display (e.g. "simple-list" under table). */
+  displayOption?: string;
+  /** YAML frontmatter key used to group items into shelves (Bookshelf only). */
+  groupBy?: string;
   sort?: string;
   showModified?: boolean;
   showExtensions?: boolean;
@@ -164,15 +169,13 @@ export interface SelectBuilderOptions {
 
 // ── Build the ```select fence string ─────────────────────────────────────────
 
-const ALL_DISPLAYS: DisplayKind[] = ["cards", "table", "list", "timeline", "kanban"];
+// Derive picker entries from DISPLAY_REGISTRY so a new display added there
+// shows up here automatically.
+const ALL_DISPLAYS: DisplayKind[] = DISPLAY_REGISTRY.map((d) => d.slug as DisplayKind);
 
-const DISPLAY_LABELS: Record<DisplayKind, string> = {
-  cards:    "Cards",
-  table:    "Table",
-  list:     "List",
-  timeline: "Timeline",
-  kanban:   "Kanban",
-};
+const DISPLAY_LABELS: Record<DisplayKind, string> = Object.fromEntries(
+  DISPLAY_REGISTRY.map((d) => [d.slug, d.label]),
+) as Record<DisplayKind, string>;
 
 function indent(text: string, n: number): string {
   const pad = " ".repeat(n);
@@ -193,6 +196,8 @@ export function buildSelectFenceFromState(state: {
   rules: SmartFolderRule[];
   path: string;
   display: DisplayKind;
+  displayOption?: string;
+  groupBy?: string;
   sort: string;
   showModified: boolean;
   showExtensions: boolean;
@@ -208,8 +213,20 @@ export function buildSelectFenceFromState(state: {
   }
   if (state.display !== "timeline") lines.push(`sort: ${state.sort}`);
   lines.push(`display: ${state.display}`);
+  // Emit `option:` only when non-default so existing fences round-trip byte-stably.
+  const spec = getDisplaySpec(state.display);
+  if (state.displayOption && spec && state.displayOption !== spec.defaultOption) {
+    lines.push(`option: ${state.displayOption}`);
+  }
+  if (state.groupBy && state.groupBy.trim()) {
+    lines.push(`group-by: ${state.groupBy.trim()}`);
+  }
   if (!state.showModified) lines.push("show-modified: false");
-  if ((state.display === "cards" || state.display === "list") && !state.showExtensions) {
+  // "Show file extensions" applies to Cards and to Table's simple-list option.
+  const isCardsLike =
+    state.display === "cards" ||
+    (state.display === "table" && state.displayOption === "simple-list");
+  if (isCardsLike && !state.showExtensions) {
     lines.push("show-extensions: false");
   }
   if (state.previewPane) lines.push("preview-pane: true");
@@ -232,6 +249,10 @@ export interface SelectFormState {
   rules: SmartFolderRule[];
   path: string;
   display: DisplayKind;
+  /** Selected sub-variant of the display (e.g. "simple-list" under table). */
+  displayOption: string;
+  /** YAML key used to group items into shelves (Bookshelf display only). */
+  groupBy: string;
   sort: string;
   showModified: boolean;
   showExtensions: boolean;
@@ -264,10 +285,14 @@ export function mountSelectForm(
     distinctExtensions: [],
   };
   const initial = opts.initial ?? {};
+  const initialDisplay = (initial.display ?? "cards") as DisplayKind;
+  const initialSpec = getDisplaySpec(initialDisplay);
   const state: SelectFormState = {
     rules:          [...(initial.rules ?? [])] as SmartFolderRule[],
     path:           initial.path ?? "./",
-    display:        (initial.display ?? "cards") as DisplayKind,
+    display:        initialDisplay,
+    displayOption:  initial.displayOption ?? (initialSpec?.defaultOption ?? ""),
+    groupBy:        initial.groupBy ?? "",
     sort:           initial.sort ?? "name-asc",
     showModified:   initial.showModified ?? true,
     showExtensions: initial.showExtensions ?? true,
@@ -352,6 +377,36 @@ export function mountSelectForm(
   function renderDisplayOptions(): void {
     optsHost.innerHTML = "";
 
+    // "Layout option" sub-pill row, shown only when the current display has
+    // more than one option.
+    const spec = getDisplaySpec(state.display);
+    if (spec && spec.options.length > 1) {
+      const optRow = document.createElement("div");
+      optRow.className = "sb-opt-row";
+      const label = document.createElement("label");
+      label.textContent = "Layout option";
+      optRow.appendChild(label);
+      const optPills = document.createElement("div");
+      optPills.className = "sb-display-pills";
+      for (const o of spec.options) {
+        const pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "sb-display-pill" + (o.slug === state.displayOption ? " is-active" : "");
+        pill.textContent = o.label;
+        if (o.description) pill.title = o.description;
+        pill.addEventListener("click", () => {
+          state.displayOption = o.slug;
+          optPills.querySelectorAll(".sb-display-pill").forEach((p) =>
+            p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
+          );
+          renderDisplayOptions();
+        });
+        optPills.appendChild(pill);
+      }
+      optRow.appendChild(optPills);
+      optsHost.appendChild(optRow);
+    }
+
     if (state.display !== "timeline") {
       const sortRow = document.createElement("div");
       sortRow.className = "sb-opt-row";
@@ -379,7 +434,7 @@ export function mountSelectForm(
 
     optsHost.appendChild(checkRow("Show modified date", state.showModified, (v) => { state.showModified = v; }));
 
-    if (state.display === "cards" || state.display === "list") {
+    if (state.display === "cards" || (state.display === "table" && state.displayOption === "simple-list")) {
       optsHost.appendChild(checkRow("Show file extensions", state.showExtensions, (v) => { state.showExtensions = v; }));
     }
 
@@ -408,6 +463,10 @@ export function mountSelectForm(
     pill.textContent = DISPLAY_LABELS[d];
     pill.addEventListener("click", () => {
       state.display = d;
+      // Reset sub-option to the new display's default so we never carry over
+      // an option that doesn't apply (e.g. "simple-list" from table to kanban).
+      const newSpec = getDisplaySpec(d);
+      state.displayOption = newSpec?.defaultOption ?? "";
       pills.querySelectorAll(".sb-display-pill").forEach((p) =>
         p.classList.toggle("is-active", (p as HTMLElement).textContent === DISPLAY_LABELS[d]),
       );

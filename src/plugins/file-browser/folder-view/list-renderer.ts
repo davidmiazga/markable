@@ -1,9 +1,13 @@
 /**
  * list-renderer.ts — Compact single-column list renderer for the "folder-list" layout.
  *
- * Exports renderFolderList() and buildListRow() (reused by timeline-renderer and
- * kanban-renderer). Each file/folder renders as one horizontal row: icon, name,
+ * Exports renderFolderListInternal() and buildListRow() (reused by timeline-renderer
+ * and kanban-renderer). Each file/folder renders as one horizontal row: icon, name,
  * optional tags, optional modified date.
+ *
+ * After May 2026, List is no longer a top-level Select display. It's reachable via
+ * `display: table, option: simple-list` and via the standalone Folder-View tab
+ * codepath (`tab.ts` LAYOUT_RENDERERS for `view-list` / `folder-list`).
  *
  * @module folder-view/list-renderer
  */
@@ -110,7 +114,7 @@ export function buildListRow(
 
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
-export function renderFolderList(
+export function renderFolderListInternal(
   config: FolderViewConfig,
   cards: FolderCard[],
   container: HTMLElement,

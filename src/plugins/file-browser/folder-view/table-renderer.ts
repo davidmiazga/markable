@@ -22,6 +22,7 @@ import { ICON_FOLDER } from "../icons/material/index";
 import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
 import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
 import type { PreviewPaneHandle } from "./preview-pane";
+import { renderFolderListInternal } from "./list-renderer";
 import { buildCheckboxTd, buildMasterCheckboxTh }
   from "./bulk-selection";
 import type { SelectionState } from "./bulk-selection";
@@ -875,6 +876,13 @@ export function renderFolderTable(
   _folderPath: string,
   context?: import("./types").BulkContext,
 ): void {
+  // `option: simple-list` under the Table display delegates to the old List
+  // renderer. List is no longer a top-level Select display — it's a Table variant.
+  if (config.displayOption === "simple-list") {
+    renderFolderListInternal(config, cards, container);
+    return;
+  }
+
   container.innerHTML = "";
 
   const host = document.createElement("div");

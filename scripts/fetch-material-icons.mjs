@@ -31,6 +31,7 @@ const ICONS = {
   CHEVRON:         "chevron_right",
   EXPAND:          "keyboard_arrow_down",
   UNMOUNT:         "chip_extraction",   // Vault unmount button
+  DASHBOARD:       "dashboard",         // File tree hover badge — opens Page Layout assignment
 };
 
 /** Strip width/height attributes so we can set them per-use-site. */
