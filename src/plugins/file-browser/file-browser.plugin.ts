@@ -43,6 +43,7 @@ import {
   ICON_CHEVRON,
   ICON_UNMOUNT,
   ICON_PREVIEW,
+  ICON_VISIBILITY,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
@@ -1649,10 +1650,14 @@ function buildTreeUl(
       const badge = document.createElement("span");
       badge.className = "tree-node-fv-badge";
       badge.setAttribute("aria-hidden", "true");
-      badge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
+      badge.innerHTML = wrapSvg(ICON_VISIBILITY, 16);
+      badge.title = "Open folder view";
       badge.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
-        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path + "/_folder.md");
+        // Folder badge → open the folder view (same as clicking the row).
+        // Per the May 2026 migration, this opens _folder.md as a normal tab
+        // and pops the CodeBlock modal on its first codefence.
+        (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(path);
       });
       el.appendChild(badge);
     }
@@ -1672,14 +1677,20 @@ function buildTreeUl(
       el.classList.add("tree-node-is-view-md");
     }
     if (isNamedViewFile) {
-      // Solid badge — click opens the assign modal (which has "Open View" inside)
+      // Visibility eye on `_folder.md` (and the legacy view-*.md naming).
+      // Click → open the folder view, same flow as the folder's own badge.
       const viewBadge = document.createElement("span");
       viewBadge.className = "tree-node-fv-badge";
       viewBadge.setAttribute("aria-hidden", "true");
-      viewBadge.innerHTML = wrapSvg(ICON_PREVIEW, 14);
+      viewBadge.innerHTML = wrapSvg(ICON_VISIBILITY, 16);
+      viewBadge.title = "Open folder view";
       viewBadge.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
-        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+        const sep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        const parentDir = sep > 0 ? path.slice(0, sep) : "";
+        if (parentDir) {
+          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, path);
+        }
       });
       el.appendChild(viewBadge);
     } else if (
@@ -1971,7 +1982,7 @@ function renderLoadingState(wrapper: HTMLElement): void {
  *   cannot be shared — extracting per-type helpers would not reduce overall
  *   line count and would obscure the single decision point.
  */
-function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = false): (e: Event) => void {
+function buildActivateHandler(el: HTMLElement, vaultId: string, _hasFolderView = false): (e: Event) => void {
   return (e: Event): void => {
     e.stopPropagation();
     const type = el.getAttribute("data-type") as "vault" | "directory" | "file" | null;
@@ -2034,20 +2045,12 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = 
         new CustomEvent("markable-folder-selected", { detail: { path } })
       );
     } else if (type === "directory") {
-      if (hasFolderView) {
-        // FR-02: row click on a folder-view directory → open the layout view.
-        // Also expand the node if it is currently collapsed, so the tree
-        // visually "enters" the folder (row click never collapses — use the
-        // chevron for that).  The chevron's own listener calls stopPropagation
-        // so this branch is never reached from a chevron click (FR-03).
-        if (el.getAttribute("aria-expanded") !== "true") {
-          toggleDirectoryNode(el, path, vaultId);
-        }
-        (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(path);
-      } else {
-        // FR-01: no _folder.md present → always toggle expand/collapse.
-        toggleDirectoryNode(el, path, vaultId);
-      }
+      // Row click ALWAYS just toggles expand/collapse — the visibility eye
+      // badge is the dedicated trigger for opening the folder view modal.
+      // Previously a directory with `_folder.md` would also open the layout
+      // view on row click; that surprised users who just wanted to expand
+      // the folder.
+      toggleDirectoryNode(el, path, vaultId);
       _selectedFolderPath = path;
       window.dispatchEvent(
         new CustomEvent("markable-folder-selected", { detail: { path } })

@@ -75,7 +75,7 @@ function defaultConfig(): FolderViewConfig {
     extraFields: [],
     fields: null,
     previewPane: false,
-    previewHeight: "60%",
+    previewHeight: "80vh",
   };
 }
 
@@ -462,6 +462,46 @@ export function findSelectFenceAtCursor(
     return { from: detected.from, to: detected.to, body: detected.body };
   }
   return null;
+}
+
+/**
+ * Find the first recognized custom codefence in the document (sidebar /
+ * sidebar-left / grid / grid-card / select). Used by the "open `_folder.md`
+ * and edit its primary block" flow when entering a Folder View.
+ */
+export function findFirstCustomFence(
+  view: EditorView,
+): { from: number; to: number; body: string; lang: string } | null {
+  const known = new Set(["sidebar", "sidebar-left", "grid", "grid-card", "select"]);
+  const state = view.state;
+  let found: { from: number; to: number; body: string; lang: string } | null = null;
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (found) return false;
+      if (node.name !== "FencedCode") return;
+      let lang = "";
+      let codeFrom = -1;
+      let codeTo = -1;
+      const cur = node.node.cursor();
+      if (cur.firstChild()) {
+        do {
+          if (cur.name === "CodeInfo") {
+            lang = state.doc.sliceString(cur.from, cur.to).trim();
+          } else if (cur.name === "CodeText") {
+            codeFrom = cur.from;
+            codeTo = cur.to;
+          }
+        } while (cur.nextSibling());
+      }
+      const langLc = lang.toLowerCase();
+      const firstToken = langLc.split(/\s+/)[0];
+      if (!known.has(firstToken)) return false;
+      const body = codeFrom >= 0 ? state.doc.sliceString(codeFrom, codeTo) : "";
+      found = { from: node.from, to: node.to, body, lang: langLc };
+      return false;
+    },
+  });
+  return found;
 }
 
 /**

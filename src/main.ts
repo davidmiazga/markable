@@ -127,6 +127,7 @@ import { openAssignModal } from "./lib/assign-modal";
 import {
   findSelectFenceRange,
   findCustomFenceAtCursor,
+  findFirstCustomFence,
   parseSelectBodyForBuilder,
   parseGridFenceBody,
   parseSidebarFenceBody,
@@ -366,19 +367,6 @@ async function openFile(): Promise<void> {
 }
 
 /**
- * Return true when the file content declares a `view-*` layout in its YAML
- * front-matter. Handles both flat (`layout: view-foo`) and nested (`type: view-foo`
- * under a `layout:` block) forms. Used to decide whether to auto-enter view mode.
- */
-function hasViewLayout(content: string): boolean {
-  if (!content.trimStart().startsWith("---")) return false;
-  const closeIdx = content.indexOf("\n---", 3);
-  if (closeIdx === -1) return false;
-  const block = content.slice(3, closeIdx);
-  return /^layout:\s*view-\S/m.test(block) || /\btype:\s*view-\S/m.test(block);
-}
-
-/**
  * Collect tag and extension suggestions from the current vault index so the
  * select-builder modal can populate its datalists. Returns empty arrays when
  * the vault index is not yet available.
@@ -429,13 +417,6 @@ async function openAndMaybeLayout(path: string): Promise<boolean> {
     // clear it if absent). The updateListener keeps it in sync on edits;
     // this initial apply covers the tab-open + tab-switch cases.
     applyPageContentWidth(readContentWidthFromFrontmatter(content));
-    if (hasViewLayout(content)) {
-      const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-      const parentDir = lastSep > 0 ? path.slice(0, lastSep) : "";
-      if (parentDir) {
-        (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, path);
-      }
-    }
   }
   return opened;
 }
@@ -773,19 +754,12 @@ function handleAction(action: string): void {
         if (previewEnabled) togglePreview();
       } else if (editor && _layoutDeps) {
         const filePath = tabManager.getActiveFilePath();
-        if (filePath && (filePath.endsWith("/_folder.md") || filePath.endsWith("\\_folder.md"))) {
-          // _folder.md: Cmd-E always means "show folder view" — never regular preview.
-          // The folder view is the layout view for this file; regular Typora preview
-          // is not a valid state for _folder.md.
-          const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : "/";
-          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir);
-        } else if (filePath && editor && hasViewLayout(editor.state.doc.toString())) {
-          // Any file with a view-* layout: Cmd-E enters view mode.
-          const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-          const parentDir = lastSep > 0 ? filePath.slice(0, lastSep) : "/";
-          (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, filePath);
-        } else if (filePath) {
+        // Note: previous branches that routed `_folder.md` and `hasViewLayout`
+        // files through __MARKABLE_OPEN_FOLDER_VIEW_TAB__ were removed after
+        // the codefence migration. `_folder.md` is now a normal markdown file
+        // whose `select` codefence renders inline as a widget; Cmd-E behaves
+        // the same way it does for every other file.
+        if (filePath) {
           // Normal file: check for a layout field; if found enter layout view, else toggle preview.
           void (async () => {
             const shown = await showLayoutForFile(filePath, editor.state.doc.toString(), _layoutDeps!);
@@ -1401,6 +1375,64 @@ async function initApp() {
             view.dispatch({ changes: { from: range.from, to: range.to, insert: "" } });
           },
         });
+      };
+
+    // Open the CodeBlock modal for the first recognized codefence in the
+    // active editor. If a codefence exists → edit mode (with Remove). If
+    // none exists → insert mode at the end of the doc, so the user can
+    // "apply" a block. Used by the Folder View entry points (click a
+    // folder row, click the visibility badge, "Open Folder View" menu).
+    //
+    // Deferred two animation frames so CM6 has time to mount the freshly
+    // loaded document and rebuild its syntax tree. Without the defer the
+    // very-first-open-after-create case finds an empty doc and falls
+    // through to insert mode incorrectly.
+    (window as unknown as Record<string, unknown>)["__MARKABLE_EDIT_FIRST_CODEBLOCK__"] =
+      () => {
+        if (!editor) return;
+        const ed = editor;
+        const open = (): void => {
+          const detected = findFirstCustomFence(ed);
+          if (detected) {
+            const langToKind: Record<string, BlockKind> = {
+              "sidebar": "sidebar",
+              "sidebar-left": "sidebar",
+              "grid": "grid",
+              "grid-card": "grid",
+              "select": "select",
+            };
+            const langFirst = detected.lang.split(/\s+/)[0];
+            const kind = langToKind[langFirst];
+            if (!kind) return;
+            openCodeBlockModal({
+              ruleRowContext: getRuleRowContext(),
+              initial: {
+                kind,
+                sidebar: kind === "sidebar" ? parseSidebarFenceBody(detected.body, detected.lang) : undefined,
+                grid:    kind === "grid"    ? parseGridFenceBody(detected.body, detected.lang)    : undefined,
+                select:  kind === "select"  ? parseSelectBodyForBuilder(detected.body)            : undefined,
+              },
+              onApply: (newFence: string) => {
+                ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: newFence } });
+              },
+              onRemove: () => {
+                ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: "" } });
+              },
+            });
+            return;
+          }
+          // No codefence in the file yet → open insert mode at the end of doc.
+          const insertPos = ed.state.doc.length;
+          openCodeBlockModal({
+            ruleRowContext: getRuleRowContext(),
+            onApply: (newFence: string) => {
+              const needLead = insertPos > 0 && ed.state.doc.sliceString(insertPos - 1, insertPos) !== "\n";
+              const insertText = (needLead ? "\n" : "") + newFence + "\n";
+              ed.dispatch({ changes: { from: insertPos, to: insertPos, insert: insertText } });
+            },
+          });
+        };
+        requestAnimationFrame(() => requestAnimationFrame(open));
       };
   }
 

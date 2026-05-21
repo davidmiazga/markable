@@ -89,12 +89,14 @@ describe("split-click behavior", () => {
     expect(openFVSpy).not.toHaveBeenCalled();
   });
 
-  // ── T-10 (FR-02): hasFolderView=true, label click → openFolderViewTab ────
+  // ── T-10: hasFolderView=true, row click → toggle expand/collapse only ────
+  //
+  // Post May 2026 codefence migration: row click on a directory ALWAYS just
+  // toggles expand/collapse, regardless of hasFolderView. The visibility eye
+  // badge on the folder is the dedicated trigger for opening the folder view
+  // modal. Row click should never call __MARKABLE_OPEN_FOLDER_VIEW_TAB__.
 
-  it("T-10 (FR-02): hasFolderView=true, label/row click → __MARKABLE_OPEN_FOLDER_VIEW_TAB__ called AND node expands if collapsed", () => {
-    // Row click on a folder-view folder should both expand the node (if collapsed)
-    // and open the folder view.  The chevron has stopPropagation so it is the
-    // exclusive toggle target — the row only expands, never collapses.
+  it("T-10: hasFolderView=true, collapsed row click → expands and does NOT open folder view", () => {
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
 
@@ -104,18 +106,13 @@ describe("split-click behavior", () => {
     _testing.setTreeEl(ul as HTMLElement);
 
     _testing.attachNodeListeners(li, "vault-1", true);
-
-    // Dispatch click directly on the row (not the chevron).
     li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    // openFolderViewTab must have been called with the folder path.
-    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
-    // aria-expanded flips to "true" — row click expands a collapsed node.
+    expect(openFVSpy).not.toHaveBeenCalled();
     expect(li.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("T-10b (FR-02): hasFolderView=true, row click on already-expanded node → NOT collapsed", () => {
-    // Row click never collapses a folder-view node — use the chevron for that.
+  it("T-10b: hasFolderView=true, expanded row click → collapses and does NOT open folder view", () => {
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
 
@@ -125,13 +122,10 @@ describe("split-click behavior", () => {
     _testing.setTreeEl(ul as HTMLElement);
 
     _testing.attachNodeListeners(li, "vault-1", true);
-
     li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    // aria-expanded stays "true" — row click does not collapse.
-    expect(li.getAttribute("aria-expanded")).toBe("true");
-    // openFolderViewTab still called.
-    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
+    expect(li.getAttribute("aria-expanded")).toBe("false");
+    expect(openFVSpy).not.toHaveBeenCalled();
   });
 
   // ── T-11 (FR-03): chevron click → toggleDirectoryNode fires, openFolderViewTab NOT ──
@@ -163,9 +157,10 @@ describe("split-click behavior", () => {
     document.body.removeChild(treeWrapper);
   });
 
-  // ── T-12 (FR-04): Enter key on hasFolderView=true → openFolderViewTab ────
+  // ── T-12: Enter on a directory → same as row click (toggle), NOT folder view ──
+  // After the row-click rule change, Enter behaves identically to a row click.
 
-  it("T-12 (FR-04): Enter key on hasFolderView=true node → __MARKABLE_OPEN_FOLDER_VIEW_TAB__ called", () => {
+  it("T-12: Enter key on hasFolderView=true node → toggles, does NOT open folder view", () => {
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
 
@@ -176,11 +171,10 @@ describe("split-click behavior", () => {
 
     _testing.attachNodeListeners(li, "vault-1", true);
 
-    // The Enter key delegates to onActivate (handleActivate), which after the
-    // FR-02 fix calls __MARKABLE_OPEN_FOLDER_VIEW_TAB__ for hasFolderView=true.
     li.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    expect(openFVSpy).toHaveBeenCalledWith("/vault/A");
+    expect(openFVSpy).not.toHaveBeenCalled();
+    expect(li.getAttribute("aria-expanded")).toBe("true");
   });
 
   // ── T-13 (FR-05): _folder.md file click → openFileInTab + exitLayoutView ─

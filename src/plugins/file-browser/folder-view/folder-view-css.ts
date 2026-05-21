@@ -527,12 +527,22 @@ export const FOLDER_VIEW_CSS = `
 
 /* ── Preview pane element ─────────────────────────────────────────────── */
 
+/* Pane is pinned at 80vh — fixed regardless of the previewed item's
+   intrinsic size. Using explicit height (not flex-basis) and !important on
+   the size axis defeats any browser quirk where flex children pick up their
+   intrinsic content size. The resize handle can still shrink it via the
+   --fvp-height variable; max-height caps any growth at 80vh. */
 .fvp-pane {
-  flex: 0 0 var(--fvp-height, 60%);
-  overflow-y: auto;
+  height: var(--fvp-height, 80vh) !important;
+  max-height: 80vh !important;
   min-height: 60px;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  flex-basis: auto !important;
+  overflow: hidden !important;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 /* Draggable resize handle — 4px hit area between pane and content */
@@ -574,8 +584,10 @@ export const FOLDER_VIEW_CSS = `
 
 .fvp-body {
   flex: 1;
+  min-height: 0;          /* allow inner flex children to shrink instead of overflowing */
   overflow-y: auto;
   padding: 16px;
+  box-sizing: border-box;
 }
 
 /* Rendered markdown content */
@@ -589,11 +601,14 @@ export const FOLDER_VIEW_CSS = `
   word-break: break-word;
 }
 
-/* Image preview */
+/* Image preview — fills the body so max-height: 100% on the img resolves
+   against a real height (the pinned 80vh pane), letting tall images scale
+   down to fit instead of pushing the pane open. */
 .fvp-image-content {
   display: flex;
   align-items: center;
   justify-content: center;
+  height: 100%;
   min-height: 120px;
 }
 .fvp-image-content img {

@@ -104,22 +104,28 @@ describe("tab.ts (layout-view refactor)", () => {
     expect(tabMgr.openFileInTab).toHaveBeenCalledWith("/vault/A/_folder.md");
   });
 
-  // ── T-02: enterLayoutView is called inside .then() (RD-01) ───────────────
+  // ── T-02: after codefence migration, openFolderViewTab does NOT call
+  // enterLayoutView. `_folder.md` opens as a normal markdown tab; the
+  // `select` codefence inside it renders inline as a widget. Post-open
+  // the function fires __MARKABLE_EDIT_FIRST_CODEBLOCK__ so the user
+  // lands in the CodeBlock modal pre-filled for their primary block.
+  it("T-02: openFolderViewTab does not call enterLayoutView; triggers edit-first-codeblock after openFileInTab resolves", async () => {
+    const editFirst = vi.fn();
+    (window as any).__MARKABLE_EDIT_FIRST_CODEBLOCK__ = editFirst;
 
-  it("T-02: enterLayoutView is called after openFileInTab resolves (inside .then())", async () => {
     openFolderViewTab("/vault/A");
 
-    // enterLayoutView must NOT be called synchronously — it is wired in .then().
+    // Neither callback fires synchronously.
     expect(tabMgr.enterLayoutView).not.toHaveBeenCalled();
+    expect(editFirst).not.toHaveBeenCalled();
 
     // Flush the microtask queue so the .then() callback fires.
     await Promise.resolve();
 
-    expect(tabMgr.enterLayoutView).toHaveBeenCalledOnce();
+    expect(tabMgr.enterLayoutView).not.toHaveBeenCalled();
+    expect(editFirst).toHaveBeenCalledOnce();
 
-    // The argument passed to enterLayoutView must be a function (the render fn).
-    const [renderFnArg] = tabMgr.enterLayoutView.mock.calls[0];
-    expect(typeof renderFnArg).toBe("function");
+    delete (window as any).__MARKABLE_EDIT_FIRST_CODEBLOCK__;
   });
 
   // ── T-03: two calls for same path → two openFileInTab calls ──────────────

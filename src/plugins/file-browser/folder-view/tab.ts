@@ -605,7 +605,12 @@ export function buildFolderViewRenderFn(
 export function openFolderViewTab(folderPath: string, viewFilePath?: string): void {
   const mdPath = viewFilePath ?? (folderPath + "/_folder.md");
   const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
+  // Post-codefence migration: `_folder.md` is a normal markdown file whose
+  // `select` (or sidebar/grid) codefence renders inline as a widget. No
+  // `enterLayoutView` takeover — just open the file and let the user land
+  // in the CodeBlock modal pre-filled with the first recognized block, so
+  // they can immediately refine the folder view's filter/display.
   void tabMgr?.openFileInTab?.(mdPath)?.then?.(() => {
-    tabMgr?.enterLayoutView?.(buildFolderViewRenderFn(folderPath, viewFilePath));
+    (window as any).__MARKABLE_EDIT_FIRST_CODEBLOCK__?.();
   });
 }

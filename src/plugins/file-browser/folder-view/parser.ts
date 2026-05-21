@@ -424,7 +424,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     extraFields: [],
     fields: null,   // null = legacy flag-based column mode (AD-6, EC-01)
     previewPane:   false,
-    previewHeight: "60%",
+    previewHeight: "80vh",
   };
 
   try {
@@ -574,9 +574,9 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
     // preview-pane: only explicit "true" enables.
     const previewPane = (fm["preview-pane"] ?? "false").trim().toLowerCase() === "true";
 
-    // preview-height: CSS height value for the preview pane. Default "60%".
-    const rawPreviewHeight = (fm["preview-height"] ?? "60%").trim();
-    const previewHeight = rawPreviewHeight || "60%";
+    // preview-height: CSS height value for the preview pane. Default "80vh".
+    const rawPreviewHeight = (fm["preview-height"] ?? "80vh").trim();
+    const previewHeight = rawPreviewHeight || "80vh";
 
     // cover: relative path to a cover image; absent when not declared.
     const coverRaw = (fm["cover"] ?? "").trim();
