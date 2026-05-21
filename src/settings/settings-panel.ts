@@ -91,13 +91,29 @@ export function createSettingsPanel(): void {
               </div>
             </div>
 
-            <div class="settings-sub-label" style="margin-top: 12px;">Content Width</div>
+            <div class="settings-sub-label" style="margin-top: 12px;">Content-width default</div>
             <div class="settings-content-width-row">
               <input type="text" class="settings-input settings-input-wide" id="settings-content-width-input"
                 placeholder="900px" />
               <button class="btn btn-tertiary settings-btn-inline" id="settings-content-width-reset">Reset</button>
             </div>
-            <p class="settings-description settings-description-tight">Supports px (e.g. 900px) or % (e.g. 80%). Default: 900px.</p>
+
+            <div class="settings-two-col" style="margin-top: 12px;">
+              <div class="settings-col">
+                <div class="settings-sub-label">Content-width wide</div>
+                <div class="settings-slider-row">
+                  <input type="range" min="50" max="100" step="5" id="settings-wide-width-slider" />
+                  <span class="settings-slider-value" id="settings-wide-width-value">85%</span>
+                </div>
+              </div>
+              <div class="settings-col">
+                <div class="settings-sub-label">Content-width full</div>
+                <div class="settings-slider-row">
+                  <input type="range" min="80" max="100" step="5" id="settings-full-width-slider" />
+                  <span class="settings-slider-value" id="settings-full-width-value">100%</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <p class="settings-description">Preset sizes apply immediately and center the window. Manual remembers your last size &amp; position. Maximize overrides all.</p>
@@ -308,6 +324,34 @@ function wireEvents(): void {
       }));
     });
 
+  // Wide / Full block width sliders. Each one writes the fraction to a CSS
+  // variable immediately on `input` (live preview as the user drags), and
+  // persists the integer percentage on `change` (commit on release).
+  const wideSlider = panelElement.querySelector("#settings-wide-width-slider") as HTMLInputElement;
+  const wideValueEl = panelElement.querySelector("#settings-wide-width-value") as HTMLElement;
+  const fullSlider = panelElement.querySelector("#settings-full-width-slider") as HTMLInputElement;
+  const fullValueEl = panelElement.querySelector("#settings-full-width-value") as HTMLElement;
+
+  function applyWideFraction(pct: number): void {
+    document.documentElement.style.setProperty("--settings-wide-fraction", String(pct / 100));
+    if (wideValueEl) wideValueEl.textContent = `${pct}%`;
+  }
+  function applyFullFraction(pct: number): void {
+    document.documentElement.style.setProperty("--settings-full-fraction", String(pct / 100));
+    if (fullValueEl) fullValueEl.textContent = `${pct}%`;
+  }
+
+  wideSlider?.addEventListener("input", () => applyWideFraction(parseInt(wideSlider.value, 10)));
+  wideSlider?.addEventListener("change", async () => {
+    const pct = parseInt(wideSlider.value, 10);
+    await updateSettings((s) => ({ ...s, editor: { ...s.editor, wideWidthPct: pct } }));
+  });
+  fullSlider?.addEventListener("input", () => applyFullFraction(parseInt(fullSlider.value, 10)));
+  fullSlider?.addEventListener("change", async () => {
+    const pct = parseInt(fullSlider.value, 10);
+    await updateSettings((s) => ({ ...s, editor: { ...s.editor, fullWidthPct: pct } }));
+  });
+
   // Clear recent files
   panelElement.querySelector("#settings-clear-recent")
     ?.addEventListener("click", async () => {
@@ -449,6 +493,18 @@ function syncPanelToSettings(): void {
     const cw = (settings.editor as any).contentWidth ?? `${settings.editor.contentMaxWidth}px`;
     cwInput.value = cw;
   }
+
+  // Wide / Full block width sliders — sync to current saved fractions.
+  const widePct = settings.editor.wideWidthPct ?? 85;
+  const fullPct = settings.editor.fullWidthPct ?? 100;
+  const wideSliderEl = document.querySelector("#settings-wide-width-slider") as HTMLInputElement | null;
+  const wideValueElSync = document.querySelector("#settings-wide-width-value") as HTMLElement | null;
+  const fullSliderEl = document.querySelector("#settings-full-width-slider") as HTMLInputElement | null;
+  const fullValueElSync = document.querySelector("#settings-full-width-value") as HTMLElement | null;
+  if (wideSliderEl) wideSliderEl.value = String(widePct);
+  if (wideValueElSync) wideValueElSync.textContent = `${widePct}%`;
+  if (fullSliderEl) fullSliderEl.value = String(fullPct);
+  if (fullValueElSync) fullValueElSync.textContent = `${fullPct}%`;
 
   // List style dropdown — defaults to "standard" when the field is absent
   // (EC-13: settings migration from before the Advanced Lists feature).

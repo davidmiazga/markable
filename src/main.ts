@@ -1430,6 +1430,22 @@ async function initApp() {
     ),
   });
 
+  // Track the .cm-editor pane's width on the editor root as
+  // `--editor-pane-width`. Block-level content-width overrides
+  // (.cm-block-width-wide / -full) use this to compute their escape
+  // size — using viewport width instead would let blocks extend under
+  // the file-browser sidebar. The observer runs whenever the editor
+  // pane resizes (sidebar collapse/expand, window resize, etc.).
+  {
+    const paneEl = editor.dom;
+    const updatePaneWidth = (): void => {
+      paneEl.style.setProperty("--editor-pane-width", `${paneEl.clientWidth}px`);
+    };
+    updatePaneWidth();
+    const ro = new ResizeObserver(updatePaneWidth);
+    ro.observe(paneEl);
+  }
+
   // List style status bar indicator (FR-3).
   // Element is created and attached unconditionally; the status bar itself
   // is only shown when a trigger plugin (word-count, etc.) calls ensureStatusBar().

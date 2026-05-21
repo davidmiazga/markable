@@ -726,21 +726,39 @@ h6 { font-size: var(--heading-h6-size); font-weight: var(--heading-h6-weight); }
    (.cm-select-widget / .cm-sidebar-preview / .cm-grid-wrapper).
    Block-level overrides are SUPPRESSED when the page itself has a
    content-width override active (markable-page-content-width on the
-   document root) — page YAML wins per locked design. */
+   document root) — page YAML wins per locked design.
+
+   Escape mechanism: `--editor-pane-width` is set by a ResizeObserver
+   in main.ts to the .cm-editor element's clientWidth (which excludes
+   the file-browser sidebar and any right-side panels). Blocks compute
+   their width as a fraction of that pane, with symmetric negative
+   margins to escape the parent .cm-content's max-width. Falls back to
+   `100%` (no escape) when the variable hasn't been set yet. */
 :root {
-  --block-wide-width: 1400px;
+  /* Fallbacks for the wide/full fractions — overridden at runtime by
+     applyEditorSettings from the Settings panel sliders. */
+  --settings-wide-fraction: 0.85;
+  --settings-full-fraction: 1;
 }
 .cm-block-width-wide {
-  max-width: var(--block-wide-width);
-  margin-left: auto;
-  margin-right: auto;
+  width: calc(var(--editor-pane-width, 100%) * var(--settings-wide-fraction));
+  max-width: none;
+  margin-left: calc(
+    -1 * (var(--editor-pane-width, 100%) * var(--settings-wide-fraction) - 100%) / 2
+  );
+  margin-right: calc(
+    -1 * (var(--editor-pane-width, 100%) * var(--settings-wide-fraction) - 100%) / 2
+  );
 }
 .cm-block-width-full {
-  width: 100vw;
+  width: calc(var(--editor-pane-width, 100%) * var(--settings-full-fraction));
   max-width: none;
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
+  margin-left: calc(
+    -1 * (var(--editor-pane-width, 100%) * var(--settings-full-fraction) - 100%) / 2
+  );
+  margin-right: calc(
+    -1 * (var(--editor-pane-width, 100%) * var(--settings-full-fraction) - 100%) / 2
+  );
 }
 html.markable-page-content-width .cm-block-width-wide,
 html.markable-page-content-width .cm-block-width-full {
@@ -750,9 +768,6 @@ html.markable-page-content-width .cm-block-width-full {
   width: 100%;
   margin-left: 0;
   margin-right: 0;
-  position: static;
-  left: auto;
-  transform: none;
 }
 
 /* ============================================================

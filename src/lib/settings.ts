@@ -269,6 +269,18 @@ export interface EditorSettings {
   /** Content width as CSS value, e.g. "900px" or "80%". Overrides contentMaxWidth if set. */
   contentWidth?: string;
   /**
+   * Fraction of the editor pane that a `content-width: wide` codeblock uses.
+   * 0–100 (interpreted as a percentage). Default 85. The block CSS computes
+   * `calc(var(--editor-pane-width) * fraction)` so the value reflects how
+   * much of the actual editor pane (not the viewport) the block occupies.
+   */
+  wideWidthPct?: number;
+  /**
+   * Fraction of the editor pane that a `content-width: full` codeblock uses.
+   * 0–100. Default 100.
+   */
+  fullWidthPct?: number;
+  /**
    * Whether the browser's native spell-checker underlines are shown in the
    * editor content element. Defaults to false (off). Set via the "Editor"
    * section in the Settings panel (FR-B.1, FR-B.3).
@@ -305,6 +317,8 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     contentPadding: "responsive",
     baseFontSize: 16,
     spellCheck: false, // EC-B.05: default off; reset-all handler relies on this (AD-08)
+    wideWidthPct: 85,
+    fullWidthPct: 100,
   },
   theme: {
     active: "default-dark",
@@ -506,6 +520,12 @@ export function applyEditorSettings(editor: EditorSettings): void {
   const cw = editor.contentWidth ?? `${editor.contentMaxWidth}px`;
   root.style.setProperty("--settings-content-max-width", cw);
   root.style.setProperty("--settings-base-font-size", `${editor.baseFontSize}px`);
+  // Block-level wide/full fractions (0–1 floats) — consumed by the
+  // .cm-block-width-wide / -full rules in styles.css.
+  const widePct = editor.wideWidthPct ?? 85;
+  const fullPct = editor.fullWidthPct ?? 100;
+  root.style.setProperty("--settings-wide-fraction", String(Math.max(0, Math.min(100, widePct)) / 100));
+  root.style.setProperty("--settings-full-fraction", String(Math.max(0, Math.min(100, fullPct)) / 100));
 
   /*
    * Reconfigure the spell-check compartment on the live EditorView.
