@@ -702,6 +702,49 @@ body.tab-mode-vertical #titlebar {
 }
 
 /* ============================================================
+   Global form controls -- canonical checkbox
+   ============================================================
+   Single source of truth for checkbox styling across the app. Custom
+   appearance (appearance: none) is used so the visual matches our dark
+   inputs/buttons: a dark filled square with a subtle border, plus a
+   blue checkmark when checked.
+
+   Modals should NOT redefine `input[type="checkbox"]` size, color, or
+   appearance. If a specific context needs a different size (e.g. compact
+   folder-view card overlays, table rows), it overrides via a
+   higher-specificity selector — see .fv-card-checkbox-wrap and
+   .fv-td-checkbox. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary, var(--bg-primary, #2a2a3a));
+  cursor: pointer;
+  /* Hover border lifts smoothly; the checkmark itself appears instantly
+     (animating background causes the image to slide in from the corner). */
+  transition: border-color 0.12s;
+  position: relative;
+  vertical-align: middle;
+}
+input[type="checkbox"]:hover {
+  border-color: var(--text-tertiary, #666);
+}
+input[type="checkbox"]:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 8'%3E%3Cpath d='M1 4l3 3 5-6' stroke='%234a9eff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 68%;
+}
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 2px;
+}
+
+/* ============================================================
    Live Preview -- Task List
    ============================================================ */
 .cm-live-task {

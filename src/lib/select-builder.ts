@@ -27,7 +27,8 @@ const STYLE_ID   = "__sb-styles__";
 const STYLES = `
 .sb-overlay {
   position: fixed; inset: 0; z-index: 2000;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 8vh;
   font-family: var(--ui-font, -apple-system, sans-serif);
 }
 .sb-backdrop {
@@ -36,7 +37,7 @@ const STYLES = `
 }
 .sb-panel {
   position: relative; z-index: 1;
-  width: min(720px, 90vw); max-height: 86vh; overflow: hidden;
+  width: min(720px, 90vw); max-height: 84vh; overflow: hidden;
   background: var(--bg-primary, #1d1d2a);
   border: 1px solid var(--border-color, rgba(255,255,255,.12));
   border-radius: 10px;
@@ -66,9 +67,10 @@ const STYLES = `
   display: flex; gap: 6px; align-items: center;
   padding: 5px 0;
 }
+.sb-section-caption,
 .sb-rules-empty {
   font-size: 12px; font-style: italic; color: var(--text-tertiary, #888);
-  padding: 6px 0;
+  padding: 0 0 10px 0;
 }
 .sb-add-rule {
   font-size: 12px; padding: 4px 10px; margin-top: 4px;
@@ -78,7 +80,7 @@ const STYLES = `
 }
 .sb-add-rule:hover { color: var(--text-primary, #fff); background: var(--bg-hover, rgba(255,255,255,.05)); }
 
-.sb-display-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.sb-display-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .sb-display-pill {
   padding: 6px 14px; border-radius: 14px; font-size: 12px;
   cursor: pointer; user-select: none;
@@ -90,14 +92,12 @@ const STYLES = `
   background: var(--link-color, #4a9eff); border-color: transparent; color: #fff;
 }
 
-.sb-opts { display: flex; flex-direction: column; gap: 8px; }
+.sb-opts { display: flex; flex-direction: column; gap: 10px; }
 .sb-opt-row {
-  display: flex; gap: 7px; align-items: center;
+  display: flex; gap: 8px; align-items: center;
   font-size: 12px; color: var(--text-secondary, #aaa);
 }
-.sb-opt-row input[type="checkbox"] {
-  width: 12px; height: 12px; cursor: pointer; accent-color: var(--link-color, #4a9eff);
-}
+/* Checkbox size + accent-color come from the global rule in styles.css. */
 .sb-opt-row input[type="text"], .sb-opt-row select {
   font-size: 12px; padding: 3px 6px;
   background: var(--bg-secondary, #2a2a3a);
@@ -268,6 +268,10 @@ export function mountSelectForm(
 
   // ── Path section ───────────────────────────────────────────────────────────
   const pathSec = section("Path");
+  const pathCaption = document.createElement("div");
+  pathCaption.className = "sb-section-caption";
+  pathCaption.textContent = "Select files to display";
+  pathSec.appendChild(pathCaption);
   const pathInput = document.createElement("input");
   pathInput.type = "text";
   pathInput.placeholder = "./";
@@ -279,7 +283,7 @@ export function mountSelectForm(
   container.appendChild(pathSec);
 
   // ── Filter section ─────────────────────────────────────────────────────────
-  const filterSec = section("Filter (AND across rows; leave empty to include all files in path)");
+  const filterSec = section("Filter");
   const rulesList = document.createElement("ul");
   rulesList.className = "sb-rules-list";
   filterSec.appendChild(rulesList);
@@ -289,7 +293,7 @@ export function mountSelectForm(
     if (state.rules.length === 0) {
       const empty = document.createElement("div");
       empty.className = "sb-rules-empty";
-      empty.textContent = "No filters — all files in the path are shown.";
+      empty.textContent = "Show all files";
       rulesList.appendChild(empty);
       return;
     }

@@ -242,30 +242,8 @@
   font-size: 13px;
   cursor: pointer;
 }
-.settings-checkbox-label input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
-}
-.settings-checkbox-label input[type="checkbox"]:checked {
-  background: var(--link-color);
-  border-color: var(--link-color);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 8'%3E%3Cpath d='M1 4l3 3 5-6' stroke='%23fff' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 65%;
-}
-.settings-checkbox-label input[type="checkbox"]:focus-visible {
-  outline: 2px solid var(--link-color);
-  outline-offset: 2px;
-}
+/* Checkbox styling (size, fill, checkmark) comes from the global rule in
+   src/styles.css — single source of truth for the app. */
 
 /* Disabled state for size controls when maximize is on */
 #settings-size-controls.disabled {

@@ -159,7 +159,7 @@ export function createSettingsPanel(): void {
           <label class="settings-label">Quick Capture</label>
           <div class="settings-row">
             <span class="settings-description">Inbox folder (relative to vault root)</span>
-            <input type="text" class="settings-input" id="settings-qc-inbox-folder" placeholder="Inbox" />
+            <input type="text" class="settings-input settings-input-wide" id="settings-qc-inbox-folder" placeholder="Inbox" />
           </div>
           <div class="settings-row">
             <span class="settings-description">Path when no vault is open</span>

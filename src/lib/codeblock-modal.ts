@@ -31,13 +31,14 @@ const STYLE_ID   = "__cbm-styles__";
 const STYLES = `
 .cbm-overlay {
   position: fixed; inset: 0; z-index: 2000;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 8vh;
   font-family: var(--ui-font, -apple-system, sans-serif);
 }
 .cbm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
 .cbm-panel {
   position: relative; z-index: 1;
-  width: min(640px, 90vw); max-height: 86vh; overflow: hidden;
+  width: min(640px, 90vw); max-height: 84vh; overflow: hidden;
   background: var(--bg-primary, #1d1d2a);
   border: 1px solid var(--border-color, rgba(255,255,255,.12));
   border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,.5);
@@ -60,20 +61,22 @@ const STYLES = `
   color: var(--text-tertiary, #888);
   text-transform: uppercase; margin-bottom: 6px;
 }
-.cbm-type-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.cbm-type-pill {
-  padding: 7px 16px; border-radius: 18px; font-size: 12.5px;
+.cbm-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.cbm-tab {
+  padding: 7px 16px; border-radius: 6px;
+  font-size: 13px; font-family: inherit;
   cursor: pointer; user-select: none;
-  border: 1px solid var(--border-color, rgba(255,255,255,.18));
-  color: var(--text-secondary, #aaa); background: transparent;
+  border: none; background: transparent;
+  color: var(--text-tertiary, #666);
 }
-.cbm-type-pill:hover { color: var(--text-primary, #e0e0e0); background: var(--bg-hover, rgba(255,255,255,.06)); }
-.cbm-type-pill.is-active {
-  background: var(--link-color, #4a9eff); border-color: transparent; color: #fff;
+.cbm-tab:hover { color: var(--text-secondary, #aaa); }
+.cbm-tab.is-active {
+  background: var(--bg-secondary, rgba(255,255,255,.06));
+  color: var(--text-primary, #fff);
 }
 .cbm-type-desc {
   font-size: 11px; color: var(--text-tertiary, #888);
-  font-style: italic; margin-top: 4px;
+  font-style: italic; margin-top: 4px; margin-bottom: 10px;
 }
 
 .cbm-form-row {
@@ -81,7 +84,7 @@ const STYLES = `
   font-size: 12px; color: var(--text-secondary, #aaa);
   margin-bottom: 8px;
 }
-.cbm-form-row label { min-width: 80px; }
+.cbm-form-row label { flex-shrink: 0; }
 .cbm-form-row input, .cbm-form-row select, .cbm-form-row textarea {
   font-size: 12px; padding: 5px 8px;
   background: var(--bg-secondary, #2a2a3a);
@@ -165,7 +168,9 @@ export function buildGridFence(g: GridFormState): string {
 // ── Modal opener ─────────────────────────────────────────────────────────────
 
 const TYPES: Array<{ kind: BlockKind; label: string; desc: string }> = [
-  { kind: "select",  label: "Select",  desc: "File collection driven by filter rules + display." },
+  // Select's description moved into the Select form itself (under PATH), so
+  // its type-pill description is intentionally empty.
+  { kind: "select",  label: "Select",  desc: "" },
   { kind: "sidebar", label: "Sidebar", desc: "Floating callout pinned to the left or right." },
   { kind: "grid",    label: "Grid",    desc: "NxM cell grid with editable markdown per cell." },
 ];
@@ -226,21 +231,19 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   body.className = "cbm-body";
   panel.appendChild(body);
 
-  // ── Type picker ───────────────────────────────────────────────────────────
-  const typeSec = section("Type");
-  const pills = document.createElement("div");
-  pills.className = "cbm-type-pills";
-  typeSec.appendChild(pills);
+  // ── Type tabs (no "TYPE" section label — the tabs make context obvious)
+  const tabs = document.createElement("div");
+  tabs.className = "cbm-tabs";
+  tabs.setAttribute("role", "tablist");
+  body.appendChild(tabs);
   const typeDesc = document.createElement("div");
   typeDesc.className = "cbm-type-desc";
-  typeSec.appendChild(typeDesc);
-  body.appendChild(typeSec);
+  body.appendChild(typeDesc);
 
-  // ── Form host ─────────────────────────────────────────────────────────────
-  const formSec = section("Settings");
+  // ── Form host (no section label — the type pills above make context obvious)
   const formHost = document.createElement("div");
-  formSec.appendChild(formHost);
-  body.appendChild(formSec);
+  formHost.className = "cbm-section";
+  body.appendChild(formHost);
 
   function renderForm(): void {
     formHost.innerHTML = "";
@@ -249,9 +252,10 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
     if (kind === "sidebar") renderSidebarForm();
     else if (kind === "grid") renderGridForm();
     else if (kind === "select") renderSelectForm();
-    pills.querySelectorAll(".cbm-type-pill").forEach((p) => {
-      const pillKind = (p as HTMLElement).dataset.kind as BlockKind | undefined;
-      p.classList.toggle("is-active", pillKind === kind);
+    tabs.querySelectorAll(".cbm-tab").forEach((t) => {
+      const tabKind = (t as HTMLElement).dataset.kind as BlockKind | undefined;
+      t.classList.toggle("is-active", tabKind === kind);
+      t.setAttribute("aria-selected", String(tabKind === kind));
     });
   }
 
@@ -367,13 +371,14 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   }
 
   for (const t of TYPES) {
-    const p = document.createElement("button");
-    p.type = "button";
-    p.className = "cbm-type-pill" + (t.kind === kind ? " is-active" : "");
-    p.textContent = t.label;
-    p.dataset.kind = t.kind;
-    p.addEventListener("click", () => { kind = t.kind; renderForm(); });
-    pills.appendChild(p);
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.className = "cbm-tab" + (t.kind === kind ? " is-active" : "");
+    tab.textContent = t.label;
+    tab.dataset.kind = t.kind;
+    tab.addEventListener("click", () => { kind = t.kind; renderForm(); });
+    tabs.appendChild(tab);
   }
   renderForm();
 
@@ -433,14 +438,3 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function section(labelText: string): HTMLElement {
-  const wrap = document.createElement("div");
-  wrap.className = "cbm-section";
-  const label = document.createElement("div");
-  label.className = "cbm-section-label";
-  label.textContent = labelText;
-  wrap.appendChild(label);
-  return wrap;
-}

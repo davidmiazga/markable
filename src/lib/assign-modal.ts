@@ -252,9 +252,7 @@ const AM_CSS = `
   font-size: 11px; color: var(--text-secondary, #aaa);
   cursor: pointer; user-select: none;
 }
-.am-opt-check input[type="checkbox"] {
-  width: 12px; height: 12px; cursor: pointer; accent-color: var(--link-color, #4a9eff);
-}
+/* Checkbox size + accent-color come from the global rule in styles.css. */
 .am-opt-note {
   font-size: 10px; color: var(--text-tertiary, #555);
   line-height: 1.55; font-style: italic; margin-top: 2px;
