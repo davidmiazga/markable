@@ -287,14 +287,16 @@ describe("F — buildFileContextMenuItems includes New Folder", () => {
     expect(labels).toContain("New Folder");
   });
 
-  it("New Folder appears immediately after New Note", () => {
+  it("New Folder appears immediately before New Note (unified-menu order)", () => {
     const el = document.createElement("li");
     el.setAttribute("data-path", "/vault/note.md");
     const items = _testing.buildFileContextMenuItems(el, "/vault/note.md", "v1");
-    const nonSep = items.filter((i) => !i.separator);
-    // Index 0 = Pin/Unpin, 1 = New Note, 2 = New Folder
-    expect(nonSep[1].label).toBe("New Note");
-    expect(nonSep[2].label).toBe("New Folder");
+    const labels = items.filter((i) => !i.separator).map((i) => i.label);
+    const newFolderIdx = labels.indexOf("New Folder");
+    const newNoteIdx = labels.indexOf("New Note");
+    // Per the May 2026 unified menu cleanup, "New Folder" precedes "New Note".
+    expect(newFolderIdx).toBeGreaterThan(-1);
+    expect(newNoteIdx).toBe(newFolderIdx + 1);
   });
 });
 

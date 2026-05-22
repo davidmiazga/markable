@@ -2901,59 +2901,47 @@ function buildFileContextMenuItems(
   el: HTMLElement,
   path: string,
   vaultId: string,
+  hasCodeblock = false,
+  hasLayout = false,
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
   const parentDir = getParentDir(path);
   const container = _panelContainer;
-
-  const fileBasename = path.split("/").pop() ?? path.split("\\").pop() ?? "";
-  const isFolderMd = fileBasename === "_folder.md";
-  const isViewFile = !isFolderMd && fileBasename.startsWith("view-") && fileBasename.endsWith(".md");
-  const isViewDefinition = isFolderMd || isViewFile;
-
-  // View definition file items injected at the top of the context menu.
-  const viewFileItems: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> =
-    isViewDefinition
-      ? [
-          {
-            label: isFolderMd ? "Open Folder View" : "Open View",
-            handler: () => openFolderViewTab(parentDir, path),
-          },
-          {
-            label: isViewFile ? "Edit View Definition" : "Edit View Source",
-            handler: () => {
-              void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
-              (window as any).__MARKABLE_TAB_MANAGER__?.exitLayoutView?.();
-            },
-          },
-          {
-            label: "Change Layout…",
-            handler: () => {
-              (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
-            },
-          },
-          { separator: true, label: "", handler: null },
-        ]
-      : [];
+  const isMd = path.toLowerCase().endsWith(".md");
 
   return [
-    ...viewFileItems,
-    {
-      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
-      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
-    },
-    { separator: true, label: "", handler: null },
-    {
-      label: "New Note",
+    // Layout entry point — label flips Apply ↔ Edit based on whether the
+    // file's YAML frontmatter already carries a `layout:` key. .md only.
+    ...(isMd ? [{
+      label: hasLayout ? "Edit Page Layout" : "Apply Page Layout",
       handler: () => {
-        if (!container) return;
-        showInlineCreateInput(parentDir, container, vaultId);
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+      },
+    }] : []),
+    // Codeblock entry point — label flips Insert ↔ Edit based on whether
+    // the file already contains a select/sidebar/grid fence. Either way the
+    // handler just opens the file in a tab; the user uses slash commands /
+    // the gear icon to actually insert or edit.
+    {
+      label: hasCodeblock ? "Edit CodeBlock" : "Insert CodeBlock",
+      handler: () => {
+        const openFn = (window as any).__MARKABLE_OPEN_FILE_IN_TAB__;
+        if (typeof openFn === "function") openFn(path);
+        else void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
       },
     },
+    { separator: true, label: "", handler: null },
     {
       label: "New Folder",
       handler: () => {
         if (!container) return;
         showInlineFolderCreateInput(parentDir, container, vaultId);
+      },
+    },
+    {
+      label: "New Note",
+      handler: () => {
+        if (!container) return;
+        showInlineCreateInput(parentDir, container, vaultId);
       },
     },
     { separator: true, label: "", handler: null },
@@ -2970,28 +2958,15 @@ function buildFileContextMenuItems(
         void deleteFile(path, container ?? document.createElement("div"));
       },
     },
-    { separator: true, label: "", handler: null },
-    ...(path.toLowerCase().endsWith(".md") && !isViewDefinition ? [{
-      label: "Apply Page Layout…",
-      handler: () => {
-        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
-      },
-    }] : []),
     {
-      label: "Move to…",
-      handler: null,
-      disabled: true,
+      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
+      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
     },
+    { separator: true, label: "", handler: null },
     {
-      label: "Open in Finder",
+      label: "Reveal in Finder",
       handler: () => {
         void (window as any).__TAURI_INTERNALS__?.invoke?.("reveal_in_finder", { path });
-      },
-    },
-    {
-      label: "Copy Path",
-      handler: () => {
-        void navigator.clipboard.writeText(path);
       },
     },
   ];
@@ -3019,51 +2994,56 @@ function buildDirContextMenuItems(
   path: string,
   vaultId: string,
   hasFolderView = false,
+  hasCodeblock = false,
+  hasLayout = false,
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
   const container = _panelContainer;
-
-  // FR-34: "Open Folder View" injected at the very top when hasFolderView=true.
-  const openFolderViewItems: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> =
-    hasFolderView
-      ? [
-          { label: "Open Folder View", handler: () => openFolderViewTab(path) },
-          {
-            label: "Change Layout…",
-            handler: () => {
-              (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path + "/_folder.md");
-            },
-          },
-          { separator: true, label: "", handler: null },
-        ]
-      : [];
+  const folderMdPath = path + "/_folder.md";
 
   return [
-    ...openFolderViewItems,
-    {
-      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
-      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
-    },
-    { separator: true, label: "", handler: null },
-    {
-      label: "New Note",
-      handler: () => {
-        if (!container) return;
-        showInlineCreateInput(path, container, vaultId);
+    // "Folder View" (no _folder.md) → opens the template picker which creates
+    // and populates _folder.md. "Remove Folder View" (has _folder.md) → deletes
+    // the file (deleteFile shows a confirm prompt).
+    hasFolderView
+      ? {
+          label: "Remove Folder View",
+          handler: () => {
+            void deleteFile(folderMdPath, container ?? document.createElement("div"));
+          },
+        }
+      : {
+          label: "Folder View",
+          handler: () => { openFolderViewPicker(path, container, vaultId); },
+        },
+    // Layout + Codeblock items act on _folder.md, so they only appear when
+    // _folder.md exists. Layout comes first (matches the file menu); labels
+    // flip based on whether _folder.md already carries a `layout:` YAML key
+    // or a fenced codeblock.
+    ...(hasFolderView ? [
+      {
+        label: hasLayout ? "Edit Page Layout" : "Apply Page Layout",
+        handler: () => {
+          (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(folderMdPath);
+        },
       },
-    },
-    // FR-35: "New Folder View…" opens template picker when no _folder.md exists;
-    // "Reset Folder View…" writes the plain starter directly (no picker).
-    {
-      label: hasFolderView ? "Reset Folder View…" : "New Folder View…",
-      handler: hasFolderView
-        ? () => { void resetFolderViewFile(path, container, vaultId); }
-        : () => { openFolderViewPicker(path, container, vaultId); },
-    },
+      {
+        label: hasCodeblock ? "Edit CodeBlock" : "Insert CodeBlock",
+        handler: () => { openFolderViewTab(path); },
+      },
+    ] : []),
+    { separator: true, label: "", handler: null },
     {
       label: "New Folder",
       handler: () => {
         if (!container) return;
         showInlineFolderCreateInput(path, container, vaultId);
+      },
+    },
+    {
+      label: "New Note",
+      handler: () => {
+        if (!container) return;
+        showInlineCreateInput(path, container, vaultId);
       },
     },
     { separator: true, label: "", handler: null },
@@ -3080,9 +3060,13 @@ function buildDirContextMenuItems(
         void deleteDirectory(path, container ?? document.createElement("div"));
       },
     },
+    {
+      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
+      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
+    },
     { separator: true, label: "", handler: null },
     {
-      label: "Open in Finder",
+      label: "Reveal in Finder",
       handler: () => {
         void (window as any).__TAURI_INTERNALS__?.invoke?.("reveal_in_finder", { path });
       },
@@ -3579,14 +3563,74 @@ function handleContextMenu(e: MouseEvent, el: HTMLElement, vaultId: string): voi
       },
     );
   } else if (type === "file") {
-    items = buildFileContextMenuItems(el, path, vaultId);
+    // .md files have context-sensitive labels for Insert/Edit CodeBlock and
+    // Apply/Change Page Layout. Read the file once and pass detection flags
+    // into the builder. Non-.md files skip the detection (no relevant items).
+    const x = e.clientX, y = e.clientY;
+    if (path.toLowerCase().endsWith(".md")) {
+      void (async () => {
+        const content = await readFileContentForMenu(path);
+        const built = buildFileContextMenuItems(
+          el, path, vaultId,
+          content ? detectCodeblock(content) : false,
+          content ? detectLayout(content) : false,
+        );
+        showContextMenu(built, x, y);
+      })();
+      return;
+    }
+    items = buildFileContextMenuItems(el, path, vaultId, false, false);
   } else if (type === "directory") {
-    items = buildDirContextMenuItems(el, path, vaultId, _lastFolderViewSet.has(path));
+    // Directories: when _folder.md exists, the CodeBlock / Layout items act on
+    // it, so we read it to derive Insert vs Edit / Apply vs Change labels.
+    const hasFolderView = _lastFolderViewSet.has(path);
+    const x = e.clientX, y = e.clientY;
+    if (hasFolderView) {
+      void (async () => {
+        const content = await readFileContentForMenu(path + "/_folder.md");
+        const built = buildDirContextMenuItems(
+          el, path, vaultId, true,
+          content ? detectCodeblock(content) : false,
+          content ? detectLayout(content) : false,
+        );
+        showContextMenu(built, x, y);
+      })();
+      return;
+    }
+    items = buildDirContextMenuItems(el, path, vaultId, false, false, false);
   } else {
     items = buildVaultContextMenuItems(el, path, vaultId);
   }
 
   showContextMenu(items, e.clientX, e.clientY);
+}
+
+/**
+ * Read a file's content via the Tauri bridge for context-menu detection.
+ * Returns null on any failure (the menu just renders the "Insert" / "Apply"
+ * label as if no codeblock/layout exists).
+ */
+async function readFileContentForMenu(path: string): Promise<string | null> {
+  try {
+    const content = await (window as any).__TAURI_INTERNALS__?.invoke?.("read_file", { path });
+    return typeof content === "string" ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the file contains a select/sidebar/grid fenced codeblock. */
+function detectCodeblock(content: string): boolean {
+  return /^```(?:select|sidebar(?:-left)?|grid(?:-card)?)\b/m.test(content);
+}
+
+/** True when the file's YAML frontmatter has a `layout:` key with a value. */
+function detectLayout(content: string): boolean {
+  if (!content.startsWith("---")) return false;
+  const closeIdx = content.indexOf("\n---", 3);
+  if (closeIdx === -1) return false;
+  const frontmatter = content.slice(3, closeIdx);
+  return /^layout:\s*\S/m.test(frontmatter);
 }
 
 // ── Inline rename / create ────────────────────────────────────────────────────

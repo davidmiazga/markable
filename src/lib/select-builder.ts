@@ -82,6 +82,20 @@ const STYLES = `
 .sb-add-rule:hover { color: var(--text-primary, #fff); background: var(--bg-hover, rgba(255,255,255,.05)); }
 
 .sb-display-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+
+/* Display Option subsection — indented under DISPLAY, subtitle on its own
+   line above the pills + preview-pane checkbox. */
+.sb-display-option-section {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-left: 16px;
+  margin-bottom: 4px;
+}
+.sb-display-option-header {
+  font-size: 11px; font-weight: 600;
+  color: var(--text-secondary, #aaa);
+  letter-spacing: .02em;
+}
+.sb-display-option-section .sb-display-pills { margin-bottom: 0; }
 .sb-display-pill {
   padding: 6px 14px; border-radius: 14px; font-size: 12px;
   cursor: pointer; user-select: none;
@@ -377,34 +391,53 @@ export function mountSelectForm(
   function renderDisplayOptions(): void {
     optsHost.innerHTML = "";
 
-    // "Layout option" sub-pill row, shown only when the current display has
-    // more than one option.
+    // "Display Option:" subsection. Renders when there are sub-variant pills
+    // (e.g. Bookshelf's covers/library/compact) OR when the display supports
+    // a preview pane (cards/table/timeline). Subtitle on its own line, content
+    // indented to read as a sub-section of DISPLAY.
     const spec = getDisplaySpec(state.display);
-    if (spec && spec.options.length > 1) {
-      const optRow = document.createElement("div");
-      optRow.className = "sb-opt-row";
-      const label = document.createElement("label");
-      label.textContent = "Layout option";
-      optRow.appendChild(label);
-      const optPills = document.createElement("div");
-      optPills.className = "sb-display-pills";
-      for (const o of spec.options) {
-        const pill = document.createElement("button");
-        pill.type = "button";
-        pill.className = "sb-display-pill" + (o.slug === state.displayOption ? " is-active" : "");
-        pill.textContent = o.label;
-        if (o.description) pill.title = o.description;
-        pill.addEventListener("click", () => {
-          state.displayOption = o.slug;
-          optPills.querySelectorAll(".sb-display-pill").forEach((p) =>
-            p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
-          );
-          renderDisplayOptions();
-        });
-        optPills.appendChild(pill);
+    const hasOptionPills = !!(spec && spec.options.length > 1);
+    const hasPreviewPane =
+      state.display === "cards" ||
+      state.display === "table" ||
+      state.display === "timeline";
+
+    if (hasOptionPills || hasPreviewPane) {
+      const section = document.createElement("div");
+      section.className = "sb-display-option-section";
+      const header = document.createElement("div");
+      header.className = "sb-display-option-header";
+      header.textContent = "Display Option:";
+      section.appendChild(header);
+
+      if (hasOptionPills && spec) {
+        const optPills = document.createElement("div");
+        optPills.className = "sb-display-pills";
+        for (const o of spec.options) {
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "sb-display-pill" + (o.slug === state.displayOption ? " is-active" : "");
+          pill.textContent = o.label;
+          if (o.description) pill.title = o.description;
+          pill.addEventListener("click", () => {
+            state.displayOption = o.slug;
+            optPills.querySelectorAll(".sb-display-pill").forEach((p) =>
+              p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
+            );
+            renderDisplayOptions();
+          });
+          optPills.appendChild(pill);
+        }
+        section.appendChild(optPills);
       }
-      optRow.appendChild(optPills);
-      optsHost.appendChild(optRow);
+
+      if (hasPreviewPane) {
+        section.appendChild(
+          checkRow("Preview pane above results", state.previewPane, (v) => { state.previewPane = v; }),
+        );
+      }
+
+      optsHost.appendChild(section);
     }
 
     if (state.display !== "timeline") {
@@ -438,7 +471,8 @@ export function mountSelectForm(
       optsHost.appendChild(checkRow("Show file extensions", state.showExtensions, (v) => { state.showExtensions = v; }));
     }
 
-    optsHost.appendChild(checkRow("Preview pane above results", state.previewPane, (v) => { state.previewPane = v; }));
+    // (Preview pane checkbox moved into the "Display Option:" section above
+    // and shown only for cards/table/timeline.)
 
     if (state.display === "kanban") {
       const row = document.createElement("div");

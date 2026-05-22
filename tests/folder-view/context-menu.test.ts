@@ -1,14 +1,16 @@
 /**
  * tests/folder-view/context-menu.test.ts
  *
- * Integration tests for context menu injection introduced in step_06.
+ * Integration tests for the unified file/folder context menu (May 2026
+ * cleanup). Folder menu structure:
+ *   - hasFolderView=false: "Folder View" → New Folder → New Note → Rename → Delete → Pin → Reveal in Finder
+ *   - hasFolderView=true:  "Remove Folder View" → "Insert/Edit CodeBlock" → "Apply/Change Page Layout"
+ *                          → New Folder → New Note → Rename → Delete → Pin → Reveal in Finder
  *
- * Covers:
- *   FR-34: "Open Folder View" injected as the first item when hasFolderView=true.
- *   FR-35: "New Folder View…" injected between "New Note" and "New Folder"
- *          when hasFolderView=false; absent when hasFolderView=true.
- *   FR-35/FR-36: createFolderViewFile writes starter template and opens editor.
- *   EC-16: createFolderViewFile opens existing file instead of overwriting it.
+ * Also covers:
+ *   createFolderViewFile / resetFolderViewFile helper behavior (the
+ *   functions themselves remain in the codebase; only the menu wiring
+ *   changed).
  *   EC-24: Smart Folder nodes never reach buildDirContextMenuItems.
  */
 
@@ -36,73 +38,99 @@ function makeDirNode(path = "/vault/A", isSmart = false): HTMLLIElement {
 
 // ── Test suite ─────────────────────────────────────────────────────────────────
 
-describe("buildDirContextMenuItems — folder-view injection", () => {
+describe("buildDirContextMenuItems — unified menu structure", () => {
 
-  // ── FR-34: Open Folder View item ──────────────────────────────────────────
+  // ── Folder View / Remove Folder View first-item toggle ────────────────────
 
-  it("FR-34: hasFolderView=true → first item has label 'Open Folder View'", () => {
+  it("hasFolderView=true → first item is 'Remove Folder View'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    expect(items[0].label).toBe("Open Folder View");
+    expect(items[0].label).toBe("Remove Folder View");
   });
 
-  it("FR-34: 'Open Folder View' appears before the Pin/Unpin item", () => {
-    const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    const openFVIdx = items.findIndex(i => i.label === "Open Folder View");
-    const pinIdx = items.findIndex(i => i.label === "Pin" || i.label === "Unpin");
-    // "Open Folder View" must come before Pin/Unpin.
-    expect(openFVIdx).toBeGreaterThanOrEqual(0);
-    expect(pinIdx).toBeGreaterThanOrEqual(0);
-    expect(openFVIdx).toBeLessThan(pinIdx);
-  });
-
-  // ── FR-35: Create Folder View… item ──────────────────────────────────────
-
-  it("FR-35: hasFolderView=false → no 'Open Folder View' item", () => {
+  it("hasFolderView=false → first item is 'Folder View'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
-    expect(items.some(i => i.label === "Open Folder View")).toBe(false);
+    expect(items[0].label).toBe("Folder View");
   });
 
-  it("FR-35: hasFolderView=false → 'Create Folder View…' item is present", () => {
+  // ── CodeBlock + Layout items only present when _folder.md exists ──────────
+  //    Labels flip Insert↔Edit / Apply↔Change based on _folder.md content.
+
+  it("hasFolderView=true, no existing codeblock/layout → 'Insert CodeBlock' + 'Apply Page Layout'", () => {
     const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
-    expect(items.some(i => i.label === "New Folder View…")).toBe(true);
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true, false, false);
+    const labels = items.map(i => i.label);
+    expect(labels).toContain("Insert CodeBlock");
+    expect(labels).toContain("Apply Page Layout");
+    expect(labels).not.toContain("Edit CodeBlock");
+    expect(labels).not.toContain("Edit Page Layout");
   });
 
-  it("FR-35 position: 'Create Folder View…' appears between 'New Note' and 'New Folder'", () => {
+  it("hasFolderView=true, existing codeblock/layout → 'Edit CodeBlock' + 'Change Page Layout'", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true, true, true);
+    const labels = items.map(i => i.label);
+    expect(labels).toContain("Edit CodeBlock");
+    expect(labels).toContain("Edit Page Layout");
+    expect(labels).not.toContain("Insert CodeBlock");
+    expect(labels).not.toContain("Apply Page Layout");
+  });
+
+  it("hasFolderView=false → codeblock + layout items are ABSENT regardless of flags", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false, true, true);
+    const labels = items.map(i => i.label);
+    expect(labels).not.toContain("Insert CodeBlock");
+    expect(labels).not.toContain("Edit CodeBlock");
+    expect(labels).not.toContain("Apply Page Layout");
+    expect(labels).not.toContain("Edit Page Layout");
+  });
+
+  // ── Order: New Folder → New Note → Rename → Delete → Pin → Reveal ────────
+
+  it("New Folder appears before New Note in the second group", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
     const labels = items.map(i => i.label);
-    const noteIdx = labels.indexOf("New Note");
-    const createFVIdx = labels.indexOf("New Folder View…");
-    const folderIdx = labels.indexOf("New Folder");
-    // All three must exist.
-    expect(noteIdx).toBeGreaterThanOrEqual(0);
-    expect(createFVIdx).toBeGreaterThanOrEqual(0);
-    expect(folderIdx).toBeGreaterThanOrEqual(0);
-    // "New Folder View…" must sit between "New Note" and "New Folder".
-    expect(createFVIdx).toBeGreaterThan(noteIdx);
-    expect(createFVIdx).toBeLessThan(folderIdx);
+    const newFolderIdx = labels.indexOf("New Folder");
+    const newNoteIdx = labels.indexOf("New Note");
+    expect(newFolderIdx).toBeGreaterThan(0);
+    expect(newFolderIdx).toBeLessThan(newNoteIdx);
   });
 
-  it("FR-35 toggle: hasFolderView=true → 'Create Folder View…' replaced by 'Reset Folder View…'", () => {
+  it("Pin appears in the same group as Rename/Delete (after Delete)", () => {
     const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    expect(items.some(i => i.label === "New Folder View…")).toBe(false);
-    expect(items.some(i => i.label === "Reset Folder View…")).toBe(true);
-  });
-
-  it("FR-35 reset position: 'Reset Folder View…' appears between 'New Note' and 'New Folder'", () => {
-    const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
     const labels = items.map(i => i.label);
-    const noteIdx = labels.indexOf("New Note");
-    const resetIdx = labels.indexOf("Reset Folder View…");
-    const folderIdx = labels.indexOf("New Folder");
-    expect(resetIdx).toBeGreaterThan(noteIdx);
-    expect(resetIdx).toBeLessThan(folderIdx);
+    const renameIdx = labels.indexOf("Rename");
+    const deleteIdx = labels.indexOf("Delete");
+    const pinIdx = labels.findIndex(l => l === "Pin" || l === "Unpin");
+    expect(renameIdx).toBeGreaterThan(0);
+    expect(deleteIdx).toBe(renameIdx + 1);
+    expect(pinIdx).toBe(deleteIdx + 1);
+  });
+
+  it("'Reveal in Finder' is the last item", () => {
+    const el = makeDirNode("/vault/A");
+    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
+    const nonSep = items.filter(i => !i.separator);
+    expect(nonSep[nonSep.length - 1].label).toBe("Reveal in Finder");
+  });
+
+  // ── Old labels are completely gone ────────────────────────────────────────
+
+  it("legacy 'Open Folder View' / 'New Folder View…' / 'Reset Folder View…' / 'Open in Finder' labels are absent", () => {
+    const el = makeDirNode("/vault/A");
+    for (const hasFV of [true, false]) {
+      const labels = _testing
+        .buildDirContextMenuItems(el, "/vault/A", "vault-1", hasFV)
+        .map(i => i.label);
+      expect(labels).not.toContain("Open Folder View");
+      expect(labels).not.toContain("New Folder View…");
+      expect(labels).not.toContain("Reset Folder View…");
+      expect(labels).not.toContain("Open in Finder");
+    }
   });
 
 });
@@ -153,8 +181,8 @@ describe("EC-24: Smart Folder nodes", () => {
     expect(menuText).toContain("Edit Filters");
 
     // Folder-view items must be absent — buildDirContextMenuItems was never called.
-    expect(menuText).not.toContain("Open Folder View");
-    expect(menuText).not.toContain("Create Folder View");
+    expect(menuText).not.toContain("Folder View");
+    expect(menuText).not.toContain("Remove Folder View");
   });
 
 });
@@ -255,31 +283,10 @@ describe("createFolderViewFile", () => {
 
 });
 
-// ── Reset Folder View context menu presence ───────────────────────────────────
-
-describe("buildDirContextMenuItems — Reset Folder View item", () => {
-
-  it("hasFolderView=true → 'Reset Folder View…' item is present", () => {
-    const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    expect(items.some(i => i.label === "Reset Folder View…")).toBe(true);
-  });
-
-  it("hasFolderView=false → 'Reset Folder View…' item is absent", () => {
-    const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
-    expect(items.some(i => i.label === "Reset Folder View…")).toBe(false);
-  });
-
-  it("'Open Folder View' is NOT directly followed by 'Reset Folder View…' (reset is in the New Note/New Folder slot)", () => {
-    const el = makeDirNode("/vault/A");
-    const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    const openIdx = items.findIndex(i => i.label === "Open Folder View");
-    expect(openIdx).toBeGreaterThanOrEqual(0);
-    expect(items[openIdx + 1]?.label).not.toBe("Reset Folder View…");
-  });
-
-});
+// (Reset Folder View describe block removed — the menu no longer has a
+// "Reset" item. To reset, users invoke "Remove Folder View" then "Folder View".
+// resetFolderViewFile() the helper remains in the codebase; its tests below
+// continue to cover that function directly.)
 
 // ── resetFolderViewFile ───────────────────────────────────────────────────────
 

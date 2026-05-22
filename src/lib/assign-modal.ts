@@ -888,39 +888,66 @@ export async function openAssignModal(
       checks.appendChild(row);
     }
 
-    // "Layout option" pill row — shown when the underlying display has >1 options.
+    // "Display Option:" group — pill row + (for cards/table/timeline) the
+    // preview-pane checkbox. Renders when there are sub-variant pills OR the
+    // display supports a preview pane. Same language as the CodeBlock modal
+    // for consistency.
     const displaySlug = slug?.replace(/^view-/, "") ?? "";
     const optSpec = getDisplaySpec(displaySlug);
-    if (optSpec && optSpec.options.length > 1) {
-      // Initialize to display default when not previously set or invalid.
-      const validSlugs = new Set(optSpec.options.map((o) => o.slug));
-      if (!validSlugs.has(optDisplayOption)) {
-        optDisplayOption = optSpec.defaultOption;
+    const hasOptionPills = !!(optSpec && optSpec.options.length > 1);
+    const supportsPreviewPane =
+      slug === "view-cards" || slug === "view-table" || slug === "view-timeline";
+
+    if (hasOptionPills || supportsPreviewPane) {
+      // Initialize displayOption to the display's default if not set / invalid.
+      if (optSpec) {
+        const validSlugs = new Set(optSpec.options.map((o) => o.slug));
+        if (!validSlugs.has(optDisplayOption)) {
+          optDisplayOption = optSpec.defaultOption;
+        }
       }
       const optGroup = document.createElement("div");
       optGroup.className = "am-opt-group";
       const optLabelEl = document.createElement("div");
       optLabelEl.className = "am-opt-group-label";
-      optLabelEl.textContent = "Layout option";
+      optLabelEl.textContent = "Display Option:";
       optGroup.appendChild(optLabelEl);
-      const pillRow = document.createElement("div");
-      pillRow.className = "am-sort-pills";
-      for (const o of optSpec.options) {
-        const pill = document.createElement("span");
-        pill.className = "am-sort-pill" + (optDisplayOption === o.slug ? " is-active" : "");
-        pill.textContent = o.label;
-        if (o.description) pill.title = o.description;
-        pill.addEventListener("click", () => {
-          optDisplayOption = o.slug;
-          pillRow.querySelectorAll(".am-sort-pill").forEach((p) =>
-            p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
-          );
-          // Re-render so option-dependent rows ("Show file extensions") refresh.
-          renderOptionsArea(slug);
-        });
-        pillRow.appendChild(pill);
+
+      if (hasOptionPills && optSpec) {
+        const pillRow = document.createElement("div");
+        pillRow.className = "am-sort-pills";
+        for (const o of optSpec.options) {
+          const pill = document.createElement("span");
+          pill.className = "am-sort-pill" + (optDisplayOption === o.slug ? " is-active" : "");
+          pill.textContent = o.label;
+          if (o.description) pill.title = o.description;
+          pill.addEventListener("click", () => {
+            optDisplayOption = o.slug;
+            pillRow.querySelectorAll(".am-sort-pill").forEach((p) =>
+              p.classList.toggle("is-active", (p as HTMLElement).textContent === o.label),
+            );
+            // Re-render so option-dependent rows ("Show file extensions") refresh.
+            renderOptionsArea(slug);
+          });
+          pillRow.appendChild(pill);
+        }
+        optGroup.appendChild(pillRow);
       }
-      optGroup.appendChild(pillRow);
+
+      if (supportsPreviewPane) {
+        // Inline a check row (addCheck appends to `checks`; we need it in optGroup).
+        const row = document.createElement("label");
+        row.className = "am-opt-check";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = optPreviewPane;
+        cb.addEventListener("change", () => { optPreviewPane = cb.checked; });
+        cb.addEventListener("click", (e) => e.stopPropagation());
+        row.appendChild(cb);
+        row.appendChild(document.createTextNode("Preview pane"));
+        optGroup.appendChild(row);
+      }
+
       optionsArea.appendChild(optGroup);
     }
 
@@ -937,8 +964,8 @@ export async function openAssignModal(
       addCheck("File extensions", optShowExtensions, (v) => { optShowExtensions = v; });
     }
 
-    // "Preview pane" — all views
-    addCheck("Preview pane", optPreviewPane, (v) => { optPreviewPane = v; });
+    // (Preview pane checkbox moved into the "Display Option:" group above
+    // and shown only for view-cards/view-table/view-timeline.)
 
     // ── Extra-fields note (table and kanban) ────────────────────────────────
     // extra-fields lets you add frontmatter columns to the view. Because it's

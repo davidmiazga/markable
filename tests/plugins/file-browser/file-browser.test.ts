@@ -1099,7 +1099,15 @@ describe("context menu", () => {
     setupVaultManager(makeVault(), makeVaultIndex(["/notes/note-a.md"]));
   });
 
-  it("right-click on a file node creates a .context-menu element", () => {
+  /*
+   * The file-node context menu now reads the file content asynchronously
+   * to derive Insert vs Edit / Apply vs Change labels. The DOM appears
+   * after one microtask, so each of these tests awaits a 0-tick flush
+   * after dispatching the contextmenu event.
+   */
+  const flushAsync = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it("right-click on a file node creates a .context-menu element", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
@@ -1110,11 +1118,12 @@ describe("context menu", () => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 });
     fileNode!.dispatchEvent(event);
 
+    await flushAsync();
     expect(document.querySelector(".context-menu")).not.toBeNull();
     _testing.closeContextMenu();
   });
 
-  it("context menu for a file node includes Rename item", () => {
+  it("context menu for a file node includes Rename item", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
@@ -1123,13 +1132,14 @@ describe("context menu", () => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 });
     fileNode!.dispatchEvent(event);
 
+    await flushAsync();
     const items = document.querySelectorAll(".context-menu-item");
     const labels = Array.from(items).map((i) => i.textContent);
     expect(labels).toContain("Rename");
     _testing.closeContextMenu();
   });
 
-  it("context menu for a file node includes Delete item", () => {
+  it("context menu for a file node includes Delete item", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
@@ -1138,32 +1148,35 @@ describe("context menu", () => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 });
     fileNode!.dispatchEvent(event);
 
+    await flushAsync();
     const items = document.querySelectorAll(".context-menu-item");
     const labels = Array.from(items).map((i) => i.textContent);
     expect(labels).toContain("Delete");
     _testing.closeContextMenu();
   });
 
-  it("Escape key dismisses the context menu", () => {
+  it("Escape key dismisses the context menu", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
 
     const fileNode = container.querySelector<HTMLElement>(".tree-node-file");
     fileNode!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    await flushAsync();
     expect(document.querySelector(".context-menu")).not.toBeNull();
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(document.querySelector(".context-menu")).toBeNull();
   });
 
-  it("click outside dismisses the context menu", () => {
+  it("click outside dismisses the context menu", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
 
     const fileNode = container.querySelector<HTMLElement>(".tree-node-file");
     fileNode!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    await flushAsync();
     expect(document.querySelector(".context-menu")).not.toBeNull();
 
     // Simulate mousedown outside the menu
@@ -1171,7 +1184,7 @@ describe("context menu", () => {
     expect(document.querySelector(".context-menu")).toBeNull();
   });
 
-  it("getContextMenu returns the open menu element", () => {
+  it("getContextMenu returns the open menu element", async () => {
     const container = makeContainer();
     _testing.setPanelContainer(container);
     renderPanel();
@@ -1179,6 +1192,7 @@ describe("context menu", () => {
     const fileNode = container.querySelector<HTMLElement>(".tree-node-file");
     fileNode!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
 
+    await flushAsync();
     expect(_testing.getContextMenu()).not.toBeNull();
     _testing.closeContextMenu();
   });
@@ -1521,6 +1535,9 @@ describe("delete file via context menu", () => {
 
     const fileNode = container.querySelector<HTMLElement>(".tree-node-file");
     fileNode!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+
+    // Wait for the async menu render (file content read for label detection).
+    await new Promise((r) => setTimeout(r, 0));
 
     const items = Array.from(document.querySelectorAll(".context-menu-item"));
     const deleteItem = items.find((i) => i.textContent === "Delete") as HTMLElement | undefined;
