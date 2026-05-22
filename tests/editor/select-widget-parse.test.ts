@@ -54,11 +54,11 @@ describe("parseSelectBody — option system", () => {
     expect(out.config.groupBy).toBeUndefined();
   });
 
-  it("`display: bookshelf` (no option) yields the covers default", () => {
+  it("`display: bookshelf` (no option) yields the compact default", () => {
     const out = parseSelectBody("display: bookshelf\n");
     expect(out.display).toBe("bookshelf");
     expect(out.config.layout).toBe("view-bookshelf");
-    expect(out.config.displayOption).toBe("covers");
+    expect(out.config.displayOption).toBe("compact");
   });
 
   it("`display: bookshelf` + `option: library` is preserved", () => {
@@ -66,9 +66,14 @@ describe("parseSelectBody — option system", () => {
     expect(out.config.displayOption).toBe("library");
   });
 
-  it("`display: bookshelf` + bogus option falls back to covers", () => {
-    const out = parseSelectBody("display: bookshelf\noption: nonsense\n");
+  it("`display: bookshelf` + `option: covers` is preserved", () => {
+    const out = parseSelectBody("display: bookshelf\noption: covers\n");
     expect(out.config.displayOption).toBe("covers");
+  });
+
+  it("`display: bookshelf` + bogus option falls back to compact", () => {
+    const out = parseSelectBody("display: bookshelf\noption: nonsense\n");
+    expect(out.config.displayOption).toBe("compact");
   });
 
   it("`display: bookshelf` + `group-by: status` writes config.groupBy", () => {

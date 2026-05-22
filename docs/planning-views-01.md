@@ -2,7 +2,128 @@
 
 > **First action after you exit plan mode:** copy this file to `docs/planning-views-01.md` in the repo so the user can follow along inline.
 
-## Context
+---
+
+## 2026-05-22 addendum — Compact-mode redesign from blendMode-test1.0.html
+
+**Working preference (note for future iterations):** the user solves the simplest mode first, then propagates the working pattern outward. Compact (no images, simplest book content) lands first; once it's solid we apply the structural pattern to Library and Covers in follow-up iterations.
+
+### Context
+
+After a long iteration cycle on the rail's `mix-blend-mode`, the user built a standalone test (`/Users/daveslaptop/work-LocalArea/-testing-tutorials/blendMode/blendMode-test1.0.html`) that demonstrates a clean working pattern: **sibling z-index layering** rather than the `isolation: isolate + background + z-index: -1 + overflow: hidden` chain we've been patching. The test also redesigns the book element: rich author/title/date text with a decorative double-rule (`.dblRule`), rendered vertically via `writing-mode: vertical-rl`. This addendum translates that test into our Bookshelf renderer, scoped to the **Compact** sub-option only.
+
+### Class mapping (test → ours)
+
+| Test class | Our class | Role |
+|---|---|---|
+| `.contentArea` | `.fv-shelf` | Per-shelf container, `position: relative`, NO isolation |
+| `.bookArea` | `.fv-shelf-row` | Row of books, `z-index: 10`, flex |
+| `.shelf` | `.fv-shelf-rail` | Colored rail, `position: absolute; bottom: 0; z-index: 1; mix-blend-mode: color` |
+| `.book` | `.fv-book` | Single book element — combined wrapper + spine, `writing-mode: vertical-rl`, colored bg from our palette |
+| `.author` / `.title` / `.date` / `.dblRule` | `.fv-book-author` / `.fv-book-title` / `.fv-book-date` / `.fv-book-rule` | Vertical text children inside `.fv-book` |
+
+### Key insight
+
+The current rail approach relies on `z-index: -1` (negative), which forces every parent up the chain to have a defined painted backdrop or the blend collapses. The test uses **positive z-index** for both the rail and the books (rail = 1, books = 10), so the rail blends with whatever's painted up the ancestor chain (body/html with `--bg-primary`) and books simply paint over the rail via normal stacking order. No isolation, no `overflow: hidden`, no `padding-bottom` reservation strip.
+
+### Renderer changes — `src/plugins/file-browser/folder-view/bookshelf-renderer.ts`
+
+- `buildCompactItem(card)` produces a single `.fv-book` element directly — no longer wraps a separate `.fv-book-spine`. Inside: optional `.fv-book-author`, always `.fv-book-title`, optional `.fv-book-date` containing a decorative `<div class="fv-book-rule">`.
+- All three text fields are sourced from optional YAML in `card.meta`: `author`, `title`, `date`. When YAML keys are absent: title falls back to `card.name` (filename stem); author and date rows are omitted entirely.
+- `enrichBookshelfMeta` reads `title` and `date` keys in addition to the existing `cover`, `author`, and `group-by` keys.
+- The color slot (`fv-book-color-N` from `colorSlotFor(card)`) stays on `.fv-book` exactly as today.
+- The width/weight/size slots on the old `.fv-book-spine` are removed for Compact — variable widths come from a CSS-only `:nth-child` rotation on `.fv-book-rule` (per the test's `.dblRule` pattern, user-confirmed).
+
+### CSS changes — `src/plugins/file-browser/folder-view/bookshelf-css.ts` (Compact scope)
+
+Strip from `.fv-bookshelf--compact .fv-shelf`:
+- `isolation: isolate`
+- `background: var(--bg-primary)`
+- `overflow: hidden`
+- `padding-bottom: 50px`
+
+The base `.fv-shelf` rule keeps just `position: relative; display: flex; flex-direction: column`. The painted backdrop falls through to `html { background-color: var(--bg-primary) }` (already present in `src/styles.css:106`) — that's what the rail's `mix-blend-mode: color` will compute against.
+
+Rewrite `.fv-bookshelf--compact .fv-shelf-rail`:
+```
+position: absolute;
+bottom: 0;
+left: 0;
+right: 0;
+height: <to-tune>; /* test uses 200px; we'll start there */
+background: var(--bright-1, …); /* per-shelf rotation via :nth-of-type already exists */
+border-radius: 12px;
+mix-blend-mode: color;
+z-index: 1;  /* positive, sibling of the row */
+/* NO translate, NO scale, NO negative z-index */
+```
+
+Rewrite `.fv-bookshelf--compact .fv-shelf-row`:
+```
+z-index: 10;  /* on top of the rail */
+display: flex;
+flex-direction: row;
+align-items: flex-end;
+justify-content: flex-start;
+gap: 2px;
+padding: 0 25px 5% 25px;  /* per test — books inset from shelf edges */
+```
+
+New `.fv-bookshelf--compact .fv-book`:
+```
+position: relative;
+display: flex;
+flex-direction: row;
+justify-content: space-between;
+align-items: center;
+height: 70vh;  /* tall; matches test */
+width: auto;  /* sized by content + padding */
+writing-mode: vertical-rl;
+text-align: center;
+padding: 6px 0;
+border-radius: 4px;
+font-size: 12px;
+/* background from .fv-book.fv-book-color-N rule already exists */
+```
+
+Text children: `.fv-book-author`, `.fv-book-title`, `.fv-book-date` use the test's typography. `.fv-book-rule` is a 20px-wide rotated double-line decoration, with `:nth-child(Nn+M)` cycling four width variants (matching the test's `--randomWidth-01..05`).
+
+The Compact-only width slot CSS on `.fv-book-spine` is removed (or scoped to library only since library still uses the old spine fallback).
+
+### Renderer — keep these unchanged for Compact
+
+- The `SUB_RENDERERS` dispatch in `bookshelf-renderer.ts:395`.
+- `colorSlotFor(card)` and the bright palette (`--bright-1…8`) in `src/styles.css:78-91` + dark-theme variants.
+- Per-shelf rail color rotation via `:nth-of-type(8n+N)`.
+- Count-aware shelf heights via `data-shelf-count`.
+- Async YAML enrichment via `enrichBookshelfMeta` (just extend its wantedKeys set).
+- `renderCompact` filtering to `kind === "file"` and the empty-state handling.
+
+### Critical files
+
+| File | Change scope |
+|---|---|
+| `src/plugins/file-browser/folder-view/bookshelf-renderer.ts` | `buildSpine` retained for library; new `buildCompactBook` for compact. `enrichBookshelfMeta` reads `title` + `date` keys too. |
+| `src/plugins/file-browser/folder-view/bookshelf-css.ts` | Remove isolation/bg/overflow/padding on shelf for compact; rewrite rail with positive z-index; rewrite row with `z-index: 10`; add `.fv-book-author`, `.fv-book-title`, `.fv-book-date`, `.fv-book-rule` styles. |
+| `tests/folder-view/bookshelf-renderer.test.ts` | Update compact-mode assertions: `.fv-book-spine` is gone in compact; check for `.fv-book-title` text content + optional `.fv-book-author` / `.fv-book-date` rows. Add coverage for the title fallback to `card.name` when no `meta.title`. |
+
+### Out of scope (this iteration)
+
+- Library and Covers modes — they keep their current implementations. Once Compact looks right visually, we revisit Library next (probably applies the sibling-rail pattern + uses the new book structure as the spine fallback when no cover) and Covers last.
+- The `--shelf-color` / `--book-color` CSS variables from the test — we already have the 8-color bright palette; reuse it.
+
+### Verification
+
+- `npx tsc --noEmit` clean.
+- `npm run build:plugins` clean (template-literal CSS string compiles).
+- `npm run test:run` passes; new compact-mode assertions cover the title/author/date/rule rendering paths.
+- Visual: paste a `\`\`\`select` fence with `display: bookshelf` + `option: compact` into a `.md` file in a vault. With and without YAML `author:` / `title:` / `date:` on individual files, verify:
+  - Rail is dark blended (not bright source color).
+  - Books sit on top of the rail with the rail visible past their edges (sides + bottom).
+  - Per-book color comes from the bright palette via the hash slot.
+  - `.fv-book-rule` widths rotate by position via `:nth-child`.
+
+---
 
 The `\`\`\`select` codefence currently exposes five top-level displays (`cards`, `table`, `list`, `timeline`, `kanban`). Two issues prompted this change:
 

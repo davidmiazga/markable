@@ -74,6 +74,21 @@
 
   /* Formula error token colour — override in theme CSS files if needed */
   --formula-error-color: #c0392b;
+
+  /* ── Bright accent palette ─────────────────────────────────────────────
+     Retro record-store palette inspired by inspo-BookshelfView-1.jpg —
+     punchy oranges, hot pinks, bright reds, contrasted by cyan/lime/yellow.
+     Used by the Bookshelf shelf rails (cycled per shelf) and spine fallbacks
+     (hashed per book so same book always gets same color). Override per
+     theme below. Each color is paired with a foreground that contrasts. */
+  --bright-1: hsl(20,  90%, 55%);   /* orange       */ --bright-1-fg: #fff;
+  --bright-2: hsl(330, 85%, 60%);   /* magenta pink */ --bright-2-fg: #fff;
+  --bright-3: hsl(50,  95%, 60%);   /* lemon yellow */ --bright-3-fg: #1a1a1a;
+  --bright-4: hsl(85,  75%, 50%);   /* lime green   */ --bright-4-fg: #1a1a1a;
+  --bright-5: hsl(195, 85%, 55%);   /* cyan         */ --bright-5-fg: #1a1a1a;
+  --bright-6: hsl(5,   85%, 55%);   /* vermillion   */ --bright-6-fg: #fff;
+  --bright-7: hsl(220, 75%, 55%);   /* cobalt blue  */ --bright-7-fg: #fff;
+  --bright-8: hsl(45,  60%, 88%);   /* cream        */ --bright-8-fg: #1a1a1a;
 }
 
 /* --- Dark Mode --- */
@@ -100,6 +115,17 @@
   --search-panel-border: hsl(216, 28%, 30%);
   --search-match-bg: rgba(56, 139, 253, 0.25);
   --search-match-selected-bg: rgba(56, 139, 253, 0.60);
+
+  /* Bright accent palette — slightly lighter/more luminous for dark backgrounds
+     so mix-blend-mode: multiply doesn't crush them to near-black. */
+  --bright-1: hsl(20,  85%, 65%);   /* orange       */ --bright-1-fg: #1a1a1a;
+  --bright-2: hsl(330, 80%, 68%);   /* magenta pink */ --bright-2-fg: #1a1a1a;
+  --bright-3: hsl(50,  90%, 68%);   /* lemon yellow */ --bright-3-fg: #1a1a1a;
+  --bright-4: hsl(85,  70%, 60%);   /* lime green   */ --bright-4-fg: #1a1a1a;
+  --bright-5: hsl(195, 80%, 65%);   /* cyan         */ --bright-5-fg: #1a1a1a;
+  --bright-6: hsl(5,   80%, 65%);   /* vermillion   */ --bright-6-fg: #1a1a1a;
+  --bright-7: hsl(220, 70%, 65%);   /* cobalt blue  */ --bright-7-fg: #1a1a1a;
+  --bright-8: hsl(45,  50%, 82%);   /* cream        */ --bright-8-fg: #1a1a1a;
 }
 
 /* --- Flash Prevention --- */

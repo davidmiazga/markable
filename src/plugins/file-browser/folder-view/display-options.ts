@@ -67,11 +67,11 @@ export const DISPLAY_REGISTRY: DisplaySpec[] = [
   {
     slug: "bookshelf",
     label: "Bookshelf",
-    defaultOption: "covers",
+    defaultOption: "compact",
     options: [
-      { slug: "covers",  label: "Covers",  description: "Horizontal shelves of cover-or-spine items" },
-      { slug: "library", label: "Library", description: "Curated pastel spines with index (Phase 3)" },
-      { slug: "compact", label: "Compact", description: "Dense rack of spines (Phase 3)" },
+      { slug: "covers",  label: "Covers",  description: "Wide cover-box grid — every item in a 300–450px cell at its cover's natural aspect; placeholder for missing covers" },
+      { slug: "library", label: "Library", description: "Mixed shelves — cover when available, randomized spine otherwise; big 80vh shelves" },
+      { slug: "compact", label: "Compact", description: "Spines only — every item rendered as a spine even if it has a cover; same shelf heights as Library" },
     ],
   },
 ];
