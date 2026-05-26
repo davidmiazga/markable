@@ -15,12 +15,21 @@ import type { ToolbarRefs } from "./bulk-toolbar";
 
 // ── Front-matter field types ──────────────────────────────────────────────────
 
-/** The four built-in sort orders for the card grid and table. */
+/** Built-in sort orders for the card grid and table.
+ * `author-asc` / `author-desc` are Bookshelf-only sort modes that read
+ * `card.meta.author` (populated by `enrichBookshelfMeta`) with a fallback
+ * chain to `card.meta.title` then `card.name` when author is missing.
+ * `manual` preserves the order in `FolderViewConfig.order` (file paths,
+ * persisted by drag/drop). When `manual` is set without an `order`, the
+ * renderer falls back to `name-asc`. */
 export type BuiltinSortOrder =
   | "name-asc"
   | "name-desc"
   | "modified-asc"
-  | "modified-desc";
+  | "modified-desc"
+  | "author-asc"
+  | "author-desc"
+  | "manual";
 
 /**
  * Sort order for a Folder View section.
@@ -107,6 +116,9 @@ export interface FolderMdFrontMatter {
   "kanban-field"?: string;
   /** Raw YAML value for the kanban-order: sequence (string[] after parsing). */
   "kanban-order"?: unknown;
+  /** Raw YAML value for the order: sequence (file paths after parsing).
+   * Drives `manual` sort mode. */
+  "order"?: unknown;
 }
 
 /**
@@ -199,6 +211,15 @@ export interface FolderViewConfig {
   kanbanField?: string;
   /** Explicit column order for folder-kanban. Alphabetical when absent. */
   kanbanOrder?: string[];
+  /**
+   * Explicit per-file order for the card grid (and other layouts in later phases).
+   * List of file paths, matched against `FolderCard.path` by the renderer.
+   * Set by drag/drop; persisted via `order:` in the `\`\`\`select` fence body
+   * or `_folder.md` frontmatter. Effective only when `sort === "manual"`.
+   * Unknown entries are silently dropped at render time (handles deleted/
+   * renamed files); files not in the list keep their natural order at the tail.
+   */
+  order?: string[];
   /**
    * Chosen sub-variant of the current display (e.g. "simple-list" under table).
    * Resolved via display-options.ts; absent means "use the display's defaultOption".

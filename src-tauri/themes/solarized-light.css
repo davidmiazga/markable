@@ -1,5 +1,6 @@
 /* Solarized Light — Markable theme
    Palette by Ethan Schoonover (https://ethanschoonover.com/solarized/) */
+/* @theme-base: light */
 :root {
   --bg-primary:         #fdf6e3;
   --bg-titlebar:        #eee8d5;
@@ -22,3 +23,4 @@
   --search-match-bg:    rgba(181, 137, 0, 0.22);
   --search-match-selected-bg: rgba(181, 137, 0, 0.50);
 }
+

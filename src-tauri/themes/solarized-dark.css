@@ -1,5 +1,6 @@
 /* Solarized Dark — Markable theme
    Palette by Ethan Schoonover (https://ethanschoonover.com/solarized/) */
+/* @theme-base: dark */
 :root {
   --bg-primary:         #002b36;
   --bg-titlebar:        #002b36;

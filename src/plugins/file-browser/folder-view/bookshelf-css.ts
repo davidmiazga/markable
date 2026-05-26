@@ -139,7 +139,10 @@ export const BOOKSHELF_CSS = `
   border-radius: 5px;
   transform: scale(1.1, 1.5);
   z-index: -1;
-  mix-blend-mode: color;
+  /* Theme-aware: --fv-rail-blend is 'multiply' in light mode (darkens the
+     rail against the light bg) and 'color' in dark mode (preserves the hue
+     against dark bg). See src/styles.css :root + [data-theme=dark]. */
+  mix-blend-mode: var(--fv-rail-blend, color);
   pointer-events: none;
 }
 
@@ -360,7 +363,10 @@ export const BOOKSHELF_CSS = `
   border-radius: 12px;
   z-index: 1;
   transform: none;
-  mix-blend-mode: color;
+  /* Theme-aware: --fv-rail-blend is 'multiply' in light mode (darkens the
+     rail against the light bg) and 'color' in dark mode (preserves the hue
+     against dark bg). See src/styles.css :root + [data-theme=dark]. */
+  mix-blend-mode: var(--fv-rail-blend, color);
   pointer-events: none;
 }
 
@@ -500,7 +506,10 @@ export const BOOKSHELF_CSS = `
   border-radius: 8px;
   z-index: 1;
   transform: none;
-  mix-blend-mode: color;
+  /* Theme-aware: --fv-rail-blend is 'multiply' in light mode (darkens the
+     rail against the light bg) and 'color' in dark mode (preserves the hue
+     against dark bg). See src/styles.css :root + [data-theme=dark]. */
+  mix-blend-mode: var(--fv-rail-blend, color);
   pointer-events: none;
 }
 
@@ -625,7 +634,10 @@ export const BOOKSHELF_CSS = `
   border-radius: 8px;
   z-index: 1;
   transform: none;
-  mix-blend-mode: color;
+  /* Theme-aware: --fv-rail-blend is 'multiply' in light mode (darkens the
+     rail against the light bg) and 'color' in dark mode (preserves the hue
+     against dark bg). See src/styles.css :root + [data-theme=dark]. */
+  mix-blend-mode: var(--fv-rail-blend, color);
   pointer-events: none;
 }
 

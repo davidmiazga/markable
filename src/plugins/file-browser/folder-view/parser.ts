@@ -20,7 +20,12 @@ import type { FolderViewConfig, FolderSortOrder, FolderLayoutMode, ExtraField } 
  * The four built-in sort values. Any other value is passed through verbatim (FR-08)
  * as it may be an extra-field key; the table renderer handles unknown values gracefully.
  */
-const VALID_SORTS = new Set<string>(["name-asc", "name-desc", "modified-asc", "modified-desc"]);
+const VALID_SORTS = new Set<string>([
+  "name-asc", "name-desc",
+  "modified-asc", "modified-desc",
+  "author-asc", "author-desc",
+  "manual",
+]);
 
 /**
  * Set of built-in column identifiers for the folder-table fields: sequence.
@@ -466,6 +471,14 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       ? (rawKanbanOrder as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
       : undefined;
 
+    // order: string sequence for the per-file manual sort (drag/drop result).
+    // Effective when sort === "manual"; ignored otherwise. Same shape as
+    // kanban-order: a flat list of strings (file paths in this case).
+    const rawOrder = rawFm["order"];
+    const order: string[] | undefined = Array.isArray(rawOrder)
+      ? (rawOrder as (string | Record<string, string>)[]).filter((x): x is string => typeof x === "string")
+      : undefined;
+
     // Extract extra-fields sequence (FR-06). Uses a dedicated pre-pass so the
     // field works whether it appears at top-level or nested under layout:.
     const rawExtraFields = extractExtraFieldsRaw(yamlBlock.split("\n"));
@@ -626,6 +639,7 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
       ...(icon        !== undefined ? { icon  }       : {}),
       ...(kanbanField !== undefined ? { kanbanField } : {}),
       ...(kanbanOrder !== undefined ? { kanbanOrder } : {}),
+      ...(order       !== undefined ? { order }       : {}),
     };
   } catch {
     // Catch-all for any unexpected parse error (EC-05 guard).

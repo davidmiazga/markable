@@ -225,10 +225,26 @@ async function applyCustomTheme(filename: string): Promise<boolean> {
   const css = await readThemeCss(filename);
   if (css === null) return false;
 
-  // Custom themes build on top of dark base
-  document.documentElement.setAttribute("data-theme", "dark");
+  // Look up the theme's declared visual base ("light" or "dark") from the
+  // ThemeEntry the loader parsed at startup. Themes carry this via a
+  // `/* @theme-base: ... */` header comment so we set data-theme correctly
+  // and the canonical token catalog in styles.css falls back to the right
+  // palette for tokens the theme doesn't override.
+  const entry = customThemes.find((t) => t.filename === filename);
+  const base = entry?.base ?? "light";
+  document.documentElement.setAttribute("data-theme", base);
   injectCustomStylesheet(css);
   return true;
+}
+
+/**
+ * Convert a `setTheme` argument to the slug used by the native Theme menu's
+ * checkmark logic (see `update_theme_menu` in src-tauri/src/lib.rs):
+ *   - `custom:foo.css`  → `foo.css`  (matches the custom-theme menu entry)
+ *   - `default-light` / `default-dark` / `system` → unchanged
+ */
+function themeMenuSlug(themeName: string): string {
+  return themeName.startsWith("custom:") ? themeName.slice("custom:".length) : themeName;
 }
 
 async function setTheme(themeName: string, persist = true): Promise<void> {
@@ -249,6 +265,7 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
       }));
     }
     console.log(`Theme applied: ${themeName}`);
+    void updateThemeMenu(customThemes, themeMenuSlug(themeName));
     return;
   }
 
@@ -266,6 +283,7 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
         }));
       }
       console.log(`Fallback theme applied: ${fallbackName}`);
+      void updateThemeMenu(customThemes, themeMenuSlug(fallbackName));
       return;
     }
   }
@@ -279,6 +297,7 @@ async function setTheme(themeName: string, persist = true): Promise<void> {
       theme: { active: BUNDLED_DEFAULT, fallback: BUNDLED_DEFAULT },
     }));
   }
+  void updateThemeMenu(customThemes, themeMenuSlug(BUNDLED_DEFAULT));
 }
 
 function nextTheme() {
@@ -1510,12 +1529,9 @@ async function initApp() {
     COMMANDS.push({ id: `custom:${theme.filename}`, label: theme.name, defaultKey: "", section: "Theme" });
   }
 
-  // Update the native Theme menu with custom themes
-  if (customThemes.length > 0) {
-    await updateThemeMenu(customThemes);
-  }
-
-  // Apply persisted theme before window.show() (no-flash)
+  // Apply persisted theme before window.show() (no-flash). setTheme rebuilds
+  // the native Theme menu with the custom-themes list and the active-theme
+  // checkmark, so we don't need a separate updateThemeMenu call here.
   await setTheme(migratedSettings.theme.active, false);
 
   // Create the floating find/replace widget (appended to document.body, hidden by default).

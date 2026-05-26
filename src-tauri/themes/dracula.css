@@ -1,5 +1,6 @@
 /* Dracula — Markable theme
    Based on the Dracula theme by Zeno Rocha (https://draculatheme.com/) */
+/* @theme-base: dark */
 :root {
   --bg-primary:         #282a36;
   --bg-titlebar:        #21222c;

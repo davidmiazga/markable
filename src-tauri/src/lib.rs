@@ -1,5 +1,5 @@
 use tauri::{Emitter, Manager};
-use tauri::menu::{MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, MenuItem, PredefinedMenuItem};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -234,9 +234,16 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
 }
 
 /// Rebuild the Theme menu to include custom themes after the built-in entries.
-/// Called from frontend after theme discovery.
+/// `current` is the active theme slug — used to render a checkmark next to the
+/// matching entry (default-light → Light, default-dark → Dark, system → System,
+/// or a custom theme filename match). Called from frontend after theme
+/// discovery and after every theme change.
 #[tauri::command]
-fn update_theme_menu(app: tauri::AppHandle, themes: Vec<commands::themes::ThemeEntry>) -> Result<(), String> {
+fn update_theme_menu(
+    app: tauri::AppHandle,
+    themes: Vec<commands::themes::ThemeEntry>,
+    current: String,
+) -> Result<(), String> {
     let menu = app.menu().ok_or("No app menu found")?;
     let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
 
@@ -250,18 +257,20 @@ fn update_theme_menu(app: tauri::AppHandle, themes: Vec<commands::themes::ThemeE
                     let _ = submenu.remove(old);
                 }
 
-                // Re-add built-in items
+                // Re-add built-in items. Next/Prev are plain MenuItems (they're
+                // actions, not selections). Light/Dark/System are CheckMenuItems
+                // so the active one shows a checkmark.
                 let next = MenuItem::with_id(&app, "theme-next", "Next Theme", true, Some("CmdOrCtrl+Alt+."))
                     .map_err(|e| format!("{}", e))?;
                 let prev = MenuItem::with_id(&app, "theme-prev", "Previous Theme", true, Some("CmdOrCtrl+Alt+,"))
                     .map_err(|e| format!("{}", e))?;
                 let sep1 = PredefinedMenuItem::separator(&app)
                     .map_err(|e| format!("{}", e))?;
-                let light = MenuItem::with_id(&app, "theme-light", "Light", true, None::<&str>)
+                let light = CheckMenuItem::with_id(&app, "theme-light", "Light", true, current == "default-light", None::<&str>)
                     .map_err(|e| format!("{}", e))?;
-                let dark = MenuItem::with_id(&app, "theme-dark", "Dark", true, None::<&str>)
+                let dark = CheckMenuItem::with_id(&app, "theme-dark", "Dark", true, current == "default-dark", None::<&str>)
                     .map_err(|e| format!("{}", e))?;
-                let system = MenuItem::with_id(&app, "theme-system", "System", true, None::<&str>)
+                let system = CheckMenuItem::with_id(&app, "theme-system", "System", true, current == "system", None::<&str>)
                     .map_err(|e| format!("{}", e))?;
 
                 submenu.append(&next).map_err(|e| format!("{}", e))?;
@@ -280,8 +289,9 @@ fn update_theme_menu(app: tauri::AppHandle, themes: Vec<commands::themes::ThemeE
                     for theme in &themes {
                         let n = MENU_ITEM_COUNTER.fetch_add(1, Ordering::Relaxed);
                         let id = format!("custom-theme-{}-{}", theme.filename, n);
+                        let is_active = current == theme.filename;
 
-                        let item = MenuItem::with_id(&app, &id, &theme.name, true, None::<&str>)
+                        let item = CheckMenuItem::with_id(&app, &id, &theme.name, true, is_active, None::<&str>)
                             .map_err(|e| format!("{}", e))?;
                         submenu.append(&item).map_err(|e| format!("{}", e))?;
 

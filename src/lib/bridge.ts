@@ -202,6 +202,14 @@ export async function updateRecentFilesMenu(paths: string[]): Promise<void> {
 export interface ThemeEntry {
   name: string;
   filename: string;
+  /**
+   * Visual base — "light" or "dark". Parsed by the Rust loader from a
+   * `/* @theme-base: ... *\/` header comment in the theme file. The
+   * frontend uses this to set `data-theme` on the html element so that
+   * tokens the theme doesn't override resolve to the right palette.
+   * Defaults to "light" if the marker is missing or invalid.
+   */
+  base: "light" | "dark";
 }
 
 /**
@@ -217,11 +225,16 @@ export async function listThemes(): Promise<ThemeEntry[]> {
 }
 
 /**
- * Update the native Theme menu to include custom themes.
+ * Update the native Theme menu to include custom themes and mark the
+ * currently-active one with a checkmark.
+ *
+ * `current` is the active theme slug — `default-light` / `default-dark` /
+ * `system` for the built-in entries, or a custom theme's `.css` filename
+ * for entries appended after the separator.
  */
-export async function updateThemeMenu(themes: ThemeEntry[]): Promise<void> {
+export async function updateThemeMenu(themes: ThemeEntry[], current: string): Promise<void> {
   try {
-    await invoke("update_theme_menu", { themes });
+    await invoke("update_theme_menu", { themes, current });
   } catch (error) {
     console.error("Failed to update theme menu:", error);
   }

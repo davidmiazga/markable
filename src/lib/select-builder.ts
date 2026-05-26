@@ -115,9 +115,9 @@ const STYLES = `
 /* Checkbox size + accent-color come from the global rule in styles.css. */
 .sb-opt-row input[type="text"], .sb-opt-row select {
   font-size: 12px; padding: 3px 6px;
-  background: var(--bg-secondary, #2a2a3a);
-  color: var(--text-primary, #e0e0e0);
-  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px;
 }
 
 .sb-footer {
@@ -163,6 +163,12 @@ export interface SelectBuilderInitial {
   /** YAML frontmatter key used to group items into shelves (Bookshelf only). */
   groupBy?: string;
   sort?: string;
+  /**
+   * Per-file manual order (drag/drop result). List of file paths matched
+   * against `FolderCard.path` by the renderer. Effective only when
+   * `sort === "manual"`. Drag/drop sets both `sort` and `order` together.
+   */
+  order?: string[];
   showModified?: boolean;
   showExtensions?: boolean;
   previewPane?: boolean;
@@ -213,6 +219,9 @@ export function buildSelectFenceFromState(state: {
   displayOption?: string;
   groupBy?: string;
   sort: string;
+  /** Per-file order for manual sort (drag/drop). Emitted as YAML list when
+   * non-empty. The renderer ignores it unless `sort === "manual"`. */
+  order?: string[];
   showModified: boolean;
   showExtensions: boolean;
   previewPane: boolean;
@@ -226,6 +235,12 @@ export function buildSelectFenceFromState(state: {
     for (const rule of state.rules) lines.push(indent(serializeRule(rule), 2));
   }
   if (state.display !== "timeline") lines.push(`sort: ${state.sort}`);
+  // Emit `order:` when the manual sort is active and we have paths.
+  // YAML list shape mirrors `kanban-order:` and `exclude:` in the parser.
+  if (state.sort === "manual" && state.order && state.order.length > 0) {
+    lines.push("order:");
+    for (const p of state.order) lines.push(`  - ${p}`);
+  }
   lines.push(`display: ${state.display}`);
   // Emit `option:` only when non-default so existing fences round-trip byte-stably.
   const spec = getDisplaySpec(state.display);
@@ -268,6 +283,11 @@ export interface SelectFormState {
   /** YAML key used to group items into shelves (Bookshelf display only). */
   groupBy: string;
   sort: string;
+  /** Per-file order for `sort: manual`. Carried through the modal so a
+   * Save round-trips the user's drag/drop order. Modal does not let the
+   * user edit this directly — it's set/cleared by drag-drop and the
+   * "Manual ✕" pill. */
+  order: string[];
   showModified: boolean;
   showExtensions: boolean;
   previewPane: boolean;
@@ -308,6 +328,7 @@ export function mountSelectForm(
     displayOption:  initial.displayOption ?? (initialSpec?.defaultOption ?? ""),
     groupBy:        initial.groupBy ?? "",
     sort:           initial.sort ?? "name-asc",
+    order:          [...(initial.order ?? [])],
     showModified:   initial.showModified ?? true,
     showExtensions: initial.showExtensions ?? true,
     previewPane:    initial.previewPane ?? false,
@@ -326,7 +347,11 @@ export function mountSelectForm(
   pathInput.placeholder = "./";
   pathInput.value = state.path;
   pathInput.className = "settings-input";
-  pathInput.style.cssText = "width:100%;padding:6px 8px;font-size:12px;background:var(--bg-secondary,#2a2a3a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;";
+  // Width + smaller font are local to this modal; bg/color/border are
+  // inherited from the global .settings-input rule (theme-aware).
+  pathInput.style.width = "100%";
+  pathInput.style.fontSize = "12px";
+  pathInput.style.padding = "6px 8px";
   pathInput.addEventListener("input", () => { state.path = pathInput.value; });
   pathSec.appendChild(pathInput);
   container.appendChild(pathSec);
@@ -452,6 +477,21 @@ export function mountSelectForm(
         { value: "modified-asc",  label: "Date ↑" },
         { value: "modified-desc", label: "Date ↓" },
       ];
+      // Author sort is meaningful only when YAML `author:` is read by the
+      // renderer (bookshelf enriches; cards/table/list/kanban do not). Falls
+      // back to title then name when author is missing — see sortCards().
+      if (state.display === "bookshelf") {
+        sortOptions.push(
+          { value: "author-asc",  label: "Author ↑" },
+          { value: "author-desc", label: "Author ↓" },
+        );
+      }
+      // "Manual" only appears in the dropdown when it's the current sort
+      // (set by drag/drop). Users don't pick it directly — drag/drop sets it
+      // automatically. The "Manual ✕" pill below clears it back to Name ↑.
+      if (state.sort === "manual") {
+        sortOptions.push({ value: "manual", label: "Manual" });
+      }
       for (const o of sortOptions) {
         const opt = document.createElement("option");
         opt.value = o.value;
@@ -462,6 +502,32 @@ export function mountSelectForm(
       sel.addEventListener("change", () => { state.sort = sel.value; });
       sortRow.appendChild(label);
       sortRow.appendChild(sel);
+
+      // "Manual ✕" clear button — only present when a manual order is active.
+      // Clicking it reverts the sort to Name ↑ and clears the persisted order
+      // so the next save emits a fence without `order:`.
+      if (state.sort === "manual" && state.order.length > 0) {
+        const clearBtn = document.createElement("button");
+        clearBtn.type = "button";
+        clearBtn.className = "sb-manual-clear";
+        clearBtn.textContent = "Manual ✕";
+        clearBtn.title = "Clear custom drag/drop order";
+        clearBtn.style.cssText =
+          "margin-left:6px;padding:3px 8px;font-size:11px;border-radius:10px;" +
+          "border:1px solid var(--border-color);background:transparent;" +
+          "color:var(--text-secondary);cursor:pointer;";
+        clearBtn.addEventListener("click", () => {
+          state.sort = "name-asc";
+          state.order = [];
+          // Repopulate select to drop the "Manual" option and select Name ↑.
+          sel.value = "name-asc";
+          clearBtn.remove();
+          const manualOpt = [...sel.options].find((o) => o.value === "manual");
+          manualOpt?.remove();
+        });
+        sortRow.appendChild(clearBtn);
+      }
+
       optsHost.appendChild(sortRow);
     }
 

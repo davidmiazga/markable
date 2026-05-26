@@ -217,17 +217,17 @@ const AM_CSS = `
 .am-kanban-label { font-size: 11px; color: var(--text-tertiary, #666); white-space: nowrap; }
 .am-kanban-input {
   flex: 1; min-width: 0;
-  background: var(--bg-secondary, #2a2a3a);
-  border: 1px solid var(--border-color, #444); border-radius: 4px;
-  padding: 4px 8px; font-size: 11px; color: var(--text-primary, #ccc); outline: none;
+  background: transparent;
+  border: 1px solid var(--border-color); border-radius: 4px;
+  padding: 4px 8px; font-size: 11px; color: var(--text-primary); outline: none;
 }
 .am-kanban-input:focus { border-color: var(--link-color, #4a9eff); }
-.am-divider { height: 1px; background: var(--border-color, rgba(255,255,255,.07)); margin: 6px 12px; }
+.am-divider { height: 1px; background: var(--border-color); margin: 6px 12px; }
 .am-preview {
   flex: 1; min-width: 0; overflow: hidden;
   padding: 16px 14px; display: flex; flex-direction: column;
   align-items: center; justify-content: flex-start;
-  background: var(--bg-secondary, #181825);
+  background: var(--bg-chrome);
 }
 .am-preview-svg {
   width: 100%; max-width: 340px;
@@ -847,12 +847,27 @@ export async function openAssignModal(
         { value: "modified-asc",  label: "Date ↑" },
         { value: "modified-desc", label: "Date ↓" },
       ];
+      // Author sort is meaningful only when YAML `author:` is read by the
+      // renderer (bookshelf enriches; other layouts do not). Falls back to
+      // title then name when author is missing — see sortCards().
+      if (slug === "view-bookshelf") {
+        SORT_OPTS.push(
+          { value: "author-asc",  label: "Author ↑" },
+          { value: "author-desc", label: "Author ↓" },
+        );
+      }
+      // "Manual" only appears when active (set by drag/drop). The pill below
+      // gets a "✕" hint so users know it's the clear action.
+      if (optSort === "manual") {
+        SORT_OPTS.push({ value: "manual", label: "Manual ✕" });
+      }
       for (const opt of SORT_OPTS) {
         const pill = document.createElement("span");
         pill.className = "am-sort-pill" + (optSort === opt.value ? " is-active" : "");
         pill.textContent = opt.label;
         pill.addEventListener("click", () => {
-          optSort = opt.value;
+          // Clicking "Manual ✕" reverts to Name ↑; other pills set their value.
+          optSort = opt.value === "manual" ? "name-asc" : opt.value;
           pillRow.querySelectorAll(".am-sort-pill").forEach((p) =>
             p.classList.toggle("is-active", (p as HTMLElement).textContent === opt.label),
           );

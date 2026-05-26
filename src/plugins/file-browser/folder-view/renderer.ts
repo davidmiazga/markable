@@ -20,6 +20,7 @@ import type { FolderViewConfig, FolderCard, FolderSortOrder, BulkContext } from 
 import { stripScripts, applyExcludeFilter, attachArrowNavigation } from "./shared";
 import { buildPreviewPane, attachPaneResizeHandle } from "./preview-pane";
 import { buildMasterCheckboxTh, buildCheckboxTd } from "./bulk-selection";
+import { attachFolderItemDrag } from "./folder-item-drag";
 import {
   ICON_FOLDER,
   ICON_FILE,
@@ -117,15 +118,69 @@ export function formatModified(ms: number): string {
  * @param sort  - The sort order from FolderViewConfig.sort.
  */
 export function sortCards(cards: FolderCard[], sort: FolderSortOrder): void {
+  // "manual" is a no-op preserve: the caller is expected to have already
+  // applied the manual order via applyManualOrder() before sortCards runs.
+  // Falling back to a stable sort would clobber the user's drag order.
+  if (sort === "manual") return;
+
   cards.sort((a, b) => {
     switch (sort) {
       case "name-desc":     return b.name.localeCompare(a.name);
       case "modified-asc":  return a.modified - b.modified;
       case "modified-desc": return b.modified - a.modified;
+      case "author-asc":    return authorKey(a).localeCompare(authorKey(b));
+      case "author-desc":   return authorKey(b).localeCompare(authorKey(a));
       case "name-asc":
       default:              return a.name.localeCompare(b.name);
     }
   });
+}
+
+/**
+ * Reorder `cards` in place to match `order` — listed paths move to the front
+ * in their declared order; cards not in the list keep their relative order at
+ * the tail.
+ *
+ * Used by `manual` sort mode. The drag-drop persistence layer writes the
+ * resulting paths back to `order:` in the source document (a `\`\`\`select`
+ * fence body or `_folder.md` frontmatter).
+ *
+ * Unknown paths in `order` are silently dropped — this is how stale entries
+ * from deleted/renamed files are handled gracefully without forcing a
+ * write-back to the source document.
+ *
+ * Matching is done by `FolderCard.path`. If a future caller wants filename-
+ * based matching, swap the lookup key.
+ */
+export function applyManualOrder(cards: FolderCard[], order: string[]): void {
+  if (!order || order.length === 0) return;
+  const indexByPath = new Map<string, number>();
+  for (const c of cards) indexByPath.set(c.path, cards.indexOf(c));
+
+  const head: FolderCard[] = [];
+  const seen = new Set<string>();
+  for (const path of order) {
+    const i = indexByPath.get(path);
+    if (i === undefined) continue;          // path no longer present — skip
+    if (seen.has(path)) continue;            // duplicate in order array — skip
+    head.push(cards[i]);
+    seen.add(path);
+  }
+  const tail = cards.filter((c) => !seen.has(c.path));
+  cards.length = 0;
+  cards.push(...head, ...tail);
+}
+
+/**
+ * Sort key for `author-asc` / `author-desc`. Author lives in YAML frontmatter
+ * and is populated by `enrichBookshelfMeta` on the bookshelf render path.
+ * Falls back to `title` (also from frontmatter) then `name` (filename stem)
+ * so a missing or unenriched author still produces a deterministic order.
+ */
+function authorKey(c: FolderCard): string {
+  return c.meta?.author?.trim()
+    || c.meta?.title?.trim()
+    || c.name;
 }
 
 // ── Metadata line builder ─────────────────────────────────────────────────────
@@ -425,6 +480,10 @@ function buildCard(
     "folder-view-card",
     card.kind === "directory" ? "folder-view-card-dir" : "folder-view-card-file",
   ].join(" ");
+  // Used by the drag-reorder util (folder-item-drag.ts) to identify cards.
+  el.dataset.path = card.path;
+  // Drag label shown in the floating ghost during a reorder drag.
+  el.dataset.dragLabel = card.name;
 
   // Required for the absolutely-positioned checkbox overlay (Step 04, C-5).
   if (checkboxCtx) {
@@ -593,6 +652,25 @@ function appendCardsToGrid(
   const addCard = (card: FolderCard): HTMLElement => {
     const el = buildCard(card, config, checkboxCtx, onSelect);
     cardMap.set(el, card);
+    // Enable drag-to-reorder for file cards only (Phase 1).
+    // On a successful drop, dispatch a bubbling CustomEvent that consumers
+    // (select-widget, folder-view tab) listen for to persist the new order.
+    // Selectors are scoped to the grid container so multiple folder-views in
+    // the same document don't cross-contaminate.
+    if (card.kind === "file") {
+      attachFolderItemDrag(
+        el,
+        grid,
+        card.path,
+        ".folder-view-card-file[data-path]",
+        (orderedPaths) => {
+          grid.dispatchEvent(new CustomEvent("folderview:reorder", {
+            detail: { orderedPaths },
+            bubbles: true,
+          }));
+        },
+      );
+    }
     return el;
   };
 
@@ -865,8 +943,15 @@ export function renderFolderCards(
   const dirCards  = visibleCards.filter(c => c.kind === "directory");
   const fileCards = visibleCards.filter(c => c.kind === "file");
 
-  sortCards(dirCards, config.sort);
-  sortCards(fileCards, config.sort);
+  // Manual sort applies the user's drag-drop order to file cards; folders
+  // continue to sort alphabetically (drag-reorder is files-only for Phase 1).
+  if (config.sort === "manual" && config.order && config.order.length > 0) {
+    applyManualOrder(fileCards, config.order);
+    sortCards(dirCards, "name-asc");
+  } else {
+    sortCards(dirCards, config.sort);
+    sortCards(fileCards, config.sort);
+  }
 
   // Respect section-visibility toggles (FVB-07).
   const showDirs  = config.showFolders && dirCards.length > 0;

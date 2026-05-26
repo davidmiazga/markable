@@ -1,5 +1,6 @@
 /* Monokai — Markable theme
    Based on the classic Monokai colour scheme by Wimer Hazenberg */
+/* @theme-base: dark */
 :root {
   --bg-primary:         #272822;
   --bg-titlebar:        #1e1f1c;

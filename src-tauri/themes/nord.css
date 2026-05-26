@@ -1,5 +1,6 @@
 /* Nord — Markable theme
    Arctic, north-bluish colour palette by Arctic Ice Studio */
+/* @theme-base: dark */
 :root {
   --bg-primary:         #2e3440;
   --bg-titlebar:        #2e3440;

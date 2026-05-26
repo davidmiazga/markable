@@ -88,9 +88,9 @@ const STYLES = `
 .cbm-form-row label { flex-shrink: 0; }
 .cbm-form-row input, .cbm-form-row select, .cbm-form-row textarea {
   font-size: 12px; padding: 5px 8px;
-  background: var(--bg-secondary, #2a2a3a);
-  color: var(--text-primary, #e0e0e0);
-  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px;
   font-family: inherit;
 }
 .cbm-form-row input[type="number"] { width: 72px; }

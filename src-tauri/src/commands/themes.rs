@@ -13,6 +13,37 @@ pub struct ThemeEntry {
     pub name: String,
     /// The CSS filename (e.g. "solarized-dark.css")
     pub filename: String,
+    /// Visual base — "light" or "dark". Parsed from a `/* @theme-base: ... */`
+    /// header comment in the theme file. Drives which `data-theme` attribute
+    /// the loader sets on the html element so the canonical token catalog in
+    /// `src/styles.css` falls back to the right palette for tokens the theme
+    /// doesn't override. Defaults to "light" if the marker is missing or
+    /// invalid.
+    pub base: String,
+}
+
+/// Scan the first few lines of a theme CSS file for a `@theme-base:` marker.
+/// Accepts `/* @theme-base: light */`, with any amount of whitespace and any
+/// surrounding comment text. Returns "light" or "dark"; falls back to "light"
+/// when the marker is missing or has any other value (a light canvas is the
+/// safer default for unknown themes).
+fn parse_theme_base(css: &str) -> String {
+    for line in css.lines().take(10) {
+        if let Some(idx) = line.find("@theme-base:") {
+            let tail = &line[idx + "@theme-base:".len()..];
+            let value: String = tail
+                .chars()
+                .skip_while(|c| c.is_whitespace())
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            let lower = value.to_lowercase();
+            if lower == "dark" || lower == "light" {
+                return lower;
+            }
+            break;
+        }
+    }
+    "light".to_string()
 }
 
 fn themes_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -67,9 +98,16 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeEntry>, String> {
             if let Some(ext) = path.extension() {
                 if ext == "css" {
                     if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                        // Read just enough to detect the @theme-base marker;
+                        // full file load also fine (themes are small), so use
+                        // read_to_string for simplicity.
+                        let base = std::fs::read_to_string(&path)
+                            .map(|css| parse_theme_base(&css))
+                            .unwrap_or_else(|_| "light".to_string());
                         themes.push(ThemeEntry {
                             name: filename_to_display_name(filename),
                             filename: filename.to_string(),
+                            base,
                         });
                     }
                 }
@@ -170,5 +208,30 @@ mod tests {
         assert!("../evil.css".contains(".."));
         assert!("foo/bar.css".contains('/'));
         assert!("foo\\bar.css".contains('\\'));
+    }
+
+    #[test]
+    fn test_parse_theme_base_recognises_light_and_dark() {
+        assert_eq!(parse_theme_base("/* @theme-base: light */\n:root{}"), "light");
+        assert_eq!(parse_theme_base("/* @theme-base: dark */\n:root{}"), "dark");
+        assert_eq!(parse_theme_base("/* @theme-base:dark */"), "dark");
+        assert_eq!(parse_theme_base("/* Header */\n/* @theme-base: DARK */"), "dark");
+    }
+
+    #[test]
+    fn test_parse_theme_base_defaults_to_light() {
+        assert_eq!(parse_theme_base(":root{}"), "light");
+        assert_eq!(parse_theme_base("/* no marker */"), "light");
+        assert_eq!(parse_theme_base("/* @theme-base: oops */"), "light");
+        assert_eq!(parse_theme_base(""), "light");
+    }
+
+    #[test]
+    fn test_parse_theme_base_only_checks_first_lines() {
+        // Marker beyond line 10 is ignored — we only scan the header.
+        let mut css = String::new();
+        for _ in 0..15 { css.push_str("/* filler */\n"); }
+        css.push_str("/* @theme-base: dark */\n");
+        assert_eq!(parse_theme_base(&css), "light");
     }
 }

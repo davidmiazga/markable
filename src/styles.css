@@ -7,8 +7,13 @@
   /* Light mode (default) */
   --bg-primary: hsl(0, 0%, 100%);
   --bg-titlebar: hsl(0, 0%, 96%);
+  --bg-secondary: hsl(0, 0%, 94%);
+  --bg-tertiary:  hsl(0, 0%, 90%);
   --text-primary: hsl(213, 13%, 16%);
   --text-secondary: hsl(212, 10%, 38%);
+  --text-tertiary: hsl(212, 10%, 55%);
+  --text-danger:   hsl(0, 72%, 45%);
+  --text-hover:    var(--text-primary);
   --text-titlebar: hsla(0, 0%, 40%, 0.12);
   --text-titlebar-hover: hsla(0, 0%, 40%, 0.8);
   --border-color: hsl(0, 0%, 88%);
@@ -75,6 +80,65 @@
   /* Formula error token colour — override in theme CSS files if needed */
   --formula-error-color: #c0392b;
 
+  /* ── Catalog: canonical surface, status, and feature tokens ────────────
+     Every token referenced via "var( -- token )" in src/ must be defined
+     here or in an allowlist (see tests/styles/token-completeness.test.ts)
+     so that no call site falls through to a hardcoded dark fallback like
+     #2a2a3a.
+     Dark equivalents live in [data-theme="dark"] below; only tokens that
+     legitimately differ light vs dark need a dark override. */
+
+  /* Surfaces */
+  --bg-hover:     hsla(0, 0%, 0%, 0.04);
+  --bg-overlay:   hsla(0, 0%, 0%, 0.4);
+  --shadow-color: hsla(0, 0%, 0%, 0.12);
+
+  /* Status (errors / warnings) */
+  --error-color:     var(--text-danger);
+  --color-error:     var(--text-danger);
+  --error-bg:        hsla(0, 72%, 50%, 0.12);
+  --error-fg:        var(--text-danger);
+  --warn-color:      hsl(35, 95%, 45%);
+  --warning-bg:      hsla(35, 95%, 50%, 0.12);
+  --warning-border:  hsla(35, 95%, 50%, 0.4);
+  --warning-text:    hsl(35, 95%, 35%);
+  --math-error-color: var(--text-danger);
+
+  /* Accent variants & buttons */
+  --accent-subtle:       color-mix(in srgb, var(--accent-color) 20%, transparent);
+  --accent-focus-ring:   color-mix(in srgb, var(--accent-color) 40%, transparent);
+  --btn-primary-text:    #fff;
+  --btn-danger-hover-bg: hsla(0, 72%, 50%, 0.12);
+
+  /* Borders / inputs */
+  --input-border:        var(--border-color);
+  --border-color-subtle: color-mix(in srgb, var(--border-color) 60%, transparent);
+
+  /* Interaction overlays */
+  --drag-target-bg:       color-mix(in srgb, var(--accent-color) 12%, transparent);
+  --active-item-bg:       color-mix(in srgb, var(--accent-color) 14%, transparent);
+  --bulk-select-bg:       color-mix(in srgb, var(--accent-color) 10%, transparent);
+  --bulk-select-hover-bg: color-mix(in srgb, var(--accent-color) 18%, transparent);
+
+  /* ── Aliases — legacy names that resolve to canonical tokens.
+     Lazy-evaluated, so they automatically pick up the right palette in
+     each theme scope. Don't grep-replace; one row here covers N call
+     sites cheaply. */
+  --accent:      var(--accent-color);
+  --text-color:  var(--text-primary);
+  --bg-color:    var(--bg-primary);
+  --hover-bg:    var(--bg-hover);
+  --muted-text:  var(--text-secondary);
+  --text-muted:  var(--text-secondary);
+  --input-bg:    var(--bg-secondary);
+  --button-bg:   var(--bg-secondary);
+  --menu-bg:     var(--bg-secondary);
+  --tooltip-bg:  var(--bg-secondary);
+  --panel-bg:    var(--bg-secondary);
+  --bg-toolbar:  var(--bg-secondary);
+  --bg-input:    var(--bg-secondary);
+  --editor-font: var(--ui-font);
+
   /* ── Bright accent palette ─────────────────────────────────────────────
      Retro record-store palette inspired by inspo-BookshelfView-1.jpg —
      punchy oranges, hot pinks, bright reds, contrasted by cyan/lime/yellow.
@@ -89,14 +153,24 @@
   --bright-6: hsl(5,   85%, 55%);   /* vermillion   */ --bright-6-fg: #fff;
   --bright-7: hsl(220, 75%, 55%);   /* cobalt blue  */ --bright-7-fg: #fff;
   --bright-8: hsl(45,  60%, 88%);   /* cream        */ --bright-8-fg: #1a1a1a;
+
+  /* Bookshelf rail blend mode. `multiply` darkens the rail against a light
+     background (light theme); `color` keeps source hue/saturation while
+     adopting the backdrop's luminosity (works better against dark theme).
+     Used by .fv-shelf-rail in bookshelf-css.ts across all three modes. */
+  --fv-rail-blend: multiply;
 }
 
 /* --- Dark Mode --- */
 [data-theme="dark"] {
   --bg-primary: hsl(216, 28%, 7%);
   --bg-titlebar: hsl(216, 28%, 7%);
+  --bg-secondary: hsl(216, 28%, 11%);
+  --bg-tertiary:  hsl(216, 28%, 14%);
   --text-primary: hsl(216, 28%, 93%);
   --text-secondary: hsl(216, 28%, 65%);
+  --text-tertiary: hsl(216, 28%, 50%);
+  --text-danger:   hsl(0, 90%, 65%);
   --text-titlebar: hsla(216, 28%, 65%, .22);
   --border-color: hsl(216, 28%, 30%);
   --cursor-color: hsl(216, 28%, 93%);
@@ -116,6 +190,17 @@
   --search-match-bg: rgba(56, 139, 253, 0.25);
   --search-match-selected-bg: rgba(56, 139, 253, 0.60);
 
+  /* Catalog dark variants — surfaces/status that differ from :root. The
+     other catalog tokens (color-mix derivatives, aliases) re-evaluate in
+     this scope automatically, so we don't repeat them here. */
+  --bg-hover:     hsla(0, 0%, 100%, 0.06);
+  --bg-overlay:   hsla(0, 0%, 0%, 0.6);
+  --shadow-color: hsla(0, 0%, 0%, 0.4);
+  --warn-color:    hsl(35, 95%, 60%);
+  --warning-bg:    hsla(35, 95%, 50%, 0.18);
+  --warning-text:  hsl(35, 95%, 70%);
+  --error-bg:      hsla(0, 90%, 60%, 0.18);
+
   /* Bright accent palette — slightly lighter/more luminous for dark backgrounds
      so mix-blend-mode: multiply doesn't crush them to near-black. */
   --bright-1: hsl(20,  85%, 65%);   /* orange       */ --bright-1-fg: #1a1a1a;
@@ -126,6 +211,11 @@
   --bright-6: hsl(5,   80%, 65%);   /* vermillion   */ --bright-6-fg: #1a1a1a;
   --bright-7: hsl(220, 70%, 65%);   /* cobalt blue  */ --bright-7-fg: #1a1a1a;
   --bright-8: hsl(45,  50%, 82%);   /* cream        */ --bright-8-fg: #1a1a1a;
+
+  /* Dark theme: `color` blend keeps the rail vibrant (hue+sat) while the
+     dark backdrop drives luminosity — produces dark teal / dark orange.
+     `multiply` would crush the rail to near-black against a dark bg. */
+  --fv-rail-blend: color;
 }
 
 /* --- Flash Prevention --- */

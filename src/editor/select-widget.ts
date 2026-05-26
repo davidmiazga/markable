@@ -34,7 +34,8 @@ import type {
 } from "../plugins/file-browser/folder-view/types";
 import type { SmartFolderRule, InverseMaps } from "../plugins/file-browser/smart-folders/types";
 import { matchRule } from "../plugins/file-browser/smart-folders/evaluator";
-import type { DisplayKind, SelectBuilderInitial } from "../lib/select-builder";
+import type { DisplayKind, SelectBuilderInitial, ContentWidth } from "../lib/select-builder";
+import { buildSelectFenceFromState } from "../lib/select-builder";
 
 const RENDERERS: Record<string, FolderLayoutRenderer> = {
   cards:     renderFolderCards,
@@ -45,7 +46,10 @@ const RENDERERS: Record<string, FolderLayoutRenderer> = {
 };
 
 const VALID_SORTS = new Set<FolderSortOrder>([
-  "name-asc", "name-desc", "modified-asc", "modified-desc",
+  "name-asc", "name-desc",
+  "modified-asc", "modified-desc",
+  "author-asc", "author-desc",
+  "manual",
 ]);
 
 function defaultConfig(): FolderViewConfig {
@@ -147,6 +151,10 @@ export function parseSelectBody(body: string): {
     config.sort = sort as FolderSortOrder;
   }
 
+  // order: list of file paths for `manual` sort (drag/drop result).
+  const order = asStringArray(parsed.order);
+  if (order && order.length > 0) config.order = order;
+
   config.showModified   = asBool(parsed["show-modified"],   config.showModified);
   config.showExtensions = asBool(parsed["show-extensions"], config.showExtensions);
   config.showTags       = asBool(parsed["show-tags"],       config.showTags);
@@ -204,6 +212,9 @@ export function parseSelectBodyForBuilder(body: string): SelectBuilderInitial {
 
   const sort = asString(parsed.sort);
   if (sort) initial.sort = sort;
+
+  const order = asStringArray(parsed.order);
+  if (order && order.length > 0) initial.order = order;
 
   initial.showModified   = asBool(parsed["show-modified"],   true);
   initial.showExtensions = asBool(parsed["show-extensions"], true);
@@ -336,16 +347,20 @@ function injectSelectWidgetCss(): void {
   position: absolute; top: 6px; right: 6px; z-index: 10;
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 5px; border: 1px solid var(--border-color, rgba(255,255,255,.2));
-  background: var(--bg-secondary, rgba(30,30,40,.92)); color: var(--text-secondary, #bbb);
+  border-radius: 5px; border: 1px solid var(--border-color);
+  /* Theme-aware fill: --bg-chrome is color-mix of --bg-primary with black,
+     so it produces a subtle "slightly darker than bg" button in both light
+     and dark themes (was previously hardcoded dark-mode rgba fallback). */
+  background: var(--bg-chrome);
+  color: var(--text-secondary);
   cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s;
   font-size: 15px; line-height: 1; user-select: none;
-  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  box-shadow: 0 1px 3px rgba(0,0,0,.15);
 }
 .cm-select-widget:hover .cm-select-widget-gear { opacity: 1; }
 .cm-select-widget-gear:hover {
-  color: var(--text-primary, #fff);
-  background: var(--bg-hover, rgba(60,60,80,.95));
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-primary) 70%, var(--text-primary));
 }
 .cm-select-error {
   padding: 10px 14px; border-radius: 4px;
@@ -456,6 +471,20 @@ export class SelectWidget extends WidgetType {
 
     const renderer = RENDERERS[display] ?? RENDERERS.cards;
     renderer(config, cards, inner, folderPath);
+
+    // Drag-reorder persistence (Phase 1: Cards display).
+    // The Cards renderer attaches drag handlers to file cards and dispatches a
+    // bubbling "folderview:reorder" CustomEvent with `detail.orderedPaths`
+    // when the user drops. We catch it here and rewrite the fence body to set
+    // `sort: manual` and `order: [...]`. CM6 re-renders the widget from the
+    // new body — the rendered grid then reflects the manual order.
+    const body = this.body;
+    inner.addEventListener("folderview:reorder", (e: Event) => {
+      const detail = (e as CustomEvent<{ orderedPaths: string[] }>).detail;
+      if (!detail || !Array.isArray(detail.orderedPaths)) return;
+      rewriteSelectFenceWithOrder(view, body, detail.orderedPaths);
+    });
+
     return wrapper;
   }
 
@@ -467,6 +496,46 @@ function errorBox(message: string): HTMLElement {
   el.className = "cm-select-error";
   el.textContent = message;
   return el;
+}
+
+/**
+ * Rewrite a `\`\`\`select` fence in the editor doc to apply a custom manual
+ * order. Called from the SelectWidget when its inner grid dispatches
+ * `folderview:reorder`. The fence's other settings (path, display, filters,
+ * etc.) are preserved exactly by parsing the existing body, mutating only
+ * `sort` and `order`, and rebuilding via `buildSelectFenceFromState`.
+ *
+ * If the fence is not found (e.g. the doc changed while the user was
+ * dragging), this is a silent no-op — the next render shows current state.
+ */
+function rewriteSelectFenceWithOrder(
+  view: EditorView,
+  body: string,
+  orderedPaths: string[],
+): void {
+  const range = findSelectFenceRange(view, body);
+  if (!range) return;
+
+  const initial = parseSelectBodyForBuilder(body);
+  const display = (initial.display ?? "cards") as DisplayKind;
+  const spec = getDisplaySpec(display);
+
+  const newFence = buildSelectFenceFromState({
+    rules:          initial.rules ?? [],
+    path:           initial.path ?? "./",
+    display,
+    displayOption:  initial.displayOption ?? (spec?.defaultOption ?? ""),
+    groupBy:        initial.groupBy ?? "",
+    sort:           "manual",
+    order:          orderedPaths,
+    showModified:   initial.showModified ?? true,
+    showExtensions: initial.showExtensions ?? true,
+    previewPane:    initial.previewPane ?? false,
+    kanbanField:    initial.kanbanField ?? "",
+    contentWidth:   (initial.contentWidth ?? "normal") as ContentWidth,
+  });
+
+  view.dispatch({ changes: { from: range.from, to: range.to, insert: newFence } });
 }
 
 /**
