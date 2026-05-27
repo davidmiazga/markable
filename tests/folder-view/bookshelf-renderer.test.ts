@@ -149,28 +149,45 @@ describe("renderFolderBookshelf — cover vs spine (library mode)", () => {
     expect(host.querySelector(".fv-book-spine")).toBeNull();
   });
 
-  it("renders rich-spine content (title/author/date) when meta.cover is absent", async () => {
+  it("renders the CLASSIC spine (author/title/rule+date) for short titles in Library", async () => {
+    // Library's no-cover branch shares populateRichBookContent with Compact:
+    // short titles get the classic single-color spine; long titles get the
+    // two-zone variant. "Untitled note" is short → classic.
     const cards = [makeBook("Untitled note")];
     renderFolderBookshelf(makeConfig(), cards, host, "/vault/library");
     await flush();
-    // New library puts the rich content directly in .fv-book — no inner spine wrapper.
     expect(host.querySelector(".fv-book-spine")).toBeNull();
+    expect(host.querySelector(".fv-book-pattern")).toBeNull();
+    expect(host.querySelector(".fv-book-label-zone")).toBeNull();
     const book = host.querySelector(".fv-book") as HTMLElement;
     expect(book).not.toBeNull();
-    // Title falls back to filename.
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(false);
+    // Classic spine: author + title + (rule + optional date).
     expect(book.querySelector(".fv-book-title")?.textContent).toBe("Untitled note");
-    // Author placeholder always renders for layout consistency, empty when absent.
-    expect(book.querySelector(".fv-book-author")?.textContent).toBe("");
-    // Date placeholder + rule always render too.
-    expect(book.querySelector(".fv-book-date")).not.toBeNull();
+    expect(book.querySelector(".fv-book-author")).not.toBeNull();
     expect(book.querySelector(".fv-book-rule")).not.toBeNull();
   });
 
-  it("includes author text when meta.author is set", async () => {
+  it("includes author text when meta.author is set (classic spine in Library)", async () => {
     const cards = [makeBook("Hobbit", { author: "Tolkien" })];
     renderFolderBookshelf(makeConfig(), cards, host, "/vault/library");
     await flush();
     expect(host.querySelector(".fv-book-author")?.textContent).toBe("Tolkien");
+    // Short title → classic spine, no eyebrow.
+    expect(host.querySelector(".fv-book-eyebrow")).toBeNull();
+  });
+
+  it("switches Library's no-cover spine to two-zone for long titles", async () => {
+    const cards = [makeBook("Hobbit", { author: "Tolkien", title: "Design Beyond Thinking Foundation" })];
+    renderFolderBookshelf(makeConfig(), cards, host, "/vault/library");
+    await flush();
+    const book = host.querySelector(".fv-book")!;
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(true);
+    expect(book.querySelector(".fv-book-pattern")).not.toBeNull();
+    expect(book.querySelector(".fv-book-label-zone")).not.toBeNull();
+    expect(book.querySelector(".fv-book-eyebrow")?.textContent).toBe("Tolkien");
+    expect(book.querySelector(".fv-book-author")).toBeNull();
+    expect(book.querySelector(".fv-book-rule")).toBeNull();
   });
 
   it("can render mixed covers and rich-spines on the same shelf", async () => {
@@ -359,7 +376,7 @@ describe("renderFolderBookshelf — compact mode", () => {
     expect(host.querySelector("img.fv-book-cover")).toBeNull();
   });
 
-  it("renders the new structured book DOM (no inner spine wrapper)", async () => {
+  it("renders the CLASSIC spine DOM for short titles (no two-zone, no len-long)", async () => {
     renderFolderBookshelf(
       makeConfig({ displayOption: "compact" }),
       [makeBook("Hobbit", { author: "Tolkien", title: "The Hobbit", date: "1937" })],
@@ -367,13 +384,62 @@ describe("renderFolderBookshelf — compact mode", () => {
       "/vault/library",
     );
     await flush();
-    // Compact's book has no inner .fv-book-spine — the .fv-book IS the
-    // colored block, with author/title/date as direct children.
+    // Short titles keep the original single-color spine: author + title + (rule+date).
+    // Two-zone elements MUST NOT appear.
+    expect(host.querySelector(".fv-book-pattern")).toBeNull();
+    expect(host.querySelector(".fv-book-label-zone")).toBeNull();
+    expect(host.querySelector(".fv-book-eyebrow")).toBeNull();
+    expect(host.querySelector(".fv-book-footer")).toBeNull();
+    // .fv-book-spine retired in May 2026 redesign — never renders now.
     expect(host.querySelector(".fv-book-spine")).toBeNull();
+
     expect(host.querySelectorAll(".fv-book").length).toBe(1);
+    const book = host.querySelector(".fv-book")!;
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(false);
     expect(host.querySelector(".fv-book-author")?.textContent).toBe("Tolkien");
     expect(host.querySelector(".fv-book-title")?.textContent).toBe("The Hobbit");
     expect(host.querySelector(".fv-book-date")?.textContent).toContain("1937");
+    expect(host.querySelector(".fv-book-rule")).not.toBeNull();
+  });
+
+  it("renders the TWO-ZONE DOM only when the title is long", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("long", { author: "Tolkien", title: "Design Beyond Thinking Foundation", date: "1937" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const book = host.querySelector(".fv-book")!;
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(true);
+    expect(host.querySelector(".fv-book-pattern")).not.toBeNull();
+    expect(host.querySelector(".fv-book-label-zone")).not.toBeNull();
+    expect(host.querySelector(".fv-book-eyebrow")?.textContent).toBe("Tolkien");
+    expect(host.querySelector(".fv-book-title")?.textContent).toBe("Design Beyond Thinking Foundation");
+    expect(host.querySelector(".fv-book-footer")?.textContent).toBe("1937");
+    // Classic-spine children must NOT appear in two-zone variant.
+    expect(host.querySelector(".fv-book-author")).toBeNull();
+    expect(host.querySelector(".fv-book-date")).toBeNull();
+    expect(host.querySelector(".fv-book-rule")).toBeNull();
+  });
+
+  it("tags the book wrapper with fv-book-pair-N (1..8) in BOTH variants", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [
+        makeBook("short", { title: "Brief Title" }),
+        makeBook("long",  { title: "Design Beyond Thinking Foundation" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    for (const book of books) {
+      const pairClass = [...book.classList].find((c) => c.startsWith("fv-book-pair-"));
+      expect(pairClass, `book "${book.title}" missing fv-book-pair-N class`).toBeDefined();
+      expect(pairClass).toMatch(/^fv-book-pair-[1-8]$/);
+    }
   });
 
   it("falls back to filename when meta.title is absent", async () => {
@@ -398,9 +464,9 @@ describe("renderFolderBookshelf — compact mode", () => {
     expect(host.querySelector(".fv-book-title")?.textContent).toBe("The Hobbit");
   });
 
-  it("renders author placeholder (empty) when meta.author is absent", async () => {
-    // Empty placeholders keep flex space-between balanced so the title stays
-    // centered on the spine regardless of which YAML keys are set.
+  it("classic spine: author renders empty string when meta.author is absent (no eyebrow)", async () => {
+    // Classic-spine layout always renders the .fv-book-author element to keep
+    // flex space-between stable. Eyebrow is two-zone only and stays absent.
     renderFolderBookshelf(
       makeConfig({ displayOption: "compact" }),
       [makeBook("Untitled", {})],
@@ -411,13 +477,10 @@ describe("renderFolderBookshelf — compact mode", () => {
     const author = host.querySelector(".fv-book-author");
     expect(author).not.toBeNull();
     expect(author!.textContent).toBe("");
-    // Title still renders.
-    expect(host.querySelector(".fv-book-title")?.textContent).toBe("Untitled");
+    expect(host.querySelector(".fv-book-eyebrow")).toBeNull();
   });
 
-  it("renders date placeholder (with rule, no text) when meta.date is absent", async () => {
-    // The rule ALWAYS renders — its width (per :nth-child) controls the
-    // spine width, so it must exist on every book regardless of date YAML.
+  it("classic spine: date placeholder (rule, no text) when meta.date is absent", async () => {
     renderFolderBookshelf(
       makeConfig({ displayOption: "compact" }),
       [makeBook("Untitled", { author: "Someone" })],
@@ -428,22 +491,184 @@ describe("renderFolderBookshelf — compact mode", () => {
     const date = host.querySelector(".fv-book-date");
     expect(date).not.toBeNull();
     expect(date!.querySelector(".fv-book-rule")).not.toBeNull();
-    // No date text, but the rule is there.
     expect(date!.textContent).toBe("");
   });
 
-  it("appends the date text alongside the rule when meta.date is set", async () => {
+  it("two-zone variant: hides eyebrow row entirely when meta.author is absent", async () => {
+    // In two-zone mode (long title), eyebrow/footer are conditional rather than
+    // always-present placeholders.
     renderFolderBookshelf(
       makeConfig({ displayOption: "compact" }),
-      [makeBook("Hobbit", { date: "1937" })],
+      [makeBook("Untitled", { title: "An Untitled Long Form Document" })],
       host,
       "/vault/library",
     );
     await flush();
-    const date = host.querySelector(".fv-book-date");
-    expect(date).not.toBeNull();
-    expect(date!.querySelector(".fv-book-rule")).not.toBeNull();
-    expect(date!.textContent).toContain("1937");
+    expect(host.querySelector(".fv-book-eyebrow")).toBeNull();
+    expect(host.querySelector(".fv-book-title")?.textContent).toBe("An Untitled Long Form Document");
+  });
+
+  it("two-zone variant: hides footer row entirely when meta.date is absent", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("title", { author: "Someone", title: "An Untitled Long Form Document" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    expect(host.querySelector(".fv-book-footer")).toBeNull();
+    expect(host.querySelector(".fv-book-eyebrow")?.textContent).toBe("Someone");
+  });
+
+  it("tags long titles (4+ words) with fv-book-title-len-long; short ones stay untagged", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [
+        makeBook("short", { title: "Brief Title" }),
+        makeBook("long",  { title: "Design Beyond Thinking Foundation" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    expect(books.length).toBe(2);
+    const shortBook = [...books].find((b) => b.querySelector(".fv-book-title")?.textContent === "Brief Title")!;
+    const longBook  = [...books].find((b) => b.querySelector(".fv-book-title")?.textContent === "Design Beyond Thinking Foundation")!;
+    expect(shortBook.classList.contains("fv-book-title-len-long")).toBe(false);
+    expect(longBook.classList.contains("fv-book-title-len-long")).toBe(true);
+  });
+
+  it("sets a data-URI SVG as --fv-pattern-url on the long-title pattern zone", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("long", { title: "Design Beyond Thinking Foundation" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const patternZone = host.querySelector<HTMLElement>(".fv-book-pattern");
+    expect(patternZone).not.toBeNull();
+    // The renderer sets --fv-pattern-url inline; CSS plugs it into
+    // mask-image (so the visible color comes from background-color, not
+    // from the SVG fill, which is currentColor-only).
+    const url = patternZone!.style.getPropertyValue("--fv-pattern-url");
+    expect(url).toContain("data:image/svg+xml");
+    expect(url).toContain("svg");
+    // No inline <svg> child — the SVG lives in the URL, not the DOM.
+    expect(patternZone!.querySelector("svg")).toBeNull();
+  });
+
+  it("does NOT set a pattern URL on classic (short-title) spines", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("short", { title: "Brief Title" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    // No pattern zone at all (the classic spine doesn't build .fv-book-pattern).
+    expect(host.querySelector(".fv-book-pattern")).toBeNull();
+    expect(host.querySelector("svg")).toBeNull();
+  });
+
+  it("varies pattern across long-title books (slot rotation)", async () => {
+    // patternSlotFor hashes card.path → slot 1..7. With 8+ books of distinct
+    // paths we expect to see at least 2 distinct pattern URLs. The exact
+    // distribution depends on the hash, but with 7 slots and 8 unique paths
+    // the pigeonhole math guarantees at least 2 unique URLs unless the hash
+    // collapses (it won't — different paths give different hashes).
+    const cards = Array.from({ length: 8 }, (_, i) =>
+      makeBook(`book-${i}`, { title: "Design Beyond Thinking Foundation" }),
+    );
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      cards,
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const urls = new Set<string>();
+    for (const zone of host.querySelectorAll<HTMLElement>(".fv-book-pattern")) {
+      const url = zone.style.getPropertyValue("--fv-pattern-url");
+      expect(url).toContain("data:image/svg+xml");
+      urls.add(url);
+    }
+    expect(urls.size).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns the same pattern URL for the same card across re-renders", async () => {
+    // The pattern slot is deterministic in the card's path — re-rendering
+    // must produce the same URL so books don't flicker between patterns.
+    const renderOnce = (): string => {
+      host.innerHTML = "";
+      renderFolderBookshelf(
+        makeConfig({ displayOption: "compact" }),
+        [makeBook("stable", { title: "Design Beyond Thinking Foundation" })],
+        host,
+        "/vault/library",
+      );
+      return "";
+    };
+    renderOnce();
+    await flush();
+    const first = host.querySelector<HTMLElement>(".fv-book-pattern")!.style.getPropertyValue("--fv-pattern-url");
+    renderOnce();
+    await flush();
+    const second = host.querySelector<HTMLElement>(".fv-book-pattern")!.style.getPropertyValue("--fv-pattern-url");
+    expect(first).toBe(second);
+  });
+
+  it("sets an inline --fv-book-min-width in [75, 105] on long-title spines", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [
+        makeBook("a", { title: "Design Beyond Thinking Foundation" }),
+        makeBook("b", { title: "Introduction to a Complexity Language" }),
+        makeBook("c", { title: "Towards a New Theory of Resonance" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    expect(books.length).toBe(3);
+    const widths = new Set<number>();
+    for (const book of books) {
+      const raw = book.style.getPropertyValue("--fv-book-min-width");
+      expect(raw, `book missing --fv-book-min-width`).not.toBe("");
+      const px = parseInt(raw.replace("px", ""), 10);
+      expect(px).toBeGreaterThanOrEqual(75);
+      expect(px).toBeLessThanOrEqual(105);
+      widths.add(px);
+    }
+    // 6 discrete slots × 3 books → expect some variety (at least 1, often 2-3).
+    expect(widths.size).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does NOT set --fv-book-min-width on classic (short-title) spines", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("short", { title: "Brief Title" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const book = host.querySelector<HTMLElement>(".fv-book")!;
+    expect(book.style.getPropertyValue("--fv-book-min-width")).toBe("");
+  });
+
+  it("tags long titles (25+ chars, single word) with fv-book-title-len-long", async () => {
+    // No spaces → not 4+ words, but length triggers the tag.
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "compact" }),
+      [makeBook("long-name", { title: "supercalifragilisticexpialidocious" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const book = host.querySelector(".fv-book")!;
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(true);
   });
 });
 

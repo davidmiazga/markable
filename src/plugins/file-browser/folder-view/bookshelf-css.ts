@@ -21,11 +21,16 @@
  *   .fv-shelf-heading                 — group label above a shelf
  *   .fv-shelf-row                     — flex/grid row of books
  *   .fv-shelf-rail                    — colored shelf rail
- *   .fv-book                          — book wrapper (carries fv-book-color-N)
+ *   .fv-book                          — book wrapper (carries fv-book-color-N
+ *                                       and fv-book-pair-N for two-zone spines)
  *   .fv-book-cover                    — <img> when YAML cover is present
- *   .fv-book-spine                    — vertical spine (carries width/weight/size slots)
+ *   .fv-book-pattern                  — top zone of a two-zone spine
+ *                                       (solid color in Phase 1; SVG pattern in Phase 2)
+ *   .fv-book-label-zone               — bottom zone of a two-zone spine
+ *   .fv-book-eyebrow / .fv-book-title /
+ *     .fv-book-footer                 — three vertical text runs in label zone
+ *   .fv-book-title-len-long           — wrapper class for long titles (wider spine)
  *   .fv-book-placeholder              — cover-box placeholder (no YAML cover)
- *   .fv-book-title / .fv-book-author  — rotated text on a spine
  *   .fv-book-placeholder-title /
  *     .fv-book-placeholder-author     — horizontal text on a placeholder
  *   .fv-book-skeleton                 — placeholder shown during YAML enrichment
@@ -185,83 +190,10 @@ export const BOOKSHELF_CSS = `
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 
-/* ── Spine (library + compact when no cover) ─────────────────────────── */
-
-.fv-book-spine {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: space-between;
-  height: 100%;
-  width: var(--fv-spine-w);
-  padding: 8px 6px;
-  background: var(--bg-secondary, #2a2a3a);
-  border: 1px solid var(--border-color, rgba(255,255,255,.12));
-  border-radius: 2px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.35);
-  box-sizing: border-box;
-  --fv-book-fg: var(--text-primary, #e0e0e0);
-  --fv-book-fg-secondary: var(--text-secondary, #888);
-}
-
-/* Per-spine width variation. Slot 1..8 from widthSlotFor() — skewed narrow. */
-.fv-book-spine.fv-book-width-1 { width: 18px; }
-.fv-book-spine.fv-book-width-2 { width: 22px; }
-.fv-book-spine.fv-book-width-3 { width: 24px; }
-.fv-book-spine.fv-book-width-4 { width: 24px; }
-.fv-book-spine.fv-book-width-5 { width: 26px; }
-.fv-book-spine.fv-book-width-6 { width: 30px; }
-.fv-book-spine.fv-book-width-7 { width: 36px; }
-.fv-book-spine.fv-book-width-8 { width: 46px; }
-
-/* Per-spine title font-weight variation. Slot 1..9 → 500..900 (skewed heavy). */
-.fv-book-spine.fv-book-weight-1 .fv-book-title { font-weight: 500; }
-.fv-book-spine.fv-book-weight-2 .fv-book-title { font-weight: 500; }
-.fv-book-spine.fv-book-weight-3 .fv-book-title { font-weight: 600; }
-.fv-book-spine.fv-book-weight-4 .fv-book-title { font-weight: 600; }
-.fv-book-spine.fv-book-weight-5 .fv-book-title { font-weight: 700; }
-.fv-book-spine.fv-book-weight-6 .fv-book-title { font-weight: 700; }
-.fv-book-spine.fv-book-weight-7 .fv-book-title { font-weight: 800; }
-.fv-book-spine.fv-book-weight-8 .fv-book-title { font-weight: 800; }
-.fv-book-spine.fv-book-weight-9 .fv-book-title { font-weight: 900; }
-
-/* Per-spine title font-size variation. Slot 1..8 → 9..14px. */
-.fv-book-spine.fv-book-size-1 .fv-book-title { font-size: 9px;  }
-.fv-book-spine.fv-book-size-2 .fv-book-title { font-size: 10px; }
-.fv-book-spine.fv-book-size-3 .fv-book-title { font-size: 10px; }
-.fv-book-spine.fv-book-size-4 .fv-book-title { font-size: 11px; }
-.fv-book-spine.fv-book-size-5 .fv-book-title { font-size: 11px; }
-.fv-book-spine.fv-book-size-6 .fv-book-title { font-size: 12px; }
-.fv-book-spine.fv-book-size-7 .fv-book-title { font-size: 13px; }
-.fv-book-spine.fv-book-size-8 .fv-book-title { font-size: 14px; }
-
-.fv-book-title {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--fv-book-fg);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-height: calc(100% - 16px);
-  align-self: center;
-}
-
-.fv-book-author {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 9px;
-  color: var(--fv-book-fg-secondary);
-  opacity: .75;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-height: calc(100% - 16px);
-  align-self: center;
-  margin-top: 4px;
-}
+/* '.fv-book-spine', generic '.fv-book-author', and generic '.fv-book-title'
+   rules were retired with the two-zone redesign. The active title/eyebrow/
+   footer styling lives under the ':is(.fv-bookshelf--compact,
+   .fv-bookshelf--library) ...' rules near the bottom of this file. */
 
 /* ── Placeholder cover-box (covers mode, no YAML cover) ──────────────── */
 
@@ -373,59 +305,92 @@ export const BOOKSHELF_CSS = `
 /* Per-shelf rail color rotation is already defined globally via
    .fv-shelf:nth-of-type(8n+N) — those rules apply unchanged in compact. */
 
-/* The book in compact IS the colored element. No inner spine. Three
-   children — author / title / date — flow along the vertical axis thanks
-   to writing-mode: vertical-rl + flex-direction: row + justify-content:
-   space-between (author at top of book, title in middle, date at bottom). */
-.fv-bookshelf--compact .fv-book {
+/* ── Spine layout for Compact + Library no-cover fallback ────────────────
+   Two render paths share these wrappers:
+     (a) Short titles use the CLASSIC single-color spine — small author at
+         top, bold rotated title in the middle, .fv-book-rule + optional
+         date at the bottom. Width cycles via .fv-book-rule :nth-child.
+     (b) Long titles (.fv-book-title-len-long) use the TWO-ZONE enriched
+         spine — pattern zone (top) + label zone (bottom) with eyebrow /
+         title / footer.
+   Both share the same .fv-book.fv-book-pair-N class on the wrapper, which
+   defines --fv-book-bg-top / --fv-book-bg-bottom / --fv-book-fg. The
+   classic spine reads --fv-book-bg-bottom as its single background. */
+
+/* Wrapper — shared shell for both layouts. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book {
   position: relative;
-  /* box-sizing: border-box is critical — without it the default content-box
-     means padding adds 12px OUTSIDE the height: 100%, so the book overflows
-     the row vertically. Combined with align-items: flex-end on the row, the
-     overflow pushes UP past the row's top, effectively cancelling the
-     padding-top so the author text crashes into the visible edge. */
   box-sizing: border-box;
   display: flex;
   flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
   height: 100%;
   width: auto;
-  background: var(--fv-book-bg);
-  /* Books have edges. Minimum radius so thin spines still read as
-     rectangles, not pills. */
-  border-radius: 1px;
   writing-mode: vertical-rl;
-  text-align: center;
-  padding: 6px 0;
-  font-size: 12px;
-  color: var(--fv-book-fg);
   cursor: pointer;
   outline: none;
+  color: var(--fv-book-fg);
 }
-.fv-bookshelf--compact .fv-book:hover { transform: translateY(-1px); }
-.fv-bookshelf--compact .fv-book:focus-visible {
+:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:hover {
+  transform: translateY(-1px);
+}
+:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:focus-visible {
   outline: 2px solid var(--accent-color, #4a9eff);
   outline-offset: 2px;
 }
 
-/* Rich-spine typography. Shared between Compact (always rich) and Library's
-   no-cover books (rich-spine fallback) via :is() — same content, same look. */
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-author,
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-title,
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-date {
+/* ── (a) CLASSIC spine — short titles (default) ──────────────────────────
+   Single-color block. The .fv-book-rule's :nth-child(5n) width cycle gives
+   the shelf organic visual variety. Author and date children always render
+   (empty when YAML keys absent) so flex space-between keeps the title
+   centered consistently. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) {
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  text-align: center;
+  font-size: 12px;
+  background: var(--fv-book-bg-bottom);
+  border-radius: 1px;
+}
+
+/* Classic-spine typography. Title is the main element; author + date are
+   subordinate visual anchors. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-author,
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-title,
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-date {
   line-height: .7;
 }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-title {
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-title {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
   font-size: 14px;
   font-weight: bold;
   color: var(--fv-book-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: calc(100% - 16px);
+  align-self: center;
 }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-author {
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-author {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
   font-size: 12px;
   color: var(--fv-book-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: calc(100% - 16px);
+  align-self: center;
 }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-date {
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-date {
   display: grid;
   grid-template-columns: .1fr 1fr;
   justify-content: center;
@@ -433,14 +398,15 @@ export const BOOKSHELF_CSS = `
   gap: 4px;
   font-size: 10px;
   font-style: italic;
-  color: var(--fv-book-fg-secondary);
+  color: var(--fv-book-fg);
+  opacity: .85;
 }
 
-/* Double-rule decoration: 2px-tall horizontal line above the date text,
-   rendered as top+bottom borders on a 2px-tall block. Width cycles via
-   :nth-child rotation on the parent .fv-book. Shared between Compact and
-   Library so the rule looks the same on rich-spine books in both modes. */
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book-rule {
+/* Double-rule decoration above the date. Width cycles via .fv-book
+   :nth-child(5n+N) to give the shelf visual variety in spine widths —
+   the rule is wider on some books, narrower on others. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long) .fv-book-rule {
   display: block;
   width: 20px;
   padding: 2px 0;
@@ -449,11 +415,158 @@ export const BOOKSHELF_CSS = `
   border-left: none;
   border-right: none;
 }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:nth-child(5n+1) .fv-book-rule { width: 15px; }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:nth-child(5n+2) .fv-book-rule { width: 25px; }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:nth-child(5n+3) .fv-book-rule { width: 44px; }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:nth-child(5n+4) .fv-book-rule { width: 58px; }
-:is(.fv-bookshelf--compact, .fv-bookshelf--library) .fv-book:nth-child(5n)   .fv-book-rule { width: 61px; }
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long):nth-child(5n+1) .fv-book-rule { width: 15px; }
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long):nth-child(5n+2) .fv-book-rule { width: 25px; }
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long):nth-child(5n+3) .fv-book-rule { width: 44px; }
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long):nth-child(5n+4) .fv-book-rule { width: 58px; }
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book:not(.fv-book-title-len-long):nth-child(5n)   .fv-book-rule { width: 61px; }
+
+/* ── (b) TWO-ZONE enriched spine — long titles only ──────────────────────
+   When the renderer tags .fv-book with .fv-book-title-len-long (>=4 words
+   OR >=25 chars in the title), the layout switches to the two-zone form:
+   pattern zone (top, hosts SVG patterns) + label zone (bottom, with
+   eyebrow / title / footer).
+
+   Each book carries an inline --fv-book-min-width (75-105px, hash-derived
+   in longTitleWidthFor) so the shelf reads as a deliberate variety of wide
+   spines rather than one fixed enriched width. The fallback (88px) is what
+   wins for any code path that fails to set the inline var. All values are
+   wider than the widest classic spine (61px from
+   .fv-book-rule:nth-child(5n)). */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long {
+  align-items: stretch;
+  padding: 0;
+  border-radius: 2px;
+  overflow: hidden;       /* clip zone backgrounds to the rounded corners */
+  min-width: var(--fv-book-min-width, 88px);
+}
+
+/* Label zone is the single container for long-title spines — it carries
+   the pair's bottom color and holds the pattern (top 38%) + text area
+   (bottom 62%). flex-direction: row looks horizontal at a glance, but
+   in vertical-rl writing mode the row axis runs top-to-bottom on
+   screen, so the two children stack vertically as desired. No padding —
+   the children own their internal padding. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-label-zone {
+  flex: 1 1 auto;
+  background: var(--fv-book-bg-bottom);
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  padding: 0;
+  min-width: 14px;
+}
+
+/* Pattern cap: top 38% of the label zone. The SVG is applied as a
+   mask-image (not background-image) — its currentColor-filled shapes
+   become an alpha silhouette, and the element's background-color
+   (set to the pair's top color) provides the visible shape color.
+   The pair's top + bottom are curated to contrast nicely. mask-size
+   cover stretches a single mask instance to fill the cap. The
+   --fv-pattern-url variable is set inline per book by the renderer. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-pattern {
+  flex: 0 0 38%;
+  min-width: 16px;
+  background-color: var(--fv-book-bg-top);
+  mask-image: var(--fv-pattern-url);
+  mask-size: cover;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  -webkit-mask-image: var(--fv-pattern-url);
+  -webkit-mask-size: cover;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  overflow: hidden;
+}
+
+/* Text area: bottom 62% of the label zone. Holds the three text runs
+   and centers the title vertically in its space. flex-direction: row
+   means main axis runs top-to-bottom (in vertical-rl), so the items
+   stack on screen and justify-content centers the title between any
+   optional eyebrow and footer. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-text-area {
+  flex: 0 0 62%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 6px;
+  min-width: 14px;
+}
+
+/* Eyebrow / title / footer typography for the two-zone variant. */
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-eyebrow {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  opacity: .85;
+  color: var(--fv-book-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: calc(40% - 4px);
+  align-self: center;
+  line-height: 1;
+}
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-title {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--fv-book-fg);
+  /* Multi-column wrap fills the label zone of the wider 88px spine. The
+     book has min-width: 88px → label zone gets ~60px → title max-width 48px
+     plus 6px*2 horizontal padding fits without clipping. */
+  white-space: normal;
+  line-height: 1.05;
+  max-width: 48px;
+  max-height: calc(100% - 16px);
+  align-self: center;
+}
+:is(.fv-bookshelf--compact, .fv-bookshelf--library)
+  .fv-book.fv-book-title-len-long .fv-book-footer {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 7px;
+  font-style: italic;
+  opacity: .75;
+  color: var(--fv-book-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: calc(40% - 4px);
+  align-self: center;
+  line-height: 1;
+}
+
+/* ── Pair classes: 8 curated top/bottom color combinations ──────────────
+   Each class wires the two zone backgrounds and the foreground color used
+   by all three text runs. Tokens defined in src/styles.css :root + dark.
+   Classic spines read --fv-book-bg-bottom as their single background;
+   two-zone spines use both. */
+.fv-book.fv-book-pair-1 { --fv-book-bg-top: var(--pair-1-top); --fv-book-bg-bottom: var(--pair-1-bottom); --fv-book-fg: var(--pair-1-fg); }
+.fv-book.fv-book-pair-2 { --fv-book-bg-top: var(--pair-2-top); --fv-book-bg-bottom: var(--pair-2-bottom); --fv-book-fg: var(--pair-2-fg); }
+.fv-book.fv-book-pair-3 { --fv-book-bg-top: var(--pair-3-top); --fv-book-bg-bottom: var(--pair-3-bottom); --fv-book-fg: var(--pair-3-fg); }
+.fv-book.fv-book-pair-4 { --fv-book-bg-top: var(--pair-4-top); --fv-book-bg-bottom: var(--pair-4-bottom); --fv-book-fg: var(--pair-4-fg); }
+.fv-book.fv-book-pair-5 { --fv-book-bg-top: var(--pair-5-top); --fv-book-bg-bottom: var(--pair-5-bottom); --fv-book-fg: var(--pair-5-fg); }
+.fv-book.fv-book-pair-6 { --fv-book-bg-top: var(--pair-6-top); --fv-book-bg-bottom: var(--pair-6-bottom); --fv-book-fg: var(--pair-6-fg); }
+.fv-book.fv-book-pair-7 { --fv-book-bg-top: var(--pair-7-top); --fv-book-bg-bottom: var(--pair-7-bottom); --fv-book-fg: var(--pair-7-fg); }
+.fv-book.fv-book-pair-8 { --fv-book-bg-top: var(--pair-8-top); --fv-book-bg-bottom: var(--pair-8-bottom); --fv-book-fg: var(--pair-8-fg); }
 
 /* ── Covers mode ──────────────────────────────────────────────────────────
    Same sibling-z-index pattern as Compact, but the books are smaller fixed-

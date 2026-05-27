@@ -28,6 +28,7 @@ import { applyExcludeFilter } from "./shared";
 import { parseYamlLines } from "./parser";
 import { readFile } from "../../../lib/bridge";
 import { resolveAssetSrc } from "../../../lib/layout-manager";
+import { bookshelfPatternUrl } from "./bookshelf-patterns";
 
 // ── Click handling ───────────────────────────────────────────────────────────
 
@@ -69,44 +70,115 @@ function hashCard(card: FolderCard): number {
   return Math.abs(h);
 }
 
-/** Bright-palette slot 1..8 (applied to spines AND placeholders). */
+/** Bright-palette slot 1..8 (applied to Covers placeholders + Library covers). */
 function colorSlotFor(card: FolderCard): number {
   return (hashCard(card) % 8) + 1;
 }
 
-// widthSlotFor / weightSlotFor / fontSizeSlotFor used to vary the OLD
-// .fv-book-spine element (pre-redesign). The new rich-book content uses
-// :nth-child width cycling on .fv-book-rule instead. Slots removed.
+/**
+ * Paired-palette slot 1..8 — used by the two-zone spine (Compact + Library's
+ * no-cover rich-spine fallback). Each pair carries a top color (pattern zone)
+ * and a bottom color (label zone), defined in src/styles.css.
+ *
+ * Different formula than colorSlotFor so a given book that uses both —
+ * unlikely in practice — would get a different pair slot than its bright
+ * slot, but the slot stays stable across re-renders for the same card.
+ */
+function pairSlotFor(card: FolderCard): number {
+  return ((hashCard(card) >> 3) % 8) + 1;
+}
+
+/**
+ * Pseudo-random width in [75, 105] for long-title spines. Hash-derived so a
+ * given book keeps its width across re-renders. The widths are discrete (6
+ * steps of 6px) so the shelf reads as deliberate variety rather than noise.
+ *
+ * Wider than the widest classic spine (61px from .fv-book-rule:nth-child(5n))
+ * — keeps the two-zone variant visibly distinct on the shelf.
+ */
+function longTitleWidthFor(card: FolderCard): number {
+  const widths = [75, 81, 87, 93, 99, 105];
+  return widths[(hashCard(card) >> 6) % widths.length];
+}
+
+/**
+ * SVG-pattern slot 1..7 for the long-title pattern zone. Shift distinct
+ * from pairSlotFor (>>3) and longTitleWidthFor (>>6) so a given book's
+ * pair color, width, and pattern look like independent draws — visual
+ * variety doesn't collapse into a small set of repeated combinations.
+ */
+function patternSlotFor(card: FolderCard): number {
+  return ((hashCard(card) >> 9) % 7) + 1;
+}
 
 // ── Item builders ────────────────────────────────────────────────────────────
 
 /**
- * Populate a .fv-book wrapper with the rich-spine content used by Compact
- * AND Library (when no cover). All three children ALWAYS render — empty
- * author/date placeholders keep `justify-content: space-between` consistent
- * so the title stays centered. The .fv-book-rule's :nth-child-cycled width
- * controls the spine's overall width.
+ * Populate a .fv-book wrapper with rich-spine content. The DOM produced
+ * depends on title length:
  *
- * Shared between buildCompactItem and buildLibraryItem (no-cover branch +
- * cover-error fallback). Title falls back to card.name when meta.title is
- * absent.
+ *   SHORT title (default) — classic single-spine layout:
+ *     .fv-book
+ *       .fv-book-author       <- small text near the top
+ *       .fv-book-title        <- main rotated bold title
+ *       .fv-book-date         <- .fv-book-rule + optional date text
+ *
+ *   LONG title (>= 4 words OR >= 25 chars) — two-zone enriched layout:
+ *     .fv-book.fv-book-title-len-long
+ *       .fv-book-pattern      <- top zone (Phase 2 hosts an SVG pattern)
+ *       .fv-book-label-zone   <- bottom zone, holds three vertical text runs
+ *         .fv-book-eyebrow    <- appended only if meta.author is set
+ *         .fv-book-title      <- bold rotated title; wraps to 2nd column
+ *         .fv-book-footer     <- appended only if meta.date is set
+ *
+ * Both layouts use the new paired color palette (via the .fv-book-pair-N
+ * class on the wrapper, set by the caller). Short books read --fv-book-bg-bottom
+ * as their single background; long books use both --fv-book-bg-top (pattern
+ * zone) and --fv-book-bg-bottom (label zone).
+ *
+ * Title falls back to card.name when meta.title is absent.
+ *
+ * Shared between buildCompactItem and buildLibraryItem's no-cover branch.
  */
 function populateRichBookContent(book: HTMLElement, card: FolderCard): void {
-  // Author (always rendered, may be empty) — top anchor of flex space-between.
+  const titleStr = (card.meta?.title ?? "").trim() || card.name;
+  const words = titleStr.split(/\s+/).filter(Boolean).length;
+  const isLong = words >= 4 || titleStr.length >= 25;
+
+  if (isLong) {
+    book.classList.add("fv-book-title-len-long");
+    // Hash-derived width 75–105px gives the shelf visual variety in the
+    // two-zone spines (without it every long-title book would be the same
+    // 88px). Picked deterministically so re-renders keep the same width.
+    // CSS reads --fv-book-min-width with a fallback to 88px.
+    book.style.setProperty("--fv-book-min-width", `${longTitleWidthFor(card)}px`);
+    populateTwoZoneContent(book, card, titleStr);
+  } else {
+    populateClassicSpineContent(book, card, titleStr);
+  }
+}
+
+/**
+ * Classic spine: author / title / (rule + date) flow along the writing axis
+ * of the single .fv-book block. Same DOM as the pre-redesign Compact + Library
+ * rich-spine; the .fv-book-rule's :nth-child width cycle still drives the
+ * spine's apparent width for visual variety.
+ *
+ * All three child elements ALWAYS render (with empty author / date text when
+ * the YAML keys are absent) so the flex space-between geometry keeps the
+ * title visually centered regardless of which fields are populated.
+ */
+function populateClassicSpineContent(book: HTMLElement, card: FolderCard, titleStr: string): void {
   const authorEl = document.createElement("div");
   authorEl.className = "fv-book-author";
   authorEl.textContent = (card.meta?.author ?? "").trim();
   book.appendChild(authorEl);
 
-  // Title — always populated; falls back to filename stem.
   const titleEl = document.createElement("div");
   titleEl.className = "fv-book-title";
-  titleEl.textContent = (card.meta?.title ?? "").trim() || card.name;
+  titleEl.textContent = titleStr;
   book.appendChild(titleEl);
 
-  // Date — always rendered with the rule decoration. The rule's :nth-child-
-  // cycled width controls the spine width (without it spines collapse to the
-  // rotated-text line-height). Date text node only added when meta.date set.
   const dateEl = document.createElement("div");
   dateEl.className = "fv-book-date";
   const rule = document.createElement("div");
@@ -115,6 +187,63 @@ function populateRichBookContent(book: HTMLElement, card: FolderCard): void {
   const date = (card.meta?.date ?? "").trim();
   if (date) dateEl.appendChild(document.createTextNode(date));
   book.appendChild(dateEl);
+}
+
+/**
+ * Two-zone enriched layout reserved for long titles. The top zone is a
+ * placeholder color block in Phase 1; Phase 2 will inject an SVG pattern
+ * into it via patternSlotFor(). Eyebrow + footer rows are conditional —
+ * absent fields don't reserve space.
+ */
+function populateTwoZoneContent(book: HTMLElement, card: FolderCard, titleStr: string): void {
+  // The .fv-book-label-zone is now the single container — it carries the
+  // pair's bottom color and holds BOTH the pattern (at top) and the text
+  // area (filling the rest). The pattern has no background-color of its
+  // own; it inherits the label zone's color and overlays the SVG via
+  // background-image. This produces a single-color spine with a
+  // patterned cap at the top.
+  const labelZone = document.createElement("div");
+  labelZone.className = "fv-book-label-zone";
+
+  const pattern = document.createElement("div");
+  pattern.className = "fv-book-pattern";
+  // Per-book pattern slot (1..7) keeps the same book looking the same
+  // across re-renders. Set inline as a CSS variable that drives
+  // mask-image in bookshelf-css.ts — using mask-image (rather than
+  // background-image) lets the visible color come from the element's
+  // CSS color/background-color, which we pin to the pair's top color
+  // (a curated contrast against the label-zone's bottom color).
+  pattern.style.setProperty("--fv-pattern-url", bookshelfPatternUrl(patternSlotFor(card)));
+  labelZone.appendChild(pattern);
+
+  // Text area wraps the three text runs so the pattern sits at the top
+  // and the text stays centered in the remaining vertical space below.
+  const textArea = document.createElement("div");
+  textArea.className = "fv-book-text-area";
+
+  const author = (card.meta?.author ?? "").trim();
+  if (author) {
+    const eyebrowEl = document.createElement("div");
+    eyebrowEl.className = "fv-book-eyebrow";
+    eyebrowEl.textContent = author;
+    textArea.appendChild(eyebrowEl);
+  }
+
+  const titleEl = document.createElement("div");
+  titleEl.className = "fv-book-title";
+  titleEl.textContent = titleStr;
+  textArea.appendChild(titleEl);
+
+  const date = (card.meta?.date ?? "").trim();
+  if (date) {
+    const footerEl = document.createElement("div");
+    footerEl.className = "fv-book-footer";
+    footerEl.textContent = date;
+    textArea.appendChild(footerEl);
+  }
+
+  labelZone.appendChild(textArea);
+  book.appendChild(labelZone);
 }
 
 /**
@@ -138,8 +267,8 @@ function buildPlaceholder(card: FolderCard): HTMLElement {
 
 /**
  * Wrap inner content in a clickable .fv-book element. The color slot lives
- * on the wrapper so both spines and placeholders inherit via descendant
- * selectors (.fv-book.fv-book-color-N .fv-book-spine etc.).
+ * on the wrapper so placeholders (in Covers mode) inherit via descendant
+ * selectors (.fv-book.fv-book-color-N .fv-book-placeholder).
  */
 function buildBookWrapper(card: FolderCard, inner: HTMLElement): HTMLElement {
   const book = document.createElement("div");
@@ -154,11 +283,14 @@ function buildBookWrapper(card: FolderCard, inner: HTMLElement): HTMLElement {
 }
 
 /**
- * Library item: cover img when available, otherwise the same rich book
- * content as Compact (author/title/date/rule). On cover-image error the
- * book is converted in-place to the rich-content fallback. This lets
- * library shelves mix wide cover-image books and narrow rich-spine books
- * on the same row, all bottom-aligned at the shared --library-book-h.
+ * Library item: cover img when available, otherwise the two-zone rich-spine
+ * fallback (shared with Compact via populateRichBookContent). On cover-image
+ * error the book is converted in-place to the rich-content fallback.
+ *
+ * The pair-N class is added only when the rich-spine path is taken (no cover
+ * OR cover failed); the cover branch keeps just `.fv-book-color-N` so the
+ * existing cover-image styling and Library covers placeholder behavior are
+ * unaffected.
  */
 function buildLibraryItem(card: FolderCard, folderPath: string): HTMLElement {
   const book = document.createElement("div");
@@ -176,11 +308,15 @@ function buildLibraryItem(card: FolderCard, folderPath: string): HTMLElement {
     img.src = resolveAssetSrc(cover, folderPath);
     img.addEventListener("error", () => {
       // Replace the broken img with the rich-content fallback in-place.
+      // Tag the wrapper with the pair slot before populating so the
+      // two-zone backgrounds resolve correctly.
       book.removeChild(img);
+      book.classList.add(`fv-book-pair-${pairSlotFor(card)}`);
       populateRichBookContent(book, card);
     });
     book.appendChild(img);
   } else {
+    book.classList.add(`fv-book-pair-${pairSlotFor(card)}`);
     populateRichBookContent(book, card);
   }
 
@@ -189,12 +325,14 @@ function buildLibraryItem(card: FolderCard, folderPath: string): HTMLElement {
 }
 
 /**
- * Compact item: a .fv-book wrapper with the rich author/title/date/rule
- * content. See populateRichBookContent for the structure rationale.
+ * Compact item: a .fv-book wrapper with the two-zone rich-spine content.
+ * See populateRichBookContent for DOM structure. The pair-N class supplies
+ * the top/bottom backgrounds and the foreground color via CSS variables
+ * defined in src/styles.css.
  */
 function buildCompactItem(card: FolderCard): HTMLElement {
   const book = document.createElement("div");
-  book.className = `fv-book fv-book-color-${colorSlotFor(card)}`;
+  book.className = `fv-book fv-book-color-${colorSlotFor(card)} fv-book-pair-${pairSlotFor(card)}`;
   book.setAttribute("role", "button");
   book.setAttribute("tabindex", "0");
   book.setAttribute("aria-label", card.name);

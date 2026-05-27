@@ -49,6 +49,8 @@ const JS_DRIVEN_TOKENS = new Set<string>([
   "--fv-card-width",
   "--fv-spine-w",
   "--library-book-h",
+  "--fv-book-min-width",
+  "--fv-pattern-url",
   // Folder view preview pane (set by resize handle)
   "--fvp-height",
   // File browser tree (set per row for indentation)

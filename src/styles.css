@@ -154,6 +154,30 @@
   --bright-7: hsl(220, 75%, 55%);   /* cobalt blue  */ --bright-7-fg: #fff;
   --bright-8: hsl(45,  60%, 88%);   /* cream        */ --bright-8-fg: #1a1a1a;
 
+  /* ── Bookshelf spine pair palette ───────────────────────────────────────
+     Hand-tuned from BookshelfViewStack-Vert-8.jpg. Each pair carries a top
+     color (the "pattern zone") and a bottom color (the label zone), plus
+     a foreground color picked for legibility against the BOTTOM. Used by
+     `.fv-book.fv-book-pair-N` in bookshelf-css.ts (Compact + Library's
+     no-cover rich-spine fallback). Separate from --bright-N so Covers
+     placeholders and other surfaces are unaffected. */
+  /* Defaults for the two zone surfaces — overridden by `.fv-book.fv-book-pair-N`
+     in bookshelf-css.ts, which wires per-pair values. Transparent fallback
+     means an unstyled book is invisible (drift-test catalog requirement;
+     the rendered code always sets a pair class). */
+  --fv-book-bg-top: transparent;
+  --fv-book-bg-bottom: transparent;
+  --fv-book-fg: var(--text-primary);
+
+  --pair-1-top: hsl(220, 80%, 55%);  --pair-1-bottom: hsl(0, 60%, 84%);    --pair-1-fg: #2a1c20;
+  --pair-2-top: hsl(10, 75%, 55%);   --pair-2-bottom: hsl(270, 35%, 80%);  --pair-2-fg: #261a35;
+  --pair-3-top: hsl(70, 70%, 60%);   --pair-3-bottom: hsl(85, 40%, 30%);   --pair-3-fg: #f0f4e6;
+  --pair-4-top: hsl(280, 35%, 78%);  --pair-4-bottom: hsl(85, 35%, 32%);   --pair-4-fg: #f0f4e6;
+  --pair-5-top: hsl(355, 65%, 70%);  --pair-5-bottom: hsl(15, 75%, 55%);   --pair-5-fg: #fff;
+  --pair-6-top: hsl(265, 40%, 75%);  --pair-6-bottom: hsl(225, 75%, 55%);  --pair-6-fg: #fff;
+  --pair-7-top: hsl(75, 65%, 65%);   --pair-7-bottom: hsl(0, 0%, 60%);     --pair-7-fg: #1a1a1a;
+  --pair-8-top: hsl(50, 90%, 60%);   --pair-8-bottom: hsl(335, 75%, 65%);  --pair-8-fg: #fff;
+
   /* Bookshelf rail blend mode. `multiply` darkens the rail against a light
      background (light theme); `color` keeps source hue/saturation while
      adopting the backdrop's luminosity (works better against dark theme).
@@ -211,6 +235,18 @@
   --bright-6: hsl(5,   80%, 65%);   /* vermillion   */ --bright-6-fg: #1a1a1a;
   --bright-7: hsl(220, 70%, 65%);   /* cobalt blue  */ --bright-7-fg: #1a1a1a;
   --bright-8: hsl(45,  50%, 82%);   /* cream        */ --bright-8-fg: #1a1a1a;
+
+  /* Bookshelf pair palette — desaturated a touch for dark canvas. Tops stay
+     vivid; bottoms shift toward muted darks so the foreground text reads.
+     Foregrounds switch toward white for the new dark bottoms. */
+  --pair-1-top: hsl(220, 70%, 50%);  --pair-1-bottom: hsl(0, 35%, 30%);    --pair-1-fg: #fde6ee;
+  --pair-2-top: hsl(10, 65%, 50%);   --pair-2-bottom: hsl(270, 30%, 30%);  --pair-2-fg: #e9defe;
+  --pair-3-top: hsl(70, 60%, 55%);   --pair-3-bottom: hsl(85, 35%, 22%);   --pair-3-fg: #e9f4d0;
+  --pair-4-top: hsl(280, 30%, 60%);  --pair-4-bottom: hsl(85, 30%, 22%);   --pair-4-fg: #e9f4d0;
+  --pair-5-top: hsl(355, 55%, 60%);  --pair-5-bottom: hsl(15, 60%, 42%);   --pair-5-fg: #fff;
+  --pair-6-top: hsl(265, 35%, 58%);  --pair-6-bottom: hsl(225, 65%, 45%);  --pair-6-fg: #fff;
+  --pair-7-top: hsl(75, 55%, 55%);   --pair-7-bottom: hsl(0, 0%, 30%);     --pair-7-fg: #f0f0f0;
+  --pair-8-top: hsl(50, 80%, 55%);   --pair-8-bottom: hsl(335, 65%, 50%);  --pair-8-fg: #fff;
 
   /* Dark theme: `color` blend keeps the rail vibrant (hue+sat) while the
      dark backdrop drives luminosity — produces dark teal / dark orange.
