@@ -2,11 +2,14 @@
  * bookshelf-patterns.ts — SVG patterns for the .fv-book-pattern top zone
  * (long-title two-zone spines).
  *
- * The seven SVG files in `docs/bookshelf-patterns/` are the **single source
- * of truth**. They're imported via Vite's `?raw` so editing the SVG file
- * automatically flows into the runtime — no copy-paste step. Each file is
- * 180×180 px and was drawn by hand to match the seven course spines in
- * `BookshelfViewStack-Vert-8.jpg`.
+ * The seven SVG files in `./pattern-assets/` are the **single source of
+ * truth** for the build. They live inside `src/` because they're runtime
+ * assets — the patterns module URL-encodes each one into a `mask-image`
+ * data URI at module load time. `docs/bookshelf-patterns/` mirrors these
+ * files for visual browsing only; it can be deleted without breaking the
+ * build, and `npm run sync:patterns` refreshes the mirror from canonical.
+ * Each file is 180×180 px and was drawn by hand to match the seven course
+ * spines in `BookshelfViewStack-Vert-8.jpg`.
  *
  * Runtime processing per slot:
  *   1. Pull the inner body (between `<svg>` and `</svg>`).
@@ -44,13 +47,13 @@
  * `patternSlotFor(card)` in `bookshelf-renderer.ts` picks a slot per book.
  */
 
-import slot1Raw from "../../../../docs/bookshelf-patterns/slot-1-plus-grid.svg?raw";
-import slot2Raw from "../../../../docs/bookshelf-patterns/slot-2-arcs.svg?raw";
-import slot3Raw from "../../../../docs/bookshelf-patterns/slot-3-chevrons.svg?raw";
-import slot4Raw from "../../../../docs/bookshelf-patterns/slot-4-snowflakes.svg?raw";
-import slot5Raw from "../../../../docs/bookshelf-patterns/slot-5-octagons.svg?raw";
-import slot6Raw from "../../../../docs/bookshelf-patterns/slot-6-pillars.svg?raw";
-import slot7Raw from "../../../../docs/bookshelf-patterns/slot-7-ovals.svg?raw";
+import slot1Raw from "./pattern-assets/slot-1-plus-grid.svg?raw";
+import slot2Raw from "./pattern-assets/slot-2-arcs.svg?raw";
+import slot3Raw from "./pattern-assets/slot-3-chevrons.svg?raw";
+import slot4Raw from "./pattern-assets/slot-4-snowflakes.svg?raw";
+import slot5Raw from "./pattern-assets/slot-5-octagons.svg?raw";
+import slot6Raw from "./pattern-assets/slot-6-pillars.svg?raw";
+import slot7Raw from "./pattern-assets/slot-7-ovals.svg?raw";
 
 /**
  * Build a `url("data:image/svg+xml,...")` value from a raw SVG file.

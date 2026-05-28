@@ -1,12 +1,21 @@
-# Bookshelf pattern previews
+# Bookshelf pattern previews — mirror copy
 
-Standalone SVG previews for the 7 background-image patterns used in the
-**Bookshelf → Compact** (and Library no-cover) two-zone spine layout.
+> **This folder is a MIRROR for visual browsing only — not a build dependency.**
+>
+> **Canonical source:** `src/plugins/file-browser/folder-view/pattern-assets/`
+>
+> The `bookshelf-patterns.ts` module imports the SVGs from `src/` via Vite's
+> `?raw`. This `docs/` folder is a parallel copy you can open in Finder Quick
+> Look or a browser without digging into `src/`. **Deleting `docs/` does
+> NOT break the app.**
 
-Each `slot-N-*.svg` shows the corresponding pattern tiled across a 180×180
-preview area at the same 18×18px tile size used in production. Open one
-in your browser (or Finder Quick Look on macOS) to evaluate the motif and
-verify seamless tiling.
+## Workflow
+
+1. Edit the canonical SVG in `src/plugins/file-browser/folder-view/pattern-assets/slot-N-*.svg` — that's what the build actually consumes.
+2. (Optional) Run `npm run sync:patterns` to refresh this mirror folder from the canonical files.
+3. Open the freshly-synced `.svg` here in your favorite SVG viewer to verify it renders the way you expect.
+
+If you edit a file in `docs/` instead, **the build won't see it** — the runtime data URI is still generated from the `src/` copy. To prevent drift, treat this folder as read-only and use `sync:patterns` to refresh.
 
 ## Files
 
@@ -23,40 +32,15 @@ Each pattern is named after the matching `Course N` spine in
 | `slot-6-pillars.svg`     | I-beam columns with chunky caps | Course 6 — Towards for Resonance |
 | `slot-7-ovals.svg`       | tall vertical ellipses | Course 7 — Designing for Resonance |
 
-## Source of truth — these SVG files
+## Runtime pipeline
 
-**The seven `slot-N-*.svg` files in this folder are the single source of
-truth for runtime patterns.** `src/plugins/file-browser/folder-view/bookshelf-patterns.ts`
-imports them via Vite's `?raw` so any edit here automatically flows into
-the live app on the next dev rebuild — no copy-paste step.
-
-Runtime pipeline per slot:
-
-1. The `.svg` file is loaded as raw text.
-2. Its inner body is extracted and wrapped in
-   `<g fill="#000" fill-opacity="0.22">` — gives every shape the subtle
-   "darken the pair's top color" overlay. Individual shapes don't need
-   to specify their own fill.
+1. The `.svg` file (canonical in `src/`) is loaded as raw text via `import "./pattern-assets/slot-N-*.svg?raw"`.
+2. Its inner body is extracted and wrapped in `<g fill="currentColor">` so every shape becomes a clean alpha silhouette.
 3. The wrapped SVG is URL-encoded into a `data:image/svg+xml,...` URI.
-4. The renderer assigns the URI inline as `background-image` on the
-   book's `.fv-book-pattern` element.
+4. The renderer assigns the URI inline as `--fv-pattern-url` on the book's `.fv-book-pattern` element, which CSS uses as a `mask-image`.
 
-The renderer picks a slot per book via `patternSlotFor(card)` in
-`bookshelf-renderer.ts`, hashes the card path → 1..7. The CSS for tile
-size lives in `bookshelf-css.ts`
-(`background-size: 60px 60px; background-repeat: repeat;`).
+`patternSlotFor(card)` in `bookshelf-renderer.ts` hashes each card path into a slot 1–7. The CSS for tile sizing lives in `bookshelf-css.ts`.
 
-## Editing the patterns
+## Background color in these previews
 
-Open any `slot-N-*.svg` in Illustrator (or any SVG editor), edit, save.
-Run `npm run tauri dev` if the dev server isn't already running, and the
-new pattern appears in the rendered bookshelf. The TS file imports these
-directly — no regen step.
-
-## Background color
-
-All previews use `#f4ead0` (a warm cream from the bright-8 palette swatch)
-as the underlying color. In production each book picks one of 8 pair-top
-colors via the `.fv-book-pair-N` class — so the actual look varies by
-book. Use this preview to evaluate **shape and tiling**; ignore the
-specific background hue.
+The preview SVGs use `#f4ead0` (a warm cream) as the background so the shapes are visible. In production each book picks one of 8 pair-top colors via the `.fv-book-pair-N` class — the actual look varies by book. Use these previews to evaluate **shape and tiling**; ignore the cream backdrop.

@@ -633,13 +633,14 @@ function renderCoversMode(
 }
 
 /**
- * Pseudo-random height in [88, 128] for long-title Book Stack bars. Same
- * hash-derived strategy as longTitleWidthFor for Compact spines — keeps a
- * given book the same size across re-renders. Six discrete 8px steps so the
- * stack reads as deliberate variety rather than noise.
+ * Pseudo-random height in [75, 105] for long-title Book Stack bars —
+ * EXACTLY the same 6 values longTitleWidthFor uses for Compact spine
+ * widths. Same hash-derived strategy so the visual rhythm matches
+ * Compact directly (Compact varies long spine WIDTH in [75, 105];
+ * Book Stack varies long bar HEIGHT in [75, 105]).
  */
 function stackBarHeightFor(card: FolderCard): number {
-  const heights = [88, 96, 104, 112, 120, 128];
+  const heights = [75, 81, 87, 93, 99, 105];
   return heights[(hashCard(card) >> 6) % heights.length];
 }
 

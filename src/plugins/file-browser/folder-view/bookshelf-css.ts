@@ -865,16 +865,21 @@ export const BOOKSHELF_CSS = `
   outline-offset: 2px;
 }
 
-/* SHORT bars: padding on the bar itself; height cycles via :nth-child. */
+/* SHORT bars: padding on the bar itself; height cycles via :nth-child
+   using EXACTLY the same 5 values as Compact's .fv-book-rule width
+   cycle (15/25/44/58/61). Compact uses these as spine WIDTH (the
+   perpendicular thickness of a vertical spine); Book Stack uses them
+   as bar HEIGHT (the perpendicular thickness of a horizontal bar) —
+   same visual rhythm, rotated 90°. */
 .fv-bookshelf--book-stack .fv-book:not(.fv-book-title-len-long) {
-  padding: 10px 16px;
-  min-height: 44px;
+  padding: 4px 16px;
+  min-height: 25px;
 }
-.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+1) { min-height: 36px; }
-.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+2) { min-height: 44px; }
-.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+3) { min-height: 52px; }
-.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+4) { min-height: 60px; }
-.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n)   { min-height: 68px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+1) { min-height: 15px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+2) { min-height: 25px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+3) { min-height: 44px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+4) { min-height: 58px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n)   { min-height: 61px; }
 
 /* LONG bars: hash-derived min-height + two-zone layout. No padding on
    the .fv-book itself — the inner zones own their own padding so the

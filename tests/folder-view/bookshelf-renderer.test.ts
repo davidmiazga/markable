@@ -972,7 +972,7 @@ describe("renderFolderBookshelf — book-stack mode", () => {
     expect(url).toContain("data:image/svg+xml");
   });
 
-  it("sets --fv-book-min-height in [88, 128] on long-title bars", async () => {
+  it("sets --fv-book-min-height in [75, 105] on long-title bars (matches Compact's longTitleWidthFor)", async () => {
     renderFolderBookshelf(
       makeConfig({ displayOption: "book-stack" }),
       [
@@ -990,8 +990,8 @@ describe("renderFolderBookshelf — book-stack mode", () => {
       const raw = book.style.getPropertyValue("--fv-book-min-height");
       expect(raw, `book missing --fv-book-min-height`).not.toBe("");
       const px = parseInt(raw.replace("px", ""), 10);
-      expect(px).toBeGreaterThanOrEqual(88);
-      expect(px).toBeLessThanOrEqual(128);
+      expect(px).toBeGreaterThanOrEqual(75);
+      expect(px).toBeLessThanOrEqual(105);
     }
   });
 
