@@ -10,6 +10,7 @@
     "build:plugins": "node scripts/build-plugins.mjs",
     "sync:plugins": "node scripts/sync-plugins.mjs",
     "sync:themes": "node scripts/sync-themes.mjs",
+    "dev:full": "npm run build:plugins && npm run sync:plugins && npm run tauri dev",
     "reset:themes": "node scripts/reset-themes.mjs",
     "preview": "vite preview",
     "tauri": "tauri",

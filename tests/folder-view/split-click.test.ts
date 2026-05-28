@@ -89,16 +89,18 @@ describe("split-click behavior", () => {
     expect(openFVSpy).not.toHaveBeenCalled();
   });
 
-  // ── T-10: hasFolderView=true, row click → toggle expand/collapse only ────
+  // ── T-10: hasFolderView=true, row click → toggle + open _folder.md ───────
   //
-  // Post May 2026 codefence migration: row click on a directory ALWAYS just
-  // toggles expand/collapse, regardless of hasFolderView. The visibility eye
-  // badge on the folder is the dedicated trigger for opening the folder view
-  // modal. Row click should never call __MARKABLE_OPEN_FOLDER_VIEW_TAB__.
+  // Row click on a folder with `_folder.md` toggles expand/collapse AND
+  // opens `_folder.md` as a tab so the inline codefence widget renders the
+  // layout. The CodeBlock modal does NOT pop — that's the badge-icon flow
+  // (which uses __MARKABLE_OPEN_FOLDER_VIEW_TAB__, fired by the visibility
+  // eye next to folders with a view).
 
-  it("T-10: hasFolderView=true, collapsed row click → expands and does NOT open folder view", () => {
-    const openFVSpy = vi.fn();
+  it("T-10: hasFolderView=true, collapsed row click → expands AND opens _folder.md (no modal)", () => {
+    const openFVSpy = vi.fn();  // modal-triggering path — should NOT fire
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+    const openFileSpy = (window as any).__MARKABLE_TAB_MANAGER__.openFileInTab;
 
     const li = makeDirectoryNode("/vault/A", false);
     const ul = document.createElement("ul");
@@ -108,13 +110,17 @@ describe("split-click behavior", () => {
     _testing.attachNodeListeners(li, "vault-1", true);
     li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
+    // _folder.md opened directly via the tab manager.
+    expect(openFileSpy).toHaveBeenCalledWith("/vault/A/_folder.md");
+    // The modal-triggering path was NOT invoked.
     expect(openFVSpy).not.toHaveBeenCalled();
     expect(li.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("T-10b: hasFolderView=true, expanded row click → collapses and does NOT open folder view", () => {
+  it("T-10b: hasFolderView=true, expanded row click → collapses AND opens _folder.md (no modal)", () => {
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+    const openFileSpy = (window as any).__MARKABLE_TAB_MANAGER__.openFileInTab;
 
     const li = makeDirectoryNode("/vault/A", true);  // already expanded
     const ul = document.createElement("ul");
@@ -125,6 +131,7 @@ describe("split-click behavior", () => {
     li.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(li.getAttribute("aria-expanded")).toBe("false");
+    expect(openFileSpy).toHaveBeenCalledWith("/vault/A/_folder.md");
     expect(openFVSpy).not.toHaveBeenCalled();
   });
 
@@ -157,12 +164,14 @@ describe("split-click behavior", () => {
     document.body.removeChild(treeWrapper);
   });
 
-  // ── T-12: Enter on a directory → same as row click (toggle), NOT folder view ──
-  // After the row-click rule change, Enter behaves identically to a row click.
+  // ── T-12: Enter on a directory → same as row click ───────────────────────
+  // Enter behaves identically to a row click — toggles AND opens
+  // `_folder.md` directly (no CodeBlock modal).
 
-  it("T-12: Enter key on hasFolderView=true node → toggles, does NOT open folder view", () => {
+  it("T-12: Enter key on hasFolderView=true node → toggles AND opens _folder.md (no modal)", () => {
     const openFVSpy = vi.fn();
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFVSpy;
+    const openFileSpy = (window as any).__MARKABLE_TAB_MANAGER__.openFileInTab;
 
     const li = makeDirectoryNode("/vault/A", false);
     const ul = document.createElement("ul");
@@ -173,6 +182,7 @@ describe("split-click behavior", () => {
 
     li.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
+    expect(openFileSpy).toHaveBeenCalledWith("/vault/A/_folder.md");
     expect(openFVSpy).not.toHaveBeenCalled();
     expect(li.getAttribute("aria-expanded")).toBe("true");
   });

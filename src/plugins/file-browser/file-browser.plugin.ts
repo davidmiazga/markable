@@ -1983,7 +1983,7 @@ function renderLoadingState(wrapper: HTMLElement): void {
  *   cannot be shared — extracting per-type helpers would not reduce overall
  *   line count and would obscure the single decision point.
  */
-function buildActivateHandler(el: HTMLElement, vaultId: string, _hasFolderView = false): (e: Event) => void {
+function buildActivateHandler(el: HTMLElement, vaultId: string, hasFolderView = false): (e: Event) => void {
   return (e: Event): void => {
     e.stopPropagation();
     const type = el.getAttribute("data-type") as "vault" | "directory" | "file" | null;
@@ -2046,12 +2046,24 @@ function buildActivateHandler(el: HTMLElement, vaultId: string, _hasFolderView =
         new CustomEvent("markable-folder-selected", { detail: { path } })
       );
     } else if (type === "directory") {
-      // Row click ALWAYS just toggles expand/collapse — the visibility eye
-      // badge is the dedicated trigger for opening the folder view modal.
-      // Previously a directory with `_folder.md` would also open the layout
-      // view on row click; that surprised users who just wanted to expand
-      // the folder.
+      // Row click toggles expand/collapse AND — when the folder has a
+      // `_folder.md` — opens that file as a tab so the inline codefence
+      // widget renders the layout. We deliberately open _folder.md
+      // directly via the tab manager rather than via openFolderViewTab,
+      // because the latter ALSO fires __MARKABLE_EDIT_FIRST_CODEBLOCK__
+      // which pops the CodeBlock modal — that's the icon-click flow, not
+      // the row-click flow. The visibility-eye badge keeps using
+      // openFolderViewTab so the icon still opens the modal as expected.
+      // The chevron click handler calls stopPropagation, so users who
+      // want to expand without opening the view can click the chevron.
       toggleDirectoryNode(el, path, vaultId);
+      if (hasFolderView) {
+        const folderMdPath = path + "/_folder.md";
+        const tabMgr = (window as unknown as {
+          __MARKABLE_TAB_MANAGER__?: { openFileInTab?: (p: string) => unknown };
+        }).__MARKABLE_TAB_MANAGER__;
+        void tabMgr?.openFileInTab?.(folderMdPath);
+      }
       _selectedFolderPath = path;
       window.dispatchEvent(
         new CustomEvent("markable-folder-selected", { detail: { path } })
