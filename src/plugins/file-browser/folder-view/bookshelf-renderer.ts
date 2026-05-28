@@ -196,12 +196,11 @@ function populateClassicSpineContent(book: HTMLElement, card: FolderCard, titleS
  * absent fields don't reserve space.
  */
 function populateTwoZoneContent(book: HTMLElement, card: FolderCard, titleStr: string): void {
-  // The .fv-book-label-zone is now the single container — it carries the
-  // pair's bottom color and holds BOTH the pattern (at top) and the text
-  // area (filling the rest). The pattern has no background-color of its
-  // own; it inherits the label zone's color and overlays the SVG via
-  // background-image. This produces a single-color spine with a
-  // patterned cap at the top.
+  // The .fv-book-label-zone is the single container — holds the pattern
+  // (one zone) and the text area (the other zone). Layout is mode-specific:
+  // Compact stacks them vertically (vertical-rl flex-row); Book Stack puts
+  // them side-by-side (flex row-reverse so the pattern is on the right).
+  // Same DOM either way.
   const labelZone = document.createElement("div");
   labelZone.className = "fv-book-label-zone";
 
@@ -209,18 +208,16 @@ function populateTwoZoneContent(book: HTMLElement, card: FolderCard, titleStr: s
   pattern.className = "fv-book-pattern";
   // Per-book pattern slot (1..7) keeps the same book looking the same
   // across re-renders. Set inline as a CSS variable that drives
-  // mask-image in bookshelf-css.ts — using mask-image (rather than
-  // background-image) lets the visible color come from the element's
-  // CSS color/background-color, which we pin to the pair's top color
-  // (a curated contrast against the label-zone's bottom color).
+  // mask-image in bookshelf-css.ts.
   pattern.style.setProperty("--fv-pattern-url", bookshelfPatternUrl(patternSlotFor(card)));
   labelZone.appendChild(pattern);
 
-  // Text area wraps the three text runs so the pattern sits at the top
-  // and the text stays centered in the remaining vertical space below.
   const textArea = document.createElement("div");
   textArea.className = "fv-book-text-area";
 
+  // Eyebrow → title → footer order works for both Compact (vertical
+  // spine, justify-content: center centers the group with title visually
+  // in the middle) and Book Stack (column-layout text-area, same effect).
   const author = (card.meta?.author ?? "").trim();
   if (author) {
     const eyebrowEl = document.createElement("div");
@@ -635,13 +632,129 @@ function renderCoversMode(
   }
 }
 
+/**
+ * Pseudo-random height in [88, 128] for long-title Book Stack bars. Same
+ * hash-derived strategy as longTitleWidthFor for Compact spines — keeps a
+ * given book the same size across re-renders. Six discrete 8px steps so the
+ * stack reads as deliberate variety rather than noise.
+ */
+function stackBarHeightFor(card: FolderCard): number {
+  const heights = [88, 96, 104, 112, 120, 128];
+  return heights[(hashCard(card) >> 6) % heights.length];
+}
+
+/**
+ * Build one horizontal book bar for Book Stack mode — the vertical-flip
+ * sibling of Compact. Short titles get a thin bar whose height cycles via
+ * CSS `:nth-child(5n+M)` (the same trick Compact uses on `.fv-book-rule`
+ * width). Long titles (≥4 words OR ≥25 chars) get a taller bar (88-128 px,
+ * hash-derived) plus the Compact two-zone layout: pattern strip on the LEFT
+ * (38%) + text area on the right (62%). populateTwoZoneContent builds that
+ * DOM identically to Compact's long-title path — the only difference is the
+ * `.fv-bookshelf--book-stack` CSS scope that lays it out horizontally
+ * instead of with writing-mode: vertical-rl.
+ *
+ *   SHORT bar:                LONG bar:
+ *     .fv-book                  .fv-book.fv-book-title-len-long
+ *       .fv-book-eyebrow?         .fv-book-label-zone
+ *       .fv-book-title              .fv-book-pattern
+ *       .fv-book-footer?            .fv-book-text-area
+ *                                     .fv-book-eyebrow?
+ *                                     .fv-book-title
+ *                                     .fv-book-footer?
+ */
+function buildStackItem(card: FolderCard): HTMLElement {
+  const titleStr = (card.meta?.title ?? "").trim() || card.name;
+  const book = document.createElement("div");
+  book.className =
+    `fv-book fv-book-color-${colorSlotFor(card)} fv-book-pair-${pairSlotFor(card)}`;
+  book.setAttribute("role", "button");
+  book.setAttribute("tabindex", "0");
+  book.setAttribute("aria-label", card.name);
+  book.title = card.name;
+
+  const words = titleStr.split(/\s+/).filter(Boolean).length;
+  const isLong = words >= 4 || titleStr.length >= 25;
+
+  if (isLong) {
+    book.classList.add("fv-book-title-len-long");
+    book.style.setProperty("--fv-book-min-height", `${stackBarHeightFor(card)}px`);
+    // Reuse Compact's two-zone DOM builder. The CSS for
+    // .fv-bookshelf--book-stack handles the horizontal layout: pattern
+    // on the right (via flex-direction: row-reverse), text-area on the
+    // left with the title centered (column layout).
+    populateTwoZoneContent(book, card, titleStr);
+  } else {
+    // Short bar: title-first horizontal layout (large title left,
+    // eyebrow + footer trail right). Uses the same .fv-book-eyebrow /
+    // .fv-book-title / .fv-book-footer class names as the long variant
+    // so the .fv-bookshelf--book-stack CSS rules apply to both.
+    const titleEl = document.createElement("div");
+    titleEl.className = "fv-book-title";
+    titleEl.textContent = titleStr;
+    book.appendChild(titleEl);
+
+    const eyebrow = (card.meta?.author ?? "").trim();
+    if (eyebrow) {
+      const el = document.createElement("div");
+      el.className = "fv-book-eyebrow";
+      el.textContent = eyebrow;
+      book.appendChild(el);
+    }
+
+    const footer = (card.meta?.date ?? "").trim();
+    if (footer) {
+      const el = document.createElement("div");
+      el.className = "fv-book-footer";
+      el.textContent = footer;
+      book.appendChild(el);
+    }
+  }
+
+  attachClickHandlers(book, card);
+  return book;
+}
+
+/** Book Stack: vertical scrolling column of horizontal book bars. No
+ *  shelves, no rails — group-by produces a heading + list per group. */
+function renderBookStack(
+  root: HTMLElement,
+  cards: FolderCard[],
+  config: FolderViewConfig,
+  _folderPath: string,
+): void {
+  root.innerHTML = "";
+
+  const files = cards.filter((c) => c.kind === "file");
+  if (files.length === 0) { emptyState(root); return; }
+
+  sortCards(files, config.sort);
+  const groups = groupCards(files, config.groupBy);
+
+  for (const { key, items } of groups) {
+    if (key !== null) {
+      const heading = document.createElement("div");
+      heading.className = "fv-stack-heading";
+      heading.textContent = key;
+      root.appendChild(heading);
+    }
+    const list = document.createElement("div");
+    list.className = "fv-stack-list";
+    for (const card of items) {
+      list.appendChild(buildStackItem(card));
+    }
+    root.appendChild(list);
+  }
+}
+
 const SUB_RENDERERS: Record<
   string,
   (root: HTMLElement, cards: FolderCard[], config: FolderViewConfig, folderPath: string) => void
 > = {
-  library: renderLibrary,
-  compact: renderCompact,
-  covers:  renderCoversMode,
+  library:      renderLibrary,
+  compact:      renderCompact,
+  covers:       renderCoversMode,
+  "book-stack": renderBookStack,
 };
 
 // ── Public entry point ──────────────────────────────────────────────────────

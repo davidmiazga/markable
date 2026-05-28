@@ -18,10 +18,10 @@ describe("DISPLAY_REGISTRY", () => {
     expect(slugs).toEqual(["cards", "table", "timeline", "kanban", "bookshelf"]);
   });
 
-  it("Bookshelf declares covers, library, and compact options (compact default)", () => {
+  it("Bookshelf declares covers, library, compact, and book-stack options (compact default)", () => {
     const bs = getDisplaySpec("bookshelf")!;
     expect(bs.defaultOption).toBe("compact");
-    expect(bs.options.map((o) => o.slug)).toEqual(["covers", "library", "compact"]);
+    expect(bs.options.map((o) => o.slug)).toEqual(["covers", "library", "compact", "book-stack"]);
   });
 
   it("does not contain a top-level 'list' display (List is a Table option)", () => {

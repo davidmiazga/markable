@@ -807,4 +807,210 @@ export const BOOKSHELF_CSS = `
   color: var(--fv-book-fg);
 }
 
+/* ── Book Stack mode ─────────────────────────────────────────────────────
+   Vertical scrolling list of horizontal book bars — the vertical-flip
+   sibling of Compact. Short bars cycle through 5 heights via :nth-child
+   (mirrors Compact's .fv-book-rule width cycle); long bars (≥4 words OR
+   ≥25 chars in the title) get a hash-derived height and the two-zone
+   pattern layout (pattern strip on the LEFT 38%, text area on the right
+   62%). Both variants override writing-mode: vertical-rl to read text
+   horizontally. */
+
+.fv-bookshelf--book-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: auto;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.fv-bookshelf--book-stack .fv-stack-heading {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: var(--text-primary);
+  padding: 12px 8px 6px;
+}
+
+.fv-bookshelf--book-stack .fv-stack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Base bar shell — applies to BOTH short and long variants. */
+.fv-bookshelf--book-stack .fv-book {
+  writing-mode: horizontal-tb;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  background: var(--fv-book-bg-bottom);
+  color: var(--fv-book-fg);
+  border-radius: 2px;
+  cursor: pointer;
+  outline: none;
+  transition: filter .12s ease;
+  box-sizing: border-box;
+  overflow: hidden;
+  gap: 12px;
+}
+.fv-bookshelf--book-stack .fv-book:hover {
+  filter: brightness(1.06);
+  transform: none;
+}
+.fv-bookshelf--book-stack .fv-book:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* SHORT bars: padding on the bar itself; height cycles via :nth-child. */
+.fv-bookshelf--book-stack .fv-book:not(.fv-book-title-len-long) {
+  padding: 10px 16px;
+  min-height: 44px;
+}
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+1) { min-height: 36px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+2) { min-height: 44px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+3) { min-height: 52px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n+4) { min-height: 60px; }
+.fv-bookshelf--book-stack .fv-stack-list > .fv-book:not(.fv-book-title-len-long):nth-child(5n)   { min-height: 68px; }
+
+/* LONG bars: hash-derived min-height + two-zone layout. No padding on
+   the .fv-book itself — the inner zones own their own padding so the
+   pattern strip butts cleanly to the left edge. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long {
+  min-height: var(--fv-book-min-height, 96px);
+  padding: 0;
+  gap: 0;
+}
+
+/* Label zone is the single container for the long bar. flex-direction:
+   row-reverse puts the pattern visually on the RIGHT while keeping the
+   pattern as the first DOM child (which Compact relies on for its own
+   layout — same populateTwoZoneContent builder used).
+
+   align-self: stretch overrides the parent .fv-book's align-items: center
+   so the label-zone (and the pattern strip inside it) fills the bar's
+   FULL height rather than collapsing to content height with empty bands
+   above and below. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-label-zone {
+  display: flex;
+  flex-direction: row-reverse;
+  width: 100%;
+  height: auto;
+  background: var(--fv-book-bg-bottom);
+  align-items: stretch;
+  align-self: stretch;
+  flex: 1 1 auto;
+}
+
+/* Pattern: right ~38% strip. Fills 100% of ITS container via mask-size:
+   cover (same mechanism Covers uses for cover images filling their cells).
+   Same mask-image trick as Compact — currentColor SVG silhouette over
+   background-color = pair top. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-pattern {
+  flex: 0 0 38%;
+  min-width: 16px;
+  background-color: var(--fv-book-bg-top);
+  mask-image: var(--fv-pattern-url);
+  mask-size: cover;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  -webkit-mask-image: var(--fv-pattern-url);
+  -webkit-mask-size: cover;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  overflow: hidden;
+}
+
+/* Text area: left ~62% zone. Column layout so the title centers vertically
+   regardless of whether the optional eyebrow + footer are present. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-text-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10px 16px;
+  gap: 4px;
+  overflow: hidden;
+  writing-mode: horizontal-tb;
+  min-width: 0;
+}
+
+/* Text element styling — same selectors target both short (direct child
+   of .fv-book) and long (child of .fv-book-text-area) variants. */
+.fv-bookshelf--book-stack .fv-book-eyebrow {
+  writing-mode: horizontal-tb;
+  transform: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  opacity: .80;
+  flex: 0 0 auto;
+  min-width: 70px;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fv-book-fg);
+  align-self: center;
+  max-height: none;
+}
+
+.fv-bookshelf--book-stack .fv-book-title {
+  writing-mode: horizontal-tb;
+  transform: none;
+  flex: 1 1 auto;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--fv-book-fg);
+  overflow: hidden;
+  align-self: center;
+  max-width: none;
+  max-height: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Long-bar title overrides for the column-layout text-area: full width,
+   left-aligned, 2-line clamp, stretches to fill the zone. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-title {
+  align-self: stretch;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  flex: 0 0 auto;
+}
+
+/* Long-bar eyebrow/footer overrides for the column-layout text-area:
+   no min-width (they shouldn't pin the column wider), left-aligned. */
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-eyebrow,
+.fv-bookshelf--book-stack .fv-book.fv-book-title-len-long .fv-book-footer {
+  align-self: stretch;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
+
+.fv-bookshelf--book-stack .fv-book-footer {
+  writing-mode: horizontal-tb;
+  transform: none;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-style: normal;
+  opacity: .75;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--fv-book-fg);
+  align-self: center;
+  max-height: none;
+}
+
 `;

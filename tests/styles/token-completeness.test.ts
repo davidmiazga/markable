@@ -50,6 +50,7 @@ const JS_DRIVEN_TOKENS = new Set<string>([
   "--fv-spine-w",
   "--library-book-h",
   "--fv-book-min-width",
+  "--fv-book-min-height",
   "--fv-pattern-url",
   // Folder view preview pane (set by resize handle)
   "--fvp-height",

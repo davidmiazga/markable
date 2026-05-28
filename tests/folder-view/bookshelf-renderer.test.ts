@@ -811,6 +811,269 @@ describe("renderFolderBookshelf — covers mode", () => {
   });
 });
 
+describe("renderFolderBookshelf — book-stack mode", () => {
+  let host: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    host = document.createElement("div");
+    document.body.appendChild(host);
+  });
+
+  it("renders the .fv-bookshelf--book-stack modifier on the outer container", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [makeBook("a", { title: "Some Book" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    expect(host.querySelector(".fv-bookshelf--book-stack")).not.toBeNull();
+  });
+
+  it("renders one .fv-book bar per card inside .fv-stack-list", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("a", { title: "First" }),
+        makeBook("b", { title: "Second" }),
+        makeBook("c", { title: "Third" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const list = host.querySelector(".fv-stack-list");
+    expect(list).not.toBeNull();
+    expect(list!.querySelectorAll(".fv-book").length).toBe(3);
+  });
+
+  it("each book carries an fv-book-pair-N (1..8) class", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [makeBook("a", { title: "Tagged" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const book = host.querySelector(".fv-book")!;
+    const pairClass = [...book.classList].find((c) => c.startsWith("fv-book-pair-"));
+    expect(pairClass).toBeDefined();
+    expect(pairClass).toMatch(/^fv-book-pair-[1-8]$/);
+  });
+
+  it("title text lives in .fv-book-title and falls back to filename when no meta.title", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("with-meta", { title: "Real" }),
+        makeBook("filename-only", {}),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const titles = host.querySelectorAll(".fv-book-title");
+    expect(titles.length).toBe(2);
+    const textContents = [...titles].map((el) => el.textContent);
+    expect(textContents).toContain("Real");
+    expect(textContents).toContain("filename-only");
+  });
+
+  it("renders eyebrow only when meta.author is present (short bars)", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("with-author", { author: "Tolkien" }),
+        makeBook("no-author", {}),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    const withAuthor = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "with-author"
+    )!;
+    const noAuthor = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "no-author"
+    )!;
+    expect(withAuthor.querySelector(".fv-book-eyebrow")?.textContent).toBe("Tolkien");
+    expect(noAuthor.querySelector(".fv-book-eyebrow")).toBeNull();
+  });
+
+  it("renders footer only when meta.date is present (short bars)", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("with-date", { date: "1937" }),
+        makeBook("no-date", {}),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    const withDate = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "with-date"
+    )!;
+    const noDate = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "no-date"
+    )!;
+    expect(withDate.querySelector(".fv-book-footer")?.textContent).toBe("1937");
+    expect(noDate.querySelector(".fv-book-footer")).toBeNull();
+  });
+
+  it("tags long-title bars with fv-book-title-len-long and renders the two-zone DOM", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("short", { title: "Brief" }),
+        makeBook("long",  { title: "Design Beyond Thinking Foundation" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book");
+    const shortBook = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "Brief"
+    )!;
+    const longBook = [...books].find((b) =>
+      b.querySelector(".fv-book-title")?.textContent === "Design Beyond Thinking Foundation"
+    )!;
+
+    // Short bar: no long class, no two-zone wrappers, no pattern.
+    expect(shortBook.classList.contains("fv-book-title-len-long")).toBe(false);
+    expect(shortBook.querySelector(".fv-book-label-zone")).toBeNull();
+    expect(shortBook.querySelector(".fv-book-pattern")).toBeNull();
+    expect(shortBook.querySelector(".fv-book-text-area")).toBeNull();
+
+    // Long bar: gets the long class + two-zone DOM (same as Compact long).
+    expect(longBook.classList.contains("fv-book-title-len-long")).toBe(true);
+    expect(longBook.querySelector(".fv-book-label-zone")).not.toBeNull();
+    expect(longBook.querySelector(".fv-book-pattern")).not.toBeNull();
+    expect(longBook.querySelector(".fv-book-text-area")).not.toBeNull();
+    // Title sits inside the text-area for long bars.
+    expect(longBook.querySelector(".fv-book-text-area > .fv-book-title")?.textContent)
+      .toBe("Design Beyond Thinking Foundation");
+  });
+
+  it("sets --fv-pattern-url on long-title bars (mask-image fed by patternSlotFor)", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [makeBook("long", { title: "Design Beyond Thinking Foundation" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const pattern = host.querySelector<HTMLElement>(".fv-book-pattern")!;
+    const url = pattern.style.getPropertyValue("--fv-pattern-url");
+    expect(url).toContain("data:image/svg+xml");
+  });
+
+  it("sets --fv-book-min-height in [88, 128] on long-title bars", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("a", { title: "Design Beyond Thinking Foundation" }),
+        makeBook("b", { title: "Introduction to a Complexity Language" }),
+        makeBook("c", { title: "Towards a New Theory of Resonance" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const books = host.querySelectorAll<HTMLElement>(".fv-book.fv-book-title-len-long");
+    expect(books.length).toBe(3);
+    for (const book of books) {
+      const raw = book.style.getPropertyValue("--fv-book-min-height");
+      expect(raw, `book missing --fv-book-min-height`).not.toBe("");
+      const px = parseInt(raw.replace("px", ""), 10);
+      expect(px).toBeGreaterThanOrEqual(88);
+      expect(px).toBeLessThanOrEqual(128);
+    }
+  });
+
+  it("does NOT set --fv-book-min-height on short-title bars", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [makeBook("short", { title: "Brief" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const book = host.querySelector<HTMLElement>(".fv-book")!;
+    expect(book.classList.contains("fv-book-title-len-long")).toBe(false);
+    expect(book.style.getPropertyValue("--fv-book-min-height")).toBe("");
+  });
+
+  it("produces no .fv-stack-heading when group-by is unset", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [makeBook("a", { title: "Book A" }), makeBook("b", { title: "Book B" })],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    expect(host.querySelector(".fv-stack-heading")).toBeNull();
+  });
+
+  it("renders one .fv-stack-heading per group when group-by is set", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack", groupBy: "status" }),
+      [
+        makeBook("a", { title: "A", status: "todo" }),
+        makeBook("b", { title: "B", status: "doing" }),
+        makeBook("c", { title: "C", status: "todo" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    const headings = host.querySelectorAll(".fv-stack-heading");
+    expect(headings.length).toBe(2);
+    const texts = [...headings].map((el) => el.textContent);
+    expect(texts).toContain("todo");
+    expect(texts).toContain("doing");
+  });
+
+  it("shows the folder-view-empty placeholder when there are no files", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    expect(host.querySelector(".folder-view-empty")).not.toBeNull();
+  });
+
+  it("does NOT render shelf-specific or classic-spine-specific classes", async () => {
+    renderFolderBookshelf(
+      makeConfig({ displayOption: "book-stack" }),
+      [
+        makeBook("short", { title: "Brief", author: "A" }),
+      ],
+      host,
+      "/vault/library",
+    );
+    await flush();
+    // No shelf rails / shelf rows in stack mode — it's a single column.
+    expect(host.querySelector(".fv-shelf-rail")).toBeNull();
+    expect(host.querySelector(".fv-shelf-row")).toBeNull();
+    expect(host.querySelector(".fv-shelf-heading")).toBeNull();
+    // No Compact classic-spine elements (rule + author/date wrappers).
+    expect(host.querySelector(".fv-book-rule")).toBeNull();
+    expect(host.querySelector(".fv-book-author")).toBeNull();
+    expect(host.querySelector(".fv-book-date")).toBeNull();
+    // Eyebrow IS present on the short bar (Book Stack uses the same
+    // .fv-book-eyebrow class as Compact's two-zone variant — different
+    // mode scope handles the styling).
+    expect(host.querySelector(".fv-book-eyebrow")?.textContent).toBe("A");
+  });
+});
+
 describe("renderFolderBookshelf — directories", () => {
   let host: HTMLElement;
 
