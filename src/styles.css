@@ -1221,24 +1221,33 @@ input[type="checkbox"]:focus-visible {
 .cm-live-callout[data-callout="example"]  { --callout-color: #a371f7; }
 .cm-live-callout[data-callout="quote"]    { --callout-color: var(--text-secondary); }
 
-/* Plain variant — no accent border, full-radius rounded box. The 4px lost
-   to the missing border-left is reclaimed in padding-left so body text
-   still aligns with the standard variants. Title text inherits the editor
-   color instead of being tinted by --callout-color. */
-.cm-line.cm-live-callout[data-callout="plain"] {
-  --callout-color: var(--text-secondary);
+/* Plain (and every `plain-<color>` variant) — no accent border, full-radius
+   rounded box. The 4px lost to the missing border-left is reclaimed in
+   padding-left so body text still aligns with the standard variants. Title
+   text inherits the editor color instead of being tinted by --callout-color
+   so it stays legible on the tinted background. */
+.cm-line.cm-live-callout[data-callout^="plain"] {
   border-left: none;
   padding-left: 24px;
 }
-.cm-line.cm-live-callout-first[data-callout="plain"] {
+.cm-line.cm-live-callout-first[data-callout^="plain"] {
   border-top-left-radius: 12px;
 }
-.cm-line.cm-live-callout-last[data-callout="plain"] {
+.cm-line.cm-live-callout-last[data-callout^="plain"] {
   border-bottom-left-radius: 12px;
 }
-.cm-live-callout-header[data-callout="plain"] .cm-live-callout-title {
+.cm-live-callout-header[data-callout^="plain"] .cm-live-callout-title {
   color: var(--text-primary);
 }
+/* Per-variant tint. Colors mirror the standard-callout palette above. */
+.cm-live-callout[data-callout="plain"]        { --callout-color: var(--text-secondary); }
+.cm-live-callout[data-callout="plain-blue"]   { --callout-color: var(--link-color); }
+.cm-live-callout[data-callout="plain-cyan"]   { --callout-color: #00b8d4; }
+.cm-live-callout[data-callout="plain-green"]  { --callout-color: #2ea043; }
+.cm-live-callout[data-callout="plain-yellow"] { --callout-color: #e6a817; }
+.cm-live-callout[data-callout="plain-orange"] { --callout-color: #d29922; }
+.cm-live-callout[data-callout="plain-red"]    { --callout-color: #da3633; }
+.cm-live-callout[data-callout="plain-purple"] { --callout-color: #a371f7; }
 
 /* ============================================================
    Live Preview -- Footnotes

@@ -14,7 +14,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
 import type { EvaluatedTable } from "./table-formula";
 import { SelectWidget } from "./select-widget";
-import { parseCalloutHeader, parseCalloutTitle, type CalloutHeader } from "./callouts";
+import { parseCalloutHeader, parseCalloutTitle, isPlainCallout, type CalloutHeader } from "./callouts";
 import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "./callout-icons";
 
 /**
@@ -287,9 +287,10 @@ class CalloutHeaderWidget extends WidgetType {
       row.appendChild(icon);
     }
 
-    // Plain never auto-fills a default title. Other types fall back to
-    // the capitalized written word when no explicit title was provided.
-    const displayTitle = this.title || (this.canonical === "plain" ? "" : this.written);
+    // Plain (and every `plain-<color>` variant) never auto-fills a default
+    // title. Other types fall back to the capitalized written word when no
+    // explicit title was provided.
+    const displayTitle = this.title || (isPlainCallout(this.canonical) ? "" : this.written);
     if (displayTitle) {
       // Parse a leading ATX marker (`#`..`######`) to set the heading level —
       // `## Title` renders at --heading-h2-size, `# Title` at h1, etc. The

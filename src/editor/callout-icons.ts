@@ -19,6 +19,8 @@
  * is set in a user's CSS snippet.
  */
 
+import { isPlainCallout } from "./callouts";
+
 // Reuse from the existing material/index.ts where the visual fits.
 // (Imported as data so callout-icons.ts stays self-contained — no
 // circular dependency between editor/ and plugins/.)
@@ -90,13 +92,13 @@ export const CALLOUT_ICONS: Record<string, string> = {
  * `info` icon for unknown types (user-defined custom callouts) — matches
  * Obsidian's behavior when no `--callout-icon` is set in a CSS snippet.
  *
- * `plain` is the one canonical type that explicitly opts out of an icon —
- * we return "" so callers know to skip rendering the icon span entirely
- * (vs. unknown types, which still get the info fallback for visual
- * affordance).
+ * `plain` (and every `plain-<color>` variant) explicitly opts out of an
+ * icon — we return "" so callers know to skip rendering the icon span
+ * entirely (vs. unknown types, which still get the info fallback for
+ * visual affordance).
  */
 export function calloutIconSvg(canonical: string): string {
-  if (canonical === "plain") return "";
+  if (isPlainCallout(canonical)) return "";
   return CALLOUT_ICONS[canonical] ?? CALLOUT_ICONS.info;
 }
 

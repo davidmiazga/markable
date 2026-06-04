@@ -15,7 +15,7 @@
 
 import { marked } from "marked";
 import markedFootnote from "marked-footnote";
-import { parseCalloutHeader, parseCalloutTitle } from "../editor/callouts";
+import { parseCalloutHeader, parseCalloutTitle, isPlainCallout } from "../editor/callouts";
 import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "../editor/callout-icons";
 import { EditorView } from "@codemirror/view";
 import { saveHtmlDialog, writeFile } from "./bridge";
@@ -155,17 +155,26 @@ details.callout[open] > summary .callout-chevron { transform: rotate(90deg); }
 .callout[data-callout="bug"]      { --callout-color: #da3633; }
 .callout[data-callout="example"]  { --callout-color: #a371f7; }
 .callout[data-callout="quote"]    { --callout-color: #888; }
-/* Plain — no accent border, all four corners rounded. The 4px lost
-   to the missing left border is reclaimed in padding-left so body text
-   still aligns with the standard variants. Title (when explicit) inherits
-   text color instead of being tinted by --callout-color. */
-.callout[data-callout="plain"] {
-  --callout-color: #888;
+/* Plain (and every plain-color variant) — no accent border, all four
+   corners rounded. The 4px lost to the missing left border is reclaimed in
+   padding-left so body text still aligns with the standard variants. Title
+   (when explicit) inherits text color instead of being tinted by
+   --callout-color so it stays legible on the tinted background. */
+.callout[data-callout^="plain"] {
   border-left: none;
   padding-left: 24px;
   border-radius: 12px;
 }
-.callout[data-callout="plain"] .callout-title { color: inherit; }
+.callout[data-callout^="plain"] .callout-title { color: inherit; }
+/* Per-variant tint. Colors mirror the standard-callout palette above. */
+.callout[data-callout="plain"]        { --callout-color: #888; }
+.callout[data-callout="plain-blue"]   { --callout-color: #388bfd; }
+.callout[data-callout="plain-cyan"]   { --callout-color: #00b8d4; }
+.callout[data-callout="plain-green"]  { --callout-color: #2ea043; }
+.callout[data-callout="plain-yellow"] { --callout-color: #e6a817; }
+.callout[data-callout="plain-orange"] { --callout-color: #d29922; }
+.callout[data-callout="plain-red"]    { --callout-color: #da3633; }
+.callout[data-callout="plain-purple"] { --callout-color: #a371f7; }
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -375,9 +384,9 @@ function convertCalloutsToHtml(md: string): string {
  * `<details>` / `<summary>`; non-foldable use `<div>` + `<div class="callout-title">`.
  */
 function renderCalloutHtml(header: { canonical: string; written: string; fold: string; title: string }, innerBody: string): string {
-  // Plain opts out of the default-title fallback. All other types fall back
-  // to the capitalized written word.
-  const titleText = header.title || (header.canonical === "plain" ? "" : header.written);
+  // Plain (and every `plain-<color>` variant) opts out of the default-title
+  // fallback. All other types fall back to the capitalized written word.
+  const titleText = header.title || (isPlainCallout(header.canonical) ? "" : header.written);
   const icon = calloutIconSvg(header.canonical);
   const dataAttr = ` data-callout="${escapeHtml(header.canonical)}"`;
   const classAttr = `class="callout callout-${escapeHtml(header.canonical)}"`;

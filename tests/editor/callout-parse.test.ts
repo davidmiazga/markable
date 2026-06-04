@@ -14,6 +14,7 @@ import {
   parseCalloutTitle,
   CALLOUT_ALIASES,
   CALLOUT_TYPES,
+  isPlainCallout,
   stripBlockquotePrefix,
 } from "../../src/editor/callouts";
 
@@ -133,9 +134,42 @@ describe("parseCalloutHeader — plain variant", () => {
   });
 });
 
+describe("parseCalloutHeader — plain color variants", () => {
+  it("parses each plain-<color> variant as its own canonical", () => {
+    for (const color of ["blue", "cyan", "green", "yellow", "orange", "red", "purple"]) {
+      const h = parseCalloutHeader(`> [!plain-${color}]`)!;
+      expect(h.canonical).toBe(`plain-${color}`);
+      expect(h.title).toBe("");
+    }
+  });
+
+  it("preserves an explicit title on a plain-color callout", () => {
+    const h = parseCalloutHeader("> [!plain-blue] Heads up")!;
+    expect(h.canonical).toBe("plain-blue");
+    expect(h.title).toBe("Heads up");
+  });
+
+  it("supports the fold marker on plain-color variants", () => {
+    expect(parseCalloutHeader("> [!plain-red]+")!.fold).toBe("+");
+    expect(parseCalloutHeader("> [!plain-red]-")!.fold).toBe("-");
+  });
+
+  it("isPlainCallout returns true for plain and every plain-<color>", () => {
+    expect(isPlainCallout("plain")).toBe(true);
+    expect(isPlainCallout("plain-blue")).toBe(true);
+    expect(isPlainCallout("plain-purple")).toBe(true);
+  });
+
+  it("isPlainCallout returns false for non-plain canonicals", () => {
+    expect(isPlainCallout("note")).toBe(false);
+    expect(isPlainCallout("tip")).toBe(false);
+    expect(isPlainCallout("plainview")).toBe(false); // no hyphen → not a variant
+  });
+});
+
 describe("CALLOUT_ALIASES + CALLOUT_TYPES integrity", () => {
-  it("contains 14 canonical types (13 Obsidian + plain)", () => {
-    expect(CALLOUT_TYPES.length).toBe(14);
+  it("contains 21 canonical types (13 Obsidian + plain + 7 plain-color variants)", () => {
+    expect(CALLOUT_TYPES.length).toBe(21);
   });
 
   it("maps every alias to a known canonical type", () => {

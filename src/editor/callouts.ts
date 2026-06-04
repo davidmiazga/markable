@@ -43,18 +43,41 @@ export const CALLOUT_ALIASES: Record<string, string> = {
   // quote
   quote: "quote", cite: "quote",
   // plain — no icon, no left accent, no default title. A bare rounded box.
+  // Color variants reuse the palette already in use for the standard types
+  // (see styles.css). Each variant is its own canonical so CSS can key off it.
   plain: "plain",
+  "plain-blue": "plain-blue",
+  "plain-cyan": "plain-cyan",
+  "plain-green": "plain-green",
+  "plain-yellow": "plain-yellow",
+  "plain-orange": "plain-orange",
+  "plain-red": "plain-red",
+  "plain-purple": "plain-purple",
 };
 
 /**
- * The 13 distinct canonical callout types — one per icon + color slot.
+ * The distinct canonical callout types — one per icon + color slot.
  * Order chosen to match Obsidian's docs page for predictable picker UI.
+ * The seven `plain-*` color variants extend the bare `plain` box with
+ * the existing standard-callout palette (no icon, no left accent).
  */
 export const CALLOUT_TYPES = [
   "note", "abstract", "info", "todo", "tip", "success",
   "question", "warning", "failure", "danger", "bug", "example", "quote",
   "plain",
+  "plain-blue", "plain-cyan", "plain-green", "plain-yellow",
+  "plain-orange", "plain-red", "plain-purple",
 ] as const;
+
+/**
+ * True for `plain` and every `plain-<color>` canonical. Both the live-preview
+ * widget and the HTML exporter use this to decide: (a) skip the icon and (b)
+ * skip the default-title fallback (the type word). Centralized so the two
+ * paths can't drift on which variants count as "plain".
+ */
+export function isPlainCallout(canonical: string): boolean {
+  return canonical === "plain" || canonical.startsWith("plain-");
+}
 
 export type CalloutCanonical = (typeof CALLOUT_TYPES)[number] | string;
 
@@ -95,7 +118,7 @@ export interface CalloutHeader {
  * with spaces between the `>` chars, so the depth count comes from the
  * `>` chars inside the prefix — not from the prefix string's length.
  */
-const HEADER_RE = /^((?:>\s*)+)\[!(\w+)\]([+-]?)\s*(.*)$/;
+const HEADER_RE = /^((?:>\s*)+)\[!([\w-]+)\]([+-]?)\s*(.*)$/;
 
 /**
  * Parse a single line as a callout header. Returns null when the line

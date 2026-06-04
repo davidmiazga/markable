@@ -79,7 +79,9 @@ function calloutTemplate(type: string): { text: string; bodyOffset: number } {
   return { text, bodyOffset: text.length };
 }
 
-/** One-line picker description per canonical callout type. */
+/** One-line picker description per canonical callout type. Plain color
+ *  variants are nested under the `plain` drilldown (see PLAIN_COLOR_PICKER)
+ *  and use their own friendly chip labels there, so they're omitted here. */
 const CALLOUT_DESCRIPTIONS: Record<string, string> = {
   note: "Insert a note callout",
   abstract: "Insert an abstract / summary callout",
@@ -94,8 +96,25 @@ const CALLOUT_DESCRIPTIONS: Record<string, string> = {
   bug: "Insert a bug callout",
   example: "Insert an example callout",
   quote: "Insert a quote / cite callout",
-  plain: "Insert a plain callout (no icon, no accent border)",
+  plain: "Insert a plain callout — pick a color",
 };
+
+/**
+ * Chips for the second-level color picker shown after `/callout` → `plain`.
+ * `canonical` is what gets written into the doc as `[!<canonical>]`; `label`
+ * is the chip text (decoupled so the chips read as bare color names instead
+ * of "plain-blue", "plain-cyan", …). `default` maps to the bare gray `plain`.
+ */
+const PLAIN_COLOR_PICKER: ReadonlyArray<{ canonical: string; label: string; description: string }> = [
+  { canonical: "plain",        label: "default", description: "Plain callout (gray, no accent)" },
+  { canonical: "plain-blue",   label: "blue",    description: "Blue plain callout" },
+  { canonical: "plain-cyan",   label: "cyan",    description: "Cyan plain callout" },
+  { canonical: "plain-green",  label: "green",   description: "Green plain callout" },
+  { canonical: "plain-yellow", label: "yellow",  description: "Yellow plain callout" },
+  { canonical: "plain-orange", label: "orange",  description: "Orange plain callout" },
+  { canonical: "plain-red",    label: "red",     description: "Red plain callout" },
+  { canonical: "plain-purple", label: "purple",  description: "Purple plain callout" },
+];
 
 // ── Command builder ────────────────────────────────────────────────────────────
 function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
@@ -151,22 +170,46 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
       name: "callout",
       description: "Insert a callout — pick a type",
       // The bare /callout entry never inserts on its own; selecting it
-      // swaps the popup into a sub-picker listing the 13 canonical
-      // callout types (see subCommands below). Keeps the root slash
-      // menu uncluttered (one entry instead of 13).
+      // swaps the popup into a sub-picker listing the canonical callout
+      // types. Keeps the root slash menu uncluttered.
       apply() { /* no-op; subCommands takes over in acceptAt */ },
-      subCommands: CALLOUT_TYPES.map((canonical) => ({
-        name: canonical,
-        description: CALLOUT_DESCRIPTIONS[canonical] ?? `Insert a ${canonical} callout`,
-        apply(view: EditorView, from: number, to: number) {
-          const { text, bodyOffset } = calloutTemplate(canonical);
-          view.dispatch({
-            changes: { from, to, insert: text },
-            selection: { anchor: from + bodyOffset },
-          });
-          deps.enterPreviewMode();
+      // 13 standard types are flat leaves; `plain` is itself a drilldown
+      // into the color picker (default + 7 tints) so the type list stays
+      // at 14 chips instead of 21. The filter excludes every plain-*
+      // canonical because those live under the nested picker.
+      subCommands: [
+        ...CALLOUT_TYPES
+          .filter((c) => !c.startsWith("plain"))
+          .map((canonical) => ({
+            name: canonical,
+            description: CALLOUT_DESCRIPTIONS[canonical] ?? `Insert a ${canonical} callout`,
+            apply(view: EditorView, from: number, to: number) {
+              const { text, bodyOffset } = calloutTemplate(canonical);
+              view.dispatch({
+                changes: { from, to, insert: text },
+                selection: { anchor: from + bodyOffset },
+              });
+              deps.enterPreviewMode();
+            },
+          })),
+        {
+          name: "plain",
+          description: CALLOUT_DESCRIPTIONS.plain,
+          apply() { /* drilldown only — see subCommands below */ },
+          subCommands: PLAIN_COLOR_PICKER.map(({ canonical, label, description }) => ({
+            name: label,
+            description,
+            apply(view: EditorView, from: number, to: number) {
+              const { text, bodyOffset } = calloutTemplate(canonical);
+              view.dispatch({
+                changes: { from, to, insert: text },
+                selection: { anchor: from + bodyOffset },
+              });
+              deps.enterPreviewMode();
+            },
+          })),
         },
-      })),
+      ],
     },
     {
       name: "divider",
