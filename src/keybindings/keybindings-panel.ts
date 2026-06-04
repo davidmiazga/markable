@@ -126,6 +126,22 @@ export const COMMANDS: CommandDef[] = [
   { id: "format-list-style-steps",        label: "List Style: Steps",        defaultKey: "Ctrl-L", section: "Format" },
   { id: "format-clear",         label: "Clear Formatting", defaultKey: "Cmd-\\",       section: "Format" },
   { id: "format-comment",       label: "Comment",          defaultKey: "Cmd-Shift-\\", section: "Format" },
+  // Callouts — one command per canonical Obsidian-parity type. No default
+  // keybindings; users discover them via the command bar by typing "callout".
+  { id: "callout-note",     label: "Callout: Note",     defaultKey: "", section: "Format" },
+  { id: "callout-abstract", label: "Callout: Abstract", defaultKey: "", section: "Format" },
+  { id: "callout-info",     label: "Callout: Info",     defaultKey: "", section: "Format" },
+  { id: "callout-todo",     label: "Callout: Todo",     defaultKey: "", section: "Format" },
+  { id: "callout-tip",      label: "Callout: Tip",      defaultKey: "", section: "Format" },
+  { id: "callout-success",  label: "Callout: Success",  defaultKey: "", section: "Format" },
+  { id: "callout-question", label: "Callout: Question", defaultKey: "", section: "Format" },
+  { id: "callout-warning",  label: "Callout: Warning",  defaultKey: "", section: "Format" },
+  { id: "callout-failure",  label: "Callout: Failure",  defaultKey: "", section: "Format" },
+  { id: "callout-danger",   label: "Callout: Danger",   defaultKey: "", section: "Format" },
+  { id: "callout-bug",      label: "Callout: Bug",      defaultKey: "", section: "Format" },
+  { id: "callout-example",  label: "Callout: Example",  defaultKey: "", section: "Format" },
+  { id: "callout-quote",    label: "Callout: Quote",    defaultKey: "", section: "Format" },
+  { id: "callout-plain",    label: "Callout: Plain",    defaultKey: "", section: "Format" },
   // Theme
   { id: "theme-next",   label: "Next Theme",     defaultKey: "Cmd-Alt-.", section: "Theme" },
   { id: "theme-prev",   label: "Previous Theme", defaultKey: "Cmd-Alt-,", section: "Theme" },

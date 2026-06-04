@@ -1102,110 +1102,142 @@ input[type="checkbox"]:focus-visible {
 
 /* ============================================================
    Live Preview -- Callouts (Obsidian-style admonitions)
+   ------------------------------------------------------------
+   All callout styling is keyed off [data-callout="<canonical>"] so
+   that user-defined custom callouts via CSS snippets work the same
+   way as the built-ins:
+       .cm-live-callout[data-callout="recipe"] {
+         --callout-color: hsl(280, 60%, 50%);
+       }
+   Per-type --callout-color drives the accent border + tinted bg.
    ============================================================ */
-.cm-live-callout {
-  border-left: 4px solid var(--link-color);
-  padding: 2px 12px;
+/* Selectors are qualified with `.cm-line` to match the specificity of
+   CodeMirror's own `.ͼ1 .cm-line { padding: 0 2px 0 6px }` base rule —
+   without that, the CM6 base wins on cascade order and our padding is
+   ignored. */
+.cm-line.cm-live-callout {
+  --callout-color: var(--link-color);
+  border-left: 4px solid var(--callout-color);
+  padding: 12px 12px 0 18px;
   margin: 0;
   border-radius: 0;
-  background: rgba(56, 139, 253, 0.06);
+  background: color-mix(in srgb, var(--callout-color) 8%, transparent);
 }
 
-.cm-live-callout-first {
-  padding-top: 6px;
-  margin-top: 4px;
-  border-top-left-radius: 4px;
-  border-top-right-radius: 4px;
+.cm-line.cm-live-callout-first {
+  /* line-height: 1 collapses CM6's editor line-height (~1.5) so the header
+     line is exactly font-size tall. Without this, the line-box extends
+     asymmetrically and the visible top/bottom padding looks uneven —
+     especially obvious when the callout is collapsed (header is the only
+     visible line) and the user expects 20/20 padding to read as symmetric. */
+  line-height: 1;
+  border-top-right-radius: 12px;
 }
 
-.cm-live-callout-last {
-  padding-bottom: 6px;
-  margin-bottom: 4px;
-  border-bottom-left-radius: 4px;
-  border-bottom-right-radius: 4px;
+.cm-line.cm-live-callout-last {
+  padding-bottom: 12px;
+  border-bottom-right-radius: 12px;
 }
 
+/* The header wrapper holds icon + title + (optional) chevron as siblings.
+   Make it an inline-flex row so the three children stay vertically centered
+   regardless of the SVG box vs. text baseline. The color set here cascades
+   into every child SVG (via fill="currentColor") and into the title text. */
+.cm-live-callout-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--callout-color);
+  vertical-align: middle;
+}
+
+/* Inherits the theme's h2 tokens — weight, size, color — so users who set
+   thin-weight headings in their theme get a thin callout title to match.
+   No local font-weight / font-size overrides; only the per-type tint is
+   applied via --callout-color (overridden to text-primary on `plain`). */
 .cm-live-callout-title {
-  font-weight: 600;
+  font-size: var(--heading-h2-size);
+  font-weight: var(--heading-h2-weight);
+  color: var(--callout-color);
+  line-height: 1;
+}
+/* Explicit heading-level override on the title — `## Title` sets size+weight
+   to h2 (same as default), `# Title` upgrades to h1, etc. Title text only;
+   the icon/chevron color follows --callout-color independently. */
+.cm-live-callout-title-h1 { font-size: var(--heading-h1-size); font-weight: var(--heading-h1-weight); }
+.cm-live-callout-title-h2 { font-size: var(--heading-h2-size); font-weight: var(--heading-h2-weight); }
+.cm-live-callout-title-h3 { font-size: var(--heading-h3-size); font-weight: var(--heading-h3-weight); }
+.cm-live-callout-title-h4 { font-size: var(--heading-h4-size); font-weight: var(--heading-h4-weight); }
+.cm-live-callout-title-h5 { font-size: var(--heading-h5-size); font-weight: var(--heading-h5-weight); }
+.cm-live-callout-title-h6 { font-size: var(--heading-h6-size); font-weight: var(--heading-h6-weight); }
+
+.cm-live-callout-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--callout-color);
+}
+.cm-live-callout-icon svg { width: 100%; height: 100%; display: block; }
+
+.cm-live-callout-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  color: var(--callout-color);
+  transition: transform 0.15s;
+}
+.cm-live-callout-chevron svg { width: 100%; height: 100%; display: block; }
+.cm-live-callout-chevron.is-open { transform: rotate(90deg); }
+
+/* Hide collapsed body lines. The renderer adds .cm-live-callout-collapsed-body
+   to every line below the header when the callout is folded shut. */
+.cm-live-callout-collapsed-body { display: none !important; }
+
+/* Nested callouts get reduced indentation so the visual hierarchy reads. */
+.cm-live-callout.cm-live-callout-nested {
+  margin-left: 0;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
-.cm-live-callout-note {
-  border-left-color: var(--link-color);
-  background: rgba(56, 139, 253, 0.06);
-}
+/* Per-canonical-type color tokens. New canonical = add one row here. */
+.cm-live-callout[data-callout="note"]     { --callout-color: var(--link-color); }
+.cm-live-callout[data-callout="abstract"] { --callout-color: #00b8d4; }
+.cm-live-callout[data-callout="info"]     { --callout-color: var(--link-color); }
+.cm-live-callout[data-callout="todo"]     { --callout-color: var(--link-color); }
+.cm-live-callout[data-callout="tip"]      { --callout-color: #2ea043; }
+.cm-live-callout[data-callout="success"]  { --callout-color: #2ea043; }
+.cm-live-callout[data-callout="question"] { --callout-color: #d29922; }
+.cm-live-callout[data-callout="warning"]  { --callout-color: #e6a817; }
+.cm-live-callout[data-callout="failure"]  { --callout-color: #da3633; }
+.cm-live-callout[data-callout="danger"]   { --callout-color: #da3633; }
+.cm-live-callout[data-callout="bug"]      { --callout-color: #da3633; }
+.cm-live-callout[data-callout="example"]  { --callout-color: #a371f7; }
+.cm-live-callout[data-callout="quote"]    { --callout-color: var(--text-secondary); }
 
-.cm-live-callout-tip,
-.cm-live-callout-hint,
-.cm-live-callout-important {
-  border-left-color: #2ea043;
-  background: rgba(46, 160, 67, 0.06);
+/* Plain variant — no accent border, full-radius rounded box. The 4px lost
+   to the missing border-left is reclaimed in padding-left so body text
+   still aligns with the standard variants. Title text inherits the editor
+   color instead of being tinted by --callout-color. */
+.cm-line.cm-live-callout[data-callout="plain"] {
+  --callout-color: var(--text-secondary);
+  border-left: none;
+  padding-left: 24px;
 }
-
-.cm-live-callout-warning,
-.cm-live-callout-caution,
-.cm-live-callout-attention {
-  border-left-color: #e6a817;
-  background: rgba(230, 168, 23, 0.06);
+.cm-line.cm-live-callout-first[data-callout="plain"] {
+  border-top-left-radius: 12px;
 }
-
-.cm-live-callout-danger,
-.cm-live-callout-error {
-  border-left-color: #da3633;
-  background: rgba(218, 54, 51, 0.06);
+.cm-line.cm-live-callout-last[data-callout="plain"] {
+  border-bottom-left-radius: 12px;
 }
-
-.cm-live-callout-info {
-  border-left-color: var(--link-color);
-  background: rgba(56, 139, 253, 0.06);
-}
-
-.cm-live-callout-success,
-.cm-live-callout-check,
-.cm-live-callout-done {
-  border-left-color: #2ea043;
-  background: rgba(46, 160, 67, 0.06);
-}
-
-.cm-live-callout-question,
-.cm-live-callout-help,
-.cm-live-callout-faq {
-  border-left-color: #a371f7;
-  background: rgba(163, 113, 247, 0.06);
-}
-
-.cm-live-callout-failure,
-.cm-live-callout-fail,
-.cm-live-callout-missing {
-  border-left-color: #da3633;
-  background: rgba(218, 54, 51, 0.06);
-}
-
-.cm-live-callout-bug {
-  border-left-color: #da3633;
-  background: rgba(218, 54, 51, 0.06);
-}
-
-.cm-live-callout-example {
-  border-left-color: #a371f7;
-  background: rgba(163, 113, 247, 0.06);
-}
-
-.cm-live-callout-quote,
-.cm-live-callout-cite {
-  border-left-color: var(--text-secondary);
-  background: rgba(128, 128, 128, 0.06);
-}
-
-.cm-live-callout-abstract,
-.cm-live-callout-summary,
-.cm-live-callout-tldr {
-  border-left-color: #58a6ff;
-  background: rgba(88, 166, 255, 0.06);
-}
-
-.cm-live-callout-todo {
-  border-left-color: var(--link-color);
-  background: rgba(56, 139, 253, 0.06);
+.cm-live-callout-header[data-callout="plain"] .cm-live-callout-title {
+  color: var(--text-primary);
 }
 
 /* ============================================================

@@ -11,10 +11,11 @@
  *   /date          — insert today's date (YYYY-MM-DD)
  *   /tasks         — insert a task list item (- [ ] )
  *   /code          — insert a fenced code block
- *   /callout       — insert a NOTE callout
- *   /callout-tip   — insert a TIP callout
- *   /callout-warning   — insert a WARNING callout
- *   /callout-important — insert an IMPORTANT callout
+ *   /callout       — opens a type-picker sub-popup. The 13 canonical
+ *                    Obsidian callout types (note, abstract, info, todo,
+ *                    tip, success, question, warning, failure, danger,
+ *                    bug, example, quote) appear as chips inside the
+ *                    same popup. Keeps the root menu uncluttered.
  *   /divider       — insert a horizontal rule
  *   /quote         — insert a blockquote prefix
  *   /sidebar-left  — insert a left-floating sidebar block
@@ -26,6 +27,7 @@
 import { type ViewUpdate, EditorView, keymap } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { insertHorizontalRule, toggleLinePrefix } from "./format";
+import { CALLOUT_TYPES } from "./callouts";
 
 export interface QuickCommandDeps {
   openLayoutPicker: () => void;
@@ -43,6 +45,12 @@ interface QuickCommand {
   name: string;
   description: string;
   apply: (view: EditorView, from: number, to: number) => void;
+  /** When set, selecting this command swaps the popup into a sub-picker
+   *  populated with these entries instead of inserting immediately. Used
+   *  for `/callout` → choose canonical type so the root picker stays
+   *  short. The sub-picker uses the same chip UI; arrow keys + Enter
+   *  navigate it, any keystroke that changes the doc dismisses it. */
+  subCommands?: QuickCommand[];
 }
 
 // ── Active plugin reference (for keymap access) ────────────────────────────────
@@ -62,9 +70,32 @@ const TABLE_STARTER   = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |
 const CODE_FENCE      = "```\n\n```";
 const SIDEBAR_LEFT    = "```sidebar-left\n\n```";
 
-function callout(type: string): string {
-  return `> [!${type}]\n> \n`;
+/** Build a callout insertion template. `type` is the lowercased canonical
+ *  type word; rendered live-preview capitalizes it via the parser's
+ *  `written` field. The trailing `> ` line lets the user start typing body
+ *  content immediately; cursor is positioned there by the slash command. */
+function calloutTemplate(type: string): { text: string; bodyOffset: number } {
+  const text = `> [!${type}]\n> `;
+  return { text, bodyOffset: text.length };
 }
+
+/** One-line picker description per canonical callout type. */
+const CALLOUT_DESCRIPTIONS: Record<string, string> = {
+  note: "Insert a note callout",
+  abstract: "Insert an abstract / summary callout",
+  info: "Insert an info callout",
+  todo: "Insert a todo callout",
+  tip: "Insert a tip / hint callout",
+  success: "Insert a success / check callout",
+  question: "Insert a question / help callout",
+  warning: "Insert a warning / caution callout",
+  failure: "Insert a failure callout",
+  danger: "Insert a danger / error callout",
+  bug: "Insert a bug callout",
+  example: "Insert an example callout",
+  quote: "Insert a quote / cite callout",
+  plain: "Insert a plain callout (no icon, no accent border)",
+};
 
 // ── Command builder ────────────────────────────────────────────────────────────
 function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
@@ -118,51 +149,24 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
     },
     {
       name: "callout",
-      description: "Insert a NOTE callout",
-      apply(view, from, to) {
-        const text = callout("NOTE");
-        view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
-        });
-        deps.enterPreviewMode();
-      },
-    },
-    {
-      name: "callout-tip",
-      description: "Insert a TIP callout",
-      apply(view, from, to) {
-        const text = callout("TIP");
-        view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
-        });
-        deps.enterPreviewMode();
-      },
-    },
-    {
-      name: "callout-warning",
-      description: "Insert a WARNING callout",
-      apply(view, from, to) {
-        const text = callout("WARNING");
-        view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
-        });
-        deps.enterPreviewMode();
-      },
-    },
-    {
-      name: "callout-important",
-      description: "Insert an IMPORTANT callout",
-      apply(view, from, to) {
-        const text = callout("IMPORTANT");
-        view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
-        });
-        deps.enterPreviewMode();
-      },
+      description: "Insert a callout — pick a type",
+      // The bare /callout entry never inserts on its own; selecting it
+      // swaps the popup into a sub-picker listing the 13 canonical
+      // callout types (see subCommands below). Keeps the root slash
+      // menu uncluttered (one entry instead of 13).
+      apply() { /* no-op; subCommands takes over in acceptAt */ },
+      subCommands: CALLOUT_TYPES.map((canonical) => ({
+        name: canonical,
+        description: CALLOUT_DESCRIPTIONS[canonical] ?? `Insert a ${canonical} callout`,
+        apply(view: EditorView, from: number, to: number) {
+          const { text, bodyOffset } = calloutTemplate(canonical);
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + bodyOffset },
+          });
+          deps.enterPreviewMode();
+        },
+      })),
     },
     {
       name: "divider",
@@ -243,6 +247,13 @@ class QuickCommandsPlugin {
   private filtered: QuickCommand[] = [];
   private selectedIdx = 0;
   private slashFrom = -1;
+  /** True when the popup is currently showing a parent command's
+   *  `subCommands` (e.g. the callout-type picker after `/callout`).
+   *  While true, `update()` does not re-filter against typed text — any
+   *  doc change dismisses the popup instead. */
+  private inSubPicker = false;
+  /** Optional caption shown above the chips in sub-picker mode. */
+  private subCaption: string | null = null;
 
   constructor(private readonly commands: QuickCommand[]) {}
 
@@ -250,6 +261,15 @@ class QuickCommandsPlugin {
     const { state } = update;
     const sel = state.selection.main;
     if (!sel.empty) { this.close(); return; }
+
+    // In sub-picker mode the chip list is frozen on the chosen parent's
+    // subCommands. Any doc change (or anything else that would normally
+    // re-run the filter) means the user has typed past the popup —
+    // dismiss instead of trying to re-filter against the original slash.
+    if (this.inSubPicker) {
+      if (update.docChanged) { this.close(); return; }
+      return;
+    }
 
     const line = state.doc.lineAt(sel.head);
     const before = state.sliceDoc(line.from, sel.head);
@@ -286,6 +306,15 @@ class QuickCommandsPlugin {
     }
 
     this.popup.innerHTML = "";
+
+    if (this.inSubPicker && this.subCaption) {
+      const caption = document.createElement("div");
+      caption.textContent = this.subCaption;
+      caption.style.cssText =
+        "flex-basis:100%;font-size:11px;color:var(--text-secondary,#888);padding:2px 4px 4px;letter-spacing:0.02em;";
+      this.popup.appendChild(caption);
+    }
+
     this.filtered.forEach((cmd, i) => {
       const item = document.createElement("div");
       item.className = "slash-cmd-chip";
@@ -297,7 +326,9 @@ class QuickCommandsPlugin {
           : "background:transparent;");
 
       const name = document.createElement("span");
-      name.textContent = "/" + cmd.name;
+      // Root level: chip reads "/name". Sub-picker: bare name (no slash) so
+      // it's clear the user is picking a value, not another slash command.
+      name.textContent = this.inSubPicker ? cmd.name : "/" + cmd.name;
       name.style.cssText = "font-size:12px;color:var(--text-primary,#ccc);font-weight:500;";
 
       const desc = document.createElement("span");
@@ -334,6 +365,20 @@ class QuickCommandsPlugin {
   private acceptAt(view: EditorView, idx: number) {
     const cmd = this.filtered[idx];
     if (!cmd) return;
+
+    // Parent commands with a subCommands list act as drilldowns: the
+    // popup stays open and swaps in the children as the new chip list.
+    // The slashFrom range is preserved so the eventual leaf apply still
+    // replaces the original `/parent` text with the chosen template.
+    if (cmd.subCommands && cmd.subCommands.length > 0) {
+      this.filtered = cmd.subCommands;
+      this.selectedIdx = 0;
+      this.inSubPicker = true;
+      this.subCaption = `Pick a ${cmd.name} type`;
+      this.render(view);
+      return;
+    }
+
     const to = view.state.selection.main.head;
     const from = this.slashFrom;
     this.close();
@@ -347,6 +392,8 @@ class QuickCommandsPlugin {
     if (_active === this) _active = null;
     this.selectedIdx = 0;
     this.slashFrom = -1;
+    this.inSubPicker = false;
+    this.subCaption = null;
   }
 
   destroy() {

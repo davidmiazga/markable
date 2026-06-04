@@ -14,6 +14,24 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
 import type { EvaluatedTable } from "./table-formula";
 import { SelectWidget } from "./select-widget";
+import { parseCalloutHeader, parseCalloutTitle, type CalloutHeader } from "./callouts";
+import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "./callout-icons";
+
+/**
+ * Fold-state cache for foldable callouts. Keyed by the absolute character
+ * position of the callout's header line so it survives normal edits, and
+ * persists for the lifetime of the editor view. Initialized lazily from
+ * the `+` / `-` marker on first encounter.
+ *
+ * Module-level so the ViewPlugin's update() can reach it; one instance
+ * per editor view in practice because the plugin is per-view.
+ */
+const calloutFoldState = new WeakMap<EditorView, Map<number, boolean>>();
+function getFoldMap(view: EditorView): Map<number, boolean> {
+  let m = calloutFoldState.get(view);
+  if (!m) { m = new Map(); calloutFoldState.set(view, m); }
+  return m;
+}
 import hljs from "highlight.js/lib/core";
 import hljsJavascript from "highlight.js/lib/languages/javascript";
 import hljsTypescript from "highlight.js/lib/languages/typescript";
@@ -209,17 +227,95 @@ class HorizontalRuleWidget extends WidgetType {
 
 
 
-class CalloutTitleWidget extends WidgetType {
-  constructor(private title: string) { super(); }
+/**
+ * The full callout header row — icon + title + (optional) chevron toggle.
+ * Replaces the `[!type] Title` markdown on the header line of a callout.
+ *
+ * Clicking the chevron flips the fold state for that callout (only when
+ * the markdown declares a fold marker: `+` open or `-` closed). The state
+ * is tracked in a per-view Map keyed by the header line's character
+ * position; the ViewPlugin re-runs its decoration build on the next
+ * update, which reads the new state and applies the `is-collapsed` class
+ * to the body lines.
+ */
+class CalloutHeaderWidget extends WidgetType {
+  constructor(
+    private canonical: string,
+    /** Explicit title from the markdown (empty when none was written). */
+    private title: string,
+    /** Capitalized written type word — used as the default title for
+     *  every type EXCEPT `plain`, which never shows a default. */
+    private written: string,
+    private foldable: boolean,
+    private collapsed: boolean,
+    private foldKey: number,
+    private view: EditorView,
+  ) { super(); }
 
   toDOM(): HTMLElement {
-    const span = document.createElement("span");
-    span.className = "cm-live-callout-title";
-    span.textContent = this.title;
-    return span;
+    const row = document.createElement("span");
+    row.className = "cm-live-callout-header";
+    row.setAttribute("data-callout", this.canonical);
+
+    // Chevron renders first so its larger hit-target sits at the leading
+    // edge of the header row — easier to aim at than a trailing toggle.
+    if (this.foldable) {
+      const chev = document.createElement("span");
+      chev.className = "cm-live-callout-chevron";
+      if (!this.collapsed) chev.classList.add("is-open");
+      chev.innerHTML = CALLOUT_CHEVRON_SVG;
+      chev.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const map = getFoldMap(this.view);
+        map.set(this.foldKey, !map.get(this.foldKey));
+        // Trigger a re-render of decorations. An empty dispatch is the
+        // standard CM6 idiom for "rerun ViewPlugin.update without changing the doc".
+        this.view.dispatch({});
+      });
+      row.appendChild(chev);
+    }
+
+    // Icon is skipped when the canonical type opts out (currently only `plain`,
+    // detected by calloutIconSvg returning ""). Keeps the DOM lean and lets
+    // the title text — when present — sit flush at the leading edge.
+    const iconSvg = calloutIconSvg(this.canonical);
+    if (iconSvg) {
+      const icon = document.createElement("span");
+      icon.className = "cm-live-callout-icon";
+      icon.innerHTML = iconSvg;
+      row.appendChild(icon);
+    }
+
+    // Plain never auto-fills a default title. Other types fall back to
+    // the capitalized written word when no explicit title was provided.
+    const displayTitle = this.title || (this.canonical === "plain" ? "" : this.written);
+    if (displayTitle) {
+      // Parse a leading ATX marker (`#`..`######`) to set the heading level —
+      // `## Title` renders at --heading-h2-size, `# Title` at h1, etc. The
+      // remainder is parsed as inline markdown so **bold**, *italic*, and
+      // `code` work in the title.
+      const { level, rest } = parseCalloutTitle(displayTitle);
+      const titleEl = document.createElement("span");
+      titleEl.className = "cm-live-callout-title"
+        + (level ? ` cm-live-callout-title-h${level}` : "");
+      titleEl.innerHTML = marked.parseInline(rest) as string;
+      row.appendChild(titleEl);
+    }
+
+    return row;
   }
 
-  eq(other: CalloutTitleWidget): boolean { return this.title === other.title; }
+  eq(other: CalloutHeaderWidget): boolean {
+    return this.canonical === other.canonical
+      && this.title === other.title
+      && this.written === other.written
+      && this.foldable === other.foldable
+      && this.collapsed === other.collapsed
+      && this.foldKey === other.foldKey;
+  }
+
+  ignoreEvent(): boolean { return false; }  // we want our click listener to fire
 }
 
 class ImageWidget extends WidgetType {
@@ -492,81 +588,183 @@ function handleInlineMarkers(
   }
 }
 
-/** Matches `> [!type]` or `> [!type] Title` on the first line of a blockquote. */
-const CALLOUT_RE = /^>\s*\[!(\w+)\]\s*(.*)/;
-
+/**
+ * Decorate a `Blockquote` syntax-tree node. Handles three cases in order:
+ *
+ *   1. Obsidian callout — `> [!type]` (with optional `+`/`-` fold marker
+ *      and optional title text). Renders an inline header (icon + title
+ *      + chevron when foldable) and applies per-canonical-type styling
+ *      via a `data-callout` attribute. Supports nested callouts
+ *      (`> > [!warning]`) by recursively inspecting deeper lines.
+ *   2. Plain blockquote — applies the standard `.cm-live-blockquote`
+ *      line decoration.
+ *
+ * `view` is required (not just `state`) so the foldable header widget
+ * can read + write the per-view fold-state Map and trigger re-renders.
+ */
 function handleBlockquote(
   node: SyntaxNodeRef,
-  state: EditorState,
+  view: EditorView,
   activeLines: Set<number>,
   decorations: Range<Decoration>[]
 ) {
+  const state = view.state;
   const startLine = state.doc.lineAt(node.from);
   const endLine = state.doc.lineAt(node.to);
 
-  // Check if this blockquote is a callout
-  const firstLineText = startLine.text;
-  const calloutMatch = firstLineText.match(CALLOUT_RE);
+  // Parse the first line as a potential callout header.
+  const header = parseCalloutHeader(startLine.text);
 
-  if (calloutMatch) {
-    // It's a callout — style as admonition
-    const type = calloutMatch[1].toLowerCase();
-    const title = calloutMatch[2] || type.charAt(0).toUpperCase() + type.slice(1);
-
+  if (!header) {
+    // Plain blockquote.
     for (let ln = startLine.number; ln <= endLine.number; ln++) {
       if (activeLines.has(ln)) continue;
       const line = state.doc.line(ln);
-      let cls = `cm-live-callout cm-live-callout-${type}`;
-      if (ln === startLine.number) cls += " cm-live-callout-first";
-      if (ln === endLine.number) cls += " cm-live-callout-last";
-      decorations.push(Decoration.line({ class: cls }).range(line.from));
-
-      // Hide the "> " prefix on all lines
-      const prefixMatch = line.text.match(/^>\s?/);
-      if (prefixMatch) {
-        decorations.push(Decoration.replace({}).range(line.from, line.from + prefixMatch[0].length));
-      }
-
-      // On the first line, also hide the [!TYPE] marker and restyle the title
-      if (ln === startLine.number) {
-        const markerMatch = line.text.match(/^>\s*(\[!\w+\]\s*)/);
-        if (markerMatch) {
-          const markerEnd = line.from + markerMatch[0].length;
-          // Hide from after "> " prefix to end of "[!TYPE] "
-          const prefixLen = prefixMatch ? prefixMatch[0].length : 0;
-          decorations.push(Decoration.replace({}).range(line.from + prefixLen, markerEnd));
-          // Style the remaining title text
-          if (markerEnd < line.to) {
-            decorations.push(
-              Decoration.mark({ class: "cm-live-callout-title" }).range(markerEnd, line.to)
-            );
-          } else if (!calloutMatch[2]) {
-            // No title provided — insert the default type name as a widget
-            decorations.push(
-              Decoration.widget({
-                widget: new CalloutTitleWidget(title),
-                side: 1,
-              }).range(line.from + prefixLen)
-            );
-          }
-        }
-      }
+      decorations.push(Decoration.line({ class: "cm-live-blockquote" }).range(line.from));
+      const m = line.text.match(/^>\s?/);
+      if (m) decorations.push(Decoration.replace({}).range(line.from, line.from + m[0].length));
     }
-    return; // handled as callout, skip normal blockquote styling
+    return;
   }
 
-  // Normal blockquote (not a callout)
-  for (let ln = startLine.number; ln <= endLine.number; ln++) {
-    if (activeLines.has(ln)) continue;
-    const line = state.doc.line(ln);
-    decorations.push(Decoration.line({ class: "cm-live-blockquote" }).range(line.from));
+  decorateCallout(header, startLine.number, endLine.number, view, activeLines, decorations);
+}
 
-    // Hide the "> " prefix
+/**
+ * Decorate one callout block (a contiguous run of `>`-prefixed lines at
+ * a given depth). Called recursively for nested callouts. The `depth`
+ * argument tells the function how many `>` characters prefix each line
+ * of THIS callout's body — exactly the `header.depth` from parseCalloutHeader.
+ *
+ * Caller is responsible for having scanned the syntax tree to find the
+ * outer block's start/end line numbers; for nested calls, the inner
+ * block's end is determined by walking forward until a line drops below
+ * the inner depth.
+ */
+function decorateCallout(
+  header: CalloutHeader,
+  startLineNo: number,
+  endLineNo: number,
+  view: EditorView,
+  activeLines: Set<number>,
+  decorations: Range<Decoration>[],
+): void {
+  const state = view.state;
+  const headerLine = state.doc.line(startLineNo);
+  const depth = header.depth;
+
+  // Resolve fold state (only relevant when foldable). The marker
+  // initializes; subsequent user clicks update the per-view Map.
+  const foldKey = headerLine.from;
+  const foldable = header.fold === "+" || header.fold === "-";
+  const map = getFoldMap(view);
+  let collapsed: boolean;
+  if (foldable && !map.has(foldKey)) {
+    collapsed = header.fold === "-";
+    map.set(foldKey, collapsed);
+  } else {
+    collapsed = foldable ? !!map.get(foldKey) : false;
+  }
+
+  // Precompute the true last line of this callout block at this depth.
+  // `endLineNo` can overshoot (the caller scans the outer blockquote and
+  // may include trailing nested content), so we walk forward and pick the
+  // highest line number whose prefix still has `depth` `>` chars.
+  let lastLineNo = startLineNo;
+  for (let scan = startLineNo; scan <= endLineNo; scan++) {
+    const scanText = state.doc.line(scan).text;
+    const lvl = (scanText.match(/^((?:>\s?)+)/)?.[1].match(/>/g) ?? []).length;
+    if (lvl < depth) break;
+    lastLineNo = scan;
+  }
+
+  // Recursive scan: walk forward, applying line decorations + body
+  // recursion. We stop at endLineNo or when we find a line that has
+  // fewer than `depth` levels of `>` prefix (end of block).
+  let ln = startLineNo;
+  while (ln <= endLineNo) {
+    const line = state.doc.line(ln);
     const text = line.text;
-    const match = text.match(/^>\s?/);
-    if (match) {
-      decorations.push(Decoration.replace({}).range(line.from, line.from + match[0].length));
+
+    // Count leading `>` characters (with optional spaces between them).
+    const prefixMatch = text.match(/^((?:>\s?)+)/);
+    const prefixLevels = prefixMatch ? (prefixMatch[1].match(/>/g) ?? []).length : 0;
+    if (prefixLevels < depth) break;
+
+    // Apply the wrapping line decoration for this callout depth.
+    const classes: string[] = [
+      "cm-live-callout",
+      `cm-live-callout-${header.canonical}`,
+    ];
+    if (depth >= 2) classes.push("cm-live-callout-nested");
+    if (ln === startLineNo) classes.push("cm-live-callout-first");
+    // When collapsed, body lines are display:none — the header becomes the
+    // only visible line and must carry -last so the bottom radius/padding
+    // render on the visible row.
+    if (ln === (collapsed ? startLineNo : lastLineNo)) classes.push("cm-live-callout-last");
+    if (collapsed && ln > startLineNo) classes.push("cm-live-callout-collapsed-body");
+    decorations.push(
+      Decoration.line({
+        class: classes.join(" "),
+        attributes: { "data-callout": header.canonical },
+      }).range(line.from),
+    );
+
+    // Hide the leading blockquote prefix(es) up to this depth.
+    if (!activeLines.has(ln) && prefixMatch) {
+      // Compute the exact prefix length corresponding to `depth` levels.
+      let lvl = 0;
+      let pos = 0;
+      while (lvl < depth && pos < text.length) {
+        if (text[pos] === ">") { lvl++; pos++; if (text[pos] === " ") pos++; }
+        else break;
+      }
+      decorations.push(Decoration.replace({}).range(line.from, line.from + pos));
     }
+
+    if (ln === startLineNo) {
+      // Replace the `[!type]±` marker with the rich header widget.
+      // The widget covers: from end of blockquote-prefix to end of header line.
+      const innerStartMatch = text.match(/^((?:>\s?)+)/);
+      const innerStart = innerStartMatch ? innerStartMatch[0].length : 0;
+      if (!activeLines.has(ln)) {
+        decorations.push(
+          Decoration.replace({
+            widget: new CalloutHeaderWidget(
+              header.canonical,
+              header.title,
+              header.written,
+              foldable,
+              collapsed,
+              foldKey,
+              view,
+            ),
+          }).range(line.from + innerStart, line.to),
+        );
+      }
+      ln++;
+      continue;
+    }
+
+    // For body lines, check whether this line is itself a nested callout
+    // header (depth > current depth) — if so, recurse on it.
+    const nestedHeader = parseCalloutHeader(text);
+    if (nestedHeader && nestedHeader.depth > depth) {
+      // Find end of the nested block: walk forward until prefix drops below nested.depth.
+      let nestedEnd = ln;
+      for (let scan = ln + 1; scan <= endLineNo; scan++) {
+        const scanText = state.doc.line(scan).text;
+        const lvlMatch = scanText.match(/^((?:>\s?)+)/);
+        const lvl = lvlMatch ? (lvlMatch[1].match(/>/g) ?? []).length : 0;
+        if (lvl < nestedHeader.depth) break;
+        nestedEnd = scan;
+      }
+      decorateCallout(nestedHeader, ln, nestedEnd, view, activeLines, decorations);
+      ln = nestedEnd + 1;
+      continue;
+    }
+
+    ln++;
   }
 }
 
@@ -1064,8 +1262,19 @@ function buildDecorations(view: EditorView): DecorationSet {
             );
           }
         } else if (name === "Blockquote") {
-          handleBlockquote(node, state, activeLines, decorations);
-          return false; // don't descend, we handle children ourselves
+          // Outermost Blockquote owns the line-level callout setup; nested
+          // ones are already covered by the outer call's decorateCallout
+          // recursion, so we skip re-processing them. We DO continue to
+          // descend in both cases so that inline + heading nodes inside
+          // the body (ATXHeading, StrongEmphasis, Emphasis, InlineCode,
+          // Strikethrough, etc.) reach their own handlers below — without
+          // this, `> ## Heading` rendered as literal `## Heading` and
+          // `> **bold**` rendered with the asterisks visible.
+          let isNested = false;
+          for (let p = node.node.parent; p; p = p.parent) {
+            if (p.name === "Blockquote") { isNested = true; break; }
+          }
+          if (!isNested) handleBlockquote(node, view, activeLines, decorations);
         } else if (name === "ListItem") {
           // Check parent to determine bullet vs ordered
           const parent = node.node.parent;

@@ -15,6 +15,8 @@
 
 import { marked } from "marked";
 import markedFootnote from "marked-footnote";
+import { parseCalloutHeader, parseCalloutTitle } from "../editor/callouts";
+import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "../editor/callout-icons";
 import { EditorView } from "@codemirror/view";
 import { saveHtmlDialog, writeFile } from "./bridge";
 
@@ -105,19 +107,65 @@ hr {
 }
 img { max-width: 100%; height: auto; }
 input[type="checkbox"] { margin-right: 0.4em; }
+/* Callouts — Obsidian-style. Scoped via [data-callout="type"] so custom user
+   types defined in CSS snippets (.callout[data-callout="recipe"]) work the
+   same way. Per-type --callout-color drives the accent border + tinted bg. */
 .callout {
-  border-left: 4px solid #388bfd;
-  padding: 0.75rem 1rem;
+  --callout-color: #388bfd;
+  border-left: 4px solid var(--callout-color);
+  padding: 20px;
   margin: 1rem 0;
-  border-radius: 4px;
-  background: rgba(56, 139, 253, 0.06);
+  border-radius: 0 12px 12px 0;
+  background: color-mix(in srgb, var(--callout-color) 8%, transparent);
 }
-.callout-title { font-weight: 600; margin: 0 0 0.25rem; }
-.callout-warning, .callout-caution, .callout-attention { border-left-color: #e6a817; background: rgba(230, 168, 23, 0.06); }
-.callout-danger, .callout-error, .callout-bug { border-left-color: #da3633; background: rgba(218, 54, 51, 0.06); }
-.callout-tip, .callout-hint, .callout-important, .callout-success, .callout-check, .callout-done { border-left-color: #2ea043; background: rgba(46, 160, 67, 0.06); }
-.callout-question, .callout-help, .callout-faq, .callout-example { border-left-color: #a371f7; background: rgba(163, 113, 247, 0.06); }
-.callout-quote, .callout-cite { border-left-color: #888; background: rgba(128, 128, 128, 0.06); }
+details.callout > summary { cursor: pointer; list-style: none; }
+details.callout > summary::-webkit-details-marker { display: none; }
+.callout-title {
+  display: flex; align-items: center; gap: 0.5rem;
+  color: var(--callout-color);
+  margin: 0;
+}
+/* Title text matches the theme's h2 weight + size so callouts respect
+   user theme overrides (e.g. thin-weight headings). No local font-weight. */
+.callout-title-text {
+  font-size: var(--heading-h2-size, 1.6em);
+  font-weight: var(--heading-h2-weight, 200);
+}
+.callout-title-text-h1 { font-size: var(--heading-h1-size, 2em);    font-weight: var(--heading-h1-weight, 200); }
+.callout-title-text-h2 { font-size: var(--heading-h2-size, 1.6em);  font-weight: var(--heading-h2-weight, 200); }
+.callout-title-text-h3 { font-size: var(--heading-h3-size, 1.35em); font-weight: var(--heading-h3-weight, 300); }
+.callout-title-text-h4 { font-size: var(--heading-h4-size, 1.15em); font-weight: var(--heading-h4-weight, 400); }
+.callout-title-text-h5 { font-size: var(--heading-h5-size, 1em);    font-weight: var(--heading-h5-weight, 600); }
+.callout-title-text-h6 { font-size: var(--heading-h6-size, 0.9em);  font-weight: var(--heading-h6-weight, 600); }
+.callout-icon { display: inline-flex; width: 18px; height: 18px; }
+.callout-icon svg { width: 100%; height: 100%; }
+.callout-chevron { display: inline-flex; width: 20px; height: 20px; transition: transform 0.15s; }
+.callout-chevron svg { width: 100%; height: 100%; }
+details.callout[open] > summary .callout-chevron { transform: rotate(90deg); }
+.callout[data-callout="note"]     { --callout-color: #388bfd; }
+.callout[data-callout="abstract"] { --callout-color: #00b8d4; }
+.callout[data-callout="info"]     { --callout-color: #388bfd; }
+.callout[data-callout="todo"]     { --callout-color: #388bfd; }
+.callout[data-callout="tip"]      { --callout-color: #2ea043; }
+.callout[data-callout="success"]  { --callout-color: #2ea043; }
+.callout[data-callout="question"] { --callout-color: #d29922; }
+.callout[data-callout="warning"]  { --callout-color: #e6a817; }
+.callout[data-callout="failure"]  { --callout-color: #da3633; }
+.callout[data-callout="danger"]   { --callout-color: #da3633; }
+.callout[data-callout="bug"]      { --callout-color: #da3633; }
+.callout[data-callout="example"]  { --callout-color: #a371f7; }
+.callout[data-callout="quote"]    { --callout-color: #888; }
+/* Plain — no accent border, all four corners rounded. The 4px lost
+   to the missing left border is reclaimed in padding-left so body text
+   still aligns with the standard variants. Title (when explicit) inherits
+   text color instead of being tinted by --callout-color. */
+.callout[data-callout="plain"] {
+  --callout-color: #888;
+  border-left: none;
+  padding-left: 24px;
+  border-radius: 12px;
+}
+.callout[data-callout="plain"] .callout-title { color: inherit; }
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -256,26 +304,129 @@ export function enforceHtmlExtension(path: string): string {
  * @param markdown - Raw Markdown source string (may be empty)
  * @returns HTML fragment string produced by marked
  */
+/**
+ * Convert all Obsidian-style callouts in a markdown source to HTML
+ * placeholder blocks (which `marked` then leaves alone because they're
+ * already HTML). Supports foldable (`<details>` element) and non-foldable
+ * (`<div>` element) variants, nested callouts (recursive), and custom
+ * types via the `data-callout` attribute. Per-type icon comes from
+ * `calloutIconSvg`.
+ *
+ * Algorithm:
+ *   1. Scan markdown line by line.
+ *   2. When a callout header line is detected at depth `d`, capture all
+ *      consecutive lines whose `>` prefix-count is ≥ `d` — that's the
+ *      callout block.
+ *   3. Strip one level of `>` prefix from each body line.
+ *   4. Recursively process the stripped body for nested callouts (which
+ *      would have appeared with `> > [!type]` at the original depth,
+ *      becoming `> [!type]` at depth 1 inside the body — handled by the
+ *      same recursive call).
+ *   5. Emit `<details>` (foldable) or `<div>` (not), with `<summary>` /
+ *      `<div class="callout-title">` containing the icon + title.
+ */
+function convertCalloutsToHtml(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+
+  let i = 0;
+  while (i < lines.length) {
+    const header = parseCalloutHeader(lines[i]);
+    if (!header || header.depth !== 1) {
+      // Not a top-level callout — pass through. Nested callouts (depth ≥ 2)
+      // are handled by the recursive call below; we don't process them here
+      // because they only appear inside another callout's body.
+      out.push(lines[i]);
+      i++;
+      continue;
+    }
+
+    // Walk forward to capture the whole callout block. Includes every
+    // consecutive line that has at least depth-1 levels of `>` prefix
+    // (i.e. is still inside the callout). The block ends at a line with
+    // fewer `>` prefixes or a non-blockquote line.
+    let end = i;
+    for (let scan = i + 1; scan < lines.length; scan++) {
+      const text = lines[scan];
+      const m = text.match(/^((?:>\s?)+)/);
+      const lvls = m ? (m[1].match(/>/g) ?? []).length : 0;
+      if (lvls < 1) break;
+      end = scan;
+    }
+
+    // Strip one `>` level from each body line. The remainder is itself
+    // markdown that may contain nested callouts at this new depth-1.
+    const bodyLines = lines.slice(i + 1, end + 1).map((l) =>
+      l.replace(/^>\s?/, "")
+    );
+    // Recurse on the stripped body so nested callouts become inner HTML.
+    const innerBody = convertCalloutsToHtml(bodyLines.join("\n"));
+
+    out.push(renderCalloutHtml(header, innerBody));
+    i = end + 1;
+  }
+
+  return out.join("\n");
+}
+
+/**
+ * Render one already-parsed callout (with its already-recursively-processed
+ * body HTML) to a single HTML block. Foldable callouts use semantic
+ * `<details>` / `<summary>`; non-foldable use `<div>` + `<div class="callout-title">`.
+ */
+function renderCalloutHtml(header: { canonical: string; written: string; fold: string; title: string }, innerBody: string): string {
+  // Plain opts out of the default-title fallback. All other types fall back
+  // to the capitalized written word.
+  const titleText = header.title || (header.canonical === "plain" ? "" : header.written);
+  const icon = calloutIconSvg(header.canonical);
+  const dataAttr = ` data-callout="${escapeHtml(header.canonical)}"`;
+  const classAttr = `class="callout callout-${escapeHtml(header.canonical)}"`;
+  const iconHtml = icon ? `<span class="callout-icon">${icon}</span>` : "";
+  // Title supports a leading ATX heading marker (`# `..`###### `) and inline
+  // markdown (**bold**, *italic*, `code`). Hidden when there's no title.
+  let titleHtml = "";
+  if (titleText) {
+    const { level, rest } = parseCalloutTitle(titleText);
+    const levelClass = level ? ` callout-title-text-h${level}` : "";
+    titleHtml = `<span class="callout-title-text${levelClass}">${marked.parseInline(rest) as string}</span>`;
+  }
+
+  if (header.fold === "+" || header.fold === "-") {
+    const openAttr = header.fold === "+" ? " open" : "";
+    return (
+      `<details ${classAttr}${dataAttr}${openAttr}>` +
+      `<summary class="callout-title">` +
+      `<span class="callout-chevron">${CALLOUT_CHEVRON_SVG}</span>` +
+      iconHtml +
+      titleHtml +
+      `</summary>` +
+      `\n\n${innerBody}\n\n` +
+      `</details>\n`
+    );
+  }
+  return (
+    `<div ${classAttr}${dataAttr}>` +
+    `<div class="callout-title">` +
+    iconHtml +
+    titleHtml +
+    `</div>` +
+    `\n\n${innerBody}\n\n` +
+    `</div>\n`
+  );
+}
+
 export function markdownToHtml(markdown: string): string {
   // Strip Obsidian-style %%comments%% before conversion
   let cleaned = markdown.replace(/%%[\s\S]*?%%/g, "");
 
   // Convert Obsidian-style callouts to HTML before marked processes them.
-  // Callouts use blockquote syntax: > [!TYPE] Title\n> content
-  // We replace them with <div> blocks so marked doesn't wrap them in <blockquote>.
-  cleaned = cleaned.replace(
-    /^(> *\[!(\w+)\] *(.*)\n(?:> .*\n?)*)/gm,
-    (_match) => {
-      const lines = _match.split("\n").filter((l) => l.trim());
-      const firstLine = lines[0];
-      const typeMatch = firstLine.match(/\[!(\w+)\]\s*(.*)/);
-      if (!typeMatch) return _match;
-      const type = typeMatch[1].toLowerCase();
-      const title = typeMatch[2] || type.charAt(0).toUpperCase() + type.slice(1);
-      const body = lines.slice(1).map((l) => l.replace(/^>\s?/, "")).join("\n");
-      return `<div class="callout callout-${type}"><p class="callout-title">${escapeHtml(title)}</p>\n\n${body}\n\n</div>\n\n`;
-    }
-  );
+  // Supports:
+  //   - All 13 canonical types + Obsidian aliases (via parseCalloutHeader)
+  //   - Foldable callouts: `> [!type]+` (open) / `> [!type]-` (collapsed)
+  //   - Nested callouts: `> > [!warning]` inside `> [!note]`
+  //   - Custom user types: `> [!recipe]` → data-callout="recipe"
+  //   - Per-type Material Symbols icon in the title row
+  cleaned = convertCalloutsToHtml(cleaned);
 
   // Custom renderer: parse image dimensions from alt text (Obsidian-style "alt|WxH")
   const renderer = new marked.Renderer();

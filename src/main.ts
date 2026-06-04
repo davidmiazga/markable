@@ -851,6 +851,35 @@ function handleAction(action: string): void {
     case "format-table":         if (editor) insertTable(editor);        break;
     case "format-code-fence":    if (editor) insertCodeFence(editor);    break;
     case "format-quote":         if (editor) toggleLinePrefix(editor, "> ");  break;
+    // Insert callout commands (one per canonical type). Builds the template
+    // `> [!type]\n> ` and places the cursor at the body line so the user can
+    // start typing immediately. Mirrors the slash-command behavior so the two
+    // entry points produce identical markdown.
+    case "callout-note":
+    case "callout-abstract":
+    case "callout-info":
+    case "callout-todo":
+    case "callout-tip":
+    case "callout-success":
+    case "callout-question":
+    case "callout-warning":
+    case "callout-failure":
+    case "callout-danger":
+    case "callout-bug":
+    case "callout-example":
+    case "callout-quote":
+    case "callout-plain": {
+      if (!editor) break;
+      const canonical = action.slice("callout-".length);
+      const text = `> [!${canonical}]\n> `;
+      const head = editor.state.selection.main.head;
+      editor.dispatch({
+        changes: { from: head, to: head, insert: text },
+        selection: { anchor: head + text.length },
+        effects: setViewMode.of(true),
+      });
+      break;
+    }
     case "format-bullet-list":   if (editor) toggleLinePrefix(editor, "- ");  break;
     case "format-ordered-list":  if (editor) toggleOrderedList(editor);       break;
     case "format-task-list":     if (editor) toggleTaskList(editor);          break;
