@@ -44,6 +44,10 @@ pub use commands::{
     WatcherRegistry,
 };
 
+// Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
+// plus stat_file for the custom-SVG cache (FR-17).
+pub use commands::folder_icon::{read_folder_icon_map, stat_file};
+
 /// Read a bundled help resource file by filename.
 /// Files are embedded at compile time — no AppHandle, no path resolution, cannot fail.
 #[tauri::command]
@@ -482,7 +486,9 @@ pub fn run() {
             search_vault_content,
             get_image_dimensions,
             get_exif_data,
-            sidecar_exists
+            sidecar_exists,
+            read_folder_icon_map,
+            stat_file
         ])
         .on_window_event(|window, event| {
             // Hide-on-close: intercept the close request and hide the window

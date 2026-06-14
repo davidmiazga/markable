@@ -1,0 +1,534 @@
+/**
+ * collections-css.ts — CSS for the Collections feature.
+ *
+ * Exports COLLECTIONS_CSS, a string constant that is appended to FILE_BROWSER_CSS
+ * in file-browser.plugin.ts at module-load time. The plugin IIFE bundler does
+ * NOT follow CSS @import directives, so the `@import "./collections/collections.css"`
+ * in file-browser.css is for AUTHORING ONLY — this file is the runtime source.
+ *
+ * Keep this string verbatim with `collections.css` next door. When you edit
+ * the authoring CSS, mirror the change here (and vice versa).
+ */
+
+export const COLLECTIONS_CSS = `
+/* ── Breadcrumb (step 07) ──────────────────────────────────────────────── */
+
+.fv-collection-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-family: var(--ui-font);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+
+.fv-collection-breadcrumb-seg {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.fv-collection-breadcrumb-seg:hover {
+  background: var(--code-bg);
+  color: var(--text-hover);
+}
+
+.fv-collection-breadcrumb-seg.is-current {
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.fv-collection-breadcrumb-sep {
+  color: var(--text-tertiary);
+}
+
+/* ── Home canvas (step 06) ─────────────────────────────────────────────── */
+
+.fv-collection-content {
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.fv-collection-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.fv-collection-empty-state-button {
+  font-family: var(--ui-font);
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.fv-collection-empty-state-button:hover {
+  background: var(--code-bg);
+}
+
+/* Home canvas — single header line with a thin divider, followed by a
+ * CSS grid of tiles. No outer container, no per-tile borders. */
+
+.fv-collection-home-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 10px;
+  color: var(--text-primary);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.fv-collection-home-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.fv-collection-home-title {
+  color: var(--text-primary);
+}
+
+.fv-collection-glyph-grid {
+  /* CSS grid with auto-fill columns so tiles align uniformly. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.fv-collection-stack-glyph {
+  /* Borderless tile — grid cell drives width; icon + badge + label
+   * vertical stack aligns with sibling tile types via consistent
+   * icon-area height. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  box-sizing: border-box;
+}
+
+/* Stack-glyph icon (icon-Stack.svg) — currentColor + secondary token. */
+.fv-collection-stack-glyph .fv-collection-note-box-icon {
+  color: var(--text-secondary);
+}
+
+.fv-collection-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 16px;
+  text-align: center;
+  font-family: var(--ui-font);
+}
+
+.fv-collection-stack-label {
+  font-size: 13px;
+  text-align: center;
+  color: var(--text-primary);
+  font-family: var(--ui-font);
+}
+
+/* Shared "+" affordance — used by both the Home canvas grid and Stack
+ * panel list via createAddCircleAffordance in affordances.ts. Single
+ * source of truth so the two surfaces cannot drift visually.
+ *
+ * The embedded SVG carries its own dashed-circle outline; the button
+ * itself is a plain transparent shell. The inner .fv-collection-note-box-icon
+ * provides the same icon-slot height as labelled sibling tiles so the +
+ * lines up vertically with their icons. */
+.fv-collection-add-affordance {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+}
+
+.fv-collection-add-affordance:hover {
+  color: var(--accent-color);
+}
+
+/* ── + Notecard/Stack popover (step 06) ────────────────────────────────── */
+
+.fv-collection-popover {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  box-sizing: border-box;
+  font-family: var(--ui-font);
+  z-index: 1000;
+}
+
+.fv-collection-popover-item {
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.fv-collection-popover-item:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+.fv-collection-popover-item:disabled {
+  /* Chapter / Book are listed but inert until their handlers ship. */
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+/* ── Stack panel (step 10) ─────────────────────────────────────────────── */
+
+.fv-collection-stack-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+}
+
+.fv-collection-stack-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+  background: var(--bg-titlebar);
+  color: var(--text-primary);
+  font-family: var(--ui-font);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.fv-collection-stack-header [class^="folder-icon-"] {
+  width: 20px;
+  height: 20px;
+  color: var(--text-primary);
+}
+
+.fv-collection-stack-panel-title {
+  flex: 1;
+}
+
+/* View toggle — file (icon-grid) vs content (composite markdown). */
+.fv-collection-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.fv-collection-view-toggle-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--ui-font);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.fv-collection-view-toggle-btn:hover {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.fv-collection-view-toggle-btn.is-active {
+  background: var(--code-bg);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+/* Breadcrumb host in row mode (Stack panel mounted) — breadcrumb +
+ * toggle clustered LEFT so the right edge stays clear for the gear. */
+.fv-collection-breadcrumb-host--row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Table view — Name + Modified columns, click row to open. */
+.fv-collection-table-view {
+  padding: 8px 16px 16px;
+  box-sizing: border-box;
+}
+
+.fv-collection-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.fv-collection-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 10px;
+}
+
+.fv-collection-table-row td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.fv-collection-table-row:hover td {
+  background: var(--code-bg);
+}
+
+.fv-collection-table-modified {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.fv-collection-stack-list {
+  /* Match the Home canvas grid so note tiles look identical whether
+   * rendered at the Collection root (Home) or inside a drilled-into
+   * Stack. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+/* Stack-panel "+" affordance: uses the shared
+ * .fv-collection-add-affordance rule above. The old
+ * .fv-collection-stack-add-note (dashed rectangle + text "+") was removed
+ * when the Stack panel switched to createAddCircleAffordance to match
+ * the Home canvas. */
+
+/* ── Note box (step 09) ────────────────────────────────────────────────── */
+
+.fv-collection-note-box {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 12px;
+  cursor: pointer;
+  box-sizing: border-box;
+  font-family: var(--ui-font);
+  transition: transform 0.08s ease, border-color 0.08s ease;
+}
+
+.fv-collection-note-box:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-color);
+}
+
+.fv-collection-note-box.is-reference {
+  /* No background change here — the corner arrow signals the distinction. */
+  border-style: dashed;
+}
+
+.fv-collection-note-box.is-broken {
+  opacity: 0.5;
+  font-style: italic;
+  border-style: dotted;
+}
+
+.fv-collection-note-box.is-broken:hover {
+  /* Broken boxes don't lift — they're not actionable. */
+  transform: none;
+}
+
+.fv-collection-note-box.is-editing .fv-collection-note-box-body {
+  /* Inline editor takes over; the preview body steps out of the way. */
+  display: none;
+}
+
+.fv-collection-note-box.is-reference::after {
+  /*
+   * CSS-only reference badge (FR-22). 14×14 SVG arrow encoded inline in
+   * mask-image. The accent-color background gets clipped to the arrow
+   * silhouette via mask-* properties. No DOM-level branch needed.
+   */
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 14px;
+  height: 14px;
+  background: var(--accent-color);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M14 3v2h3.586l-9.293 9.293 1.414 1.414L19 6.414V10h2V3z'/><path d='M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M14 3v2h3.586l-9.293 9.293 1.414 1.414L19 6.414V10h2V3z'/><path d='M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2z'/></svg>");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  pointer-events: none;
+}
+
+.fv-collection-note-box-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  font-family: var(--ui-font);
+  /* Ellipsis treatment so long filenames don't break the tile. The
+   * \`title\` attribute on the parent box reveals the full label on hover. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fv-collection-note-box-icon {
+  /* Notecard glyph above the label. Fixed 48px tall so siblings in the
+   * Home grid (Stack notebook, AddNote dashed paper) all share the same
+   * icon baseline; labels below then line up across rows. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+
+/* Note box inside any Collections tile grid (Home canvas OR Stack
+ * panel) — borderless, transparent, centered icon + label below. */
+.fv-collection-glyph-grid .fv-collection-note-box,
+.fv-collection-stack-list .fv-collection-note-box {
+  width: auto;
+  height: auto;
+  padding: 6px 4px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.fv-collection-glyph-grid .fv-collection-note-box:hover,
+.fv-collection-stack-list .fv-collection-note-box:hover {
+  transform: none;
+  border: none;
+  color: var(--accent-color);
+}
+
+.fv-collection-glyph-grid .fv-collection-note-box .fv-collection-note-box-body,
+.fv-collection-stack-list .fv-collection-note-box .fv-collection-note-box-body {
+  display: none;
+}
+
+
+.fv-collection-breadcrumb-icon {
+  /* Inline house glyph before the "Home" label. */
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+/* Drop-target highlight applied by attachFolderItemDrag when the
+ * cursor hovers a tile that can absorb the dragged item. Uses
+ * --code-bg, the same subtle-hover token Stack glyphs use. */
+.is-drop-target {
+  background: var(--code-bg);
+  border-radius: 8px;
+}
+
+.fv-collection-note-box-body {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.fv-collection-note-box-rename-input {
+  font: inherit;
+  border: 1px solid var(--accent-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 2px 4px;
+  border-radius: 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fv-collection-note-box-rename-error {
+  border-color: var(--text-danger);
+  color: var(--text-danger);
+}
+
+/* ── Inline editor host (step 11) ──────────────────────────────────────── */
+
+.fv-collection-inline-editor-host {
+  /*
+   * The CM6 EditorView is reparented into the active box. When parked under
+   * the hidden host, this container is invisible; when reparented, the box's
+   * is-editing modifier (above) hides the preview body so this gets the
+   * available space.
+   */
+  width: 100%;
+  min-height: 100px;
+  box-sizing: border-box;
+}
+
+.fv-collection-editor-host {
+  /*
+   * Hidden parent the inline-editor parks the EditorView under between
+   * mounts. display:none is too aggressive (would tear down measurement);
+   * absolute + visually-hidden positioning keeps the CM6 instance alive
+   * without claiming layout space.
+   */
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+`;

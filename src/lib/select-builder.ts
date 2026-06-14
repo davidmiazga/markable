@@ -149,7 +149,19 @@ function injectStyles(): void {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type DisplayKind = "cards" | "table" | "timeline" | "kanban" | "bookshelf";
+// `collection-home` is the Collections layout slug (refactor R02 / R07).
+// Listed as a sibling of the other built-in displays so the select-builder
+// picker accepts it natively without a cast at every call site. The
+// `DISPLAY_REGISTRY` (in folder-view/display-options.ts) is the runtime
+// source of truth for which slugs appear in the picker UI; this union
+// exists so TypeScript can narrow the literal at each emission site.
+export type DisplayKind =
+  | "cards"
+  | "table"
+  | "timeline"
+  | "kanban"
+  | "bookshelf"
+  | "collection-home";
 
 /** Per-block content-width override. Page YAML wins via CSS cascade. */
 export type ContentWidth = "normal" | "wide" | "full";

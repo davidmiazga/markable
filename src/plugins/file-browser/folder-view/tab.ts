@@ -19,6 +19,7 @@
 import { applyExcludeFilter } from "./shared";
 import { parseFolderMd } from "./parser";
 import { buildFolderViewSet } from "./detection";
+import { renderCollectionHome } from "../collections/renderer";
 import { renderFallback } from "./fallback";
 import { renderFolderCards } from "./renderer";
 import { renderFolderTable } from "./table-renderer";
@@ -119,6 +120,8 @@ export const LAYOUT_RENDERERS: Record<string, FolderLayoutRenderer> = {
   "folder-list":     renderFolderListInternal,
   "folder-timeline": renderFolderTimeline,
   "folder-kanban":   renderFolderKanban,
+  // Collections (FR-3) — full renderer replaces the step-05 stub.
+  "collection-home": renderCollectionHome,
 };
 
 // ── Children collection (FR-19, AD-5, EC-22) ─────────────────────────────────
@@ -331,7 +334,21 @@ async function renderFolderViewTabAsync(
   (window as any).__MARKABLE_TAB_MANAGER__?.setActiveTabTitle?.(config.title);
 
   // Step 3: Dispatch to layout renderer (FR-27/FR-28).
-  const layoutKey = config.layout.toLowerCase();
+  //
+  // Refactor 2026-06-06 (step_R03 / step_R04): the heavy MVP detection
+  // short-circuit is gone. Collections is now discovered through standard
+  // `config.layout === "collection-home"` resolution, exactly like every
+  // other layout. The three-line legacy alias below preserves read-compat
+  // for folders created via the pre-refactor "Make Collection" gesture —
+  // those carry `type: collection` in `_folder.md` with no `layout:` field.
+  // We treat that case as `layout: collection-home`; the migration to the
+  // new key happens on the next user-initiated write (see
+  // store.writeCollectionMeta).
+  let layoutKey = config.layout.toLowerCase();
+  if (!layoutKey) {
+    const probe = extractFrontmatterKeys(content, ["type"]);
+    if (probe.type === "collection") layoutKey = "collection-home";
+  }
   if (!layoutKey) {
     renderFallback(config.body, "No layout specified — showing raw content.", container);
   } else if (!LAYOUT_RENDERERS[layoutKey]) {
@@ -602,15 +619,31 @@ export function buildFolderViewRenderFn(
  *
  * @param folderPath - Absolute path of the folder whose view to open.
  */
-export function openFolderViewTab(folderPath: string, viewFilePath?: string): void {
+export function openFolderViewTab(
+  folderPath: string,
+  viewFilePath?: string,
+  opts?: { readonly suppressEditModal?: boolean },
+): void {
   const mdPath = viewFilePath ?? (folderPath + "/_folder.md");
+  const folderName = folderPath.split("/").pop() ?? folderPath;
   const tabMgr = (window as any).__MARKABLE_TAB_MANAGER__;
   // Post-codefence migration: `_folder.md` is a normal markdown file whose
   // `select` (or sidebar/grid) codefence renders inline as a widget. No
-  // `enterLayoutView` takeover — just open the file and let the user land
-  // in the CodeBlock modal pre-filled with the first recognized block, so
-  // they can immediately refine the folder view's filter/display.
+  // `enterLayoutView` takeover — just open the file and (by default) let
+  // the user land in the CodeBlock modal pre-filled with the first
+  // recognized block, so they can refine the folder view's settings.
+  //
+  // `opts.suppressEditModal` skips the auto-open. Used after the
+  // "New Folder View" modal's Create button — the user just closed
+  // that modal; re-popping it as "Save" is the second-modal nag.
+  //
+  // Tab title: openFileInTab seeds the title from the filename
+  // ("_folder"). Override it to the folder's directory name so users
+  // see "Daily Notes" instead of "_folder" at the top of the window.
   void tabMgr?.openFileInTab?.(mdPath)?.then?.(() => {
-    (window as any).__MARKABLE_EDIT_FIRST_CODEBLOCK__?.();
+    tabMgr?.setActiveTabTitle?.(folderName);
+    if (!opts?.suppressEditModal) {
+      (window as any).__MARKABLE_EDIT_FIRST_CODEBLOCK__?.();
+    }
   });
 }

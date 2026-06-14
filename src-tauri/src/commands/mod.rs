@@ -7,6 +7,7 @@ pub mod daily_note;
 pub mod dialogs;
 pub mod file_ops;
 pub mod files;
+pub mod folder_icon;
 pub mod io;
 pub mod plugins;
 pub mod settings;

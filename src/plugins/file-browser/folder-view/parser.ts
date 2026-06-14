@@ -46,6 +46,52 @@ export const BUILTIN_FIELDS = new Set([
 ]);
 
 /**
+ * Locate the first `select` codeblock in a body string and return its
+ * inner YAML lines (between the fences). Returns null when no such
+ * codeblock exists.
+ *
+ * Match rules (locked per AD-2 in `docs/specs/view-modal/00_index.md`):
+ *   - Opening fence: a line that starts at column 0 with /^```select(\s|$)/.
+ *     The `(\s|$)` group tolerates a width modifier such as
+ *     "```select wide"; the modifier is ignored by this extractor.
+ *   - Closing fence: a line whose full trimmed content is exactly "```".
+ *   - The opening fence line and closing fence line are NOT included.
+ *   - Only the FIRST `select` codeblock in the body is considered.
+ *   - Unclosed fences return null (treated as "no codeblock present").
+ *
+ * Never throws. Public so step_01 unit tests can pin the boundary
+ * detection logic independently of the projection step in
+ * parseFolderMd().
+ *
+ * @param body - the body string of a `_folder.md` file (post-frontmatter).
+ * @returns the body of the first select codeblock, or null when absent.
+ */
+export function extractSelectCodeblockBody(body: string): string | null {
+  if (!body) return null;
+  const lines = body.split("\n");
+  // Opening fence must start at column 0 — no leading whitespace tolerated.
+  // The `(?:\s|$)` allows "```select" alone OR "```select <modifier>".
+  const openRe = /^```select(?:\s|$)/;
+  let openIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (openRe.test(lines[i])) {
+      openIdx = i;
+      break;
+    }
+  }
+  if (openIdx === -1) return null;
+  // Closing fence: trimmed equals exactly "```". A second "```select" line
+  // would match this branch only if its trimmed form is "```" which it is
+  // not; the second opener acts as ordinary text inside the first fence.
+  for (let i = openIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "```") {
+      return lines.slice(openIdx + 1, i).join("\n");
+    }
+  }
+  return null; // Unclosed fence → treat as no codeblock present.
+}
+
+/**
  * Parse an aspect-ratio YAML value into a CSS-ready string.
  *
  * Accepts: "W:H", "W/H", plain positive number, or the special token "original".
@@ -434,29 +480,115 @@ export function parseFolderMd(content: string, folderName: string): FolderViewCo
 
   try {
     const trimmed = content.trimStart();
+    // Holds the YAML block lines (between --- markers), and the body
+    // (everything after the closing ---). When no frontmatter is present
+    // the YAML block is empty and the entire content becomes the body so
+    // the codeblock-overlay path (AD-2) still runs.
+    let yamlBlock: string;
+    let rawBody: string;
 
     // Step 1: Check for opening --- marker.
     if (!trimmed.startsWith("---")) {
-      // No front-matter — treat the entire content as the body (EC-04).
-      return { ...safeDefaults, body: content.trim() };
+      // No front-matter — entire content becomes the body so the
+      // codeblock-overlay path (AD-2) can still detect a `select`
+      // codeblock living at the top of the file (the canonical shape
+      // for new `_folder.md` files per AD-5).
+      yamlBlock = "";
+      rawBody = content;
+    } else {
+      // Step 2: Find the closing --- after the first line.
+      // Search from character 3 onward to skip past the opening ---.
+      // The closing delimiter may be "\n---\n" or "\n---" at end-of-string.
+      const afterOpen = trimmed.slice(3);
+      const closeIdx = afterOpen.indexOf("\n---");
+      if (closeIdx === -1) {
+        // Unclosed front-matter — treat as malformed, return defaults (EC-05).
+        return safeDefaults;
+      }
+      yamlBlock = afterOpen.slice(0, closeIdx);
+      // Everything after "\n---" (4 chars) is the body. May start with a newline.
+      rawBody = afterOpen.slice(closeIdx + 4).replace(/^\n/, "");
     }
-
-    // Step 2: Find the closing --- after the first line.
-    // We search from character 3 onward to skip past the opening ---.
-    // The closing delimiter may be "\n---\n" or "\n---" at end-of-string.
-    const afterOpen = trimmed.slice(3);
-    const closeIdx = afterOpen.indexOf("\n---");
-    if (closeIdx === -1) {
-      // Unclosed front-matter — treat as malformed, return defaults (EC-05).
-      return safeDefaults;
-    }
-
-    const yamlBlock = afterOpen.slice(0, closeIdx);
-    // Everything after "\n---" (4 chars) is the body. May start with a newline.
-    const rawBody = afterOpen.slice(closeIdx + 4).replace(/^\n/, "");
 
     // Step 3: Parse the YAML block line by line.
     const rawFm = parseYamlLines(yamlBlock.split("\n"));
+
+    // Step 3.5 (AD-2): Codeblock overlay.
+    //
+    // When the body contains a `select` codeblock, parse its YAML and let
+    // its keys override the frontmatter-derived values. The codeblock
+    // represents the most recent user intent (a file with both shapes is
+    // mid-migration; the codeblock is canonical per FR-55 / AD-2).
+    //
+    // The select codeblock uses `display:` for the layout slug; legacy
+    // frontmatter uses `layout:`. The overlay maps display → layout so the
+    // downstream defaults / validators see a single canonical key.
+    //
+    // Import boundary note: parser.ts ships inside the file-browser plugin
+    // IIFE; `parseSelectBody` (in src/editor/select-widget.ts) lives in the
+    // main app bundle. We CANNOT cross-bundle import from a plugin IIFE.
+    // Instead we reuse `parseYamlLines` (already in this file) on the
+    // codeblock body — that IS the underlying YAML parser
+    // `parseSelectBody` uses — and inline the small `display`→`layout`
+    // projection here. NFR-10 ("reuse the parser") is satisfied because
+    // there is still exactly one YAML parser (`parseYamlLines`).
+    const cbBody = extractSelectCodeblockBody(rawBody);
+    if (cbBody !== null) {
+      const cbParsed = parseYamlLines(cbBody.split("\n"));
+      // display: maps to layout. Codeblock display is the new canonical key.
+      const cbDisplay =
+        typeof cbParsed["display"] === "string"
+          ? (cbParsed["display"] as string).trim()
+          : "";
+      if (cbDisplay) rawFm["layout"] = cbDisplay;
+      // path: + sort: + scalar toggles — projected through as-is.
+      if (typeof cbParsed["path"] === "string") rawFm["path"] = cbParsed["path"];
+      if (typeof cbParsed["sort"] === "string") rawFm["sort"] = cbParsed["sort"];
+      // Kebab-case toggles carry through unchanged.
+      if (typeof cbParsed["show-modified"] === "string") {
+        rawFm["show-modified"] = cbParsed["show-modified"];
+      }
+      if (typeof cbParsed["show-extensions"] === "string") {
+        rawFm["show-extensions"] = cbParsed["show-extensions"];
+      }
+      if (typeof cbParsed["preview-pane"] === "string") {
+        rawFm["preview-pane"] = cbParsed["preview-pane"];
+      }
+      if (typeof cbParsed["content-width"] === "string") {
+        rawFm["content-width"] = cbParsed["content-width"];
+      }
+      // Other scalar passthroughs the renderer consumes.
+      if (typeof cbParsed["show-tags"] === "string") {
+        rawFm["show-tags"] = cbParsed["show-tags"];
+      }
+      if (typeof cbParsed["show-count"] === "string") {
+        rawFm["show-count"] = cbParsed["show-count"];
+      }
+      if (typeof cbParsed["group-by"] === "string") {
+        rawFm["group-by"] = cbParsed["group-by"];
+      }
+      if (typeof cbParsed["kanban-field"] === "string") {
+        rawFm["kanban-field"] = cbParsed["kanban-field"];
+      }
+      if (typeof cbParsed["card-width"] === "string") {
+        rawFm["card-width"] = cbParsed["card-width"];
+      }
+      if (typeof cbParsed["aspect-ratio"] === "string") {
+        rawFm["aspect-ratio"] = cbParsed["aspect-ratio"];
+      }
+      if (typeof cbParsed["fit"] === "string") {
+        rawFm["fit"] = cbParsed["fit"];
+      }
+      // Array passthroughs (order, kanban-order, where, fields) override
+      // the corresponding frontmatter sequence shape used by the
+      // downstream extractors.
+      if (Array.isArray(cbParsed["order"])) rawFm["order"] = cbParsed["order"];
+      if (Array.isArray(cbParsed["kanban-order"])) {
+        rawFm["kanban-order"] = cbParsed["kanban-order"];
+      }
+      if (Array.isArray(cbParsed["where"])) rawFm["where"] = cbParsed["where"];
+      if (Array.isArray(cbParsed["fields"])) rawFm["fields"] = cbParsed["fields"];
+    }
 
     // Extract top-level sequence fields before normalization (FVB-05).
     const rawExclude = rawFm["exclude"];

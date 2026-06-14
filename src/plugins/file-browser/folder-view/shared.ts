@@ -73,14 +73,34 @@ export function attachArrowNavigation(
 /**
  * Remove <script> elements and inline event handlers from an HTML string.
  *
- * Used before assigning user-controlled markdown to innerHTML (EC-14).
+ * Used before assigning user-controlled markdown to innerHTML (EC-14, EC-17).
+ *
+ * Why three separate event-handler regexes (post-Reviewer-fix):
+ * Real HTML/XML separates attributes with ANY whitespace (space, tab, newline)
+ * — not just a literal ASCII space — AND permits unquoted attribute values.
+ * An earlier implementation matched only ` on\w+="..."` and ` on\w+='...'`,
+ * which let `<circle\nonclick="alert(1)"/>` (newline gap) and
+ * `<circle onclick=alert(1)/>` (unquoted) survive sanitisation.
+ *
+ * The leading character class `[\s\/]` accepts any whitespace OR the `/` of a
+ * self-closing tag (e.g. `<br/ onclick=...>`). The three value-form branches
+ * cover double-quoted, single-quoted, and unquoted values; for unquoted the
+ * value runs until the next whitespace or `>` (HTML tokeniser rule). `\s*` on
+ * either side of `=` tolerates `onclick = "..."`.
  *
  * @param html - Rendered HTML string to sanitize.
  * @returns Sanitized HTML with script elements and event handlers removed.
  */
 export function stripScripts(html: string): string {
-  return html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-    .replace(/ on\w+="[^"]*"/gi, "")
-    .replace(/ on\w+='[^']*'/gi, "");
+  let sanitised = html.replace(
+    /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+    "",
+  );
+  // Double-quoted event-handler value.
+  sanitised = sanitised.replace(/[\s\/]on\w+\s*=\s*"[^"]*"/gi, "");
+  // Single-quoted event-handler value.
+  sanitised = sanitised.replace(/[\s\/]on\w+\s*=\s*'[^']*'/gi, "");
+  // Unquoted event-handler value — terminates at whitespace or `>`.
+  sanitised = sanitised.replace(/[\s\/]on\w+\s*=\s*[^\s>]+/gi, "");
+  return sanitised;
 }

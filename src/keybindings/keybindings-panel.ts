@@ -152,9 +152,16 @@ export const COMMANDS: CommandDef[] = [
   { id: "help-quickstart", label: "Quickstart",          defaultKey: "", section: "Help" },
   { id: "help-help",       label: "Help",                defaultKey: "", section: "Help" },
   { id: "help-cheatsheet", label: "Markdown Cheatsheet", defaultKey: "", section: "Help" },
+  // Collection (FR-61) — no default keys; the user binds via the Keyboard
+  // Shortcuts panel. Each id is dispatched by main.ts handleAction(). The
+  // MVP-era `collection:make-collection` row was deleted in refactor
+  // step_R01 (2026-06-06) — the layout is opted into via the
+  // display-options picker, not a bespoke command.
+  { id: "collection:new-stack",       label: "New Stack in Current Collection",     defaultKey: "", section: "Collection" },
+  { id: "collection:add-reference",   label: "Add Reference to Another Stack…", defaultKey: "", section: "Collection" },
 ];
 
-const SECTIONS = ["File", "Edit", "View", "Format", "Theme", "Help"];
+const SECTIONS = ["File", "Edit", "View", "Format", "Theme", "Help", "Collection"];
 
 // ---------------------------------------------------------------------------
 // Key formatting / matching helpers

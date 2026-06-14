@@ -15,7 +15,17 @@ import {
 describe("DISPLAY_REGISTRY", () => {
   it("contains the expected displays in picker order", () => {
     const slugs = DISPLAY_REGISTRY.map((d) => d.slug);
-    expect(slugs).toEqual(["cards", "table", "timeline", "kanban", "bookshelf"]);
+    // `collection-home` was appended in refactor step_R02 (2026-06-06) — see
+    // tests/collections/display-options.test.ts for the Collections-specific
+    // assertions; the order requirement is "after Bookshelf".
+    expect(slugs).toEqual([
+      "cards",
+      "table",
+      "timeline",
+      "kanban",
+      "bookshelf",
+      "collection-home",
+    ]);
   });
 
   it("Bookshelf declares covers, library, compact, and book-stack options (compact default)", () => {

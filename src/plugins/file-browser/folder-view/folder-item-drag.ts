@@ -24,12 +24,45 @@
  *                     drop. Below the 6 px threshold it does not fire — that
  *                     path stays a click.
  */
+/**
+ * Optional cross-container drop hook.
+ *
+ *   containerTargetSelector — CSS selector for "container" elements
+ *     (e.g. Stack tiles that can absorb a dropped note). When the
+ *     pointer is released over an element matching this selector AND
+ *     the dragged element is NOT inside it AND it's not the dragged
+ *     element itself, `onDropOnContainer(targetEl)` fires INSTEAD of
+ *     `onReorder`. `onReorder` is skipped — a cross-container drop
+ *     is a different intent from a sibling reorder.
+ *   onDropOnContainer — callback invoked with the matched target
+ *     element when the cross-container drop is detected.
+ */
+export interface FolderItemDragOpts {
+  readonly containerTargetSelector?: string;
+  readonly onDropOnContainer?: (targetEl: HTMLElement) => void;
+  /**
+   * When provided, drag only activates when the pointerdown originates
+   * from within this element (the drag handle). All other pointer targets
+   * on `el` are ignored so they can fire their own click/contextmenu
+   * handlers normally.
+   */
+  readonly handleEl?: HTMLElement;
+  /**
+   * "horizontal" (default) — items are arranged in a grid/row and the
+   * insertion line is a vertical bar between columns.
+   * "vertical" — items are stacked in a single column (table rows) and
+   * the insertion line is a full-width horizontal bar above the target row.
+   */
+  readonly orientation?: "horizontal" | "vertical";
+}
+
 export function attachFolderItemDrag(
   el: HTMLElement,
   container: HTMLElement,
   id: string,
   itemSelector: string,
   onReorder: (orderedIds: string[]) => void,
+  opts?: FolderItemDragOpts,
 ): void {
   let startX = 0;
   let startY = 0;
@@ -38,6 +71,13 @@ export function attachFolderItemDrag(
   let ghostEl: HTMLElement | null = null;
   let lineEl: HTMLElement | null = null;
   let insertBeforeId: string | null = null;
+  let suppressNextClick = false;
+  // Currently-highlighted cross-container drop target (or null). When
+  // the cursor hovers a `containerTargetSelector` match, we add the
+  // `.is-drop-target` class to that element and HIDE the insertion
+  // line — the drop intent is "into this container", not "reorder
+  // adjacent to it". On exit / pointerup / cleanup the class clears.
+  let highlightedTargetEl: HTMLElement | null = null;
 
   const cleanup = (): void => {
     ghostEl?.remove();
@@ -50,6 +90,10 @@ export function attachFolderItemDrag(
     document.body.style.userSelect = "";
     (document.body.style as unknown as Record<string, string>).webkitUserSelect = "";
     document.body.style.cursor = "";
+    if (highlightedTargetEl) {
+      highlightedTargetEl.classList.remove("is-drop-target");
+      highlightedTargetEl = null;
+    }
   };
 
   /**
@@ -142,6 +186,39 @@ export function attachFolderItemDrag(
     return { id: best.id, lineX: best.x, lineTop: best.rowTop, lineHeight: best.rowHeight };
   };
 
+  /**
+   * Insertion computation for vertical lists (table rows). Finds the row
+   * whose top edge is closest to the cursor and returns a full-width
+   * horizontal line geometry for drawing above that row.
+   */
+  const computeInsertionVertical = (cursorY: number): {
+    id: string | null;
+    lineLeft: number;
+    lineTop: number;
+    lineWidth: number;
+  } => {
+    const allSiblings = [...container.querySelectorAll<HTMLElement>(itemSelector)]
+      .filter((e) => idOf(e) !== id);
+
+    const containerRect = container.getBoundingClientRect();
+
+    if (allSiblings.length === 0) {
+      return { id: null, lineLeft: containerRect.left, lineTop: containerRect.top, lineWidth: containerRect.width };
+    }
+
+    // Find the first sibling whose vertical center is below the cursor —
+    // insert before that sibling. If the cursor is below all siblings,
+    // insert at the end.
+    for (const s of allSiblings) {
+      const r = s.getBoundingClientRect();
+      if (cursorY < r.top + r.height / 2) {
+        return { id: idOf(s), lineLeft: containerRect.left, lineTop: r.top, lineWidth: containerRect.width };
+      }
+    }
+    const lastRect = allSiblings[allSiblings.length - 1].getBoundingClientRect();
+    return { id: null, lineLeft: containerRect.left, lineTop: lastRect.bottom, lineWidth: containerRect.width };
+  };
+
   /** Read the ID from a sibling element. Uses data-path for cards; falls back
    * to data-id. Kept as a tiny helper to centralize the convention. */
   const idOf = (e: HTMLElement): string =>
@@ -149,6 +226,7 @@ export function attachFolderItemDrag(
 
   el.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.button !== 0) return;
+    if (opts?.handleEl && !opts.handleEl.contains(e.target as Node)) return;
     startX = e.clientX;
     startY = e.clientY;
     activePointerId = e.pointerId;
@@ -181,9 +259,15 @@ export function attachFolderItemDrag(
 
       lineEl = document.createElement("div");
       lineEl.className = "fv-drag-insert-line";
-      lineEl.style.cssText =
-        "position:fixed;z-index:9998;pointer-events:none;width:2px;" +
-        "background:var(--accent-color);border-radius:1px;";
+      if (opts?.orientation === "vertical") {
+        lineEl.style.cssText =
+          "position:fixed;z-index:9998;pointer-events:none;height:2px;" +
+          "background:var(--accent-color);border-radius:1px;";
+      } else {
+        lineEl.style.cssText =
+          "position:fixed;z-index:9998;pointer-events:none;width:2px;" +
+          "background:var(--accent-color);border-radius:1px;";
+      }
       document.body.appendChild(lineEl);
     }
     if (!ghostEl || !lineEl) return;
@@ -191,11 +275,52 @@ export function attachFolderItemDrag(
     ghostEl.style.left = `${e.clientX + 12}px`;
     ghostEl.style.top = `${e.clientY + 4}px`;
 
-    const ins = computeInsertion(e.clientX, e.clientY);
-    insertBeforeId = ins.id;
-    lineEl.style.left = `${ins.lineX - 1}px`;
-    lineEl.style.top = `${ins.lineTop}px`;
-    lineEl.style.height = `${ins.lineHeight}px`;
+    // Cross-container drop detection — if the cursor is over an
+    // element matching `containerTargetSelector` (and the dragged
+    // element isn't inside it), highlight that element and HIDE the
+    // insertion line. The drop intent is "into this container", not
+    // "reorder adjacent to it". When the cursor leaves the target,
+    // we restore the insertion line.
+    let overContainer: HTMLElement | null = null;
+    if (opts?.containerTargetSelector) {
+      const hit = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (hit) {
+        const candidate = hit.closest(opts.containerTargetSelector) as HTMLElement | null;
+        if (candidate && candidate !== el && !candidate.contains(el)) {
+          overContainer = candidate;
+        }
+      }
+    }
+    if (overContainer !== highlightedTargetEl) {
+      if (highlightedTargetEl) {
+        highlightedTargetEl.classList.remove("is-drop-target");
+      }
+      if (overContainer) {
+        overContainer.classList.add("is-drop-target");
+      }
+      highlightedTargetEl = overContainer;
+    }
+
+    if (overContainer) {
+      // Insertion line is irrelevant when dropping into a container.
+      lineEl.style.display = "none";
+      return;
+    }
+    lineEl.style.display = "";
+
+    if (opts?.orientation === "vertical") {
+      const ins = computeInsertionVertical(e.clientY);
+      insertBeforeId = ins.id;
+      lineEl.style.left = `${ins.lineLeft}px`;
+      lineEl.style.top = `${ins.lineTop - 1}px`;
+      lineEl.style.width = `${ins.lineWidth}px`;
+    } else {
+      const ins = computeInsertion(e.clientX, e.clientY);
+      insertBeforeId = ins.id;
+      lineEl.style.left = `${ins.lineX - 1}px`;
+      lineEl.style.top = `${ins.lineTop}px`;
+      lineEl.style.height = `${ins.lineHeight}px`;
+    }
   });
 
   const handlePointerEnd = (e: PointerEvent, fire: boolean): void => {
@@ -207,7 +332,34 @@ export function attachFolderItemDrag(
     }
     try { el.releasePointerCapture(e.pointerId); } catch { /* JSDOM */ }
 
+    // After a real drag (`dragActive`), the browser will still synthesize
+    // a `click` on the source element because pointerdown + pointerup
+    // both landed on it. Without suppression, the source's click handler
+    // (e.g. "open file in new tab") fires AFTER the drop, and if the
+    // drop just moved the file, the open targets the now-nonexistent
+    // old path. Mark the next click for suppression — the capture-phase
+    // listener below intercepts it.
+    if (dragActive) suppressNextClick = true;
+
     if (fire && dragActive) {
+      // Cross-container drop check: if the cursor was released over an
+      // element matching the optional `containerTargetSelector` (and that
+      // element is neither the dragged element nor an ancestor of it),
+      // route to `onDropOnContainer` and skip the sibling reorder. The
+      // dragged element keeps pointer capture, so the natural pointerup
+      // target is the source itself — we need elementFromPoint to find
+      // what's actually under the cursor.
+      if (opts?.containerTargetSelector && opts.onDropOnContainer) {
+        const hit = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+        if (hit) {
+          const targetEl = hit.closest(opts.containerTargetSelector) as HTMLElement | null;
+          if (targetEl && targetEl !== el && !targetEl.contains(el)) {
+            cleanup();
+            opts.onDropOnContainer(targetEl);
+            return;
+          }
+        }
+      }
       const ordered = computeOrderedIds();
       cleanup();
       onReorder(ordered);
@@ -218,4 +370,21 @@ export function attachFolderItemDrag(
 
   el.addEventListener("pointerup",     (e: PointerEvent) => handlePointerEnd(e, true));
   el.addEventListener("pointercancel", (e: PointerEvent) => handlePointerEnd(e, false));
+
+  // Suppress the synthetic click that follows a successful drag. Capture
+  // phase + `stopImmediatePropagation` means consumer-attached click
+  // listeners (e.g. "open file") never see this event. One-shot — the
+  // flag flips back to false immediately so a subsequent real click
+  // (no drag) still opens.
+  el.addEventListener(
+    "click",
+    (e: MouseEvent) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+    },
+    true,
+  );
 }

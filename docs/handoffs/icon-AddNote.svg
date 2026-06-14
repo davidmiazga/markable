@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 93.82996 61.04004">
+  <defs>
+    <style>
+      .cls-1 {
+        stroke-dasharray: 4 6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .cls-1, .cls-2 {
+        fill: none;
+        stroke: #4f5259;
+        stroke-width: 2px;
+      }
+
+      .cls-2 {
+        stroke-miterlimit: 10;
+      }
+    </style>
+    <symbol id="New_NoteCard" data-name="New NoteCard" viewBox="0 0 93.82996 61.04004">
+      <g>
+        <g>
+          <line class="cls-2" x1="37.51216" y1="31.52002" x2="59.63437" y2="31.52002"/>
+          <line class="cls-2" x1="48.57327" y1="42.58112" x2="48.57327" y2="20.45892"/>
+        </g>
+        <g>
+          <path class="cls-1" d="M92.82996,17.37v36.36005c0,3.46997-2.83997,6.31-6.30994,6.31H7.30994c-3.46997,0-6.30994-2.84003-6.30994-6.31V7.31C1,3.84003,3.83997,1,7.30994,1h68.85999l16.66003,16.37Z"/>
+          <path class="cls-1" d="M76.16992,1v13.47694c0,1.59779,1.29527,2.89306,2.89306,2.89306h13.76697"/>
+        </g>
+      </g>
+    </symbol>
+  </defs>
+  <use width="93.82996" height="61.04004" xlink:href="#New_NoteCard"/>
+</svg>

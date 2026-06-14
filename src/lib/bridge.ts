@@ -792,6 +792,83 @@ export async function getExifData(
 }
 
 /**
+ * Read file metadata (mtimeMs + size) for the custom-SVG cache key.
+ *
+ * The folder-icon-custom-cache module (step_05 of folder-icon-assignment)
+ * keys its in-memory SVG cache by `(absolutePath, mtimeMs)` so external
+ * edits to a referenced SVG file invalidate the cache automatically (FR-17).
+ * Used in the post-mount injection pass — never on the synchronous render
+ * hot path (NFR-2).
+ *
+ * Errors map to `{ ok: false }` like every other FileResult wrapper.
+ *
+ * @param path - Absolute path to stat.
+ * @returns FileResult wrapping `{ mtimeMs, size }` (both numeric).
+ */
+export async function statFile(
+  path: string,
+): Promise<FileResult<{ mtimeMs: number; size: number }>> {
+  try {
+    const stat = await invoke<{ mtimeMs: number; size: number }>(
+      "stat_file",
+      { path },
+    );
+    return { ok: true, value: stat };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "stat_file",
+        path,
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
+ * Batch-read the `icon:` field from a list of `_folder.md` absolute paths.
+ *
+ * This is the bridge wrapper for the Rust `read_folder_icon_map` command added
+ * in step_04 of the folder-icon-assignment feature. It returns one
+ * `[path, value]` entry per input, preserving order. `value` is the literal
+ * string read from the frontmatter (no catalog validation — interpretation
+ * happens in `getFolderIconClass()` at render time), or `null` when the file
+ * is missing, has no frontmatter, no `icon:` key, or has an empty value.
+ *
+ * Used by `buildFolderIconMap()` during `renderTreeContent` — the batch is
+ * one Tauri round-trip per render (NFR-2). Individual file errors are
+ * silently coerced to `null` so the renderer can degrade gracefully (NFR-1).
+ *
+ * Never throws. Bridge errors map to `{ ok: false, error }` like every other
+ * `FileResult<T>` wrapper.
+ *
+ * @param paths - Absolute paths of `_folder.md` files to read.
+ * @returns FileResult wrapping an ordered list of [path, value | null] pairs.
+ */
+export async function readFolderIconMap(
+  paths: string[],
+): Promise<FileResult<Array<[string, string | null]>>> {
+  try {
+    const value = await invoke<Array<[string, string | null]>>(
+      "read_folder_icon_map",
+      { paths },
+    );
+    return { ok: true, value };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "read_folder_icon_map",
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
+/**
  * Check whether a sidecar file (path + ".md") exists on disk.
  *
  * Returns true if the sidecar file exists as a regular file.

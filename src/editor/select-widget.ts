@@ -23,6 +23,7 @@ import { renderFolderTable } from "../plugins/file-browser/folder-view/table-ren
 import { renderFolderTimeline } from "../plugins/file-browser/folder-view/timeline-renderer";
 import { renderFolderKanban } from "../plugins/file-browser/folder-view/kanban-renderer";
 import { renderFolderBookshelf } from "../plugins/file-browser/folder-view/bookshelf-renderer";
+import { renderCollectionHome } from "../plugins/file-browser/collections/renderer";
 import { resolveDisplayAndOption, getDisplaySpec } from "../plugins/file-browser/folder-view/display-options";
 import { collectChildren } from "../plugins/file-browser/folder-view/tab";
 import { parseYamlLines } from "../plugins/file-browser/folder-view/parser";
@@ -37,13 +38,29 @@ import { matchRule } from "../plugins/file-browser/smart-folders/evaluator";
 import type { DisplayKind, SelectBuilderInitial, ContentWidth } from "../lib/select-builder";
 import { buildSelectFenceFromState } from "../lib/select-builder";
 
-const RENDERERS: Record<string, FolderLayoutRenderer> = {
-  cards:     renderFolderCards,
-  table:     renderFolderTable,
-  timeline:  renderFolderTimeline,
-  kanban:    renderFolderKanban,
-  bookshelf: renderFolderBookshelf,
+/**
+ * Dispatch table the codeblock-widget consults to render a chosen layout in
+ * place. Mirror of `LAYOUT_RENDERERS` in `folder-view/tab.ts` (the legacy
+ * `renderFolderViewTabAsync` path); both must list the same slugs.
+ *
+ * Exported under a dedicated name (rather than `RENDERERS`) so refactor tests
+ * can assert reference equality against this table without spinning up the
+ * full codefence widget.
+ */
+export const SELECT_WIDGET_RENDERERS: Record<string, FolderLayoutRenderer> = {
+  cards:             renderFolderCards,
+  table:             renderFolderTable,
+  timeline:          renderFolderTimeline,
+  kanban:            renderFolderKanban,
+  bookshelf:         renderFolderBookshelf,
+  // Refactor 2026-06-06, step_R02. The MVP exposed Collections through a
+  // detection short-circuit in tab.ts; the refactor flips it to standard
+  // dispatch through this map (and DISPLAY_REGISTRY). renderCollectionHome
+  // is the unchanged renderer from the shipped MVP.
+  "collection-home": renderCollectionHome,
 };
+
+const RENDERERS = SELECT_WIDGET_RENDERERS;
 
 const VALID_SORTS = new Set<FolderSortOrder>([
   "name-asc", "name-desc",

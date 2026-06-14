@@ -1053,12 +1053,6 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
     enter(node) {
       if (node.name !== "FencedCode") return;
 
-      const startLine = state.doc.lineAt(node.from).number;
-      const endLine = state.doc.lineAt(node.to).number;
-      for (let ln = startLine; ln <= endLine; ln++) {
-        if (activeLines.has(ln)) return false;
-      }
-
       let lang = "";
       let codeFrom = -1;
       let codeTo = -1;
@@ -1073,6 +1067,26 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
             codeTo = cursor.to;
           }
         } while (cursor.nextSibling());
+      }
+
+      // `select` codeblocks render an interactive widget (folder views,
+      // Collections home canvas). When the user clicks into that widget —
+      // e.g. to rename a tile — the cursor moves into the codeblock's
+      // line range. Without this guard the standard "reveal source on
+      // active line" behaviour below would tear the widget DOM down
+      // mid-interaction, destroying the rename input and any other
+      // widget-internal state. Keep `select` widgets mounted regardless
+      // of cursor position; the gear button still opens a code-view
+      // editor for users who need to edit the YAML body directly.
+      const langFirstToken = lang.toLowerCase().split(/\s+/)[0] ?? "";
+      const skipActiveLineReveal = langFirstToken === "select";
+
+      if (!skipActiveLineReveal) {
+        const startLine = state.doc.lineAt(node.from).number;
+        const endLine = state.doc.lineAt(node.to).number;
+        for (let ln = startLine; ln <= endLine; ln++) {
+          if (activeLines.has(ln)) return false;
+        }
       }
 
       if (diagramsActive && lang.toLowerCase() === "mermaid") return false;

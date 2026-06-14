@@ -1,32 +1,52 @@
 /**
- * codeblock-modal.ts — Insert or Edit CodeBlock.
+ * codeblock-modal.ts — Unified View Modal.
  *
- * Unified entry point for inserting any of our custom codefences:
- *   - Sidebar (```sidebar / ```sidebar-left) — floating callout
- *   - Grid (```grid / ```grid-card) — NxM cell grid
- *   - Select (```select) — file collection driven by filter rules
+ * Single entry point for picking a file-collection layout (Cards,
+ * Table, Collection, Timeline, Kanban, Bookshelf) and producing a
+ * `select` codefence. Triggered from two contexts:
  *
- * The modal shows a type picker at the top; the form below changes to match
- * the chosen type. Sidebar and Grid forms are inline. Picking Select hands
- * off to the existing `openSelectBuilderModal` so we don't duplicate that
- * UI — same UX as today, just a different entry path.
+ *   - Right-click → "Folder View" on a folder in the file browser.
+ *     `openViewModal("create" | "edit", { folderPath, ... })`.
+ *   - In-doc "Insert CodeBlock" command on an `.md` editor.
+ *     `openViewModal("insert" | "edit", { editor, ... })`.
  *
- * Cursor-aware edit: when the caller passes `initial.detected`, the picker
- * starts on the matching type and the form is pre-populated.
+ * Submit writes `_folder.md` via `writeFolderMdCodeblock` (step_02)
+ * for folder-context modes, or dispatches `view.dispatch(...)` for
+ * in-doc modes.
+ *
+ * The legacy type-picker modal (Select / Sidebar / Grid tabs) was
+ * deleted in step_09 of the view-modal feature. Sidebar and grid
+ * codefences now use the `/sidebar` and `/grid` slash commands
+ * (registered in `src/editor/quick-commands.ts` step_07).
+ *
+ * History: this file was named `codeblock-modal.ts` when it hosted
+ * the multi-type picker. The file path is preserved so the six
+ * `src/main.ts` import sites do not need to be re-pathed; a future
+ * polish-pass may rename it to `view-modal.ts`.
  */
 
 import { attachModalKeyboard } from "./modal-keyboard";
 import {
   buildSelectFenceFromState,
-  mountSelectForm,
   type SelectBuilderInitial,
   type SelectFormState,
   type ContentWidth,
 } from "./select-builder";
-import { buildGridStarterFence } from "./layout-manager";
 import type { RuleRowContext } from "./rule-row";
+import type { EditorView } from "@codemirror/view";
+import type { SmartFolderRule } from "../plugins/file-browser/smart-folders/types";
+import {
+  VIEW_MODAL_ILLUSTRATIONS,
+  VIEW_MODAL_TAB_ORDER,
+  type ViewModalLayoutKey,
+} from "./view-modal-illustrations";
+import { isAnyModalOpen } from "./active-modal";
 
-const OVERLAY_ID = "__codeblock-modal-overlay__";
+/**
+ * Sentinel id for the legacy modal's overlay. Kept around so
+ * `active-modal.ts`'s sentinel list does not need a rename; the new
+ * View Modal uses a different id (`VIEW_MODAL_OVERLAY_ID`).
+ */
 const STYLE_ID   = "__cbm-styles__";
 
 const STYLES = `
@@ -62,23 +82,9 @@ const STYLES = `
   color: var(--text-tertiary, #888);
   text-transform: uppercase; margin-bottom: 6px;
 }
-.cbm-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
-.cbm-tab {
-  padding: 7px 16px; border-radius: 6px;
-  font-size: 13px; font-family: inherit;
-  cursor: pointer; user-select: none;
-  border: none; background: transparent;
-  color: var(--text-tertiary, #666);
-}
-.cbm-tab:hover { color: var(--text-secondary, #aaa); }
-.cbm-tab.is-active {
-  background: var(--bg-secondary, rgba(255,255,255,.06));
-  color: var(--text-primary, #fff);
-}
-.cbm-type-desc {
-  font-size: 11px; color: var(--text-tertiary, #888);
-  font-style: italic; margin-top: 4px; margin-bottom: 10px;
-}
+/* step_09 (view-modal): the legacy type-picker CSS classes were
+   deleted with the legacy modal. The View Modal uses its own
+   prefix (defined in VIEW_MODAL_STYLES below). */
 
 .cbm-form-row {
   display: flex; gap: 8px; align-items: center;
@@ -133,80 +139,254 @@ function injectStyles(): void {
   document.head.appendChild(style);
 }
 
-// ── Types ────────────────────────────────────────────────────────────────────
 
-export type BlockKind = "sidebar" | "grid" | "select";
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified View Modal (step_04 / AD-1)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `openViewModal` repurposes this file as the canonical Unified View
+// Modal entry point. The legacy `openCodeBlockModal` above stays in
+// place until step_09 to keep the six `main.ts` import sites green.
+//
+// Design (per `docs/specs/view-modal/00_index.md`):
+//   - One modal, two contexts (right-click create / in-doc insert /
+//     edit existing).
+//   - Six layout tabs: Cards, Table, Collection, Timeline, Kanban,
+//     Bookshelf. Tab order is fixed (FR-10).
+//   - Preview area on top (60-65% vertical), tab strip middle, two-column
+//     config row below (Path/Filter/Sort left; toggles + Content Width
+//     right). Footer with Cancel + action button.
+//   - All `_folder.md` writes go through `writeFolderMdCodeblock`
+//     (step_02). In-doc insert builds a fence via
+//     `buildSelectFenceFromState` and dispatches into the editor.
+//   - The legacy `mountSelectForm` is NOT mounted; the modal builds its
+//     own DOM and reuses small primitives (`buildSelectFenceFromState`,
+//     `buildRuleRow`) so the visual layout matches the mockup exactly.
 
-export interface SidebarFormState { side: "right" | "left"; body: string; contentWidth: ContentWidth; }
-export interface GridFormState { cols: number; rows: number; cellStyle: "grid" | "grid-card"; contentWidth: ContentWidth; }
+/** DOM id of the modal overlay. Exported so tests can locate it. */
+export const VIEW_MODAL_OVERLAY_ID = "__view-modal-overlay__";
 
-export interface CodeBlockModalOptions {
-  /** Pre-fill values when editing an existing block. */
-  initial?: {
-    kind: BlockKind;
-    sidebar?: SidebarFormState;
-    grid?: GridFormState;
-    select?: SelectBuilderInitial;
-  };
-  onApply: (fence: string) => void;
-  onRemove?: () => void;
-  /** Forwarded to the select-builder when the user picks Select. */
+/** DOM id of the modal's injected CSS sentinel. */
+const VIEW_MODAL_STYLE_ID = "__vm-styles__";
+
+/** Mode the modal opens in. Drives title bar text and action button label. */
+export type ViewModalMode = "create" | "insert" | "edit";
+
+/**
+ * Context the caller supplies. `folderPath` is the target for create /
+ * edit modes; `editor` is the host for insert mode. `initial` carries
+ * prefill values for edit mode. `ruleRowContext` threads tag /
+ * extension autocomplete data into the filter row.
+ */
+export interface ViewModalContext {
+  /** Vault-relative folder path (create / edit-folder modes). */
+  folderPath?: string;
+  /** Host editor view + selection range (insert / edit-codeblock modes). */
+  editor?: { view: EditorView; from: number; to: number };
+  /** Prefill state for edit mode. */
+  initial?: SelectBuilderInitial;
+  /** Tag and extension autocomplete suggestions for filter rows. */
   ruleRowContext?: RuleRowContext;
+  /**
+   * Optional callback fired after the user clicks the action button and
+   * the modal has built the codefence body. Used in step_05 to wire
+   * the file write / editor dispatch. Returning false aborts close.
+   */
+  onSubmit?: (state: SelectFormState, mode: ViewModalMode) => void;
 }
 
-// ── Fence builders ───────────────────────────────────────────────────────────
+/**
+ * Internal modal state. Held in a module-scoped variable so the
+ * `emitViewModalFence` / `getViewModalState` test hooks can introspect.
+ * Set to null when the modal is closed.
+ */
+let currentViewModalState: {
+  state: SelectFormState;
+  activeTab: ViewModalLayoutKey;
+} | null = null;
 
-function widthSuffix(w: ContentWidth): string {
-  return w === "wide" ? " wide" : w === "full" ? " full" : "";
+/* VIEW_MODAL_STYLES_BEGIN */
+/**
+ * CSS for the View Modal's preview area, tab strip, two-column config
+ * row, and toggle / width-pill rows. Theme tokens only (NFR-5 / EC-15)
+ * — the css.test.ts grep audits this block for hex literals.
+ */
+const VIEW_MODAL_STYLES = `
+.vm-preview {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin: 0 0 14px 0;
+  min-height: 240px;
+  color: var(--text-secondary);
 }
-
-export function buildSidebarFence(s: SidebarFormState): string {
-  const lang = s.side === "left" ? "sidebar-left" : "sidebar";
-  const body = s.body.trim() || "Side note.";
-  return ["```" + lang + widthSuffix(s.contentWidth), body, "```"].join("\n");
+.vm-preview svg { width: 100%; max-width: 380px; height: auto; max-height: 240px; }
+.vm-tabs {
+  display: flex; gap: 4px; margin-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
 }
-
-export function buildGridFence(g: GridFormState): string {
-  const fence = buildGridStarterFence({ cols: g.cols, rows: g.rows, cellStyle: g.cellStyle });
-  if (g.contentWidth === "normal") return fence;
-  // The starter fence begins with "```grid" or "```grid-card"; append the width modifier.
-  return fence.replace(/^```(grid|grid-card)(\b|$)/, "```$1" + widthSuffix(g.contentWidth));
+.vm-tab {
+  padding: 7px 14px; border-radius: 6px;
+  font-size: 13px; font-family: inherit;
+  cursor: pointer; user-select: none;
+  border: 1px solid transparent; background: transparent;
+  color: var(--text-tertiary);
 }
+.vm-tab:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.vm-tab.is-active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+.vm-config-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.vm-col-left, .vm-col-right { display: flex; flex-direction: column; gap: 14px; }
+.vm-field-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+.vm-field-caption {
+  font-size: 11px; color: var(--text-tertiary);
+  font-style: italic; margin-top: 3px;
+}
+.vm-input, .vm-select {
+  width: 100%; box-sizing: border-box;
+  font-size: 12px; padding: 6px 8px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px;
+  font-family: inherit;
+}
+.vm-filter-status {
+  font-size: 12px; color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.vm-add-filter {
+  font-size: 12px; padding: 5px 12px; border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: transparent; color: var(--text-secondary);
+  cursor: pointer; font-family: inherit;
+}
+.vm-add-filter:hover { color: var(--text-primary); background: var(--bg-hover); }
+.vm-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--text-secondary);
+}
+.vm-toggle-row label { user-select: none; cursor: pointer; }
+.vm-width-pills { display: flex; gap: 6px; }
+.vm-width-pill {
+  padding: 5px 12px; border-radius: 14px; font-size: 11.5px;
+  cursor: pointer; user-select: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary); background: transparent;
+  font-family: inherit;
+}
+.vm-width-pill:hover { color: var(--text-primary); background: var(--bg-hover); }
+.vm-width-pill.is-active {
+  /* NFR-5: theme-token only. The link-color background gets light text
+     in both light and dark themes because --text-primary inverts with
+     the theme; this matches the existing .cbm-pill.is-active intent
+     without introducing a new on-accent token. */
+  background: var(--link-color); border-color: transparent; color: var(--text-primary);
+}
+`;
+/* VIEW_MODAL_STYLES_END */
 
-// ── Modal opener ─────────────────────────────────────────────────────────────
-
-const TYPES: Array<{ kind: BlockKind; label: string; desc: string }> = [
-  // Select's description moved into the Select form itself (under PATH), so
-  // its type-pill description is intentionally empty.
-  { kind: "select",  label: "Select",  desc: "" },
-  { kind: "sidebar", label: "Sidebar", desc: "Floating callout pinned to the left or right." },
-  { kind: "grid",    label: "Grid",    desc: "NxM cell grid with editable markdown per cell." },
-];
-
-export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
-  if (document.getElementById(OVERLAY_ID)) return;
+function injectViewModalStyles(): void {
+  if (document.getElementById(VIEW_MODAL_STYLE_ID)) return;
+  // Reuse the existing cbm-* injection so the chrome classes the modal
+  // depends on (cbm-overlay, cbm-panel, cbm-header, cbm-footer,
+  // cbm-btn, cbm-btn-primary) are always present.
   injectStyles();
+  const style = document.createElement("style");
+  style.id = VIEW_MODAL_STYLE_ID;
+  style.textContent = VIEW_MODAL_STYLES.trim();
+  document.head.appendChild(style);
+}
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  let kind: BlockKind = opts.initial?.kind ?? "select";
+/**
+ * Build the title bar text for a (mode, ctx) pair per Q-1.
+ *   - create → "New Folder View"
+ *   - insert → "Insert Codeblock"
+ *   - edit + folderPath → "Edit Folder View"
+ *   - edit + editor → "Edit Codeblock"
+ */
+function titleForMode(mode: ViewModalMode, ctx: ViewModalContext): string {
+  if (mode === "create") return "New Folder View";
+  if (mode === "insert") return "Insert Codeblock";
+  return ctx.folderPath != null ? "Edit Folder View" : "Edit Codeblock";
+}
 
-  const sidebarState: SidebarFormState = {
-    side: opts.initial?.sidebar?.side ?? "right",
-    body: opts.initial?.sidebar?.body ?? "",
-    contentWidth: opts.initial?.sidebar?.contentWidth ?? "normal",
+/**
+ * Build the action button label for a mode per FR-40.
+ *   - create → "Create" / insert → "Insert" / edit → "Save".
+ */
+function actionLabelForMode(mode: ViewModalMode): string {
+  if (mode === "create") return "Create";
+  if (mode === "insert") return "Insert";
+  return "Save";
+}
+
+/**
+ * Open the Unified View Modal. Idempotent: a second call while the
+ * modal is open is a no-op.
+ *
+ * Step_04 surface: builds the DOM and wires the form controls so
+ * Path / Sort / toggles / Content Width / tab selection persist into
+ * the modal's `SelectFormState`. Submit wiring (writeFolderMdCodeblock
+ * for create/edit-folder, view.dispatch for insert/edit-codeblock) is
+ * deferred to step_05; this step's submit is a no-op or a callback
+ * via `ctx.onSubmit` (used by tests).
+ */
+export function openViewModal(mode: ViewModalMode, ctx: ViewModalContext): void {
+  // EC-12 / AD-8: refuse to stack on any other open modal. Silent no-op
+  // — no toast, no console log. The check covers the View Modal's own
+  // overlay id too, so a double-open is also a no-op.
+  if (isAnyModalOpen()) return;
+  if (document.getElementById(VIEW_MODAL_OVERLAY_ID)) return;
+  injectViewModalStyles();
+
+  // ── Initial state ──────────────────────────────────────────────────────
+  const initial: SelectBuilderInitial = ctx.initial ?? {};
+  // Default display: Cards (FR-11). For edit mode, prefilled `initial.display`
+  // selects the matching tab; if absent, default to Cards.
+  const initialDisplay = (initial.display as ViewModalLayoutKey | undefined) ?? "cards";
+  // Validate that the initial display is one of our six tab slugs;
+  // anything else (legacy aliases like "view-cards") falls back to Cards.
+  const TAB_SLUGS = new Set<string>(VIEW_MODAL_TAB_ORDER.map((t) => t.slug));
+  const activeTabInitial: ViewModalLayoutKey = TAB_SLUGS.has(initialDisplay)
+    ? initialDisplay
+    : "cards";
+
+  const state: SelectFormState = {
+    rules: [...(initial.rules ?? [])] as SmartFolderRule[],
+    path: initial.path ?? "./",
+    display: activeTabInitial,
+    displayOption: initial.displayOption ?? "",
+    groupBy: initial.groupBy ?? "",
+    sort: initial.sort ?? "name-asc",
+    order: [...(initial.order ?? [])],
+    // Q-2 / FR-31 — fresh-mode defaults flip all three toggles ON.
+    // Edit mode honours the prefilled values via `??` fallback.
+    showModified: initial.showModified ?? true,
+    showExtensions: initial.showExtensions ?? true,
+    previewPane: initial.previewPane ?? true,
+    kanbanField: initial.kanbanField ?? "",
+    contentWidth: initial.contentWidth ?? "normal",
   };
-  const gridState: GridFormState = {
-    cols:      opts.initial?.grid?.cols      ?? 3,
-    rows:      opts.initial?.grid?.rows      ?? 3,
-    cellStyle: opts.initial?.grid?.cellStyle ?? "grid",
-    contentWidth: opts.initial?.grid?.contentWidth ?? "normal",
-  };
-  // Lazy mount the select form; getState set after first render.
-  let selectGetState: (() => SelectFormState) | null = null;
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
+  let activeTab: ViewModalLayoutKey = activeTabInitial;
+
+  // ── DOM construction ───────────────────────────────────────────────────
   const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
+  overlay.id = VIEW_MODAL_OVERLAY_ID;
   overlay.className = "cbm-overlay";
 
   const backdrop = document.createElement("div");
@@ -218,7 +398,7 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   panel.className = "cbm-panel";
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-modal", "true");
-  panel.setAttribute("aria-label", "Insert or Edit CodeBlock");
+  panel.setAttribute("aria-label", titleForMode(mode, ctx));
   overlay.appendChild(panel);
 
   // Header
@@ -226,10 +406,11 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   header.className = "cbm-header";
   const titleEl = document.createElement("div");
   titleEl.className = "cbm-title";
-  titleEl.textContent = opts.initial ? "Edit CodeBlock" : "Insert CodeBlock";
+  titleEl.textContent = titleForMode(mode, ctx);
   header.appendChild(titleEl);
   const closeBtn = document.createElement("button");
   closeBtn.className = "cbm-close";
+  closeBtn.type = "button";
   closeBtn.setAttribute("aria-label", "Close");
   closeBtn.textContent = "×";
   closeBtn.addEventListener("click", close);
@@ -241,245 +422,278 @@ export function openCodeBlockModal(opts: CodeBlockModalOptions): void {
   body.className = "cbm-body";
   panel.appendChild(body);
 
-  // ── Type tabs (no "TYPE" section label — the tabs make context obvious)
+  // Preview area
+  const previewHost = document.createElement("div");
+  previewHost.className = "vm-preview";
+  previewHost.innerHTML = VIEW_MODAL_ILLUSTRATIONS[activeTab];
+  body.appendChild(previewHost);
+
+  // Tab strip
   const tabs = document.createElement("div");
-  tabs.className = "cbm-tabs";
+  tabs.className = "vm-tabs";
   tabs.setAttribute("role", "tablist");
-  body.appendChild(tabs);
-  const typeDesc = document.createElement("div");
-  typeDesc.className = "cbm-type-desc";
-  body.appendChild(typeDesc);
-
-  // ── Form host (no section label — the type pills above make context obvious)
-  const formHost = document.createElement("div");
-  formHost.className = "cbm-section";
-  body.appendChild(formHost);
-
-  function renderForm(): void {
-    formHost.innerHTML = "";
-    selectGetState = null;
-    typeDesc.textContent = TYPES.find((t) => t.kind === kind)?.desc ?? "";
-    if (kind === "sidebar") renderSidebarForm();
-    else if (kind === "grid") renderGridForm();
-    else if (kind === "select") renderSelectForm();
-    tabs.querySelectorAll(".cbm-tab").forEach((t) => {
-      const tabKind = (t as HTMLElement).dataset.kind as BlockKind | undefined;
-      t.classList.toggle("is-active", tabKind === kind);
-      t.setAttribute("aria-selected", String(tabKind === kind));
-    });
-  }
-
-  function appendWidthRow(getCurrent: () => ContentWidth, onChange: (v: ContentWidth) => void): void {
-    const row = document.createElement("div");
-    row.className = "cbm-form-row";
-    const label = document.createElement("label");
-    label.textContent = "Content width";
-    row.appendChild(label);
-    const pillRow = document.createElement("div");
-    pillRow.className = "cbm-pill-row";
-    const opts: Array<{ value: ContentWidth; label: string }> = [
-      { value: "normal", label: "Normal" },
-      { value: "wide",   label: "Wide" },
-      { value: "full",   label: "Full" },
-    ];
-    const current = getCurrent();
-    for (const o of opts) {
-      const p = document.createElement("button");
-      p.type = "button";
-      p.className = "cbm-pill" + (o.value === current ? " is-active" : "");
-      p.textContent = o.label;
-      p.addEventListener("click", () => {
-        onChange(o.value);
-        pillRow.querySelectorAll(".cbm-pill").forEach((x) =>
-          x.classList.toggle("is-active", (x as HTMLElement).textContent === o.label),
-        );
-      });
-      pillRow.appendChild(p);
-    }
-    row.appendChild(pillRow);
-    formHost.appendChild(row);
-  }
-
-  function renderSidebarForm(): void {
-    const sideRow = document.createElement("div");
-    sideRow.className = "cbm-form-row";
-    const sideLabel = document.createElement("label");
-    sideLabel.textContent = "Side";
-    sideRow.appendChild(sideLabel);
-    const sidePills = document.createElement("div");
-    sidePills.className = "cbm-pill-row";
-    const sides: Array<{ value: "right" | "left"; label: string }> = [
-      { value: "right", label: "Right" },
-      { value: "left",  label: "Left" },
-    ];
-    for (const s of sides) {
-      const p = document.createElement("button");
-      p.type = "button";
-      p.className = "cbm-pill" + (s.value === sidebarState.side ? " is-active" : "");
-      p.textContent = s.label;
-      p.addEventListener("click", () => {
-        sidebarState.side = s.value;
-        sidePills.querySelectorAll(".cbm-pill").forEach((x) =>
-          x.classList.toggle("is-active", (x as HTMLElement).textContent === s.label),
-        );
-      });
-      sidePills.appendChild(p);
-    }
-    sideRow.appendChild(sidePills);
-    formHost.appendChild(sideRow);
-
-    const bodyRow = document.createElement("div");
-    bodyRow.className = "cbm-form-row";
-    bodyRow.style.flexDirection = "column";
-    bodyRow.style.alignItems = "stretch";
-    const bodyLabel = document.createElement("label");
-    bodyLabel.textContent = "Markdown body";
-    bodyRow.appendChild(bodyLabel);
-    const bodyArea = document.createElement("textarea");
-    bodyArea.placeholder = "## Pro tip\n\nText here renders inside the sidebar.";
-    bodyArea.value = sidebarState.body;
-    bodyArea.addEventListener("input", () => { sidebarState.body = bodyArea.value; });
-    bodyRow.appendChild(bodyArea);
-    formHost.appendChild(bodyRow);
-
-    appendWidthRow(() => sidebarState.contentWidth, (v) => { sidebarState.contentWidth = v; });
-  }
-
-  function renderGridForm(): void {
-    const dimRow = document.createElement("div");
-    dimRow.className = "cbm-form-row";
-    const dimLabel = document.createElement("label");
-    dimLabel.textContent = "Size";
-    dimRow.appendChild(dimLabel);
-    const colsInput = document.createElement("input");
-    colsInput.type = "number";
-    colsInput.min = "1";
-    colsInput.max = "12";
-    colsInput.value = String(gridState.cols);
-    colsInput.addEventListener("input", () => {
-      const n = parseInt(colsInput.value, 10);
-      if (Number.isFinite(n) && n >= 1) gridState.cols = n;
-    });
-    const times = document.createElement("span");
-    times.textContent = "×";
-    times.style.color = "var(--text-tertiary, #666)";
-    const rowsInput = document.createElement("input");
-    rowsInput.type = "number";
-    rowsInput.min = "1";
-    rowsInput.max = "12";
-    rowsInput.value = String(gridState.rows);
-    rowsInput.addEventListener("input", () => {
-      const n = parseInt(rowsInput.value, 10);
-      if (Number.isFinite(n) && n >= 1) gridState.rows = n;
-    });
-    dimRow.appendChild(colsInput);
-    dimRow.appendChild(times);
-    dimRow.appendChild(rowsInput);
-    formHost.appendChild(dimRow);
-
-    const styleRow = document.createElement("div");
-    styleRow.className = "cbm-form-row";
-    const styleLabel = document.createElement("label");
-    styleLabel.textContent = "Cell style";
-    styleRow.appendChild(styleLabel);
-    const stylePills = document.createElement("div");
-    stylePills.className = "cbm-pill-row";
-    const styles: Array<{ value: "grid" | "grid-card"; label: string }> = [
-      { value: "grid",      label: "Plain" },
-      { value: "grid-card", label: "Card" },
-    ];
-    for (const st of styles) {
-      const p = document.createElement("button");
-      p.type = "button";
-      p.className = "cbm-pill" + (st.value === gridState.cellStyle ? " is-active" : "");
-      p.textContent = st.label;
-      p.addEventListener("click", () => {
-        gridState.cellStyle = st.value;
-        stylePills.querySelectorAll(".cbm-pill").forEach((x) =>
-          x.classList.toggle("is-active", (x as HTMLElement).textContent === st.label),
-        );
-      });
-      stylePills.appendChild(p);
-    }
-    styleRow.appendChild(stylePills);
-    formHost.appendChild(styleRow);
-
-    appendWidthRow(() => gridState.contentWidth, (v) => { gridState.contentWidth = v; });
-  }
-
-  function renderSelectForm(): void {
-    const mounted = mountSelectForm(formHost, {
-      initial: opts.initial?.select,
-      ruleRowContext: opts.ruleRowContext,
-    });
-    selectGetState = mounted.getState;
-  }
-
-  for (const t of TYPES) {
+  for (const t of VIEW_MODAL_TAB_ORDER) {
     const tab = document.createElement("button");
     tab.type = "button";
-    tab.setAttribute("role", "tab");
-    tab.className = "cbm-tab" + (t.kind === kind ? " is-active" : "");
+    tab.className = "vm-tab" + (t.slug === activeTab ? " is-active" : "");
+    tab.dataset.slug = t.slug;
     tab.textContent = t.label;
-    tab.dataset.kind = t.kind;
-    tab.addEventListener("click", () => { kind = t.kind; renderForm(); });
+    tab.setAttribute("role", "tab");
+    tab.addEventListener("click", () => {
+      activeTab = t.slug;
+      state.display = t.slug;
+      // Update preview synchronously — no async work, no rAF (EC-18).
+      previewHost.innerHTML = VIEW_MODAL_ILLUSTRATIONS[t.slug];
+      // Flip is-active on all tabs.
+      for (const el of Array.from(tabs.querySelectorAll<HTMLElement>(".vm-tab"))) {
+        el.classList.toggle("is-active", el.dataset.slug === t.slug);
+      }
+      // Mirror to module-scoped state so test hooks see fresh values.
+      if (currentViewModalState) currentViewModalState.activeTab = t.slug;
+    });
     tabs.appendChild(tab);
   }
-  renderForm();
+  body.appendChild(tabs);
+
+  // Config row — two columns.
+  const configRow = document.createElement("div");
+  configRow.className = "vm-config-row";
+  const leftCol = document.createElement("div");
+  leftCol.className = "vm-col-left";
+  const rightCol = document.createElement("div");
+  rightCol.className = "vm-col-right";
+  configRow.appendChild(leftCol);
+  configRow.appendChild(rightCol);
+  body.appendChild(configRow);
+
+  // ── Left column: Path / Filter / Sort ──────────────────────────────────
+
+  // Path
+  const pathField = document.createElement("div");
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "vm-field-label";
+  pathLabel.textContent = "Path (select files to display)";
+  pathField.appendChild(pathLabel);
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.className = "vm-input";
+  pathInput.placeholder = "./";
+  pathInput.value = state.path;
+  pathInput.dataset.vmField = "path";
+  pathInput.addEventListener("input", () => {
+    state.path = pathInput.value;
+  });
+  pathField.appendChild(pathInput);
+  leftCol.appendChild(pathField);
+
+  // Filter
+  const filterField = document.createElement("div");
+  const filterLabel = document.createElement("div");
+  filterLabel.className = "vm-field-label";
+  filterLabel.textContent = "Filter";
+  filterField.appendChild(filterLabel);
+  const filterStatus = document.createElement("div");
+  filterStatus.className = "vm-filter-status";
+  filterStatus.dataset.vmField = "filter-status";
+  filterField.appendChild(filterStatus);
+  const addFilterBtn = document.createElement("button");
+  addFilterBtn.type = "button";
+  addFilterBtn.className = "vm-add-filter";
+  addFilterBtn.textContent = "+ Add filter";
+  addFilterBtn.addEventListener("click", () => {
+    // Step_05 wires this to the existing smart-filter-builder modal.
+    // For step_04 it appends a blank rule so the count updates.
+    state.rules.push({
+      type: "tag",
+      operator: "is",
+      value: "",
+    } as unknown as SmartFolderRule);
+    refreshFilterStatus();
+  });
+  filterField.appendChild(addFilterBtn);
+  leftCol.appendChild(filterField);
+
+  function refreshFilterStatus(): void {
+    if (state.rules.length === 0) {
+      filterStatus.textContent = "Show all files";
+    } else {
+      filterStatus.textContent =
+        state.rules.length === 1 ? "1 filter applied" : `${state.rules.length} filters applied`;
+    }
+  }
+  refreshFilterStatus();
+
+  // Sort
+  const sortField = document.createElement("div");
+  const sortLabel = document.createElement("div");
+  sortLabel.className = "vm-field-label";
+  sortLabel.textContent = "Sort";
+  sortField.appendChild(sortLabel);
+  const sortSel = document.createElement("select");
+  sortSel.className = "vm-select";
+  sortSel.dataset.vmField = "sort";
+  const sortOptions = [
+    { value: "name-asc", label: "Name ↑" },
+    { value: "name-desc", label: "Name ↓" },
+  ];
+  for (const o of sortOptions) {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (o.value === state.sort) opt.selected = true;
+    sortSel.appendChild(opt);
+  }
+  sortSel.addEventListener("change", () => {
+    state.sort = sortSel.value;
+  });
+  sortField.appendChild(sortSel);
+  leftCol.appendChild(sortField);
+
+  // ── Right column: three toggles + Content Width ────────────────────────
+
+  // Helper to build a labelled checkbox row.
+  function buildToggleRow(
+    toggleKey: "show-modified" | "show-extensions" | "preview-pane",
+    label: string,
+    getValue: () => boolean,
+    setValue: (v: boolean) => void,
+  ): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "vm-toggle-row";
+    const lbl = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = getValue();
+    cb.dataset.vmToggle = toggleKey;
+    const id = `vm-toggle-${toggleKey}`;
+    cb.id = id;
+    lbl.htmlFor = id;
+    lbl.textContent = label;
+    cb.addEventListener("change", () => setValue(cb.checked));
+    row.appendChild(lbl);
+    row.appendChild(cb);
+    return row;
+  }
+
+  rightCol.appendChild(
+    buildToggleRow("show-modified", "Show modified date",
+      () => state.showModified,
+      (v) => { state.showModified = v; }),
+  );
+  rightCol.appendChild(
+    buildToggleRow("show-extensions", "Show file extensions",
+      () => state.showExtensions,
+      (v) => { state.showExtensions = v; }),
+  );
+  rightCol.appendChild(
+    buildToggleRow("preview-pane", "Include preview pane",
+      () => state.previewPane,
+      (v) => { state.previewPane = v; }),
+  );
+
+  // Content Width
+  const widthField = document.createElement("div");
+  const widthLabel = document.createElement("div");
+  widthLabel.className = "vm-field-label";
+  widthLabel.textContent = "Content width";
+  widthField.appendChild(widthLabel);
+  const widthPills = document.createElement("div");
+  widthPills.className = "vm-width-pills";
+  const widthOptions: Array<{ value: ContentWidth; label: string }> = [
+    { value: "normal", label: "Normal" },
+    { value: "wide", label: "Wide" },
+    { value: "full", label: "Full" },
+  ];
+  for (const w of widthOptions) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "vm-width-pill" + (w.value === state.contentWidth ? " is-active" : "");
+    pill.dataset.vmWidth = w.value;
+    pill.textContent = w.label;
+    pill.addEventListener("click", () => {
+      state.contentWidth = w.value;
+      for (const p of Array.from(widthPills.querySelectorAll<HTMLElement>(".vm-width-pill"))) {
+        p.classList.toggle("is-active", p.dataset.vmWidth === w.value);
+      }
+    });
+    widthPills.appendChild(pill);
+  }
+  widthField.appendChild(widthPills);
+  rightCol.appendChild(widthField);
 
   // Footer
   const footer = document.createElement("div");
   footer.className = "cbm-footer";
-  panel.appendChild(footer);
-  const footerLeft = document.createElement("div");
-  footerLeft.className = "cbm-footer-left";
-  if (opts.onRemove) {
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "cbm-btn cbm-btn-danger";
-    removeBtn.textContent = "Remove block";
-    removeBtn.addEventListener("click", () => {
-      close();
-      opts.onRemove?.();
-    });
-    footerLeft.appendChild(removeBtn);
-  }
-  footer.appendChild(footerLeft);
-
   const cancelBtn = document.createElement("button");
   cancelBtn.className = "cbm-btn";
+  cancelBtn.type = "button";
   cancelBtn.textContent = "Cancel";
   cancelBtn.addEventListener("click", close);
   footer.appendChild(cancelBtn);
-
   const primaryBtn = document.createElement("button");
   primaryBtn.className = "cbm-btn cbm-btn-primary";
-  primaryBtn.textContent = opts.initial ? "Save" : "Insert";
+  primaryBtn.type = "button";
+  primaryBtn.textContent = actionLabelForMode(mode);
   primaryBtn.addEventListener("click", () => {
-    let fence: string;
-    if (kind === "sidebar") {
-      fence = buildSidebarFence(sidebarState);
-    } else if (kind === "grid") {
-      fence = buildGridFence(gridState);
-    } else if (kind === "select") {
-      if (!selectGetState) return;
-      fence = buildSelectFenceFromState(selectGetState());
-    } else {
-      return;
-    }
+    // EC-4 / FR-18: empty Path on submit substitutes the default "./".
+    // The renderer would also fall back if the key were absent, but we
+    // emit it explicitly so downstream readers see a deterministic value.
+    const submitState: SelectFormState = {
+      ...state,
+      path: state.path.trim() === "" ? "./" : state.path,
+    };
+    if (ctx.onSubmit) ctx.onSubmit(submitState, mode);
     close();
-    opts.onApply(fence);
   });
   footer.appendChild(primaryBtn);
+  panel.appendChild(footer);
 
   document.body.appendChild(overlay);
 
+  // Module-scoped state for test introspection hooks.
+  currentViewModalState = { state, activeTab };
+
+  // Esc keyboard wiring (FR-42 Cancel). Enter-to-submit is handled by
+  // the input element's default behaviour (button focus + Enter); the
+  // modal-keyboard helper provides Esc-to-close and Tab trapping.
   attachModalKeyboard({
     modal: overlay,
     onClose: close,
   });
 
   function close(): void {
-    document.getElementById(OVERLAY_ID)?.remove();
+    document.getElementById(VIEW_MODAL_OVERLAY_ID)?.remove();
+    currentViewModalState = null;
   }
 }
 
+/**
+ * Test hook: returns the current modal's form state. Throws when the
+ * modal is not mounted. Step_05 builds on this to wire submit logic
+ * via `ctx.onSubmit`.
+ */
+export function getViewModalState(): SelectFormState {
+  if (currentViewModalState === null) {
+    throw new Error("View Modal is not open");
+  }
+  return { ...currentViewModalState.state };
+}
+
+/**
+ * Test hook: builds the codefence body the modal WOULD emit on submit.
+ * Pure read — does not mutate state or dispatch any side effects.
+ */
+export function emitViewModalFence(): string {
+  if (currentViewModalState === null) {
+    throw new Error("View Modal is not open");
+  }
+  // Path empty → emit `./` (EC-4 / FR-18 contract).
+  const stateForFence: SelectFormState = {
+    ...currentViewModalState.state,
+    path:
+      currentViewModalState.state.path.trim() === ""
+        ? "./"
+        : currentViewModalState.state.path,
+  };
+  return buildSelectFenceFromState(stateForFence);
+}

@@ -75,6 +75,17 @@ export const DISPLAY_REGISTRY: DisplaySpec[] = [
       { slug: "book-stack", label: "Book Stack", description: "Vertical scrolling list of horizontal book bars — no shelves, no rails; title reads horizontally" },
     ],
   },
+  // Collections (refactor 2026-06-06, step_R02). The MVP shipped a single
+  // `default` sub-option per Q-R2 — `compact` vs `expanded` previews are
+  // reserved for Phase 2 and do not block the refactor. Selecting this entry
+  // writes `display: collection-home` into the codefence; the select-widget
+  // RENDERERS map (see select-widget.ts) routes to renderCollectionHome.
+  {
+    slug: "collection-home",
+    label: "Collection",
+    defaultOption: "default",
+    options: [{ slug: "default", label: "Default" }],
+  },
 ];
 
 /** Look up a display spec by slug. Returns null when unknown. */

@@ -129,10 +129,9 @@ import {
   findCustomFenceAtCursor,
   findFirstCustomFence,
   parseSelectBodyForBuilder,
-  parseGridFenceBody,
-  parseSidebarFenceBody,
 } from "./editor/select-widget";
-import { openCodeBlockModal, type BlockKind } from "./lib/codeblock-modal";
+import { openViewModal } from "./lib/codeblock-modal";
+import { buildSelectFenceFromState } from "./lib/select-builder";
 import type { RuleRowContext } from "./lib/rule-row";
 import { readContentWidthFromFrontmatter, applyPageContentWidth } from "./lib/page-width";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -618,6 +617,57 @@ function showGoToLineOverlay(): void {
 }
 
 
+// ── Collections command-bar helpers (step 15 + refactor R01) ─────────────────
+//
+// The MVP-era `getFocusedFolderPath()` helper was deleted in refactor
+// step_R01 (2026-06-06) along with the `collection:make-collection`
+// dispatcher case — it was the only consumer. The two surviving helpers
+// below are still wired into `case "collection:new-stack"` and
+// `case "collection:add-reference"` respectively.
+
+/**
+ * Resolve the absolute path of the active tab's folder iff that folder is
+ * a Collection. Returns null when the active tab isn't a folder-view tab,
+ * or when its folder doesn't carry `layout: collection-home`.
+ *
+ * Implemented via a fire-once async probe through the active tab manager;
+ * the synchronous return makes this a best-effort hint — when in doubt,
+ * the command surfaces a toast.
+ */
+function getActiveCollectionPath(): string | null {
+  const path = tabManager.getActiveFilePath();
+  if (!path) return null;
+  // Active tab path could be either a file or a folder. The collection
+  // detection probe walks up to the folder containing `_folder.md`.
+  if (path.endsWith("/_folder.md")) {
+    return path.slice(0, -"/_folder.md".length);
+  }
+  return null;
+}
+
+/**
+ * Resolve the absolute path of the focused note iff that note lives inside
+ * a Collection. Returns null otherwise. The cross-feature scaffolding for
+ * proper "focused note" tracking arrives with the renderer's context-menu
+ * dispatch (step 14); this helper falls back to the active tab's file path.
+ */
+function getFocusedNotePath(): string | null {
+  const path = tabManager.getActiveFilePath();
+  if (!path || !path.endsWith(".md")) return null;
+  return path;
+}
+
+/** Surface a Collections-related notification via the project's toast system. */
+function notifyCollectionsToast(message: string): void {
+  // Reuse the project's existing toast machinery (console fallback is fine
+  // for unit tests; production fires through `__MARKABLE_TOAST__`).
+  const t = (window as unknown as {
+    __MARKABLE_TOAST__?: (msg: string) => void;
+  }).__MARKABLE_TOAST__;
+  if (t) t(message);
+  else console.warn("[collections]", message);
+}
+
 /**
  * Central action dispatcher — shared by the native menu-event listener and
  * the custom keybinding document keydown handler.
@@ -972,37 +1022,34 @@ function handleAction(action: string): void {
       const ruleRowContext = getRuleRowContext();
       const detected = findCustomFenceAtCursor(ed);
       if (detected) {
-        const langToKind: Record<string, BlockKind> = {
-          "sidebar": "sidebar",
-          "sidebar-left": "sidebar",
-          "grid": "grid",
-          "grid-card": "grid",
-          "select": "select",
-        };
-        // detected.lang may include a width modifier (e.g. "grid wide");
-        // strip it to look up the block kind.
+        // step_09 (view-modal): the legacy Select/Sidebar/Grid type-
+        // picker modal is gone. The Unified View Modal owns the
+        // `select` flow; sidebar and grid fences are edited inline
+        // (the user can also use `/sidebar` or `/grid` to insert a
+        // fresh stub elsewhere in the document).
         const langFirst = detected.lang.split(/\s+/)[0];
-        const kind = langToKind[langFirst];
-        openCodeBlockModal({
-          ruleRowContext,
-          initial: {
-            kind,
-            sidebar: kind === "sidebar" ? parseSidebarFenceBody(detected.body, detected.lang) : undefined,
-            grid:    kind === "grid"    ? parseGridFenceBody(detected.body, detected.lang)    : undefined,
-            select:  kind === "select"  ? parseSelectBodyForBuilder(detected.body)            : undefined,
-          },
-          onApply: (newFence: string) => {
-            ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: newFence } });
-          },
-          onRemove: () => {
-            ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: "" } });
-          },
-        });
+        if (langFirst === "select") {
+          const initial = parseSelectBodyForBuilder(detected.body);
+          openViewModal("edit", {
+            editor: { view: ed, from: detected.from, to: detected.to },
+            initial,
+            ruleRowContext,
+            onSubmit: (state) => {
+              const newFence = buildSelectFenceFromState(state);
+              ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: newFence } });
+            },
+          });
+        }
+        // Sidebar and grid: silent no-op. The fence is editable in
+        // place; users can also insert a fresh stub via `/sidebar` or
+        // `/grid`. No toast yet — DW-1 follow-up may add one.
       } else {
         const cursorPos = ed.state.selection.main.head;
-        openCodeBlockModal({
+        openViewModal("insert", {
+          editor: { view: ed, from: cursorPos, to: cursorPos },
           ruleRowContext,
-          onApply: (newFence: string) => {
+          onSubmit: (state) => {
+            const newFence = buildSelectFenceFromState(state);
             const line = ed.state.doc.lineAt(cursorPos);
             const needLead = line.from !== cursorPos;
             const insertText = (needLead ? "\n" : "") + newFence + "\n";
@@ -1010,6 +1057,43 @@ function handleAction(action: string): void {
           },
         });
       }
+      break;
+    }
+
+    // Collections (FR-61) — two surviving command-bar entries after refactor
+    // step_R01 (2026-06-06). The MVP-era `collection:make-collection` case
+    // was deleted; the layout is opted into via the display-options picker.
+    case "collection:new-stack": {
+      void (async () => {
+        const collectionPath = getActiveCollectionPath();
+        if (!collectionPath) {
+          notifyCollectionsToast("Open a Collection first.");
+          return;
+        }
+        const mod = await import("./plugins/file-browser/collections/commands");
+        await mod.newStack(collectionPath);
+        const vm = (window as unknown as { __MARKABLE_VAULT_MANAGER__?: { reloadVaultIndex?: () => Promise<void> } })
+          .__MARKABLE_VAULT_MANAGER__;
+        await vm?.reloadVaultIndex?.();
+      })();
+      break;
+    }
+    case "collection:add-reference": {
+      // Step 14 / 15 implementation note: the Stack picker UI is a follow-up
+      // in step 17/18; this case still wires the entry so the command bar
+      // shows the command. When no note is focused, surface a toast.
+      void (async () => {
+        const notePath = getFocusedNotePath();
+        if (!notePath) {
+          notifyCollectionsToast("Focus a note in a Collection first.");
+          return;
+        }
+        // The picker UI ships with the renderer's context-menu dispatch in
+        // step 14; the command-bar entry stays a thin wrapper around the
+        // same call path. With no picker mounted at command-bar invocation
+        // time, we emit a toast guiding the user to the right-click flow.
+        notifyCollectionsToast("Right-click the note for the Stack picker.");
+      })();
       break;
     }
 
@@ -1368,22 +1452,25 @@ async function initApp() {
         buildQuickCommandExtension({
           openLayoutPicker: () => { if (_layoutDeps) void openLayoutPicker(_layoutDeps); },
           enterPreviewMode: () => { if (!previewEnabled) togglePreview(); },
-          openCodeBlock: (view, from, to, preselect) => {
-            // Remove the trigger text first, then open the unified CodeBlock
-            // modal. `preselect` (when set) jumps the type picker to that
-            // kind — Select is the default when not specified.
+          openCodeBlock: (view, from, to, _preselect) => {
+            // step_09 (view-modal): the unified View Modal replaces the
+            // legacy type-picker. The `preselect` arg is ignored
+            // because the new modal does not have a type picker; the
+            // user picks a layout via the six-tab strip. `/sidebar`
+            // and `/grid` slash commands handle the other two fence
+            // types (step_07).
             view.dispatch({ changes: { from, to, insert: "" } });
             const insertPos = from;
-            const onApply = (newFence: string): void => {
-              const line = view.state.doc.lineAt(insertPos);
-              const needLead = line.from !== insertPos;
-              const insertText = (needLead ? "\n" : "") + newFence + "\n";
-              view.dispatch({ changes: { from: insertPos, to: insertPos, insert: insertText } });
-            };
-            openCodeBlockModal({
+            openViewModal("insert", {
+              editor: { view, from: insertPos, to: insertPos },
               ruleRowContext: getRuleRowContext(),
-              initial: preselect ? { kind: preselect } : undefined,
-              onApply,
+              onSubmit: (state) => {
+                const newFence = buildSelectFenceFromState(state);
+                const line = view.state.doc.lineAt(insertPos);
+                const needLead = line.from !== insertPos;
+                const insertText = (needLead ? "\n" : "") + newFence + "\n";
+                view.dispatch({ changes: { from: insertPos, to: insertPos, insert: insertText } });
+              },
             });
           },
         }),
@@ -1410,17 +1497,13 @@ async function initApp() {
       (view: EditorView, body: string) => {
         const range = findSelectFenceRange(view, body);
         if (!range) return;
-        openCodeBlockModal({
-          initial: {
-            kind: "select",
-            select: parseSelectBodyForBuilder(body),
-          },
+        openViewModal("edit", {
+          editor: { view, from: range.from, to: range.to },
+          initial: parseSelectBodyForBuilder(body),
           ruleRowContext: getRuleRowContext(),
-          onApply: (newFence: string) => {
+          onSubmit: (state) => {
+            const newFence = buildSelectFenceFromState(state);
             view.dispatch({ changes: { from: range.from, to: range.to, insert: newFence } });
-          },
-          onRemove: () => {
-            view.dispatch({ changes: { from: range.from, to: range.to, insert: "" } });
           },
         });
       };
@@ -1442,38 +1525,29 @@ async function initApp() {
         const open = (): void => {
           const detected = findFirstCustomFence(ed);
           if (detected) {
-            const langToKind: Record<string, BlockKind> = {
-              "sidebar": "sidebar",
-              "sidebar-left": "sidebar",
-              "grid": "grid",
-              "grid-card": "grid",
-              "select": "select",
-            };
+            // step_09 (view-modal): only `select` fences open the modal.
+            // Sidebar / grid fences are edited inline; `/sidebar` and
+            // `/grid` slash commands cover insertion.
             const langFirst = detected.lang.split(/\s+/)[0];
-            const kind = langToKind[langFirst];
-            if (!kind) return;
-            openCodeBlockModal({
+            if (langFirst !== "select") return;
+            openViewModal("edit", {
+              editor: { view: ed, from: detected.from, to: detected.to },
+              initial: parseSelectBodyForBuilder(detected.body),
               ruleRowContext: getRuleRowContext(),
-              initial: {
-                kind,
-                sidebar: kind === "sidebar" ? parseSidebarFenceBody(detected.body, detected.lang) : undefined,
-                grid:    kind === "grid"    ? parseGridFenceBody(detected.body, detected.lang)    : undefined,
-                select:  kind === "select"  ? parseSelectBodyForBuilder(detected.body)            : undefined,
-              },
-              onApply: (newFence: string) => {
+              onSubmit: (state) => {
+                const newFence = buildSelectFenceFromState(state);
                 ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: newFence } });
-              },
-              onRemove: () => {
-                ed.dispatch({ changes: { from: detected.from, to: detected.to, insert: "" } });
               },
             });
             return;
           }
           // No codefence in the file yet → open insert mode at the end of doc.
           const insertPos = ed.state.doc.length;
-          openCodeBlockModal({
+          openViewModal("insert", {
+            editor: { view: ed, from: insertPos, to: insertPos },
             ruleRowContext: getRuleRowContext(),
-            onApply: (newFence: string) => {
+            onSubmit: (state) => {
+              const newFence = buildSelectFenceFromState(state);
               const needLead = insertPos > 0 && ed.state.doc.sliceString(insertPos - 1, insertPos) !== "\n";
               const insertText = (needLead ? "\n" : "") + newFence + "\n";
               ed.dispatch({ changes: { from: insertPos, to: insertPos, insert: insertText } });

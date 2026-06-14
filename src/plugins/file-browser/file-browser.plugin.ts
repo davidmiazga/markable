@@ -71,16 +71,41 @@ import {
   showInlineError,
 } from "./file-browser-ops";
 
+// Folder-icon-assignment — bundled inline by Rollup.
+// folder-icons.ts provides the curated catalog + interpretIconValue resolver.
+// folder-icon-store.ts batch-reads `_folder.md icon:` values via the Rust bridge.
+// folder-icon-custom-cache.ts sanitises and caches user-supplied SVGs by path+mtime.
+import { FOLDER_ICONS } from "./folder-icons";
+import { buildFolderIconMap } from "./folder-icon-store";
+import {
+  getCustomSvg,
+  hasReportedMissingPath,
+  markPathReported,
+} from "./folder-icon-custom-cache";
+import { openFolderIconPicker } from "./folder-icon-picker";
+
 // Folder View — bundled inline by Rollup.
 import { buildFolderViewSet } from "./folder-view/detection";
 import { FOLDER_VIEW_CSS } from "./folder-view/folder-view-css";
 import { FOLDER_TABLE_CSS } from "./folder-view/folder-table-css";
 import { BOOKSHELF_CSS } from "./folder-view/bookshelf-css";
+import { COLLECTIONS_CSS } from "./collections/collections-css";
 import {
   openFolderViewTab as _openFolderViewTab,
   buildFolderViewRenderFn,
 } from "./folder-view/tab";
-import { openTemplatePicker, type TemplateDefinition } from "../../lib/template-picker";
+// step_08 (view-modal): `openTemplatePicker` and the four `*_SVG`
+// constants + `FOLDER_VIEW_TEMPLATES` + `openFolderViewPicker` +
+// `writeFolderViewTemplate` have been deleted entirely. The
+// Hub Page / Media Gallery / Project Table / Simple Index templates
+// move to a deferred "Layouts" flow (DW-3); the right-click handler
+// now opens the Unified View Modal via `openViewModal`.
+import { openViewModal, type ViewModalMode } from "../../lib/codeblock-modal";
+import type { SelectBuilderInitial } from "../../lib/select-builder";
+import { parseSelectBodyForBuilder } from "../../editor/select-widget";
+import { writeFolderMdCodeblock } from "./folder-view/codeblock-writer";
+import { extractSelectCodeblockBody } from "./folder-view/parser";
+import { readFile } from "../../lib/bridge";
 
 // Smart Folders — bundled inline by Rollup (step_01 & step_02).
 import type { SmartFolderDef } from "./smart-folders/types";
@@ -716,7 +741,7 @@ const FILE_BROWSER_CSS = `
   background: #e05252;
 }
 
-` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS;
+` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS + COLLECTIONS_CSS;
 
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
@@ -903,6 +928,29 @@ let _activeDragPath: string | null = null;
 let _lastFolderViewSet: Set<string> = new Set();
 
 /**
+ * Folder-icon assignment map (step_05 of folder-icon-assignment).
+ *
+ * Keyed by parent directory path → raw icon value (catalog iconId OR absolute
+ * SVG path — interpretation lives in interpretIconValue). Populated
+ * asynchronously by `refreshFolderIconMap()` which is fire-and-forget'd from
+ * `renderTreeContent`: the first paint renders the current (possibly stale or
+ * empty) map; once the bridge call resolves and the map differs, the next
+ * vault-changed tick re-renders with the fresh data. This keeps
+ * renderTreeContent synchronous and the render hot path free of I/O (NFR-2).
+ *
+ * Empty map = no assignments, fall back to "folder-icon" for every directory
+ * (NFR-1: byte-identical to today's behaviour).
+ */
+let _folderIconMap: Map<string, string> = new Map();
+
+/**
+ * Token used to discard stale `refreshFolderIconMap` responses when the user
+ * switches vaults rapidly. Each call increments the token; the response
+ * applies its result only if the token matches the value at request time.
+ */
+let _folderIconMapToken = 0;
+
+/**
  * Module-level wrapper for openFolderViewTab from tab.ts.
  *
  * Kept as a function reference (not a direct import call) so that
@@ -912,8 +960,12 @@ let _lastFolderViewSet: Set<string> = new Set();
  *
  * @param path - Absolute path of the folder to open.
  */
-const openFolderViewTab = (path: string, viewFilePath?: string): void => {
-  _openFolderViewTab(path, viewFilePath);
+const openFolderViewTab = (
+  path: string,
+  viewFilePath?: string,
+  opts?: { readonly suppressEditModal?: boolean },
+): void => {
+  _openFolderViewTab(path, viewFilePath, opts);
 };
 
 // ── Settings persistence ──────────────────────────────────────────────────────
@@ -1309,12 +1361,47 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
 
   /* Icon — resolved through the active icon set.
      Smart Folder nodes use the folder_managed Material Symbol (FR-17 / step_04).
-     All other node types use the regular icon set. */
+     Directory nodes whose `iconClass` is a folder-icon-* variant render the
+     curated catalog SVG instead of the default folder glyph (step_05 of
+     folder-icon-assignment). Custom-SVG nodes get an empty slot here; the
+     post-mount injection pass (`injectCustomFolderIcons`) fills it with the
+     sanitised file body off the render hot path (NFR-2). */
   const icon = document.createElement("span");
   if (node.iconClass === "folder-smart") {
     // Smart Folder: use folder_managed icon with a distinct modifier class.
     icon.className = "tree-node-icon folder-icon folder-icon-smart";
     icon.innerHTML = wrapSvg(ICON_FOLDER_MANAGED, 16);
+  } else if (
+    node.type === "directory" &&
+    typeof node.iconClass === "string" &&
+    node.iconClass.startsWith("folder-icon-")
+  ) {
+    // Folder-icon-assignment variant — either a curated catalog id
+    // (`folder-icon-<id>`) or the custom-SVG sentinel (`folder-icon-custom`).
+    // The parent `.folder-icon` class is retained so any existing sizing or
+    // hover rules still match.
+    icon.className = `tree-node-icon folder-icon ${node.iconClass}`;
+    if (node.iconClass === "folder-icon-custom") {
+      // Slot is empty until the post-mount injection pass fills it. Attach
+      // the absolute path so `injectCustomFolderIcons` can resolve it.
+      if (node.iconCustomPath) {
+        icon.dataset.iconPath = node.iconCustomPath;
+      }
+    } else {
+      // Catalog hit: look up the inline SVG by stripping the `folder-icon-`
+      // prefix and finding the matching FOLDER_ICONS entry. O(N) over a
+      // 24-entry array — trivial.
+      const id = node.iconClass.slice("folder-icon-".length);
+      const def = FOLDER_ICONS.find((d) => d.id === id);
+      if (def) {
+        icon.innerHTML = wrapSvg(def.svg, 16);
+      } else {
+        // Defensive: an iconClass we don't recognise should not happen
+        // because interpretIconValue() only returns catalog ids that exist.
+        // Fall back to the default folder glyph so the row still renders.
+        icon.innerHTML = _iconSet.folder(node.name, node.expanded);
+      }
+    }
   } else {
     icon.className = `tree-node-icon ${
       node.type === "vault" ? "vault-icon" :
@@ -1864,6 +1951,22 @@ function renderTreeContent(wrapper: HTMLElement): void {
     })
     .filter((n): n is TreeNode => n !== null);
 
+  // FR-05/FR-06: compute the folder-view set once per render pass.
+  // Store in module-level _lastFolderViewSet so context menu handlers can
+  // read it without re-scanning the index (step_06).
+  // Computed BEFORE buildTreeFromIndex so we can derive the _folder.md paths
+  // we need to scan for icon assignments (step_05).
+  const folderViewSet = buildFolderViewSet(vaultIndex);
+  _lastFolderViewSet = folderViewSet;
+
+  // Step 05 (folder-icon-assignment): kick off the asynchronous icon-map
+  // refresh. The current `_folderIconMap` (populated by the previous render's
+  // refresh, or empty on first paint) is what this synchronous render uses.
+  // When the refresh resolves with a different map, it triggers a re-render
+  // via the existing renderPanel pathway. Render hot path stays pure-data
+  // (NFR-2).
+  void refreshFolderIconMap(folderViewSet, wrapper);
+
   /* Build, sort, and cache the tree. Smart folder injections are prepended
      inside buildTreeFromIndex; sortNodes then keeps them at the top (AD-6). */
   const tree = buildTreeFromIndex(
@@ -1873,15 +1976,10 @@ function renderTreeContent(wrapper: HTMLElement): void {
     activeVault,
     vaultIndex.directories,
     sfNodes,
+    _folderIconMap,
   );
   sortNodes(tree);
   _currentTree = tree;
-
-  // FR-05/FR-06: compute the folder-view set once per render pass.
-  // Store in module-level _lastFolderViewSet so context menu handlers can
-  // read it without re-scanning the index (step_06).
-  const folderViewSet = buildFolderViewSet(vaultIndex);
-  _lastFolderViewSet = folderViewSet;
 
   /* Apply search filter (returns original tree reference when query is empty) */
   const displayNodes = _searchQuery.trim() ? filterTree(tree, _searchQuery) : tree;
@@ -1893,6 +1991,114 @@ function renderTreeContent(wrapper: HTMLElement): void {
 
   const activeFile = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
   buildTreeUl(wrapper, displayNodes, activeFile, activeVault.id, folderViewSet);
+
+  // Step 05 (folder-icon-assignment): inject sanitised custom-SVG bodies into
+  // any `.folder-icon-custom[data-icon-path]` slots that the tree just
+  // rendered. Fire-and-forget — file reads happen between paint frames so the
+  // render hot path is unblocked (NFR-2).
+  void injectCustomFolderIcons(wrapper);
+}
+
+// ── Folder-icon-assignment helpers (step_05) ──────────────────────────────────
+
+/**
+ * Asynchronously refresh `_folderIconMap` from the current folder-view set.
+ *
+ * Strategy: enumerate every directory that contains a `_folder.md` (the
+ * folder-view set is the exact set we need — both the folder-view feature and
+ * folder-icon-assignment key off the same sidecar file), batch-read all icon
+ * values via the Rust command, and apply the new map to module state. When
+ * the map differs from the previous value, trigger a re-render so the UI
+ * reflects new assignments (NFR-3 preserves expansion state via the existing
+ * pipeline).
+ *
+ * Concurrency: each call increments `_folderIconMapToken`; a stale response
+ * whose token has been superseded is silently discarded. This protects
+ * against double-applies when the user switches vaults rapidly.
+ *
+ * @param folderViewSet - Set of directory paths that contain `_folder.md`.
+ * @param wrapper       - Panel wrapper to re-render against if the map changes.
+ */
+async function refreshFolderIconMap(
+  folderViewSet: Set<string>,
+  wrapper: HTMLElement,
+): Promise<void> {
+  const token = ++_folderIconMapToken;
+  const paths: string[] = [];
+  for (const dir of folderViewSet) paths.push(dir + "/_folder.md");
+  const next = await buildFolderIconMap(paths);
+
+  // Discard stale responses (a newer refresh has been issued since).
+  if (token !== _folderIconMapToken) return;
+
+  if (mapsEqual(_folderIconMap, next)) return;
+
+  _folderIconMap = next;
+  // Re-render to apply the freshly resolved iconClasses. The render path
+  // reads the same `_folderIconMap` on the next pass; expansion state /
+  // scroll position are preserved by the existing render pipeline (NFR-3).
+  renderTreeContent(wrapper);
+}
+
+/**
+ * Compare two icon maps by entry. Returns true when both have the same keys
+ * and the same value for each key. Used to skip pointless re-renders when
+ * the bridge resolves with the same data we already have.
+ */
+function mapsEqual(
+  a: Map<string, string>,
+  b: Map<string, string>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    if (b.get(k) !== v) return false;
+  }
+  return true;
+}
+
+/**
+ * Walk the rendered tree DOM and inject sanitised inline SVG into every
+ * `.folder-icon-custom[data-icon-path]` slot. Runs after `buildTreeUl` so
+ * the DOM is mounted; file reads (off the render hot path) populate the
+ * `folder-icon-custom-cache` and the cached result is dropped into the slot
+ * via `innerHTML`. All reads run concurrently for a fast first paint.
+ *
+ * EC-16: when the path cannot be resolved (missing on disk or unreadable),
+ * remove the `folder-icon-custom` class, restore the generic `folder-icon`,
+ * and surface a one-time `console.warn` per missing path per session. We do
+ * NOT auto-edit `_folder.md` — the user reassigns manually.
+ *
+ * @param wrapper - The `.file-browser-panel` element containing the tree.
+ */
+async function injectCustomFolderIcons(wrapper: HTMLElement): Promise<void> {
+  const slots = Array.from(
+    wrapper.querySelectorAll<HTMLElement>(".folder-icon-custom"),
+  );
+  if (slots.length === 0) return;
+
+  await Promise.all(
+    slots.map(async (el) => {
+      const path = el.dataset.iconPath;
+      if (!path) return;
+      const sanitised = await getCustomSvg(path);
+      if (sanitised) {
+        el.innerHTML = sanitised;
+        return;
+      }
+      // EC-16: missing or invalid. Fall back to the default folder glyph and
+      // surface a one-time warning (the picker is the primary error surface
+      // in step_06; this is a soft signal for the tree).
+      el.classList.remove("folder-icon-custom");
+      el.classList.add("folder-icon");
+      el.innerHTML = _iconSet.folder("", false);
+      if (!hasReportedMissingPath(path)) {
+        markPathReported(path);
+        console.warn(
+          `[folder-icon-assignment] custom icon not found: ${path}. Reverting to default.`,
+        );
+      }
+    }),
+  );
 }
 
 /**
@@ -3025,7 +3231,11 @@ function buildDirContextMenuItems(
         }
       : {
           label: "Folder View",
-          handler: () => { openFolderViewPicker(path, container, vaultId); },
+          // step_05 (view-modal): replaces the four-template picker with
+          // the Unified View Modal (six layout tabs, single config row).
+          // The legacy `openFolderViewPicker` is deleted in step_08 once
+          // step_05 verifies no other call sites remain.
+          handler: () => { void openUnifiedViewModalForFolder(path); },
         },
     // Layout + Codeblock items act on _folder.md, so they only appear when
     // _folder.md exists. Layout comes first (matches the file menu); labels
@@ -3077,6 +3287,28 @@ function buildDirContextMenuItems(
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
     },
     { separator: true, label: "", handler: null },
+    // folder-icon-assignment step_07 — entry for the modal picker.
+    // onChange reloads the vault index, which fires onVaultChanged →
+    // renderPanel → renderTreeContent → the icon map refresh resolves with
+    // the new value and the tree paints with the freshly assigned class.
+    // NFR-3: expansion state + scroll position are preserved by the existing
+    // render pipeline (the tree rebuild is structurally identical).
+    {
+      label: "Set folder icon…",
+      handler: () => {
+        void openFolderIconPicker(path, {
+          onChange: () => {
+            const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+            void vm?.reloadVaultIndex?.();
+          },
+        });
+      },
+    },
+    { separator: true, label: "", handler: null },
+    // Refactor step_R01 (2026-06-06): the "Make Collection" / "Unmake
+    // Collection" entries were removed. Collections is now opted into via
+    // the display-options picker on the folder's _folder.md codeblock,
+    // mirroring every other folder-view layout (Bookshelf, Cards, etc.).
     {
       label: "Reveal in Finder",
       handler: () => {
@@ -3086,219 +3318,106 @@ function buildDirContextMenuItems(
   ];
 }
 
-// ── Folder view templates ─────────────────────────────────────────────────────
-
-const HUB_PAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
-  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
-  <rect x="0" y="0" width="400" height="80" fill="#2d5a8e" rx="6"/>
-  <rect x="0" y="60" width="400" height="20" fill="#1a1a1a"/>
-  <rect x="16" y="52" width="48" height="48" fill="#1a1a1a" rx="6" stroke="#3a3a3a" stroke-width="1"/>
-  <text x="40" y="84" text-anchor="middle" font-size="24" fill="#e0e0e0">📁</text>
-  <text x="20" y="122" font-size="14" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">My Project</text>
-  <text x="20" y="138" font-size="9" fill="#888" font-family="sans-serif">Add a description here…</text>
-  <rect x="20" y="152" width="110" height="76" fill="#252525" rx="5"/>
-  <rect x="20" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
-  <text x="75" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
-  <text x="75" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note A</text>
-  <rect x="145" y="152" width="110" height="76" fill="#252525" rx="5"/>
-  <rect x="145" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
-  <text x="200" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
-  <text x="200" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note B</text>
-  <rect x="270" y="152" width="110" height="76" fill="#252525" rx="5"/>
-  <rect x="270" y="152" width="110" height="40" fill="#2a2a2a" rx="5"/>
-  <text x="325" y="178" text-anchor="middle" font-size="8" fill="#666" font-family="sans-serif">preview</text>
-  <text x="325" y="200" text-anchor="middle" font-size="8" fill="#ccc" font-family="sans-serif">Note C</text>
-</svg>`;
-
-const MEDIA_GALLERY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
-  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
-  <text x="20" y="30" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Media Gallery</text>
-  <rect x="20" y="44" width="115" height="86" fill="#2d4a2d" rx="4"/>
-  <text x="78" y="91" text-anchor="middle" font-size="22" fill="#4a8" font-family="sans-serif">🖼</text>
-  <rect x="143" y="44" width="115" height="86" fill="#4a3020" rx="4"/>
-  <text x="200" y="91" text-anchor="middle" font-size="22" fill="#c84" font-family="sans-serif">🌅</text>
-  <rect x="266" y="44" width="115" height="86" fill="#2a2a4a" rx="4"/>
-  <text x="323" y="91" text-anchor="middle" font-size="22" fill="#48c" font-family="sans-serif">🏙</text>
-  <rect x="20" y="138" width="115" height="86" fill="#3a2a4a" rx="4"/>
-  <text x="78" y="185" text-anchor="middle" font-size="22" fill="#a48" font-family="sans-serif">🌸</text>
-  <rect x="143" y="138" width="115" height="86" fill="#2a3a2a" rx="4"/>
-  <text x="200" y="185" text-anchor="middle" font-size="22" fill="#8a4" font-family="sans-serif">🌿</text>
-  <rect x="266" y="138" width="115" height="86" fill="#3a2a20" rx="4"/>
-  <text x="323" y="185" text-anchor="middle" font-size="22" fill="#ca6" font-family="sans-serif">🍂</text>
-</svg>`;
-
-const PROJECT_TABLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
-  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
-  <text x="20" y="28" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Project Table</text>
-  <rect x="20" y="36" width="360" height="22" fill="#252525" rx="3"/>
-  <text x="30" y="51" font-size="8" fill="#888" font-family="sans-serif">Name</text>
-  <text x="170" y="51" font-size="8" fill="#888" font-family="sans-serif">Modified</text>
-  <text x="270" y="51" font-size="8" fill="#888" font-family="sans-serif">Tags</text>
-  <line x1="20" y1="58" x2="380" y2="58" stroke="#333" stroke-width="1"/>
-  <rect x="20" y="60" width="360" height="18" fill="#1e1e1e"/>
-  <text x="30" y="73" font-size="8" fill="#ccc" font-family="sans-serif">Meeting Notes</text>
-  <text x="170" y="73" font-size="8" fill="#888" font-family="sans-serif">May 12</text>
-  <rect x="268" y="63" width="30" height="10" fill="#2d4a2d" rx="3"/>
-  <text x="283" y="71" text-anchor="middle" font-size="7" fill="#4a8" font-family="sans-serif">work</text>
-  <rect x="20" y="78" width="360" height="18" fill="#222"/>
-  <text x="30" y="91" font-size="8" fill="#ccc" font-family="sans-serif">Research Notes</text>
-  <text x="170" y="91" font-size="8" fill="#888" font-family="sans-serif">May 10</text>
-  <rect x="268" y="81" width="36" height="10" fill="#2a3040" rx="3"/>
-  <text x="286" y="89" text-anchor="middle" font-size="7" fill="#68a" font-family="sans-serif">reading</text>
-  <rect x="20" y="96" width="360" height="18" fill="#1e1e1e"/>
-  <text x="30" y="109" font-size="8" fill="#ccc" font-family="sans-serif">Draft Article</text>
-  <text x="170" y="109" font-size="8" fill="#888" font-family="sans-serif">May 8</text>
-  <rect x="268" y="99" width="28" height="10" fill="#3a2020" rx="3"/>
-  <text x="282" y="107" text-anchor="middle" font-size="7" fill="#c66" font-family="sans-serif">draft</text>
-  <rect x="20" y="114" width="360" height="18" fill="#222"/>
-  <text x="30" y="127" font-size="8" fill="#ccc" font-family="sans-serif">Project Plan</text>
-  <text x="170" y="127" font-size="8" fill="#888" font-family="sans-serif">May 5</text>
-  <rect x="20" y="132" width="360" height="18" fill="#1e1e1e"/>
-  <text x="30" y="145" font-size="8" fill="#ccc" font-family="sans-serif">Archive</text>
-  <text x="170" y="145" font-size="8" fill="#888" font-family="sans-serif">Apr 30</text>
-</svg>`;
-
-const SIMPLE_INDEX_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
-  <rect width="400" height="280" fill="#1a1a1a" rx="6"/>
-  <text x="20" y="28" font-size="11" font-weight="bold" fill="#e0e0e0" font-family="sans-serif">Simple Index</text>
-  ${[0,1,2,3,4,5,6].map(i => `
-  <rect x="20" y="${40 + i * 26}" width="360" height="20" fill="${i % 2 === 0 ? "#1e1e1e" : "#222"}" rx="3"/>
-  <text x="34" y="${54 + i * 26}" font-size="9" fill="#ccc" font-family="sans-serif">📄 Note ${i + 1}</text>
-  <text x="340" y="${54 + i * 26}" text-anchor="end" font-size="8" fill="#666" font-family="sans-serif">May ${12 - i}</text>`).join("")}
-</svg>`;
-
-/** Starter template definitions shown in the "New Folder View…" picker. */
-const FOLDER_VIEW_TEMPLATES: TemplateDefinition<string>[] = [
-  {
-    id: "hub-page",
-    name: "Hub Page",
-    description: "Cover image, icon, description, and a card grid below — Notion-style dashboard.",
-    previewSvg: HUB_PAGE_SVG,
-    data: [
-      "---",
-      "layout:",
-      "  type: view-cards",
-      "  content-area-override: true",
-      "  card-width: 160",
-      "  aspect-ratio: 1/1",
-      "  fit: cover",
-      "  sort: name-asc",
-      "# cover: ./cover.png   # replace with a relative path to your cover image",
-      "# icon: 📁             # replace with an emoji or a relative image path",
-      "---",
-      "",
-      "Welcome to this folder. Edit this description to add notes about its contents.",
-    ].join("\n"),
-  },
-  {
-    id: "media-gallery",
-    name: "Media Gallery",
-    description: "Wide image cards with metadata — ideal for photo or asset folders.",
-    previewSvg: MEDIA_GALLERY_SVG,
-    data: [
-      "---",
-      "layout:",
-      "  type: view-cards",
-      "  content-area-override: true",
-      "  card-width: 200",
-      "  aspect-ratio: 4/3",
-      "  fit: cover",
-      "  sort: modified-desc",
-      "  card-preview: full",
-      "fields:",
-      "  - name",
-      "  - modified",
-      "---",
-    ].join("\n"),
-  },
-  {
-    id: "project-table",
-    name: "Project Table",
-    description: "Spreadsheet-style table with sortable columns, tags, and bulk select.",
-    previewSvg: PROJECT_TABLE_SVG,
-    data: [
-      "---",
-      "layout:",
-      "  type: view-table",
-      "  content-area-override: false",
-      "  sort: modified-desc",
-      "fields:",
-      "  - name",
-      "  - modified",
-      "  - tags",
-      "  - select",
-      "---",
-    ].join("\n"),
-  },
-  {
-    id: "simple-index",
-    name: "Simple Index",
-    description: "Compact card grid — name and date only, no preview images.",
-    previewSvg: SIMPLE_INDEX_SVG,
-    data: [
-      "---",
-      "layout:",
-      "  type: view-cards",
-      "  content-area-override: false",
-      "  card-width: 160",
-      "  card-preview: none",
-      "  sort: name-asc",
-      "fields:",
-      "  - name",
-      "  - modified",
-      "---",
-    ].join("\n"),
-  },
-];
+// ── Unified View Modal helpers (step_05) ─────────────────────────────────────
 
 /**
- * Open the template picker and create _folder.md with the chosen template.
- * Replaces the old direct-write behaviour of createFolderViewFile for new
- * folder view creation. "Reset Folder View…" still uses createFolderViewFile.
+ * Open the Unified View Modal targeting `folderPath` (step_05).
+ *
+ * Behaviour per spec (`docs/specs/view-modal/00_index.md`):
+ *   - If `_folder.md` already exists, opens in **edit** mode with the
+ *     existing config prefilled (EC-2). Codeblock-first / frontmatter-
+ *     fallback per AD-2.
+ *   - Otherwise opens in **create** mode with default state (FR-2).
+ *
+ * Submit writes the file via `writeFolderMdCodeblock` (step_02) and
+ * opens the folder-view tab (FR-4). Migration-on-write is folded into
+ * the same atomic write (AD-4 / FR-60 / FR-61).
  */
-function openFolderViewPicker(
-  dirPath: string,
-  container: HTMLElement | null,
-  vaultId: string,
-): void {
-  openTemplatePicker({
-    title: "New Folder View",
-    createLabel: "Create",
-    templates: FOLDER_VIEW_TEMPLATES,
-    onSelect: (tpl) => { void writeFolderViewTemplate(dirPath, tpl.data, container, vaultId); },
+async function openUnifiedViewModalForFolder(folderPath: string): Promise<void> {
+  const folderMdPath = folderPath + "/_folder.md";
+
+  // EC-2 read-compat: read the existing file, prefer the codeblock,
+  // fall back to legacy frontmatter projection.
+  let mode: ViewModalMode = "create";
+  let initial: SelectBuilderInitial | undefined;
+  const readRes = await readFile(folderMdPath);
+  if (readRes.ok) {
+    mode = "edit";
+    initial = readFolderMdForBuilder(readRes.value);
+  }
+
+  openViewModal(mode, {
+    folderPath,
+    initial,
+    onSubmit: async (state) => {
+      const res = await writeFolderMdCodeblock(folderPath, state);
+      if (res.ok) {
+        // The user just submitted the Create modal; opening the file
+        // should NOT re-pop the modal as "Save". Pass `suppressEditModal`
+        // so openFolderViewTab skips the auto-modal hook.
+        openFolderViewTab(folderPath, undefined, { suppressEditModal: true });
+      }
+    },
   });
 }
 
 /**
- * Write the chosen template content to _folder.md and open the folder view tab.
- * Same error-handling pattern as createFolderViewFile.
+ * Project a `_folder.md` file's content into the `SelectBuilderInitial`
+ * shape the modal consumes for edit-mode prefill.
+ *
+ * Read order (AD-2): the body's first `select` codeblock wins; legacy
+ * frontmatter is the fallback for files written before step_03.
  */
-async function writeFolderViewTemplate(
-  dirPath: string,
-  content: string,
-  container: HTMLElement | null,
-  _vaultId: string,
-): Promise<void> {
-  const folderMdPath = dirPath + "/_folder.md";
-  const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
-  const vaultIndex = vaultManager?.getVaultIndex?.();
-  const existingEntry = (vaultIndex?.entries ?? []).find(
-    (e: any) => e.path === folderMdPath
-  );
-  if (existingEntry) {
-    openFolderViewTab(dirPath);
-    return;
+function readFolderMdForBuilder(content: string): SelectBuilderInitial {
+  // Isolate the body text. When frontmatter exists, the body starts
+  // four characters past the second `---` (the trailing newline).
+  const idx = content.indexOf("\n---\n");
+  const body = content.startsWith("---")
+    ? idx > 0
+      ? content.slice(idx + 5)
+      : ""
+    : content;
+  const cb = extractSelectCodeblockBody(body);
+  if (cb !== null) {
+    return parseSelectBodyForBuilder(cb);
   }
-  try {
-    await (window as any).__TAURI_INTERNALS__?.invoke?.(
-      "write_file",
-      { path: folderMdPath, content },
-    );
-  } catch (err) {
-    if (container) showInlineError(container, `Could not create _folder.md: ${String(err)}`);
-    return;
+
+  // Frontmatter fallback. Project the legacy keys we recognise onto
+  // the SelectBuilderInitial shape. A malformed frontmatter falls
+  // through to an empty initial, which the modal then renders with
+  // create-mode defaults.
+  const initial: SelectBuilderInitial = {};
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (fmMatch) {
+    const lines = fmMatch[1].split("\n");
+    for (const raw of lines) {
+      const colon = raw.indexOf(":");
+      if (colon === -1) continue;
+      const key = raw.slice(0, colon).trim();
+      const val = raw.slice(colon + 1).trim();
+      if (!val) continue;
+      if (key === "layout") {
+        // Legacy aliases (`view-cards`, `folder-cards`, etc.) collapse to
+        // their canonical slug; the modal's tab strip recognises only the
+        // canonical six.
+        const canonical = val
+          .replace(/^view-/, "")
+          .replace(/^folder-/, "");
+        initial.display = canonical as SelectBuilderInitial["display"];
+      }
+      if (key === "path") initial.path = val;
+      if (key === "sort") initial.sort = val;
+      if (key === "show-modified") initial.showModified = val !== "false";
+      if (key === "show-extensions") initial.showExtensions = val !== "false";
+      if (key === "preview-pane") initial.previewPane = val === "true";
+      if (key === "content-width") {
+        if (val === "wide" || val === "full" || val === "normal") {
+          initial.contentWidth = val;
+        }
+      }
+    }
   }
-  openFolderViewTab(dirPath);
+  return initial;
 }
 
 /** Default _folder.md content written by both create and reset actions. */

@@ -25,7 +25,8 @@
  */
 
 import { type ViewUpdate, EditorView, keymap } from "@codemirror/view";
-import { Prec, type Extension } from "@codemirror/state";
+import { Prec, type EditorState, type Extension } from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
 import { insertHorizontalRule, toggleLinePrefix } from "./format";
 import { CALLOUT_TYPES } from "./callouts";
 
@@ -62,13 +63,86 @@ const slashKeymap = keymap.of([
   { key: "ArrowUp",   run: ()     => { if (!_active) return false; _active.move(-1); return true; } },
   { key: "Enter",     run: (view) => { if (!_active) return false; _active.accept(view); return true; } },
   { key: "Tab",       run: (view) => { if (!_active) return false; _active.accept(view); return true; } },
-  { key: "Escape",    run: ()     => { if (!_active) return false; _active.close();  return true; } },
+  { key: "Escape",    run: (view) => { if (!_active) return false; _active.cancelOnEsc(view); return true; } },
 ]);
 
 // ── Starters ───────────────────────────────────────────────────────────────────
 const TABLE_STARTER   = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n";
 const CODE_FENCE      = "```\n\n```";
 const SIDEBAR_LEFT    = "```sidebar-left\n\n```";
+const SIDEBAR_FENCE   = "```sidebar\n\n```";
+const GRID_FENCE      = "```grid\n\n```";
+
+/**
+ * Names of slash commands that opt into the "Esc cancels and removes
+ * the typed slash text" behaviour (view-modal EC-10, locked per user
+ * directive 2026-06-08).
+ *
+ * Existing slash commands (e.g. /sidebar-left, /code, /callout) keep
+ * the legacy convention of leaving typed text in place after Esc.
+ * Only the two NEW commands introduced in step_07 of the Unified View
+ * Modal feature opt into the inverse behaviour.
+ *
+ * Order of operations on Esc when active command opts in:
+ *   1. dispatch a change that deletes the slash text range [slashFrom, head)
+ *   2. close the popup
+ *   3. return cursor to slashFrom (achieved by the change's selection)
+ *
+ * Stored as a runtime-frozen Set (Object.freeze) — not just a
+ * TypeScript-level `ReadonlySet<string>` — so a malicious or buggy
+ * plugin that grabs the binding via the module graph cannot mutate the
+ * opt-in list at runtime to extend EC-10's "Esc removes typed text"
+ * behaviour to other slash commands (Reviewer L-1 hardening,
+ * 2026-06-08). `Object.isFrozen(ESC_REMOVES_TYPED_TEXT)` returns true.
+ * Lookup is O(1) inside the Esc handler.
+ */
+const ESC_REMOVES_TYPED_TEXT: ReadonlySet<string> =
+  Object.freeze(new Set(["sidebar", "grid"])) as ReadonlySet<string>;
+
+/**
+ * Test-only export of the EC-10 opt-in Set. Exposed solely so the
+ * regression test in `tests/view-modal/slash-commands.test.ts` can
+ * assert that `Object.isFrozen(...)` returns true (Reviewer L-1).
+ * Plugins do not bundle this module, so re-exposing the reference here
+ * does not widen the runtime attack surface.
+ */
+export const __TEST_ONLY_ESC_REMOVES_TYPED_TEXT = ESC_REMOVES_TYPED_TEXT;
+
+/**
+ * Returns true when `pos` is inside an open fenced or indented code
+ * block. The naive line-start regex `^\/(\w*)$` in `update()` would
+ * otherwise fire for `/sidebar` typed on the inner blank line of a
+ * ```js / ```python / ```... fence, because that blank line still
+ * matches the regex.
+ *
+ * AD-7 in `docs/specs/view-modal/00_index.md` mandates this guard:
+ * the slash-trigger must consult the Lezer syntax tree and skip when
+ * the cursor's enclosing node is a code context. We mirror the
+ * exhaustive list used by `typing-assist.plugin.ts:isProtectedContext`
+ * (`FencedCode`, `CodeBlock`, `CodeText`, `InlineCode`) — the same
+ * canonical set the existing typography-suppression code uses, so the
+ * two share a single mental model of "code-like context".
+ *
+ * The walk is bounded by `node.parent` — at most ~5 levels in practice
+ * for a markdown doc — so the check is effectively O(1) per keystroke.
+ */
+function isInsideCodeFence(state: EditorState, pos: number): boolean {
+  // `resolveInner(pos, -1)` biases to the node ending at `pos` if
+  // there's ambiguity; matches the typing-assist plugin's call shape.
+  let node = syntaxTree(state).resolveInner(pos, -1);
+  while (node) {
+    const { name } = node;
+    if (
+      name === "FencedCode" ||
+      name === "CodeBlock"  ||
+      name === "CodeText"   ||
+      name === "InlineCode"
+    ) return true;
+    if (!node.parent) break;
+    node = node.parent;
+  }
+  return false;
+}
 
 /** Build a callout insertion template. `type` is the lowercased canonical
  *  type word; rendered live-preview capitalizes it via the parser's
@@ -228,12 +302,52 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
       },
     },
     {
+      // step_07 (view-modal): inserts a right-floating sidebar codefence
+      // stub. The chooser modal (sidebar / grid / select) is gone post-
+      // step_09; users now type the slash command directly. The cursor
+      // lands on the inner blank line so the user can start typing the
+      // sidebar body immediately. FR-70 / FR-74.
+      //
+      // Esc behaviour for this command is the inverse of the legacy
+      // convention — typed text is removed (EC-10). See
+      // ESC_REMOVES_TYPED_TEXT and `QuickCommandsPlugin.cancelOnEsc`.
+      //
+      // Placed BEFORE /sidebar-left so the exact match `/sidebar` is
+      // the first (default-selected) suggestion when the user types
+      // the full slug.
+      name: "sidebar",
+      description: "Insert a right-floating sidebar",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: SIDEBAR_FENCE },
+          // Cursor lands at the inner blank line: ```sidebar\n<here>\n```
+          selection: { anchor: from + SIDEBAR_FENCE.indexOf("\n") + 1 },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
       name: "sidebar-left",
       description: "Insert a left-floating sidebar",
       apply(view, from, to) {
         view.dispatch({
           changes: { from, to, insert: SIDEBAR_LEFT },
           selection: { anchor: from + SIDEBAR_LEFT.indexOf("\n") + 1 },
+        });
+        deps.enterPreviewMode();
+      },
+    },
+    {
+      // step_07 (view-modal): inserts an NxM grid codefence stub.
+      // Configuration (cols × rows, cell style) is deferred (DW-1);
+      // for now the stub is empty and the user fills in the body.
+      // Same EC-10 Esc-removes-typed-text behaviour as `/sidebar`.
+      name: "grid",
+      description: "Insert an NxM grid",
+      apply(view, from, to) {
+        view.dispatch({
+          changes: { from, to, insert: GRID_FENCE },
+          selection: { anchor: from + GRID_FENCE.indexOf("\n") + 1 },
         });
         deps.enterPreviewMode();
       },
@@ -319,6 +433,14 @@ class QuickCommandsPlugin {
     const match = before.match(/^\/(\w*)$/);
 
     if (!match) { this.close(); return; }
+
+    // EC-9 guard (view-modal, AD-7): suppress the slash menu when the
+    // cursor sits inside an open code fence / inline code span. The
+    // regex above only checks "/" is at column 0, which still matches
+    // the inner blank line of a ```lang fence. Without this guard,
+    // typing `/sidebar` on that blank line would pop the slash menu
+    // inside a code block — a surprising UX regression.
+    if (isInsideCodeFence(state, sel.head)) { this.close(); return; }
 
     const typed = match[1].toLowerCase();
     this.filtered = this.commands.filter((c) => c.name.startsWith(typed));
@@ -427,6 +549,53 @@ class QuickCommandsPlugin {
     this.close();
     cmd.apply(view, from, to);
     view.focus();
+  }
+
+  /**
+   * Handle the Esc key. Legacy convention: close the popup; the user's
+   * typed slash text stays in the doc. New behaviour for `/sidebar`
+   * and `/grid` (view-modal EC-10, locked per user directive
+   * 2026-06-08): the typed slash text is removed and the cursor
+   * returns to where the slash started.
+   *
+   * The selection inversion is performed BEFORE close() because close()
+   * resets `slashFrom = -1`, losing the range we need.
+   */
+  cancelOnEsc(view: EditorView) {
+    // Determine if the currently-selected suggestion's name is in the
+    // opt-in set. We look at the FILTERED list's first entry — the
+    // user's typed text is `before.slice(1)` (the chars after `/`),
+    // and the selected chip is `this.filtered[this.selectedIdx]`.
+    //
+    // The user directive scopes the inverse behaviour to the typed
+    // text being `/sidebar` or `/grid`, not to the selected suggestion.
+    // We compare against what the user typed (the literal text in the
+    // slash range), not against the suggestion list, so partial matches
+    // like `/si` do NOT trigger the deletion — only fully-typed
+    // `/sidebar` or `/grid` (or a longer prefix that resolves to one).
+    let shouldRemove = false;
+    if (this.slashFrom >= 0 && !this.inSubPicker) {
+      const head = view.state.selection.main.head;
+      if (head > this.slashFrom) {
+        const typed = view.state
+          .sliceDoc(this.slashFrom + 1, head)
+          .toLowerCase();
+        if (ESC_REMOVES_TYPED_TEXT.has(typed)) shouldRemove = true;
+      }
+    }
+
+    if (shouldRemove) {
+      // Capture the range BEFORE close() resets slashFrom.
+      const from = this.slashFrom;
+      const head = view.state.selection.main.head;
+      this.close();
+      view.dispatch({
+        changes: { from, to: head, insert: "" },
+        selection: { anchor: from },
+      });
+    } else {
+      this.close();
+    }
   }
 
   close() {

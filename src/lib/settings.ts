@@ -56,6 +56,23 @@ export interface SessionTabEntry {
 }
 
 /**
+ * One entry in the cross-vault custom-folder-icon list (folder-icon-assignment
+ * step_06c — FR-14).
+ *
+ * Path is absolute. Label defaults to the file's basename at add-time and is
+ * not user-editable in MVP (DW-16). `addedAt` is epoch ms and is the stable
+ * sort key the picker uses to display newest entries first.
+ */
+export interface CustomIconEntry {
+  /** Absolute path to the user's .svg file (stored verbatim). */
+  path: string;
+  /** Display label shown in the picker tile's title attribute. */
+  label: string;
+  /** Add timestamp in ms since epoch — picker sort key. */
+  addedAt: number;
+}
+
+/**
  * Per-plugin enable/disable state entry in the unified `plugins` map.
  *
  * `kind` distinguishes core plugins (shipped with the app) from user plugins
@@ -235,6 +252,51 @@ export interface MarkableSettings {
    * QuickCaptureWidget falls back to DEFAULT_SETTINGS.quickCapture when absent.
    */
   quickCapture?: QuickCaptureSettings;
+
+  /**
+   * Cross-vault custom folder-icon list (folder-icon-assignment step_06c).
+   *
+   * User-curated list of absolute SVG paths surfaced by the folder-icon
+   * picker's "Custom" section. Lives at user-settings level (not per-vault)
+   * so a user who maintains a personal SVG library does not have to re-add
+   * each file in every vault (FR-14).
+   *
+   * Capped at 100 entries with refuse-add behaviour (FR-18, EC-20).
+   *
+   * IMPORTANT (EC-21): removing an entry from this list does NOT clear
+   * folder assignments that reference the path. `_folder.md` is the source
+   * of truth for assignment; this list is the picker's favourites surface
+   * only.
+   */
+  customFolderIcons?: CustomIconEntry[];
+
+  /**
+   * Per-vault Collections UI state (step 16).
+   *
+   * Optional — absent in settings files created before Collections shipped.
+   * `collections-persistence.ts` reads through this map keyed by vault id,
+   * with `?? {}` fallbacks so reads are null-safe.
+   *
+   * Structure: `collections[vaultId].lastOpenedStackByCollection` maps a
+   * Collection's absolute folder path to the absolute path of the Stack the
+   * user was viewing when they navigated away — used to auto-restore the
+   * Stack view on re-entry. `collections[vaultId].scrollPositionByStack` is
+   * the per-Stack scroll position the renderer applies on first paint.
+   *
+   * The Rust raw-JSON pass-through means this field is safe to add without
+   * touching any Rust struct.
+   */
+  collections?: Record<string, CollectionsPerVaultState>;
+}
+
+/**
+ * Per-vault Collections state shape (step 16). Both keys are optional and
+ * have empty-object semantics — callers compose partial updates without
+ * worrying about creating missing intermediates.
+ */
+export interface CollectionsPerVaultState {
+  lastOpenedStackByCollection?: Record<string, string>;
+  scrollPositionByStack?: Record<string, number>;
 }
 
 export interface QuickCaptureSettings {
@@ -337,6 +399,9 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     right: { ...DEFAULT_SIDEBAR_SLOT },
     panelSides: {},
   },
+  // folder-icon-assignment step_06c — cross-vault custom SVG list. Empty by
+  // default; populated only via the picker's "Add custom SVG…" flow.
+  customFolderIcons: [],
 };
 
 // --- Window state helpers ---

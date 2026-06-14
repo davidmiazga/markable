@@ -19,6 +19,12 @@
  */
 
 import type { VaultIndexEntry, VaultEntry } from "../../lib/vault-types";
+import { interpretIconValue } from "./folder-icons";
+
+// Re-export so importers can stay path-symmetric with getVaultIconClass.
+// Adding a folder-icon resolver as a sibling of getVaultIconClass mirrors the
+// pattern Architect §2 (system decomposition) lays out for step_05.
+export { getFolderIconClass } from "./folder-icons";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -52,6 +58,17 @@ export interface TreeNode {
   depth: number;
   /** CSS class for the icon glyph (mapped from type + vault.iconId). */
   iconClass: string;
+  /**
+   * Set only when this directory node's icon resolves to a custom SVG path
+   * (`iconClass === "folder-icon-custom"`). Carries the absolute file-system
+   * path so the post-mount custom-SVG injection pass in file-browser.plugin.ts
+   * (step_05 of folder-icon-assignment) can find the slot element via
+   * `data-icon-path` and read the SVG body off the render hot path.
+   *
+   * Undefined for catalog hits and the generic fallback — those use the
+   * iconClass alone to drive their visual.
+   */
+  iconCustomPath?: string;
   /** Set only when type === "vault"; contains the vault's UUID. */
   vaultId?: string;
   /**
@@ -197,6 +214,15 @@ export function buildTreeFromIndex(
   vault: VaultEntry,
   directories?: string[],
   smartFolderInjections?: TreeNode[],
+  /**
+   * Optional map from directory path → raw icon value (catalog iconId OR
+   * absolute SVG path). Populated by `buildFolderIconMap()` once per render
+   * pass in file-browser.plugin.ts. The map is consulted only inside
+   * `buildSubtree()` — a missing entry or missing map yields the generic
+   * "folder-icon" class, preserving today's byte-identical default behaviour
+   * (NFR-1).
+   */
+  folderIconMap?: Map<string, string>,
 ): TreeNode[] {
   /*
    * Build a map from absolute path → TreeNode for all directory nodes so we
@@ -229,8 +255,8 @@ export function buildTreeFromIndex(
      * the tree shallow.
      */
     const container: TreeNode[] = rootPaths.length > 1
-      ? buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 1)
-      : buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 0);
+      ? buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 1, folderIconMap)
+      : buildSubtree(rootPath, rootEntries, rootDirs, expandedPaths, dirMap, 0, folderIconMap);
 
     rootChildren.push(...container);
   }
@@ -290,8 +316,24 @@ function buildSubtree(
   expandedPaths: Set<string>,
   dirMap: Map<string, TreeNode>,
   baseDepth: number,
+  folderIconMap?: Map<string, string>,
 ): TreeNode[] {
   const topLevel: TreeNode[] = [];
+
+  /*
+   * Resolve a directory's iconClass + (optional) custom path from the map.
+   * Local closure to keep both directory-creation sites in sync — adding a
+   * second resolver call would have invited drift between them.
+   */
+  function iconFor(dirPath: string): { iconClass: string; iconCustomPath?: string } {
+    if (!folderIconMap) return { iconClass: "folder-icon" };
+    const rawValue = folderIconMap.get(dirPath);
+    const kind = interpretIconValue(rawValue);
+    if (kind.kind === "custom") {
+      return { iconClass: kind.cssClass, iconCustomPath: kind.path };
+    }
+    return { iconClass: kind.cssClass };
+  }
 
   // First pass: ensure directory nodes exist for all known subdirectories,
   // including empty ones not reachable from any file path.
@@ -303,6 +345,7 @@ function buildSubtree(
       currentPath = currentPath + "/" + parts[i];
       const depth = baseDepth + i;
       if (!dirMap.has(currentPath)) {
+        const icon = iconFor(currentPath);
         const dirNode: TreeNode = {
           type: "directory",
           path: currentPath,
@@ -310,7 +353,8 @@ function buildSubtree(
           children: [],
           expanded: expandedPaths.has(currentPath),
           depth,
-          iconClass: "folder-icon",
+          iconClass: icon.iconClass,
+          iconCustomPath: icon.iconCustomPath,
         };
         dirMap.set(currentPath, dirNode);
         parentChildren.push(dirNode);
@@ -334,6 +378,7 @@ function buildSubtree(
       const depth = baseDepth + i;
 
       if (!dirMap.has(currentPath)) {
+        const icon = iconFor(currentPath);
         const dirNode: TreeNode = {
           type: "directory",
           path: currentPath,
@@ -341,7 +386,8 @@ function buildSubtree(
           children: [],
           expanded: expandedPaths.has(currentPath),
           depth,
-          iconClass: "folder-icon",
+          iconClass: icon.iconClass,
+          iconCustomPath: icon.iconCustomPath,
         };
         dirMap.set(currentPath, dirNode);
         parentChildren.push(dirNode);

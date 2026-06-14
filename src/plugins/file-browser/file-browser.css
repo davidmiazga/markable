@@ -1,3 +1,5 @@
+@import "./collections/collections.css";
+
 /*
  * file-browser.css
  *
@@ -142,6 +144,81 @@
 .folder-icon::before {
   content: "📁";
   font-size: 12px;
+}
+
+/* ── Folder-icon variants — one selector per FOLDER_ICONS entry ──────────────
+ * Naming convention mirrors vault-icon-* (step_02 of folder-icon-assignment).
+ * Glyphs are inline SVGs injected by the renderer (file-browser.plugin.ts
+ * appendIconAndLabel post-mount pass — step_05). The rules below intentionally
+ * delegate color to `currentColor` so the tree-node-icon's theme tokens carry
+ * through unchanged (NFR-7). No hardcoded hex.
+ */
+.folder-icon-folder svg,
+.folder-icon-folder-open svg,
+.folder-icon-book svg,
+.folder-icon-bookshelf svg,
+.folder-icon-notebook svg,
+.folder-icon-lightbulb svg,
+.folder-icon-target svg,
+.folder-icon-calendar svg,
+.folder-icon-inbox svg,
+.folder-icon-archive svg,
+.folder-icon-code svg,
+.folder-icon-terminal svg,
+.folder-icon-database svg,
+.folder-icon-image svg,
+.folder-icon-film svg,
+.folder-icon-music svg,
+.folder-icon-pencil svg,
+.folder-icon-tag svg,
+.folder-icon-flag svg,
+.folder-icon-star svg,
+.folder-icon-heart svg,
+.folder-icon-clipboard svg,
+.folder-icon-briefcase svg,
+.folder-icon-house svg,
+/* AMENDMENT 2026-06-05 — parent class for user-supplied custom SVGs. The
+ * renderer injects the sanitised file body into the slot at runtime
+ * (folder-icon-custom-cache.ts in step_05), so the rule only needs to size
+ * and color the svg child. */
+.folder-icon-custom svg {
+  display: block;
+  fill: currentColor;
+  width: 100%;
+  height: 100%;
+}
+
+/* When a variant class is present, suppress the default emoji ::before glyph
+ * inherited from .folder-icon so the inline SVG is the only thing painted.
+ * The variant classes apply IN ADDITION to .folder-icon on the slot element
+ * (the renderer keeps both classes so the parent sizing rules still apply).
+ */
+.folder-icon-folder::before,
+.folder-icon-folder-open::before,
+.folder-icon-book::before,
+.folder-icon-bookshelf::before,
+.folder-icon-notebook::before,
+.folder-icon-lightbulb::before,
+.folder-icon-target::before,
+.folder-icon-calendar::before,
+.folder-icon-inbox::before,
+.folder-icon-archive::before,
+.folder-icon-code::before,
+.folder-icon-terminal::before,
+.folder-icon-database::before,
+.folder-icon-image::before,
+.folder-icon-film::before,
+.folder-icon-music::before,
+.folder-icon-pencil::before,
+.folder-icon-tag::before,
+.folder-icon-flag::before,
+.folder-icon-star::before,
+.folder-icon-heart::before,
+.folder-icon-clipboard::before,
+.folder-icon-briefcase::before,
+.folder-icon-house::before,
+.folder-icon-custom::before {
+  content: none;
 }
 
 /* Document icon for file nodes */
@@ -387,4 +464,94 @@
   font-family: var(--ui-font);
   font-size: 11px;
   color: var(--error-color, #c0392b);
+}
+
+/* ── Folder-icon picker (step_06 of folder-icon-assignment) ──────────────────
+ * Reuses .settings-overlay / .settings-panel / .settings-footer chrome from
+ * the canonical Markable modal pattern. Only the grid + tile + Custom-section
+ * specifics live here.
+ */
+.folder-icon-picker-overlay {
+  /* feedback_modal_top_anchor — Custom section's height varies as entries
+   * are added/removed; top-anchor avoids vertical jolt. */
+  align-items: flex-start;
+  padding-top: 8vh;
+}
+.folder-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+}
+.folder-icon-picker-divider {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  margin: 12px 0 8px;
+  opacity: 0.4;
+}
+.folder-icon-picker-section-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin: 4px 0;
+}
+.folder-icon-tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border-color-subtle, var(--border-color));
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: currentColor;
+  padding: 4px;
+}
+.folder-icon-tile svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+.folder-icon-tile:hover {
+  background: var(--accent-subtle, rgba(128, 128, 128, 0.08));
+}
+.folder-icon-tile-selected {
+  border-color: var(--accent-color);
+  background: var(--accent-subtle, rgba(128, 128, 128, 0.08));
+}
+.folder-icon-tile-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  /* DW-12: --danger-color is deferred to a Phase 2 token-catalog pass.
+   * --error-color is the canonical token (defined globally in styles.css)
+   * and is the right semantic match for a "remove" affordance. */
+  background: var(--error-color);
+  color: white;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.folder-icon-tile:hover .folder-icon-tile-remove {
+  opacity: 1;
+}
+.folder-icon-picker-error {
+  color: var(--error-color);
+  margin-right: auto;
+  font-size: 12px;
+  align-self: center;
+}
+.folder-icon-picker-add {
+  margin-right: auto;
 }

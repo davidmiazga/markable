@@ -57,3 +57,10 @@ export function buildFolderViewSet(vaultIndex: VaultIndex | null): Set<string> {
 
   return result;
 }
+
+// Refactor 2026-06-06 (step_R03): the Collections-specific detection-glue
+// short-circuit was removed. Layout dispatch now flows through the
+// standard `LAYOUT_RENDERERS[config.layout]` path in tab.ts, with a
+// three-line legacy alias in tab.ts itself for pre-refactor `type:
+// collection` folders. There is no separate Collections detection module
+// to re-export from this file anymore.
