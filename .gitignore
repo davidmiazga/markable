@@ -31,3 +31,6 @@ Thumbs.db
 # Tauri resource globs are relative to src-tauri/, so the output path is
 # src-tauri/plugins/core/ (matching bundle.resources entry "plugins/core/*").
 src-tauri/plugins/core/*.js
+
+# Claude local settings (may contain API keys)
+.claude/settings.local*.json
