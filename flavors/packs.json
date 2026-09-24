@@ -1,0 +1,64 @@
+{
+  "host": {
+    "description": "Engine surfaces. Always present, not IIFE plugins, not togglable.",
+    "modules": [
+      "editor",
+      "tabs",
+      "sidebar-shell",
+      "settings",
+      "find",
+      "theme-load",
+      "status-bar-host",
+      "menus",
+      "vault-runtime",
+      "plugin-loader"
+    ]
+  },
+  "packs": {
+    "base": {
+      "displayName": "Base editing",
+      "plugins": [
+        "markdown-toolbar",
+        "command-bar",
+        "typing-assist",
+        "auto-save",
+        "word-count"
+      ]
+    },
+    "pkm": {
+      "displayName": "PKM",
+      "plugins": [
+        "file-browser",
+        "backlinks",
+        "knowledge-graph",
+        "yaml-pane",
+        "media-preview",
+        "outline-panel"
+      ]
+    },
+    "project": {
+      "displayName": "Project",
+      "plugins": [],
+      "planned": ["kanban"]
+    },
+    "quicknote": {
+      "displayName": "Quick note",
+      "plugins": ["templates", "insert-count", "auto-title"]
+    },
+    "diary": {
+      "displayName": "Diary",
+      "plugins": ["daily-note"],
+      "planned": ["calendar"]
+    },
+    "added": {
+      "displayName": "Added",
+      "plugins": [
+        "diagrams",
+        "math",
+        "focus-mode",
+        "typewriter-mode",
+        "auto-toc"
+      ]
+    }
+  }
+}

@@ -31,9 +31,9 @@ pub use commands::{
     open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, read_plugin_file,
     read_plugin_settings, read_theme_css, rename_file, reveal_in_finder, save_file_dialog,
     save_html_dialog, save_image_dialog, save_settings, save_vault_index, scan_vault_tags,
-    search_vault_content, sidecar_exists, switch_vault, unwatch_vault, update_vault,
-    update_wiki_links, validate_vault_paths, watch_vault, write_binary_file, write_file,
-    write_plugin_settings, WatcherRegistry,
+    search_vault_content, settings_file_existed, sidecar_exists, switch_vault, unwatch_vault,
+    update_vault, update_wiki_links, validate_vault_paths, watch_vault, write_binary_file,
+    write_file, write_plugin_settings, WatcherRegistry,
 };
 
 // Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
@@ -496,6 +496,7 @@ pub fn run() {
             write_file,
             write_binary_file,
             get_settings,
+            settings_file_existed,
             save_settings,
             list_themes,
             read_theme_css,

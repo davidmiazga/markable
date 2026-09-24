@@ -33,7 +33,7 @@ pub use plugins::{
     copy_core_plugins, list_core_plugins, list_user_plugins, read_plugin_file,
     read_plugin_settings, write_plugin_settings,
 };
-pub use settings::{get_settings, save_settings};
+pub use settings::{get_settings, save_settings, settings_file_existed};
 pub use themes::{copy_default_themes, list_themes, read_theme_css};
 pub use vault::{
     build_vault_index, create_vault, delete_vault, get_vault_index, list_vault_files,

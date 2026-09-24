@@ -147,6 +147,26 @@ export async function writeBinaryFile(
  * On first launch, Rust creates the file with defaults.
  * On corrupt file, Rust returns defaults.
  */
+/**
+ * Whether Application Support already has settings.json.
+ * Call before getSettings() — that command writes defaults on first launch.
+ */
+export async function settingsFileExisted(): Promise<FileResult<boolean>> {
+  try {
+    const existed = await invoke<boolean>("settings_file_existed");
+    return { ok: true, value: existed };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "settings_file_existed",
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
 export async function getSettings(): Promise<FileResult<MarkableSettings>> {
   try {
     const json = await invoke<string>("get_settings");

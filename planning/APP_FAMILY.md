@@ -12,7 +12,7 @@
 | Window + menus | One overlay window; one native menu tree in `menu.rs` / `lib.rs` |
 | Icons | `src-tauri/icons/` (workspace also has unused `jobWorking/app-icon/`) |
 | Default settings | `DEFAULT_SETTINGS` in `src/lib/settings.ts` + Rust defaults |
-| Default-enabled plugins | `DEFAULT_ENABLED_PLUGINS` in `src/plugins/index.ts` (`media-preview`, `backlinks`, `markdown-toolbar`, `command-bar`) |
+| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable intends `base`+`pkm` with a kitchen-sink first-run override |
 | Bundled resources | `help/*`, `plugins/core/*`, `themes/*` |
 | Signing | Not configured |
 
@@ -38,6 +38,6 @@
 
 ## Blockers
 
-There is no plugin manifest file today. Enabled state is a runtime map in settings. Core plugins are a hard-coded array in `build-plugins.mjs`. Until those become data, “preconfigured apps” means forking source.
+Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json) and explained in [SeparateApp-CXrequirements-v1.0.md](SeparateApp-CXrequirements-v1.0.md). Existing `com.markable.app` directories are stamped `productLine: "legacy-kitchen-sink"` and keep the Re-markable first-run override plus file-browser-first vault chrome until a migration exists. A missing `settings.json` is stamped `markable` and enables the `base` pack. Existing `settings.plugins` entries still win. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. Other flavor JSON files (Project, KnowledgeBank, QuickNote, Diary) are not created yet.
 
-`dm-software-machine` stays **uninitialized** until this layout exists so `app_folder` is not pointed at a path that will move. See [EXECUTION.md](EXECUTION.md).
+See [EXECUTION.md](EXECUTION.md) for the software-machine contract.

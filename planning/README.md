@@ -10,7 +10,8 @@ Stale session trackers, completed requirement snapshots, and historical handoffs
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Implemented system, seams, and coupling |
 | [RISKS.md](RISKS.md) | Debt and constraints for the next epic |
 | [APP_FAMILY.md](APP_FAMILY.md) | Separate-installable-app target and readiness |
-| [EXECUTION.md](EXECUTION.md) | Deferred `dm-software-machine` + Beads contract |
+| [SeparateApp-CXrequirements-v1.0.md](SeparateApp-CXrequirements-v1.0.md) | Six-app CX and locked host / pack table |
+| [EXECUTION.md](EXECUTION.md) | Software-machine + Beads contract |
 | [old/README.md](old/README.md) | Archive index |
 
 Last-known product requirement (not yet implemented as a spec): [`docs/requirements/active_task.md`](../docs/requirements/active_task.md) — Collections hierarchy / composite views (2026-06-09). The referenced `docs/specs/collections-hierarchy/` directory does not exist.

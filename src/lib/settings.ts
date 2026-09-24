@@ -6,7 +6,7 @@
  * immediately for user actions or debounced for high-frequency events.
  */
 
-import { getSettings, saveSettings } from "./bridge";
+import { getSettings, saveSettings, settingsFileExisted } from "./bridge";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import type { VaultEntry } from "./vault-types";
@@ -287,7 +287,21 @@ export interface MarkableSettings {
    * touching any Rust struct.
    */
   collections?: Record<string, CollectionsPerVaultState>;
+
+  /**
+   * Install lineage for this Application Support directory.
+   *
+   * `"markable"` — first launch after flavor subtraction (single-file editor).
+   * `"legacy-kitchen-sink"` — `settings.json` already existed (today’s
+   * `com.markable.app` data). Kept until a Re-markable migration exists.
+   *
+   * Stamped once in loadSettings(). Absent on disk means “not yet classified”.
+   */
+  productLine?: ProductLine;
 }
+
+/** Persisted install lineage. See MarkableSettings.productLine. */
+export type ProductLine = "markable" | "legacy-kitchen-sink";
 
 /**
  * Per-vault Collections state shape (step 16). Both keys are optional and
@@ -402,6 +416,7 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
   // folder-icon-assignment step_06c — cross-vault custom SVG list. Empty by
   // default; populated only via the picker's "Add custom SVG…" flow.
   customFolderIcons: [],
+  productLine: "markable",
 };
 
 // --- Window state helpers ---
@@ -501,7 +516,25 @@ export function getCurrentSettings(): MarkableSettings {
  * Load settings from Rust backend. Call once during init, before window.show().
  * On failure, returns defaults and marks settings as read-only for the session.
  */
+export function resolveProductLine(
+  diskProductLine: ProductLine | undefined,
+  settingsFileExisted: boolean,
+): ProductLine {
+  if (diskProductLine === "markable" || diskProductLine === "legacy-kitchen-sink") {
+    return diskProductLine;
+  }
+  // get_settings writes defaults on first launch — existence must be
+  // sampled before that call. Existing com.markable.app data stays
+  // kitchen-sink until a Re-markable migration exists.
+  return settingsFileExisted ? "legacy-kitchen-sink" : "markable";
+}
+
 export async function loadSettings(): Promise<MarkableSettings> {
+  const existedResult = await settingsFileExisted();
+  // Fail closed: if we cannot tell, treat the install as existing kitchen-sink
+  // so we never subtract chrome from unknown Application Support data.
+  const settingsFileWasPresent = !existedResult.ok || existedResult.value === true;
+
   const result = await getSettings();
 
   if (result.ok) {
@@ -511,11 +544,30 @@ export async function loadSettings(): Promise<MarkableSettings> {
     // flat optional fields; nested objects (window, editor, theme) are replaced
     // wholesale by the persisted value, which is correct since they are always
     // fully written on save.
-    currentSettings = { ...structuredClone(DEFAULT_SETTINGS), ...result.value };
+    //
+    // productLine is classified from the raw disk value, not the merge —
+    // DEFAULT_SETTINGS.productLine is "markable" and must not re-stamp
+    // existing Application Support data.
+    const diskLine = result.value.productLine;
+    const productLine = resolveProductLine(diskLine, settingsFileWasPresent);
+    currentSettings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      ...result.value,
+      productLine,
+    };
+    if (diskLine !== productLine && settingsWritable) {
+      const saved = await saveSettings(currentSettings);
+      if (!saved.ok) {
+        console.error("Failed to persist productLine:", saved.error.message);
+      }
+    }
   } else {
     console.error("Failed to load settings:", result.error.message);
     console.warn("Using default settings.");
-    currentSettings = structuredClone(DEFAULT_SETTINGS);
+    currentSettings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      productLine: resolveProductLine(undefined, settingsFileWasPresent),
+    };
     settingsWritable = false;
   }
 

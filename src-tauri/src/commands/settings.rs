@@ -376,6 +376,14 @@ fn write_raw_settings_to_disk(
 
 // --- Tauri Commands ---
 
+/// True when `settings.json` already exists. Must be called before
+/// `get_settings`, which writes defaults on first launch and would
+/// otherwise hide a fresh install.
+#[tauri::command]
+pub fn settings_file_existed(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(settings_path(&app)?.exists())
+}
+
 #[tauri::command]
 pub fn get_settings(app: tauri::AppHandle) -> Result<String, String> {
     let path = settings_path(&app)?;
@@ -426,6 +434,11 @@ pub fn save_settings(app: tauri::AppHandle, settings: String) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_filename_is_settings_json() {
+        assert_eq!(SETTINGS_FILENAME, "settings.json");
+    }
 
     #[test]
     fn test_default_settings_serialize_roundtrip() {

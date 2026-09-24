@@ -33,11 +33,15 @@ import { evaluatePlugin } from "./user-plugin-loader";
 import { updateSettings } from "../lib/settings";
 import type { MarkableSettings } from "../lib/settings";
 import { pluginCompartment } from "../editor/extensions";
+import { defaultEnabledPluginSet, defaultEnabledPluginsForProductLine } from "../lib/flavor";
 
 // ── Default-enabled plugins ───────────────────────────────────────────────────
 
 /**
  * Plugins that are ON out of the box for a new install.
+ *
+ * Markable flavor first-run set. Kitchen-sink installs use
+ * `defaultEnabledPluginsForProductLine` instead.
  *
  * Applied only when a plugin has NO saved state in settings.plugins
  * (i.e. the user has never explicitly toggled it). Once the user turns a
@@ -46,12 +50,7 @@ import { pluginCompartment } from "../editor/extensions";
  * Order also defines their display priority in the Plugins panel Core section
  * (see plugins-panel.ts FEATURED_PLUGIN_ORDER).
  */
-export const DEFAULT_ENABLED_PLUGINS: ReadonlySet<string> = new Set([
-  "media-preview",
-  "backlinks",
-  "markdown-toolbar",
-  "command-bar",
-]);
+export const DEFAULT_ENABLED_PLUGINS: ReadonlySet<string> = defaultEnabledPluginSet();
 
 /**
  * Plugins that belong to the "Workflow" section in the Plugins panel.
@@ -385,15 +384,16 @@ export class PluginManager {
     // A plugin is enabled when:
     //   a) The user has explicitly enabled it (saved.enabled === true), OR
     //   b) The user has never touched it (saved === undefined) AND it is in
-    //      DEFAULT_ENABLED_PLUGINS — first-run / new-install experience.
+    //      the product-line first-run set (Markable flavor vs kitchen-sink).
     // Explicitly disabled plugins (saved.enabled === false) are always off.
+    const firstRunDefaults = defaultEnabledPluginsForProductLine(settings.productLine);
     for (const record of this._records) {
       if (record.status !== "loaded" || !record.plugin || !record.api) continue;
       const saved = settings.plugins?.[record.plugin.id];
       const neverTouched = saved === undefined;
       const shouldEnable =
         saved?.enabled === true ||
-        (neverTouched && DEFAULT_ENABLED_PLUGINS.has(record.plugin.id));
+        (neverTouched && firstRunDefaults.has(record.plugin.id));
       if (shouldEnable) {
         await this._enable(record);
       }

@@ -1,0 +1,11 @@
+{
+  "id": "remarkable",
+  "displayName": "Re-markable",
+  "enabledPacks": ["base", "pkm"],
+  "defaultEnabledPlugins": [
+    "media-preview",
+    "backlinks",
+    "markdown-toolbar",
+    "command-bar"
+  ]
+}

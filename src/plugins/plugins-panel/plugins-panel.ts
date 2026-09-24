@@ -17,7 +17,8 @@
 
 import "./plugins-panel.css";
 import type { UnifiedPluginDef } from "../index";
-import { DEFAULT_ENABLED_PLUGINS, WORKFLOW_PLUGINS } from "../index";
+import { WORKFLOW_PLUGINS } from "../index";
+import { defaultEnabledPluginsForProductLine } from "../../lib/flavor";
 import { getCurrentSettings } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
 import { attachModalKeyboard } from "../../lib/modal-keyboard";
@@ -235,7 +236,9 @@ function showListView(): void {
   bodyElement.innerHTML = "";
 
   const workflowSet = new Set(WORKFLOW_PLUGINS);
-  const featuredOrder = Array.from(DEFAULT_ENABLED_PLUGINS);
+  const featuredOrder = Array.from(
+    defaultEnabledPluginsForProductLine(getCurrentSettings().productLine),
+  );
 
   // Workflow section: WORKFLOW_PLUGINS order, skipping any not yet loaded.
   const workflowDefs = WORKFLOW_PLUGINS

@@ -1174,12 +1174,21 @@ async function initApp() {
   // statusBar.visible, userPlugins) into the unified plugins map introduced in
   // step_03c. migratePluginSettings is idempotent: if settings.plugins is already
   // non-empty it returns the input unchanged (EC-26/27/28).
-  const migratedSettings = migratePluginSettings(settings);
+  // Fresh Markable installs have no pre-Chunk-3 flat keys. Skipping
+  // migratePluginSettings avoids stamping word-count/status-bar as
+  // enabled:false, which would override flavor first-run defaults.
+  const migratedSettings =
+    settings.productLine === "markable"
+      ? settings
+      : migratePluginSettings(settings);
 
   // Persist the migrated map so subsequent launches skip migration entirely.
   // Fire-and-forget (void): if the write fails the migration re-runs next launch
   // with the same idempotent result, so no data is lost.
-  if (!settings.plugins || Object.keys(settings.plugins).length === 0) {
+  if (
+    settings.productLine !== "markable" &&
+    (!settings.plugins || Object.keys(settings.plugins).length === 0)
+  ) {
     void updateSettings(() => migratedSettings);
   }
 
@@ -1373,21 +1382,22 @@ async function initApp() {
   // restore "open" state if at least one panel was actually registered.
   restoreSidebarFromSettings();
 
-  // File-browser-first experience: when a vault is active and the left sidebar
-  // is at factory default (never been manually opened/closed by the user),
-  // open it automatically so the file browser leads the experience.
+  // File-browser-first experience for existing kitchen-sink installs only.
+  // Fresh Markable is a single-file editor — do not auto-open the sidebar.
   // "Factory default" = open:false AND activeTabId:null (the user has not
   // interacted with the sidebar since the vault was configured).
   {
     const _s = getCurrentSettings();
-    const _activeId = _s.activeVaultId;
-    const _hasVault = !!_activeId && (_s.vaults ?? []).some((v) => v.id === _activeId);
-    if (_hasVault) {
-      const _leftSlot = _s.sidebar?.left;
-      const _isFactoryDefault =
-        !_leftSlot || (_leftSlot.open === false && _leftSlot.activeTabId === null);
-      if (_isFactoryDefault) {
-        toggleSidebarSide("left");
+    if (_s.productLine === "legacy-kitchen-sink") {
+      const _activeId = _s.activeVaultId;
+      const _hasVault = !!_activeId && (_s.vaults ?? []).some((v) => v.id === _activeId);
+      if (_hasVault) {
+        const _leftSlot = _s.sidebar?.left;
+        const _isFactoryDefault =
+          !_leftSlot || (_leftSlot.open === false && _leftSlot.activeTabId === null);
+        if (_isFactoryDefault) {
+          toggleSidebarSide("left");
+        }
       }
     }
   }
