@@ -34,3 +34,16 @@ src-tauri/plugins/core/*.js
 
 # Claude local settings (may contain API keys)
 .claude/settings.local*.json
+
+# dm-software-machine runtime
+.dm-software-machine/runs/
+.dm-software-machine/install-manifest.json
+__pycache__/
+*.pyc
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
