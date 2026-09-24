@@ -84,8 +84,8 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeEntry>, String> {
 
     let mut themes = Vec::new();
 
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Failed to read themes directory: {}", e))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("Failed to read themes directory: {}", e))?;
 
     for entry in entries {
         let entry = match entry {
@@ -135,8 +135,7 @@ pub fn read_theme_css(app: tauri::AppHandle, filename: String) -> Result<String,
         return Err(format!("Theme file not found: {}", filename));
     }
 
-    std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read theme file: {}", e))
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read theme file: {}", e))
 }
 
 /// Copy default theme CSS files from the app bundle into Application Support.
@@ -163,12 +162,11 @@ pub fn copy_default_themes(app: tauri::AppHandle) -> Result<usize, String> {
     }
 
     let dst_dir = themes_dir(&app)?;
-    std::fs::create_dir_all(&dst_dir)
-        .map_err(|e| format!("Failed to create themes dir: {}", e))?;
+    std::fs::create_dir_all(&dst_dir).map_err(|e| format!("Failed to create themes dir: {}", e))?;
 
     let mut copied = 0usize;
-    for entry in std::fs::read_dir(&src_dir)
-        .map_err(|e| format!("Failed to read bundled themes: {}", e))?
+    for entry in
+        std::fs::read_dir(&src_dir).map_err(|e| format!("Failed to read bundled themes: {}", e))?
     {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -185,7 +183,10 @@ pub fn copy_default_themes(app: tauri::AppHandle) -> Result<usize, String> {
     }
 
     if copied > 0 {
-        println!("[themes] Installed {} default theme(s) to Application Support.", copied);
+        println!(
+            "[themes] Installed {} default theme(s) to Application Support.",
+            copied
+        );
     }
 
     Ok(copied)
@@ -197,8 +198,14 @@ mod tests {
 
     #[test]
     fn test_filename_to_display_name() {
-        assert_eq!(filename_to_display_name("solarized-dark.css"), "Solarized Dark");
-        assert_eq!(filename_to_display_name("my_custom_theme.css"), "My Custom Theme");
+        assert_eq!(
+            filename_to_display_name("solarized-dark.css"),
+            "Solarized Dark"
+        );
+        assert_eq!(
+            filename_to_display_name("my_custom_theme.css"),
+            "My Custom Theme"
+        );
         assert_eq!(filename_to_display_name("monokai.css"), "Monokai");
         assert_eq!(filename_to_display_name("nord-light.css"), "Nord Light");
     }
@@ -212,10 +219,16 @@ mod tests {
 
     #[test]
     fn test_parse_theme_base_recognises_light_and_dark() {
-        assert_eq!(parse_theme_base("/* @theme-base: light */\n:root{}"), "light");
+        assert_eq!(
+            parse_theme_base("/* @theme-base: light */\n:root{}"),
+            "light"
+        );
         assert_eq!(parse_theme_base("/* @theme-base: dark */\n:root{}"), "dark");
         assert_eq!(parse_theme_base("/* @theme-base:dark */"), "dark");
-        assert_eq!(parse_theme_base("/* Header */\n/* @theme-base: DARK */"), "dark");
+        assert_eq!(
+            parse_theme_base("/* Header */\n/* @theme-base: DARK */"),
+            "dark"
+        );
     }
 
     #[test]
@@ -230,7 +243,9 @@ mod tests {
     fn test_parse_theme_base_only_checks_first_lines() {
         // Marker beyond line 10 is ignored — we only scan the header.
         let mut css = String::new();
-        for _ in 0..15 { css.push_str("/* filler */\n"); }
+        for _ in 0..15 {
+            css.push_str("/* filler */\n");
+        }
         css.push_str("/* @theme-base: dark */\n");
         assert_eq!(parse_theme_base(&css), "light");
     }

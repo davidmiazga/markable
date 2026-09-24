@@ -89,10 +89,10 @@ impl Default for MarkableSettings {
 impl Default for WindowSettings {
     fn default() -> Self {
         Self {
-            x: -1,      // Sentinel: frontend computes screen-centered default
+            x: -1, // Sentinel: frontend computes screen-centered default
             y: -1,
-            width: 0,   // Sentinel: frontend uses 50% of screen width
-            height: 0,  // Sentinel: frontend uses 100% of screen height
+            width: 0,  // Sentinel: frontend uses 50% of screen width
+            height: 0, // Sentinel: frontend uses 100% of screen height
             fullscreen: false,
             maximized: false,
         }
@@ -245,7 +245,10 @@ fn read_settings_from_disk(app: &tauri::AppHandle) -> MarkableSettings {
         Ok(v) => v,
         Err(e) => {
             // EC-3: Invalid JSON
-            eprintln!("Settings file contains invalid JSON: {}. Using defaults.", e);
+            eprintln!(
+                "Settings file contains invalid JSON: {}. Using defaults.",
+                e
+            );
             return MarkableSettings::default();
         }
     };
@@ -264,7 +267,10 @@ fn read_settings_from_disk(app: &tauri::AppHandle) -> MarkableSettings {
     let mut settings: MarkableSettings = match serde_json::from_value(raw_value.clone()) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Settings deserialization warning: {}. Merging with defaults.", e);
+            eprintln!(
+                "Settings deserialization warning: {}. Merging with defaults.",
+                e
+            );
             merge_with_defaults(&raw_value)
         }
     };
@@ -386,8 +392,8 @@ pub fn get_settings(app: tauri::AppHandle) -> Result<String, String> {
 
     // Read the raw JSON so frontend-only fields (sizeW, sizeH, contentWidth, etc.)
     // are preserved through the round-trip.
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read settings file: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Cannot read settings file: {}", e))?;
 
     if content.trim().is_empty() {
         let defaults = MarkableSettings::default();
@@ -407,8 +413,8 @@ pub fn save_settings(app: tauri::AppHandle, settings: String) -> Result<(), Stri
     // Validate the JSON is a valid object, but write the raw value to preserve
     // frontend-only fields (sizeW, sizeH, contentWidth, wordCount, focusMode, etc.)
     // that aren't in the Rust MarkableSettings struct.
-    let raw: serde_json::Value = serde_json::from_str(&settings)
-        .map_err(|e| format!("Invalid settings JSON: {}", e))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&settings).map_err(|e| format!("Invalid settings JSON: {}", e))?;
     if !raw.is_object() {
         return Err("Settings must be a JSON object".to_string());
     }
@@ -574,10 +580,7 @@ mod tests {
     #[test]
     fn test_ec16_directories_removed_from_recent() {
         let mut settings = MarkableSettings::default();
-        settings.recent_files = vec![
-            "/tmp".to_string(),
-            "/nonexistent/file.md".to_string(),
-        ];
+        settings.recent_files = vec!["/tmp".to_string(), "/nonexistent/file.md".to_string()];
         validate_settings(&mut settings);
         assert!(!settings.recent_files.contains(&"/tmp".to_string()));
     }

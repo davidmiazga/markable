@@ -140,7 +140,8 @@ pub fn list_preset_files(app: tauri::AppHandle) -> Vec<String> {
 #[tauri::command]
 pub fn ensure_directory(path: String) -> Result<(), String> {
     let dir = std::path::Path::new(&path);
-    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
 }
 
 #[allow(dependency_on_unit_never_type_fallback)]

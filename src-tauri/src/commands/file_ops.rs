@@ -140,8 +140,7 @@ pub fn delete_file(path: String) -> Result<(), String> {
         ));
     }
 
-    std::fs::remove_file(&target)
-        .map_err(|e| format!("Failed to delete file {}: {}", path, e))
+    std::fs::remove_file(&target).map_err(|e| format!("Failed to delete file {}: {}", path, e))
 }
 
 /// Recursively delete the directory at `path` and all its contents.

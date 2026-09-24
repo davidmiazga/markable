@@ -2,7 +2,6 @@
 ///
 /// This module provides native file open/save dialogs that integrate
 /// with the system's file browser (Finder on macOS, Explorer on Windows, etc.).
-
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -186,7 +185,10 @@ pub async fn open_asset_dialog(app: tauri::AppHandle) -> Result<Option<String>, 
 
     app.dialog()
         .file()
-        .add_filter("Images & SVG", &["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"])
+        .add_filter(
+            "Images & SVG",
+            &["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"],
+        )
         .add_filter("All Files", &["*"])
         .pick_file(move |path| {
             let path_string = path.map(|p| p.to_string());

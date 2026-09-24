@@ -39,8 +39,7 @@ pub struct FileStat {
 /// construction.
 #[tauri::command]
 pub fn stat_file(path: String) -> Result<FileStat, String> {
-    let meta = fs::metadata(&path)
-        .map_err(|e| format!("stat_file failed: {}: {}", path, e))?;
+    let meta = fs::metadata(&path).map_err(|e| format!("stat_file failed: {}: {}", path, e))?;
     // `modified()` may be unsupported on some platforms (returns Err). For
     // Markable's target platforms (macOS) it is always available, but we
     // fall back to 0 rather than failing the whole call.
@@ -115,10 +114,7 @@ fn read_icon_from_file(path: &str) -> Option<String> {
             // Mirrors the TS writer's quoting policy (applyYamlKey emits
             // quoted values when the payload contains `:` or surrounding
             // whitespace — see folder-icon-store.ts and yaml-frontmatter.ts).
-            let unquoted = if val.starts_with('"')
-                && val.ends_with('"')
-                && val.len() >= 2
-            {
+            let unquoted = if val.starts_with('"') && val.ends_with('"') && val.len() >= 2 {
                 val[1..val.len() - 1].replace("\\\"", "\"")
             } else {
                 val.to_string()
@@ -164,11 +160,7 @@ mod tests {
     #[tokio::test]
     async fn returns_none_when_icon_key_missing() {
         let dir = tempdir().unwrap();
-        let p = write_tmp(
-            dir.path(),
-            "_folder.md",
-            "---\nlayout: bookshelf\n---\n",
-        );
+        let p = write_tmp(dir.path(), "_folder.md", "---\nlayout: bookshelf\n---\n");
         let r = read_folder_icon_map(vec![p]).await.unwrap();
         assert!(r[0].1.is_none());
     }
@@ -177,11 +169,7 @@ mod tests {
     async fn returns_none_for_malformed_frontmatter() {
         let dir = tempdir().unwrap();
         // No opening `---` at all.
-        let p = write_tmp(
-            dir.path(),
-            "_folder.md",
-            "icon: book\nno frontmatter",
-        );
+        let p = write_tmp(dir.path(), "_folder.md", "icon: book\nno frontmatter");
         let r = read_folder_icon_map(vec![p]).await.unwrap();
         assert!(r[0].1.is_none());
     }
@@ -189,11 +177,7 @@ mod tests {
     #[tokio::test]
     async fn mixed_batch_preserves_order_and_does_not_fail() {
         let dir = tempdir().unwrap();
-        let good = write_tmp(
-            dir.path(),
-            "good.md",
-            "---\nicon: lightbulb\n---\n",
-        );
+        let good = write_tmp(dir.path(), "good.md", "---\nicon: lightbulb\n---\n");
         let bad = "/nonexistent/_folder.md".to_string();
         let r = read_folder_icon_map(vec![good.clone(), bad.clone()])
             .await
@@ -207,11 +191,7 @@ mod tests {
     #[tokio::test]
     async fn strips_surrounding_double_quotes() {
         let dir = tempdir().unwrap();
-        let p = write_tmp(
-            dir.path(),
-            "_folder.md",
-            "---\nicon: \"book\"\n---\n",
-        );
+        let p = write_tmp(dir.path(), "_folder.md", "---\nicon: \"book\"\n---\n");
         let r = read_folder_icon_map(vec![p]).await.unwrap();
         assert_eq!(r[0].1, Some("book".to_string()));
     }
@@ -228,10 +208,7 @@ mod tests {
             "---\nicon: \"/Users/dave/My Icons/café.svg\"\n---\n",
         );
         let r = read_folder_icon_map(vec![p]).await.unwrap();
-        assert_eq!(
-            r[0].1,
-            Some("/Users/dave/My Icons/café.svg".to_string())
-        );
+        assert_eq!(r[0].1, Some("/Users/dave/My Icons/café.svg".to_string()));
     }
 
     #[tokio::test]

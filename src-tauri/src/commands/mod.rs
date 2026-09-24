@@ -15,42 +15,28 @@ pub mod themes;
 pub mod vault;
 
 pub use daily_note::{check_paths_exist, create_daily_note};
-pub use dialogs::{open_asset_dialog, open_file_dialog, open_folder_dialog, save_file_dialog, save_html_dialog, save_image_dialog};
-pub use file_ops::{
-    create_directory,
-    create_file,
-    delete_directory,
-    delete_file,
-    move_file,
-    rename_file,
-    reveal_in_finder,
-    update_wiki_links,
+pub use dialogs::{
+    open_asset_dialog, open_file_dialog, open_folder_dialog, save_file_dialog, save_html_dialog,
+    save_image_dialog,
 };
-pub use files::{list_md_files, list_preset_files, ensure_directory, get_home_dir, get_app_data_dir};
-pub use io::{read_file, write_file, write_binary_file, get_image_dimensions, get_exif_data, sidecar_exists};
+pub use file_ops::{
+    create_directory, create_file, delete_directory, delete_file, move_file, rename_file,
+    reveal_in_finder, update_wiki_links,
+};
+pub use files::{
+    ensure_directory, get_app_data_dir, get_home_dir, list_md_files, list_preset_files,
+};
+pub use io::{
+    get_exif_data, get_image_dimensions, read_file, sidecar_exists, write_binary_file, write_file,
+};
 pub use plugins::{
-    copy_core_plugins,
-    list_core_plugins,
-    list_user_plugins,
-    read_plugin_file,
-    read_plugin_settings,
-    write_plugin_settings,
+    copy_core_plugins, list_core_plugins, list_user_plugins, read_plugin_file,
+    read_plugin_settings, write_plugin_settings,
 };
 pub use settings::{get_settings, save_settings};
 pub use themes::{copy_default_themes, list_themes, read_theme_css};
 pub use vault::{
-    build_vault_index,
-    create_vault,
-    delete_vault,
-    get_vault_index,
-    list_vault_files,
-    save_vault_index,
-    scan_vault_tags,
-    search_vault_content,
-    switch_vault,
-    unwatch_vault,
-    update_vault,
-    validate_vault_paths,
-    watch_vault,
-    WatcherRegistry,
+    build_vault_index, create_vault, delete_vault, get_vault_index, list_vault_files,
+    save_vault_index, scan_vault_tags, search_vault_content, switch_vault, unwatch_vault,
+    update_vault, validate_vault_paths, watch_vault, WatcherRegistry,
 };

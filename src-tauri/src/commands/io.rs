@@ -92,7 +92,10 @@ pub fn write_file(path: String, content: String) -> Result<(), String> {
     let parent = path.parent();
     if let Some(parent_dir) = parent {
         if !parent_dir.is_dir() && parent_dir != Path::new("") {
-            return Err(format!("File not found: {} (parent dir missing)", path.display()));
+            return Err(format!(
+                "File not found: {} (parent dir missing)",
+                path.display()
+            ));
         }
     }
 
@@ -141,7 +144,11 @@ pub fn write_file(path: String, content: String) -> Result<(), String> {
     // Sync all data to disk
     if let Err(e) = file.sync_all() {
         let _ = fs::remove_file(&temp_path); // Clean up temp file
-        return Err(format!("Failed to sync file to disk: {} ({})", path.display(), e));
+        return Err(format!(
+            "Failed to sync file to disk: {} ({})",
+            path.display(),
+            e
+        ));
     }
 
     // Atomic rename (POSIX atomic operation)
@@ -196,7 +203,10 @@ pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
     let parent = path.parent();
     if let Some(parent_dir) = parent {
         if !parent_dir.is_dir() && parent_dir != Path::new("") {
-            return Err(format!("File not found: {} (parent dir missing)", path.display()));
+            return Err(format!(
+                "File not found: {} (parent dir missing)",
+                path.display()
+            ));
         }
     }
 
@@ -245,7 +255,11 @@ pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
     // Flush OS buffers to disk before renaming to prevent partial-write exposure.
     if let Err(e) = file.sync_all() {
         let _ = fs::remove_file(&temp_path); // Clean up temp file on failure
-        return Err(format!("Failed to sync file to disk: {} ({})", path.display(), e));
+        return Err(format!(
+            "Failed to sync file to disk: {} ({})",
+            path.display(),
+            e
+        ));
     }
 
     // Atomic rename: on POSIX systems `rename` is guaranteed to be atomic,
@@ -267,7 +281,6 @@ pub fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
         }
     }
 }
-
 
 // ── Image dimension command ───────────────────────────────────────────────────
 
@@ -406,7 +419,7 @@ fn parse_jpeg_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
             file.read_exact(&mut sof_data)
                 .map_err(|_| "Truncated JPEG SOF segment".to_string())?;
             let height = u16::from_be_bytes([sof_data[1], sof_data[2]]) as u32;
-            let width  = u16::from_be_bytes([sof_data[3], sof_data[4]]) as u32;
+            let width = u16::from_be_bytes([sof_data[3], sof_data[4]]) as u32;
             return Ok((width, height));
         }
 
@@ -441,7 +454,7 @@ fn parse_png_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
     file.read_exact(&mut ihdr_data)
         .map_err(|_| "Truncated PNG IHDR chunk".to_string())?;
 
-    let width  = u32::from_be_bytes([ihdr_data[0], ihdr_data[1], ihdr_data[2], ihdr_data[3]]);
+    let width = u32::from_be_bytes([ihdr_data[0], ihdr_data[1], ihdr_data[2], ihdr_data[3]]);
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     Ok((width, height))
 }
@@ -456,7 +469,7 @@ fn parse_gif_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
     file.read_exact(&mut lsd)
         .map_err(|_| "Truncated GIF Logical Screen Descriptor".to_string())?;
 
-    let width  = u16::from_le_bytes([lsd[0], lsd[1]]) as u32;
+    let width = u16::from_le_bytes([lsd[0], lsd[1]]) as u32;
     let height = u16::from_le_bytes([lsd[2], lsd[3]]) as u32;
     Ok((width, height))
 }
@@ -487,9 +500,9 @@ fn parse_webp_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
 
         // RFC 6386 §9.1: bits [13:0] are the actual display width/height (not dim-1).
         // Bits [15:14] are the horizontal/vertical scale factor.
-        let width_raw  = u16::from_le_bytes([vp8_data[6], vp8_data[7]]);
+        let width_raw = u16::from_le_bytes([vp8_data[6], vp8_data[7]]);
         let height_raw = u16::from_le_bytes([vp8_data[8], vp8_data[9]]);
-        let width  = (width_raw  & 0x3FFF) as u32;
+        let width = (width_raw & 0x3FFF) as u32;
         let height = (height_raw & 0x3FFF) as u32;
         Ok((width, height))
     } else if chunk_type == b"VP8L" {
@@ -508,7 +521,7 @@ fn parse_webp_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
 
         // Unpack the two 14-bit fields from the 4-byte LE integer at bytes 1-4.
         let bits = u32::from_le_bytes([vp8l_data[1], vp8l_data[2], vp8l_data[3], vp8l_data[4]]);
-        let width  = (bits & 0x3FFF) + 1;
+        let width = (bits & 0x3FFF) + 1;
         let height = ((bits >> 14) & 0x3FFF) + 1;
         Ok((width, height))
     } else if chunk_type == b"VP8X" {
@@ -521,7 +534,7 @@ fn parse_webp_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
             .map_err(|_| "Truncated VP8X chunk".to_string())?;
 
         // Build u32 from 3-byte LE: pad the high byte with 0x00.
-        let width  = u32::from_le_bytes([vp8x_data[4], vp8x_data[5], vp8x_data[6], 0]) + 1;
+        let width = u32::from_le_bytes([vp8x_data[4], vp8x_data[5], vp8x_data[6], 0]) + 1;
         let height = u32::from_le_bytes([vp8x_data[7], vp8x_data[8], vp8x_data[9], 0]) + 1;
         Ok((width, height))
     } else {
@@ -547,7 +560,7 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
         let pos = f.stream_position()?;
         let mut header = [0u8; 8];
         match f.read_exact(&mut header) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(e) => return Err(e),
         }
@@ -557,7 +570,10 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
         // size = 0 means "to EOF"; size = 1 means 64-bit extended size header.
         // Both are unsupported — real HEIC ftyp and meta boxes use 32-bit sizes.
         if size == 0 || size == 1 {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "64-bit BMFF box size not supported"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "64-bit BMFF box size not supported",
+            ));
         }
         // Data length = total box size minus the 8-byte header already consumed.
         let data_len = size.saturating_sub(8);
@@ -579,7 +595,9 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
 
         loop {
             let pos = f.stream_position()?;
-            if pos >= region_end { break; }
+            if pos >= region_end {
+                break;
+            }
 
             match read_box_header(f)? {
                 None => break,
@@ -597,7 +615,8 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
     }
 
     // Step 1: Get the total file length to bound the top-level box scan.
-    let file_len = file.seek(SeekFrom::End(0))
+    let file_len = file
+        .seek(SeekFrom::End(0))
         .map_err(|e| format!("Failed to seek HEIC file: {}", e))?;
     file.seek(SeekFrom::Start(0))
         .map_err(|e| format!("Failed to seek HEIC file to start: {}", e))?;
@@ -617,19 +636,25 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
     let (iprp_data_len, iprp_data_offset) =
         find_child_box(file, meta_children_offset, meta_children_len, b"iprp")
             .map_err(|e| format!("HEIC iprp box walk error: {}", e))?
-            .ok_or_else(|| "Could not find ispe box in HEIC/HEIF file (iprp not found)".to_string())?;
+            .ok_or_else(|| {
+                "Could not find ispe box in HEIC/HEIF file (iprp not found)".to_string()
+            })?;
 
     // Step 4: Find `ipco` inside `iprp`.
     let (ipco_data_len, ipco_data_offset) =
         find_child_box(file, iprp_data_offset, iprp_data_len, b"ipco")
             .map_err(|e| format!("HEIC ipco box walk error: {}", e))?
-            .ok_or_else(|| "Could not find ispe box in HEIC/HEIF file (ipco not found)".to_string())?;
+            .ok_or_else(|| {
+                "Could not find ispe box in HEIC/HEIF file (ipco not found)".to_string()
+            })?;
 
     // Step 5: Find `ispe` inside `ipco`.
     let (ispe_data_len, ispe_data_offset) =
         find_child_box(file, ipco_data_offset, ipco_data_len, b"ispe")
             .map_err(|e| format!("HEIC ispe box walk error: {}", e))?
-            .ok_or_else(|| "Could not find ispe box in HEIC/HEIF file (ispe not found)".to_string())?;
+            .ok_or_else(|| {
+                "Could not find ispe box in HEIC/HEIF file (ispe not found)".to_string()
+            })?;
 
     if ispe_data_len < 8 {
         return Err("HEIC/HEIF ispe box too small to contain dimensions".to_string());
@@ -645,7 +670,7 @@ fn parse_heic_dimensions(file: &mut fs::File) -> Result<(u32, u32), String> {
         .map_err(|_| "Truncated HEIC/HEIF ispe box".to_string())?;
 
     // Bytes 0-3: version+flags (skip).
-    let width  = u32::from_be_bytes([ispe_data[4], ispe_data[5], ispe_data[6], ispe_data[7]]);
+    let width = u32::from_be_bytes([ispe_data[4], ispe_data[5], ispe_data[6], ispe_data[7]]);
     let height = u32::from_be_bytes([ispe_data[8], ispe_data[9], ispe_data[10], ispe_data[11]]);
     Ok((width, height))
 }
@@ -678,8 +703,8 @@ pub struct ExifData {
 /// * `Err(message)` — not a JPEG, no Exif APP1 found, or read failure
 #[tauri::command]
 pub fn get_exif_data(path: String) -> Result<ExifData, String> {
-    let mut file = fs::File::open(&path)
-        .map_err(|e| format!("Failed to open file: {} ({})", path, e))?;
+    let mut file =
+        fs::File::open(&path).map_err(|e| format!("Failed to open file: {} ({})", path, e))?;
 
     // Verify JPEG SOI marker.
     let mut soi = [0u8; 2];
@@ -701,7 +726,7 @@ pub fn get_exif_data(path: String) -> Result<ExifData, String> {
         // Each segment starts with 0xFF + marker byte.
         let mut marker = [0u8; 2];
         match file.read_exact(&mut marker) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => return Err("No Exif segment found".to_string()),
         }
 
@@ -761,7 +786,8 @@ pub fn get_exif_data(path: String) -> Result<ExifData, String> {
 
             // We are now at the start of the TIFF header.
             // Record the TIFF base offset so we can resolve IFD offsets later.
-            let tiff_base: u64 = file.stream_position()
+            let tiff_base: u64 = file
+                .stream_position()
                 .map_err(|_| "Failed to get stream position".to_string())?;
 
             return parse_exif_tiff(&mut file, tiff_base);
@@ -809,8 +835,7 @@ fn parse_exif_tiff(file: &mut fs::File, tiff_base: u64) -> Result<ExifData, Stri
         .map_err(|_| "Failed to seek to IFD0".to_string())?;
 
     // Walk IFD0 to collect Make, Model, and ExifIFD offset.
-    let (make_raw, model_raw, date_raw, exif_ifd_offset) =
-        walk_ifd(file, tiff_base, is_le, true)?;
+    let (make_raw, model_raw, date_raw, exif_ifd_offset) = walk_ifd(file, tiff_base, is_le, true)?;
 
     // If DateTimeOriginal not found in IFD0, follow ExifIFD pointer.
     let final_date = if date_raw.is_none() {
@@ -856,10 +881,10 @@ fn walk_ifd(
         .map_err(|_| "Failed to read IFD entry count".to_string())?;
     let entry_count = read_u16(&count_buf, is_le) as usize;
 
-    let mut make_raw:  Option<String> = None;
+    let mut make_raw: Option<String> = None;
     let mut model_raw: Option<String> = None;
-    let mut date_raw:  Option<String> = None;
-    let mut exif_ptr:  Option<u32>    = None;
+    let mut date_raw: Option<String> = None;
+    let mut exif_ptr: Option<u32> = None;
 
     // Each IFD entry is 12 bytes: 2-byte tag + 2-byte type + 4-byte count + 4-byte value/offset.
     for _ in 0..entry_count {
@@ -867,8 +892,8 @@ fn walk_ifd(
         file.read_exact(&mut entry)
             .map_err(|_| "Failed to read IFD entry".to_string())?;
 
-        let tag   = read_u16(&entry[0..2], is_le);
-        let _typ  = read_u16(&entry[2..4], is_le); // type (ASCII = 2, LONG = 4, etc.)
+        let tag = read_u16(&entry[0..2], is_le);
+        let _typ = read_u16(&entry[2..4], is_le); // type (ASCII = 2, LONG = 4, etc.)
         let count = read_u32(&entry[4..8], is_le);
         let value_or_offset = read_u32(&entry[8..12], is_le);
 
@@ -938,7 +963,11 @@ fn read_ascii_field(
         .trim()
         .to_string();
 
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Reformat an Exif date string from "YYYY:MM:DD HH:MM:SS" to "YYYY-MM-DD".
@@ -962,9 +991,7 @@ fn reformat_exif_date(s: &str) -> String {
 /// None if both are absent.
 fn build_camera_string(make: Option<String>, model: Option<String>) -> Option<String> {
     match (make, model) {
-        (Some(m), Some(mo)) if !m.is_empty() && !mo.is_empty() => {
-            Some(format!("{} {}", m, mo))
-        }
+        (Some(m), Some(mo)) if !m.is_empty() && !mo.is_empty() => Some(format!("{} {}", m, mo)),
         (Some(m), _) if !m.is_empty() => Some(m),
         (_, Some(mo)) if !mo.is_empty() => Some(mo),
         _ => None,
@@ -1051,7 +1078,8 @@ mod tests {
 
     #[test]
     fn test_write_file_success() {
-        let path = std::env::temp_dir().join(format!("markable_write_test_{}.md", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("markable_write_test_{}.md", std::process::id()));
         let content = "# Test Content\n\nThis is a test.";
 
         let result = write_file(path.to_string_lossy().to_string(), content.to_string());
@@ -1067,7 +1095,8 @@ mod tests {
 
     #[test]
     fn test_write_file_creates_new_file() {
-        let path = std::env::temp_dir().join(format!("markable_new_file_{}.md", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("markable_new_file_{}.md", std::process::id()));
 
         // Ensure file doesn't exist
         let _ = fs::remove_file(&path);
@@ -1082,7 +1111,8 @@ mod tests {
 
     #[test]
     fn test_write_file_overwrites_existing() {
-        let path = std::env::temp_dir().join(format!("markable_overwrite_{}.md", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("markable_overwrite_{}.md", std::process::id()));
 
         // Create initial file
         fs::write(&path, "Initial content").unwrap();
@@ -1132,9 +1162,11 @@ mod tests {
         // Use the PNG magic bytes as representative binary content.
         // This verifies the file is written verbatim without encoding changes.
         let bytes: Vec<u8> = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-        let path = std::env::temp_dir()
-            .join(format!("markable_binary_success_{}_{:?}.bin",
-                std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "markable_binary_success_{}_{:?}.bin",
+            std::process::id(),
+            std::thread::current().id()
+        ));
 
         let result = write_binary_file(path.to_string_lossy().to_string(), bytes.clone());
         assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result.err());
@@ -1148,13 +1180,18 @@ mod tests {
 
     #[test]
     fn test_write_binary_file_creates_new_file() {
-        let path = std::env::temp_dir()
-            .join(format!("markable_binary_creates_{}_{:?}.bin",
-                std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "markable_binary_creates_{}_{:?}.bin",
+            std::process::id(),
+            std::thread::current().id()
+        ));
 
         // Ensure the file does not exist before the test.
         let _ = fs::remove_file(&path);
-        assert!(!path.exists(), "Pre-condition: file must not exist before write");
+        assert!(
+            !path.exists(),
+            "Pre-condition: file must not exist before write"
+        );
 
         let result = write_binary_file(
             path.to_string_lossy().to_string(),
@@ -1170,10 +1207,7 @@ mod tests {
     fn test_write_binary_file_parent_missing() {
         // A path whose parent directory does not exist must return the
         // canonical "File not found" error message.
-        let result = write_binary_file(
-            "/nonexistent/test.bin".to_string(),
-            vec![0x00],
-        );
+        let result = write_binary_file("/nonexistent/test.bin".to_string(), vec![0x00]);
         assert!(result.is_err(), "Expected Err for missing parent dir");
         assert!(
             result.unwrap_err().contains("File not found"),
@@ -1184,13 +1218,19 @@ mod tests {
     #[test]
     fn test_write_binary_file_empty_data() {
         // Writing zero bytes is a valid operation (e.g. an empty clipboard item).
-        let path = std::env::temp_dir()
-            .join(format!("markable_binary_empty_{}_{:?}.bin",
-                std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "markable_binary_empty_{}_{:?}.bin",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = fs::remove_file(&path);
 
         let result = write_binary_file(path.to_string_lossy().to_string(), vec![]);
-        assert!(result.is_ok(), "Expected Ok(()) for empty data, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected Ok(()) for empty data, got: {:?}",
+            result.err()
+        );
 
         // File must exist and have zero length.
         let metadata = fs::metadata(&path).expect("File must exist after write");
@@ -1227,9 +1267,9 @@ mod tests {
         // Segment length = 14 + 2 = 16 = 0x0010.
         v.extend_from_slice(&[0xFF, 0xE0]);
         v.extend_from_slice(&[0x00, 0x10]); // length = 16
-        v.extend_from_slice(b"JFIF\0");     // 5 bytes identifier
+        v.extend_from_slice(b"JFIF\0"); // 5 bytes identifier
         v.extend_from_slice(&[0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]); // 9 bytes padding
-        // SOF0 marker.
+                                                                                      // SOF0 marker.
         v.extend_from_slice(&[0xFF, 0xC0]);
         // SOF0 segment: length = 17 = 0x0011.
         // Data: precision(1) + height(2) + width(2) + ncomp(1) + specs(9) = 15 bytes.
@@ -1240,7 +1280,7 @@ mod tests {
         v.extend_from_slice(&width.to_be_bytes());
         v.push(0x03); // 3 components
         v.extend_from_slice(&[0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]); // 9 bytes
-        // EOI
+                                                                                      // EOI
         v.extend_from_slice(&[0xFF, 0xD9]);
         v
     }
@@ -1313,18 +1353,24 @@ mod tests {
         // Bytes 3-5: start code 0x9D 0x01 0x2A
         // Bytes 6-7: (horiz_scale << 14) | display_width  (scale = 0 for test)
         // Bytes 8-9: (vert_scale  << 14) | display_height (scale = 0 for test)
-        let width_bytes  = ((width  & 0x3FFF) as u16).to_le_bytes();
+        let width_bytes = ((width & 0x3FFF) as u16).to_le_bytes();
         let height_bytes = ((height & 0x3FFF) as u16).to_le_bytes();
 
         let vp8_data: Vec<u8> = vec![
-            tag_bytes[0], tag_bytes[1], tag_bytes[2], // frame tag (3 bytes)
-            0x9D, 0x01, 0x2A,                         // start code
-            width_bytes[0],  width_bytes[1],           // display width
-            height_bytes[0], height_bytes[1],          // display height
+            tag_bytes[0],
+            tag_bytes[1],
+            tag_bytes[2], // frame tag (3 bytes)
+            0x9D,
+            0x01,
+            0x2A, // start code
+            width_bytes[0],
+            width_bytes[1], // display width
+            height_bytes[0],
+            height_bytes[1], // display height
         ];
 
         let chunk_size = vp8_data.len() as u32;
-        let riff_size  = 4 + 4 + 4 + chunk_size; // "WEBP" + chunk_type + chunk_size + data
+        let riff_size = 4 + 4 + 4 + chunk_size; // "WEBP" + chunk_type + chunk_size + data
         let mut v = vec![];
         v.extend_from_slice(b"RIFF");
         v.extend_from_slice(&riff_size.to_le_bytes());
@@ -1345,8 +1391,7 @@ mod tests {
         let h_bytes = h_minus1.to_le_bytes();
         let vp8x_data: Vec<u8> = vec![
             0x00, 0x00, 0x00, 0x00, // flags
-            w_bytes[0], w_bytes[1], w_bytes[2],
-            h_bytes[0], h_bytes[1], h_bytes[2],
+            w_bytes[0], w_bytes[1], w_bytes[2], h_bytes[0], h_bytes[1], h_bytes[2],
         ];
 
         let vp8x_chunk_size = vp8x_data.len() as u32;
@@ -1447,7 +1492,10 @@ mod tests {
 
         let result = get_image_dimensions(path.to_string_lossy().to_string());
         assert!(result.is_err(), "Expected Err for plain text file");
-        assert!(result.unwrap_err().contains("Unsupported"), "Should report unsupported format");
+        assert!(
+            result.unwrap_err().contains("Unsupported"),
+            "Should report unsupported format"
+        );
 
         let _ = fs::remove_file(&path);
     }
@@ -1489,7 +1537,11 @@ mod tests {
         fs::write(&path, make_png_bytes(0, 100)).unwrap();
 
         let result = get_image_dimensions(path.to_string_lossy().to_string());
-        assert!(result.is_ok(), "Expected Ok for 0-width PNG, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for 0-width PNG, got: {:?}",
+            result.err()
+        );
         let (w, h) = result.unwrap();
         assert_eq!(w, 0, "Width should be 0");
         assert_eq!(h, 100, "Height should be 100");
@@ -1516,7 +1568,10 @@ mod tests {
 
         let result = get_image_dimensions(path.to_string_lossy().to_string());
         assert!(result.is_err(), "Expected Err for non-IHDR first chunk");
-        assert!(result.unwrap_err().contains("IHDR"), "Error should mention IHDR");
+        assert!(
+            result.unwrap_err().contains("IHDR"),
+            "Error should mention IHDR"
+        );
 
         let _ = fs::remove_file(&path);
     }
@@ -1566,9 +1621,15 @@ mod tests {
         // IFD0 entry count: make + model + ExifIFD pointer (if date)
         let ifd0_count: u32 = {
             let mut c = 0u32;
-            if make.is_some() { c += 1; }
-            if model.is_some() { c += 1; }
-            if date_time_original.is_some() { c += 1; } // ExifIFD pointer
+            if make.is_some() {
+                c += 1;
+            }
+            if model.is_some() {
+                c += 1;
+            }
+            if date_time_original.is_some() {
+                c += 1;
+            } // ExifIFD pointer
             c
         };
         let exif_ifd_count: u32 = if date_time_original.is_some() { 1 } else { 0 };
@@ -1576,7 +1637,11 @@ mod tests {
         // Size of IFD0 block: 2 (count) + N*12 (entries) + 4 (next-IFD ptr).
         let ifd0_block_size = 2 + ifd0_count * 12 + 4;
         // Size of ExifIFD block: 2 + N*12 + 4.
-        let exif_ifd_block_size = if date_time_original.is_some() { 2 + exif_ifd_count * 12 + 4 } else { 0 };
+        let exif_ifd_block_size = if date_time_original.is_some() {
+            2 + exif_ifd_count * 12 + 4
+        } else {
+            0
+        };
 
         // IFD0 offset from TIFF base = tiff_header_size.
         let ifd0_offset: u32 = tiff_header_size;
@@ -1701,11 +1766,7 @@ mod tests {
     fn te_01_jpeg_with_make_model_date_returns_correct_exif() {
         let path = std::env::temp_dir().join(format!("markable_te01_{}.jpg", tid_suffix()));
         let _ = fs::remove_file(&path);
-        let bytes = make_jpeg_with_exif(
-            Some("Canon"),
-            Some("EOS R5"),
-            Some("2024:03:15 14:22:10"),
-        );
+        let bytes = make_jpeg_with_exif(Some("Canon"), Some("EOS R5"), Some("2024:03:15 14:22:10"));
         fs::write(&path, &bytes).unwrap();
 
         let result = get_exif_data(path.to_string_lossy().to_string());
@@ -1796,7 +1857,11 @@ mod tests {
         let exif = result.unwrap();
         // Null bytes must not appear in the returned camera string.
         let camera = exif.camera.expect("Expected Some camera");
-        assert!(!camera.contains('\0'), "camera must not contain null bytes; got: {:?}", camera);
+        assert!(
+            !camera.contains('\0'),
+            "camera must not contain null bytes; got: {:?}",
+            camera
+        );
         assert_eq!(camera, "Canon EOS R5");
 
         let _ = fs::remove_file(&path);
@@ -1815,11 +1880,7 @@ mod tests {
         // DateTimeOriginal is in ExifIFD (tag 0x8769 points to sub-IFD) — the normal case.
         let path = std::env::temp_dir().join(format!("markable_te08_{}.jpg", tid_suffix()));
         let _ = fs::remove_file(&path);
-        let bytes = make_jpeg_with_exif(
-            Some("Nikon"),
-            Some("Z6"),
-            Some("2023:07:04 10:30:00"),
-        );
+        let bytes = make_jpeg_with_exif(Some("Nikon"), Some("Z6"), Some("2023:07:04 10:30:00"));
         fs::write(&path, &bytes).unwrap();
 
         let result = get_exif_data(path.to_string_lossy().to_string());
@@ -1848,8 +1909,7 @@ mod tests {
     #[test]
     fn ts_01_sidecar_file_exists_returns_true() {
         // Create the sidecar file, then check that sidecar_exists returns true.
-        let base_path = std::env::temp_dir()
-            .join(format!("markable_ts01_{}.jpg", tid_suffix()));
+        let base_path = std::env::temp_dir().join(format!("markable_ts01_{}.jpg", tid_suffix()));
         let sidecar_path = format!("{}.md", base_path.to_string_lossy());
         let _ = fs::remove_file(&base_path);
         let _ = fs::remove_file(&sidecar_path);
@@ -1866,8 +1926,7 @@ mod tests {
 
     #[test]
     fn ts_02_sidecar_does_not_exist_returns_false() {
-        let base_path = std::env::temp_dir()
-            .join(format!("markable_ts02_{}.jpg", tid_suffix()));
+        let base_path = std::env::temp_dir().join(format!("markable_ts02_{}.jpg", tid_suffix()));
         let sidecar_path = format!("{}.md", base_path.to_string_lossy());
 
         // Ensure neither exists.
@@ -1882,8 +1941,7 @@ mod tests {
     #[test]
     fn ts_03_sidecar_is_directory_returns_false() {
         // Create a directory named "photo.jpg.md" — sidecar_exists should return false.
-        let base_path = std::env::temp_dir()
-            .join(format!("markable_ts03_{}.jpg", tid_suffix()));
+        let base_path = std::env::temp_dir().join(format!("markable_ts03_{}.jpg", tid_suffix()));
         let sidecar_path = format!("{}.md", base_path.to_string_lossy());
         let _ = fs::remove_file(&sidecar_path);
 
@@ -1892,7 +1950,11 @@ mod tests {
 
         let result = sidecar_exists(base_path.to_string_lossy().to_string());
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
-        assert_eq!(result.unwrap(), false, "Directory at sidecar path should return false");
+        assert_eq!(
+            result.unwrap(),
+            false,
+            "Directory at sidecar path should return false"
+        );
 
         let _ = fs::remove_dir(&sidecar_path);
     }

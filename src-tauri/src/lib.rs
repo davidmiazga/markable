@@ -1,7 +1,7 @@
-use tauri::{Emitter, Manager};
-use tauri::menu::{CheckMenuItem, MenuItem, PredefinedMenuItem};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::menu::{CheckMenuItem, MenuItem, PredefinedMenuItem};
+use tauri::{Emitter, Manager};
 
 mod commands;
 mod menu;
@@ -23,25 +23,17 @@ fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: 
 fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
 
 pub use commands::{
-    create_daily_note, check_paths_exist,
-    open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, save_file_dialog, save_html_dialog, save_image_dialog, write_file, write_binary_file,
-    get_image_dimensions, get_exif_data, sidecar_exists,
-    get_settings, save_settings,
-    list_themes, read_theme_css, copy_default_themes,
-    copy_core_plugins,
-    list_core_plugins,
-    list_md_files,
-    list_preset_files,
-    ensure_directory,
-    get_home_dir,
-    get_app_data_dir,
-    list_user_plugins, read_plugin_file, read_plugin_settings, write_plugin_settings,
-    build_vault_index, create_vault, delete_vault, get_vault_index, list_vault_files,
-    save_vault_index, scan_vault_tags, search_vault_content, switch_vault, unwatch_vault,
-    update_vault, validate_vault_paths, watch_vault,
-    create_file, rename_file, delete_file, delete_directory, move_file, create_directory,
-    update_wiki_links, reveal_in_finder,
-    WatcherRegistry,
+    build_vault_index, check_paths_exist, copy_core_plugins, copy_default_themes,
+    create_daily_note, create_directory, create_file, create_vault, delete_directory, delete_file,
+    delete_vault, ensure_directory, get_app_data_dir, get_exif_data, get_home_dir,
+    get_image_dimensions, get_settings, get_vault_index, list_core_plugins, list_md_files,
+    list_preset_files, list_themes, list_user_plugins, list_vault_files, move_file,
+    open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, read_plugin_file,
+    read_plugin_settings, read_theme_css, rename_file, reveal_in_finder, save_file_dialog,
+    save_html_dialog, save_image_dialog, save_settings, save_vault_index, scan_vault_tags,
+    search_vault_content, sidecar_exists, switch_vault, unwatch_vault, update_vault,
+    update_wiki_links, validate_vault_paths, watch_vault, write_binary_file, write_file,
+    write_plugin_settings, WatcherRegistry,
 };
 
 // Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
@@ -71,10 +63,14 @@ static MENU_ITEM_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn find_recent_submenu<R: tauri::Runtime>(
     menu: &tauri::menu::Menu<R>,
 ) -> Result<tauri::menu::Submenu<R>, String> {
-    let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
+    let items = menu
+        .items()
+        .map_err(|e| format!("Failed to get menu items: {}", e))?;
     for item in &items {
         if let Some(submenu) = item.as_submenu() {
-            let sub_items = submenu.items().map_err(|e| format!("Failed to get submenu items: {}", e))?;
+            let sub_items = submenu
+                .items()
+                .map_err(|e| format!("Failed to get submenu items: {}", e))?;
             for sub_item in &sub_items {
                 if let Some(recent_submenu) = sub_item.as_submenu() {
                     if recent_submenu.id().as_ref() == "open-recent-submenu" {
@@ -91,7 +87,9 @@ fn find_recent_submenu<R: tauri::Runtime>(
 fn find_file_submenu<R: tauri::Runtime>(
     menu: &tauri::menu::Menu<R>,
 ) -> Result<tauri::menu::Submenu<R>, String> {
-    let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
+    let items = menu
+        .items()
+        .map_err(|e| format!("Failed to get menu items: {}", e))?;
     for item in &items {
         if let Some(submenu) = item.as_submenu() {
             if submenu.id().as_ref() == "file-menu" {
@@ -101,7 +99,6 @@ fn find_file_submenu<R: tauri::Runtime>(
     }
     Err("File submenu not found".to_string())
 }
-
 
 /// Show or hide the two Templates menu items by removing or re-inserting them.
 ///
@@ -181,7 +178,9 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
     let recent_submenu = find_recent_submenu(&menu)?;
 
     // Clear existing items
-    let existing = recent_submenu.items().map_err(|e| format!("Failed to get recent items: {}", e))?;
+    let existing = recent_submenu
+        .items()
+        .map_err(|e| format!("Failed to get recent items: {}", e))?;
     for old_item in &existing {
         let _ = recent_submenu.remove(old_item);
     }
@@ -194,8 +193,11 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
             "(No Recent Files)",
             false,
             None::<&str>,
-        ).map_err(|e| format!("Failed to create menu item: {}", e))?;
-        recent_submenu.append(&empty_item).map_err(|e| format!("Failed to append item: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to create menu item: {}", e))?;
+        recent_submenu
+            .append(&empty_item)
+            .map_err(|e| format!("Failed to append item: {}", e))?;
     } else {
         for (i, path) in paths.iter().enumerate() {
             let label = path.rsplit('/').next().unwrap_or(path);
@@ -203,17 +205,18 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
             let id = format!("recent-file-{}-{}", i, n);
 
             // First item gets the Cmd+Alt+O accelerator hint
-            let accel: Option<&str> = if i == 0 { Some("CmdOrCtrl+Alt+O") } else { None };
+            let accel: Option<&str> = if i == 0 {
+                Some("CmdOrCtrl+Alt+O")
+            } else {
+                None
+            };
 
-            let item = MenuItem::with_id(
-                &app,
-                &id,
-                label,
-                true,
-                accel,
-            ).map_err(|e| format!("Failed to create menu item: {}", e))?;
+            let item = MenuItem::with_id(&app, &id, label, true, accel)
+                .map_err(|e| format!("Failed to create menu item: {}", e))?;
 
-            recent_submenu.append(&item).map_err(|e| format!("Failed to append item: {}", e))?;
+            recent_submenu
+                .append(&item)
+                .map_err(|e| format!("Failed to append item: {}", e))?;
 
             // Register a click handler on the AppHandle for this item.
             // Builder's on_menu_event may not fire for dynamically added items,
@@ -228,7 +231,10 @@ fn update_recent_files_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result
                             let _ = window.set_focus();
                         }
                     }
-                    let _ = app_clone.emit("menu-event", json!({ "action": format!("recent-file-{}", idx) }));
+                    let _ = app_clone.emit(
+                        "menu-event",
+                        json!({ "action": format!("recent-file-{}", idx) }),
+                    );
                 }
             });
         }
@@ -249,14 +255,18 @@ fn update_theme_menu(
     current: String,
 ) -> Result<(), String> {
     let menu = app.menu().ok_or("No app menu found")?;
-    let items = menu.items().map_err(|e| format!("Failed to get menu items: {}", e))?;
+    let items = menu
+        .items()
+        .map_err(|e| format!("Failed to get menu items: {}", e))?;
 
     // Find the "theme-menu" submenu
     for item in &items {
         if let Some(submenu) = item.as_submenu() {
             if submenu.id().as_ref() == "theme-menu" {
                 // Remove everything and rebuild from scratch
-                let existing = submenu.items().map_err(|e| format!("Failed to get items: {}", e))?;
+                let existing = submenu
+                    .items()
+                    .map_err(|e| format!("Failed to get items: {}", e))?;
                 for old in &existing {
                     let _ = submenu.remove(old);
                 }
@@ -264,18 +274,50 @@ fn update_theme_menu(
                 // Re-add built-in items. Next/Prev are plain MenuItems (they're
                 // actions, not selections). Light/Dark/System are CheckMenuItems
                 // so the active one shows a checkmark.
-                let next = MenuItem::with_id(&app, "theme-next", "Next Theme", true, Some("CmdOrCtrl+Alt+."))
-                    .map_err(|e| format!("{}", e))?;
-                let prev = MenuItem::with_id(&app, "theme-prev", "Previous Theme", true, Some("CmdOrCtrl+Alt+,"))
-                    .map_err(|e| format!("{}", e))?;
-                let sep1 = PredefinedMenuItem::separator(&app)
-                    .map_err(|e| format!("{}", e))?;
-                let light = CheckMenuItem::with_id(&app, "theme-light", "Light", true, current == "default-light", None::<&str>)
-                    .map_err(|e| format!("{}", e))?;
-                let dark = CheckMenuItem::with_id(&app, "theme-dark", "Dark", true, current == "default-dark", None::<&str>)
-                    .map_err(|e| format!("{}", e))?;
-                let system = CheckMenuItem::with_id(&app, "theme-system", "System", true, current == "system", None::<&str>)
-                    .map_err(|e| format!("{}", e))?;
+                let next = MenuItem::with_id(
+                    &app,
+                    "theme-next",
+                    "Next Theme",
+                    true,
+                    Some("CmdOrCtrl+Alt+."),
+                )
+                .map_err(|e| format!("{}", e))?;
+                let prev = MenuItem::with_id(
+                    &app,
+                    "theme-prev",
+                    "Previous Theme",
+                    true,
+                    Some("CmdOrCtrl+Alt+,"),
+                )
+                .map_err(|e| format!("{}", e))?;
+                let sep1 = PredefinedMenuItem::separator(&app).map_err(|e| format!("{}", e))?;
+                let light = CheckMenuItem::with_id(
+                    &app,
+                    "theme-light",
+                    "Light",
+                    true,
+                    current == "default-light",
+                    None::<&str>,
+                )
+                .map_err(|e| format!("{}", e))?;
+                let dark = CheckMenuItem::with_id(
+                    &app,
+                    "theme-dark",
+                    "Dark",
+                    true,
+                    current == "default-dark",
+                    None::<&str>,
+                )
+                .map_err(|e| format!("{}", e))?;
+                let system = CheckMenuItem::with_id(
+                    &app,
+                    "theme-system",
+                    "System",
+                    true,
+                    current == "system",
+                    None::<&str>,
+                )
+                .map_err(|e| format!("{}", e))?;
 
                 submenu.append(&next).map_err(|e| format!("{}", e))?;
                 submenu.append(&prev).map_err(|e| format!("{}", e))?;
@@ -286,8 +328,7 @@ fn update_theme_menu(
 
                 // Add custom themes if any
                 if !themes.is_empty() {
-                    let sep2 = PredefinedMenuItem::separator(&app)
-                        .map_err(|e| format!("{}", e))?;
+                    let sep2 = PredefinedMenuItem::separator(&app).map_err(|e| format!("{}", e))?;
                     submenu.append(&sep2).map_err(|e| format!("{}", e))?;
 
                     for theme in &themes {
@@ -295,8 +336,15 @@ fn update_theme_menu(
                         let id = format!("custom-theme-{}-{}", theme.filename, n);
                         let is_active = current == theme.filename;
 
-                        let item = CheckMenuItem::with_id(&app, &id, &theme.name, true, is_active, None::<&str>)
-                            .map_err(|e| format!("{}", e))?;
+                        let item = CheckMenuItem::with_id(
+                            &app,
+                            &id,
+                            &theme.name,
+                            true,
+                            is_active,
+                            None::<&str>,
+                        )
+                        .map_err(|e| format!("{}", e))?;
                         submenu.append(&item).map_err(|e| format!("{}", e))?;
 
                         // Register per-item handler
@@ -310,7 +358,10 @@ fn update_theme_menu(
                                         let _ = window.set_focus();
                                     }
                                 }
-                                let _ = app_clone.emit("menu-event", json!({ "action": format!("custom:{}", filename) }));
+                                let _ = app_clone.emit(
+                                    "menu-event",
+                                    json!({ "action": format!("custom:{}", filename) }),
+                                );
                             }
                         });
                     }

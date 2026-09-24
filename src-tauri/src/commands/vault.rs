@@ -211,7 +211,13 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
 /// Used to construct the meta folder component for exclusion during index build.
 fn sanitise_vault_name(name: &str) -> String {
     name.chars()
-        .map(|c| if matches!(c, '/' | ':' | '\0') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | ':' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -224,9 +230,9 @@ fn sanitise_vault_name(name: &str) -> String {
 /// Called inside `build_vault_index` walk loop to filter out meta folder files
 /// (FR-4 / NFR-6).
 fn is_meta_folder_component(rel_path: &Path, meta_folder_component: &str) -> bool {
-    rel_path.components().any(|c| {
-        c.as_os_str().to_string_lossy().as_ref() == meta_folder_component
-    })
+    rel_path
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().as_ref() == meta_folder_component)
 }
 
 /// Return true if any component of `rel_path` (relative to the vault root)
@@ -278,10 +284,27 @@ struct ParsedFrontMatter {
 
 /// Fields that are standard document metadata — not browsable as categorical tags.
 const SKIP_TAG_FIELDS: &[&str] = &[
-    "title", "date", "created", "updated", "modified", "last-updated",
-    "id", "uuid", "url", "permalink", "aliases", "image", "cover",
-    "layout", "template", "weight", "published", "author",
-    "description", "excerpt", "summary",
+    "title",
+    "date",
+    "created",
+    "updated",
+    "modified",
+    "last-updated",
+    "id",
+    "uuid",
+    "url",
+    "permalink",
+    "aliases",
+    "image",
+    "cover",
+    "layout",
+    "template",
+    "weight",
+    "published",
+    "author",
+    "description",
+    "excerpt",
+    "summary",
 ];
 
 /// Returns `true` when a YAML string value looks like a categorical tag
@@ -296,11 +319,17 @@ fn looks_like_tag_value(value: &str) -> bool {
     if value.parse::<f64>().is_ok() {
         return false;
     }
-    if matches!(value.to_ascii_lowercase().as_str(), "true" | "false" | "yes" | "no") {
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "true" | "false" | "yes" | "no"
+    ) {
         return false;
     }
     // Looks like a date: all chars are digits, slashes, dashes, colons, or spaces.
-    if value.chars().all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | ':' | ' ')) {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | ':' | ' '))
+    {
         return false;
     }
     true
@@ -466,7 +495,11 @@ fn parse_front_matter(content: &str) -> ParsedFrontMatter {
         title = extract_h1(content);
     }
 
-    ParsedFrontMatter { title, tags, field_tags }
+    ParsedFrontMatter {
+        title,
+        tags,
+        field_tags,
+    }
 }
 
 /// Scan `content` for the first Markdown H1 heading. Returns None if absent.
@@ -544,16 +577,16 @@ fn extract_wiki_links(content: &str) -> Vec<String> {
 /// increment `skipped_count` and continue walking.
 fn index_file(path: &Path, _vault_id: &str) -> Result<VaultIndexEntry, String> {
     // Read filesystem metadata for timestamps and size.
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| format!("metadata error for {:?}: {}", path, e))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|e| format!("metadata error for {:?}: {}", path, e))?;
 
     let modified = metadata.modified().map(system_time_to_ms).unwrap_or(0);
     let size = metadata.len();
 
     // Read content for front matter and wiki-link parsing. EC-12: unreadable
     // file surfaces as an Err so the walker increments skipped_count.
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read error for {:?}: {}", path, e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("read error for {:?}: {}", path, e))?;
 
     let fm = parse_front_matter(&content);
     let stem = path
@@ -1015,7 +1048,8 @@ pub async fn list_vault_files(
 ///
 /// Drop of a `RecommendedWatcher` value automatically un-registers all FSEvents
 /// callbacks, so `registry.remove(vault_id)` is sufficient cleanup.
-pub type WatcherRegistry = std::sync::Mutex<std::collections::HashMap<String, notify::RecommendedWatcher>>;
+pub type WatcherRegistry =
+    std::sync::Mutex<std::collections::HashMap<String, notify::RecommendedWatcher>>;
 
 // ─── watch_vault / unwatch_vault ─────────────────────────────────────────────
 
@@ -1046,7 +1080,9 @@ pub fn watch_vault(
 
     // Remove any existing watcher for this vault (idempotent restart).
     {
-        let mut reg = registry.lock().map_err(|_| "watcher registry lock poisoned")?;
+        let mut reg = registry
+            .lock()
+            .map_err(|_| "watcher registry lock poisoned")?;
         reg.remove(&vault_id);
     }
 
@@ -1095,7 +1131,9 @@ pub fn watch_vault(
     }
 
     // Store the live watcher so it stays alive (dropping it stops watching).
-    let mut reg = registry.lock().map_err(|_| "watcher registry lock poisoned")?;
+    let mut reg = registry
+        .lock()
+        .map_err(|_| "watcher registry lock poisoned")?;
     reg.insert(vault_id, watcher);
 
     Ok(())
@@ -1110,7 +1148,9 @@ pub fn unwatch_vault(
     vault_id: String,
     registry: tauri::State<'_, WatcherRegistry>,
 ) -> Result<(), String> {
-    let mut reg = registry.lock().map_err(|_| "watcher registry lock poisoned")?;
+    let mut reg = registry
+        .lock()
+        .map_err(|_| "watcher registry lock poisoned")?;
     reg.remove(&vault_id);
     Ok(())
 }
@@ -1181,10 +1221,7 @@ pub async fn search_vault_content(
             }
 
             // Only .md files (case-insensitive extension check).
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if !ext.eq_ignore_ascii_case("md") {
                 continue;
             }
@@ -1527,7 +1564,10 @@ mod tests {
     fn should_not_exclude_normal_path() {
         // Relative: docs/guide.md  →  no hidden components, no matching patterns
         let path = Path::new("docs/guide.md");
-        assert!(!should_exclude(path, &["node_modules".to_string(), ".git".to_string()]));
+        assert!(!should_exclude(
+            path,
+            &["node_modules".to_string(), ".git".to_string()]
+        ));
     }
 
     // ── parse_front_matter ────────────────────────────────────────────────────
@@ -1763,7 +1803,11 @@ mod tests {
     #[tokio::test]
     async fn build_index_basic() {
         let dir = tempfile::tempdir().unwrap();
-        write_temp_file(dir.path(), "note-a.md", "---\ntitle: Note A\ntags: [x]\n---\nSee [[note-b]].");
+        write_temp_file(
+            dir.path(),
+            "note-a.md",
+            "---\ntitle: Note A\ntags: [x]\n---\nSee [[note-b]].",
+        );
         write_temp_file(dir.path(), "note-b.md", "# Note B\n[[note-a]]");
         write_temp_file(dir.path(), "ignore.txt", "not markdown");
 
@@ -1950,16 +1994,15 @@ mod tests {
         // VaultSettings folder and a file inside it — must be excluded.
         let settings_dir = dir.path().join("VaultSettings");
         fs::create_dir(&settings_dir).unwrap();
-        fs::write(settings_dir.join("Test Vault_properties.md"), "## Tags\n- alpha\n").unwrap();
-
-        let result = list_vault_files(
-            vec![root],
-            vec![],
-            500,
-            "Test Vault".to_string(),
+        fs::write(
+            settings_dir.join("Test Vault_properties.md"),
+            "## Tags\n- alpha\n",
         )
-        .await
         .unwrap();
+
+        let result = list_vault_files(vec![root], vec![], 500, "Test Vault".to_string())
+            .await
+            .unwrap();
 
         let has_settings_file = result.iter().any(|e| e.path.contains("VaultSettings"));
         assert!(
@@ -2010,7 +2053,11 @@ mod tests {
         .unwrap();
 
         // Only my-note.md should appear.
-        assert_eq!(result.entries.len(), 1, "VaultSettings files must be excluded");
+        assert_eq!(
+            result.entries.len(),
+            1,
+            "VaultSettings files must be excluded"
+        );
         assert!(result.entries[0].path.ends_with("my-note.md"));
     }
 
@@ -2373,7 +2420,8 @@ mod content_search_tests {
         );
         // The valid ASCII query must still be found in the lossily-decoded content.
         assert_eq!(
-            result.results.len(), 1,
+            result.results.len(),
+            1,
             "FINDME must be found in the lossily-decoded file"
         );
     }
@@ -2447,14 +2495,24 @@ mod tag_scan_tests {
         )
         .unwrap();
         let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
-        assert!(tags.contains(&"project"), "should find front matter tag 'project'");
-        assert!(tags.contains(&"work"), "should find front matter tag 'work'");
+        assert!(
+            tags.contains(&"project"),
+            "should find front matter tag 'project'"
+        );
+        assert!(
+            tags.contains(&"work"),
+            "should find front matter tag 'work'"
+        );
     }
 
     #[test]
     fn scan_collects_inline_hashtags() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "note.md", "No front matter\n\nHere is #inline-tag");
+        write_file(
+            dir.path(),
+            "note.md",
+            "No front matter\n\nHere is #inline-tag",
+        );
         let result = scan_vault_tags(
             vec![dir.path().to_str().unwrap().to_string()],
             vec![],
@@ -2471,7 +2529,11 @@ mod tag_scan_tests {
         let settings_dir = dir.path().join("VaultSettings");
         fs::create_dir_all(&settings_dir).unwrap();
         write_file(dir.path(), "note.md", "---\ntags:\n  - real-tag\n---");
-        write_file(&settings_dir, "test_vault_properties.md", "---\ntags:\n  - meta-only\n---");
+        write_file(
+            &settings_dir,
+            "test_vault_properties.md",
+            "---\ntags:\n  - meta-only\n---",
+        );
         let result = scan_vault_tags(
             vec![dir.path().to_str().unwrap().to_string()],
             vec![],
@@ -2480,7 +2542,10 @@ mod tag_scan_tests {
         .unwrap();
         let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
         assert!(tags.contains(&"real-tag"), "real-tag must be found");
-        assert!(!tags.contains(&"meta-only"), "meta-only must not leak from VaultSettings");
+        assert!(
+            !tags.contains(&"meta-only"),
+            "meta-only must not leak from VaultSettings"
+        );
     }
 
     #[test]
@@ -2501,7 +2566,11 @@ mod tag_scan_tests {
     #[test]
     fn scan_collects_arbitrary_yaml_field_as_field_value() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "note.md", "---\ntype: draft\ndate: 04/18/26\n---\nBody text");
+        write_file(
+            dir.path(),
+            "note.md",
+            "---\ntype: draft\ndate: 04/18/26\n---\nBody text",
+        );
         let result = scan_vault_tags(
             vec![dir.path().to_str().unwrap().to_string()],
             vec![],
@@ -2509,9 +2578,15 @@ mod tag_scan_tests {
         )
         .unwrap();
         let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
-        assert!(tags.contains(&"type:draft"), "type:draft must appear in tag scan");
+        assert!(
+            tags.contains(&"type:draft"),
+            "type:draft must appear in tag scan"
+        );
         // date value should be filtered out by looks_like_tag_value
-        assert!(!tags.iter().any(|t| t.starts_with("date:")), "date field must be excluded");
+        assert!(
+            !tags.iter().any(|t| t.starts_with("date:")),
+            "date field must be excluded"
+        );
     }
 
     #[test]

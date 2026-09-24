@@ -93,10 +93,7 @@ pub fn create_daily_note(path: String, content: String) -> Result<(), String> {
         Ok(f) => f,
         Err(e) => {
             // No temp file was created, nothing to clean up.
-            return Err(format!(
-                "Failed to create temp file for '{}': {}",
-                path, e
-            ));
+            return Err(format!("Failed to create temp file for '{}': {}", path, e));
         }
     };
 
@@ -107,10 +104,7 @@ pub fn create_daily_note(path: String, content: String) -> Result<(), String> {
 
     if let Err(e) = file.sync_all() {
         let _ = fs::remove_file(&temp_path); // clean up temp file
-        return Err(format!(
-            "Failed to sync file to disk for '{}': {}",
-            path, e
-        ));
+        return Err(format!("Failed to sync file to disk for '{}': {}", path, e));
     }
 
     // Atomic rename: temp → target. On POSIX this is guaranteed atomic when
@@ -209,10 +203,8 @@ mod tests {
         let note_path = dir.join("2026-04-23.md");
         let content = "# Daily Note\n\nHello World.";
 
-        let result = create_daily_note(
-            note_path.to_string_lossy().to_string(),
-            content.to_string(),
-        );
+        let result =
+            create_daily_note(note_path.to_string_lossy().to_string(), content.to_string());
 
         assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
         assert!(note_path.exists(), "Note file should exist after creation");
@@ -241,18 +233,26 @@ mod tests {
     #[test]
     fn creates_nested_directories_automatically() {
         let dir = setup_test_dir("nested_dirs");
-        let note_path = dir.join("daily").join("2026").join("04").join("2026-04-23.md");
+        let note_path = dir
+            .join("daily")
+            .join("2026")
+            .join("04")
+            .join("2026-04-23.md");
         let content = "# Nested note";
 
-        assert!(!note_path.parent().unwrap().exists(), "Precondition: parent dir must not exist");
-
-        let result = create_daily_note(
-            note_path.to_string_lossy().to_string(),
-            content.to_string(),
+        assert!(
+            !note_path.parent().unwrap().exists(),
+            "Precondition: parent dir must not exist"
         );
 
+        let result =
+            create_daily_note(note_path.to_string_lossy().to_string(), content.to_string());
+
         assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
-        assert!(note_path.exists(), "Note file should exist after nested dir creation");
+        assert!(
+            note_path.exists(),
+            "Note file should exist after nested dir creation"
+        );
         assert_eq!(fs::read_to_string(&note_path).unwrap(), content);
 
         cleanup(&dir);
@@ -272,7 +272,8 @@ mod tests {
         create_daily_note(
             note_path.to_string_lossy().to_string(),
             first_content.to_string(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Second call: directory exists, file exists — must overwrite without error.
         let result = create_daily_note(
@@ -321,10 +322,7 @@ mod tests {
         let dir = setup_test_dir("empty_content");
         let note_path = dir.join("empty.md");
 
-        let result = create_daily_note(
-            note_path.to_string_lossy().to_string(),
-            String::new(),
-        );
+        let result = create_daily_note(note_path.to_string_lossy().to_string(), String::new());
 
         assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
         assert!(note_path.exists());
@@ -343,10 +341,8 @@ mod tests {
         // Mix of: emoji, accented Latin, CJK, RTL hint, combining chars.
         let content = "# Unicode Note 🦀\n\nCafé résumé naïve\n日本語テスト\n";
 
-        let result = create_daily_note(
-            note_path.to_string_lossy().to_string(),
-            content.to_string(),
-        );
+        let result =
+            create_daily_note(note_path.to_string_lossy().to_string(), content.to_string());
 
         assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
         assert_eq!(fs::read_to_string(&note_path).unwrap(), content);
@@ -363,12 +359,14 @@ mod tests {
         let note_path = dir.join("My Daily Notes").join("2026-04-23.md");
         let content = "# Spaces test";
 
-        let result = create_daily_note(
-            note_path.to_string_lossy().to_string(),
-            content.to_string(),
-        );
+        let result =
+            create_daily_note(note_path.to_string_lossy().to_string(), content.to_string());
 
-        assert!(result.is_ok(), "Expected Ok(()) for path with spaces: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected Ok(()) for path with spaces: {:?}",
+            result
+        );
         assert!(note_path.exists());
 
         cleanup(&dir);
@@ -536,16 +534,25 @@ mod tests {
         let dir_str = dir.to_string_lossy().to_string();
         let missing_str = missing_path.to_string_lossy().to_string();
 
-        let result = check_paths_exist(vec![
-            file_str.clone(),
-            dir_str.clone(),
-            missing_str.clone(),
-        ])
-        .unwrap();
+        let result =
+            check_paths_exist(vec![file_str.clone(), dir_str.clone(), missing_str.clone()])
+                .unwrap();
 
-        assert_eq!(result.get(&file_str), Some(&true), "Existing file should be true");
-        assert_eq!(result.get(&dir_str), Some(&true), "Existing dir should be true");
-        assert_eq!(result.get(&missing_str), Some(&false), "Missing path should be false");
+        assert_eq!(
+            result.get(&file_str),
+            Some(&true),
+            "Existing file should be true"
+        );
+        assert_eq!(
+            result.get(&dir_str),
+            Some(&true),
+            "Existing dir should be true"
+        );
+        assert_eq!(
+            result.get(&missing_str),
+            Some(&false),
+            "Missing path should be false"
+        );
 
         cleanup(&dir);
     }
@@ -556,7 +563,11 @@ mod tests {
     #[test]
     fn handles_nested_path() {
         let dir = setup_test_dir("nested_path");
-        let nested = dir.join("daily").join("2026").join("04").join("2026-04-23.md");
+        let nested = dir
+            .join("daily")
+            .join("2026")
+            .join("04")
+            .join("2026-04-23.md");
         fs::create_dir_all(nested.parent().unwrap()).unwrap();
         fs::write(&nested, "").unwrap();
 

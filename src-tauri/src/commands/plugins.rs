@@ -44,14 +44,21 @@ fn sanitize_filename(filename: &str) -> Result<(), String> {
     // EC-11: reject path separators and traversal sequences.
     // '\0' (NUL) is rejected separately because it can be used to bypass
     // extension checks on some filesystems (e.g. "evil\0.js" → "evil").
-    if filename.contains('/') || filename.contains('\\') || filename.contains("..") || filename.contains('\0') {
+    if filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+        || filename.contains('\0')
+    {
         return Err(format!("Invalid plugin filename: {}", filename));
     }
     // Extra guard: ensure the string resolves to exactly one path component.
     let p = std::path::Path::new(filename);
     let component_count = p.components().count();
     if component_count != 1 {
-        return Err(format!("Invalid plugin filename (multi-component): {}", filename));
+        return Err(format!(
+            "Invalid plugin filename (multi-component): {}",
+            filename
+        ));
     }
     Ok(())
 }
@@ -65,10 +72,7 @@ fn sanitize_plugin_id(id: &str) -> Result<(), String> {
         return Err("Plugin id must not be empty".to_string());
     }
     if id.contains('/') || id.contains('\\') || id.contains('.') || id.contains('\0') {
-        return Err(format!(
-            "Plugin id contains invalid characters: {}",
-            id
-        ));
+        return Err(format!("Plugin id contains invalid characters: {}", id));
     }
     Ok(())
 }
@@ -101,8 +105,8 @@ pub fn list_user_plugins(app: tauri::AppHandle) -> Result<ListPluginsResponse, S
     let dir = plugins_user_dir(&app)?;
     ensure_dir(&dir)?;
 
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("Failed to read plugins directory: {}", e))?;
 
     let mut filenames: Vec<String> = Vec::new();
 
@@ -247,8 +251,8 @@ pub fn read_plugin_file(
         return Err(format!("Plugin file not found: {}", filename));
     }
 
-    let metadata = std::fs::metadata(&path)
-        .map_err(|e| format!("Failed to stat plugin file: {}", e))?;
+    let metadata =
+        std::fs::metadata(&path).map_err(|e| format!("Failed to stat plugin file: {}", e))?;
     if metadata.len() > max_bytes {
         return Err(format!(
             "Plugin file exceeds size limit ({} bytes, limit {} bytes): {}",
@@ -522,8 +526,7 @@ pub fn copy_core_plugins(app: tauri::AppHandle) -> Result<(), String> {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
         // Fall back to empty object on parse failure — we can still write the stamp.
-        serde_json::from_str(&content)
-            .unwrap_or(serde_json::Value::Object(Default::default()))
+        serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(Default::default()))
     } else {
         // File doesn't exist yet (first launch before settings.json is written).
         serde_json::Value::Object(Default::default())
@@ -601,8 +604,7 @@ pub fn copy_core_plugins(app: tauri::AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to read bundled core plugins dir: {}", e))?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.path().is_file()
-                    && e.path().extension().and_then(|x| x.to_str()) == Some("js")
+                e.path().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("js")
             })
             .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
             .collect();
@@ -724,8 +726,8 @@ mod tests {
     fn migrate_flat_plugins_to_user_dir_skips_existing() {
         use std::fs;
         // Use a unique temp directory per test run to avoid conflicts with parallel tests.
-        let tmp = std::env::temp_dir()
-            .join(format!("markable_migrate_skip_{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("markable_migrate_skip_{}", std::process::id()));
         let user = tmp.join("user");
         fs::create_dir_all(&user).unwrap();
 
@@ -738,7 +740,10 @@ mod tests {
 
         // user/my-plugin.js must NOT have been overwritten.
         let content = fs::read_to_string(user.join("my-plugin.js")).unwrap();
-        assert_eq!(content, "// existing", "existing user file must not be overwritten");
+        assert_eq!(
+            content, "// existing",
+            "existing user file must not be overwritten"
+        );
 
         // The source flat file should still be at the flat level (rename did not happen).
         assert!(
@@ -754,8 +759,8 @@ mod tests {
     #[test]
     fn migrate_flat_plugins_moves_new_files() {
         use std::fs;
-        let tmp = std::env::temp_dir()
-            .join(format!("markable_migrate_move_{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("markable_migrate_move_{}", std::process::id()));
         let user = tmp.join("user");
         fs::create_dir_all(&user).unwrap();
 
@@ -764,7 +769,10 @@ mod tests {
         migrate_flat_plugins_to_user_dir(&tmp, &user).unwrap();
 
         // File should now be in user/.
-        assert!(user.join("new-plugin.js").exists(), "file should be in user/");
+        assert!(
+            user.join("new-plugin.js").exists(),
+            "file should be in user/"
+        );
         // Original flat-level file should be gone (was renamed, not copied).
         assert!(
             !tmp.join("new-plugin.js").exists(),
@@ -779,8 +787,7 @@ mod tests {
     #[test]
     fn write_version_stamp_creates_file_if_absent() {
         use std::fs;
-        let tmp = std::env::temp_dir()
-            .join(format!("markable_stamp_new_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("markable_stamp_new_{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("settings.json");
 
@@ -802,8 +809,8 @@ mod tests {
     #[test]
     fn write_version_stamp_preserves_existing_fields() {
         use std::fs;
-        let tmp = std::env::temp_dir()
-            .join(format!("markable_stamp_preserve_{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("markable_stamp_preserve_{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("settings.json");
 
@@ -872,8 +879,7 @@ mod tests {
     fn copy_core_plugins_stamp_match_idempotency_guard() {
         use std::fs;
 
-        let tmp = std::env::temp_dir()
-            .join(format!("markable_idempotency_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("markable_idempotency_{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         let settings_path = tmp.join("settings.json");
 
@@ -904,7 +910,10 @@ mod tests {
         );
 
         // Pre-existing fields must be intact — stamp write must not corrupt settings.
-        assert_eq!(raw["version"], 1, "pre-existing version field must be preserved");
+        assert_eq!(
+            raw["version"], 1,
+            "pre-existing version field must be preserved"
+        );
         assert_eq!(
             raw["theme"]["active"], "dark",
             "pre-existing theme field must be preserved"
