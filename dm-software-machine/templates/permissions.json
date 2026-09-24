@@ -1,0 +1,16 @@
+{
+  "autoRun": {
+    "allow_instructions": [
+      "Allow just sm-* from the repo root: sm-add, sm-claim, sm-next, sm-finish, sm-accept, sm-gate, sm-status, sm-defaults, sm-scope, sm-auto, sm-handoff, sm-watch, sm-tail, sm-init, sm-configure.",
+      "Allow uv run dm-software-machine/scripts/dmsm.py and any subcommand of that CLI.",
+      "Allow npm and cargo inside the app folder (install, build, test, fmt, check, clippy, tauri). Network to crates.io, npmjs.org, and GitHub is expected for those tools.",
+      "Allow git status, git diff, git log, and git add limited to task writes. Allow git commit only with a message the machine or engineer already stated.",
+      "Allow python3 and uv for dm-software-machine scripts. Allow just recipes in this justfile."
+    ],
+    "block_instructions": [
+      "Ask before git push, force-push, git config, or rewriting history.",
+      "Ask before brew install, npm install -g, or writing outside this workspace (including the Cursor Agent Store and home directory).",
+      "Ask before deleting files outside the task writes paths."
+    ]
+  }
+}

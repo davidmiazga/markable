@@ -1,0 +1,79 @@
+id: astro
+app_dir: astro-app
+dev_cwd: astro-app
+dev_command: [npm, run, dev]
+writes:
+  - src/
+  - public/
+never_write:
+  - node_modules
+  - dist
+  - .astro
+detect:
+  - astro-app/package.json
+  - astro-app/astro.config.mjs
+scaffold:
+  dest: astro-app
+  argv:
+    - npm
+    - create
+    - astro@latest
+    - astro-app
+    - --
+    - --template
+    - minimal
+    - --install
+    - --no-git
+    - --no-ai
+    - --yes
+  install_argv: [npm, install]
+  install_cwd: astro-app
+  after_argv: [npm, install, -D, "@astrojs/check", typescript]
+checks:
+  fast:
+    - name: astro_check
+      cwd: astro-app
+      argv: [npx, astro, check]
+      timeout_seconds: 180
+    - name: build
+      cwd: astro-app
+      argv: [npm, run, build]
+      timeout_seconds: 180
+    - name: test
+      cwd: astro-app
+      argv: [npm, test]
+      timeout_seconds: 180
+      when:
+        package_script: test
+    - name: lint
+      cwd: astro-app
+      argv: [npm, run, lint]
+      timeout_seconds: 120
+      when:
+        package_script: lint
+  full:
+    - name: astro_check
+      cwd: astro-app
+      argv: [npx, astro, check]
+      timeout_seconds: 180
+    - name: lint
+      cwd: astro-app
+      argv: [npm, run, lint]
+      timeout_seconds: 120
+      when:
+        package_script: lint
+    - name: test
+      cwd: astro-app
+      argv: [npm, test]
+      timeout_seconds: 180
+      when:
+        package_script: test
+    - name: build
+      cwd: astro-app
+      argv: [npm, run, build]
+      timeout_seconds: 180
+  package:
+    - name: build
+      cwd: astro-app
+      argv: [npm, run, build]
+      timeout_seconds: 300

@@ -1,0 +1,64 @@
+id: tauri
+app_dir: tauri-app
+dev_cwd: tauri-app
+dev_command: [npm, run, tauri, dev]
+writes:
+  - src/
+  - src-tauri/src/
+  - index.html
+never_write:
+  - node_modules
+  - target
+  - dist
+detect:
+  - tauri-app/src-tauri/Cargo.toml
+  - tauri-app/package.json
+scaffold:
+  dest: tauri-app
+  argv: [npm, create, tauri-app@latest, tauri-app, --, --template, vanilla-ts, --manager, npm, --yes]
+  install_argv: [npm, install]
+  install_cwd: tauri-app
+checks:
+  fast:
+    - name: frontend_build
+      cwd: tauri-app
+      argv: [npm, run, build]
+      timeout_seconds: 180
+    - name: rust_fmt
+      cwd: tauri-app/src-tauri
+      argv: [cargo, fmt, --check]
+      timeout_seconds: 120
+    - name: rust_check
+      cwd: tauri-app/src-tauri
+      argv: [cargo, check]
+      timeout_seconds: 300
+    - name: rust_test
+      cwd: tauri-app/src-tauri
+      argv: [cargo, test]
+      timeout_seconds: 300
+  full:
+    - name: frontend_build
+      cwd: tauri-app
+      argv: [npm, run, build]
+      timeout_seconds: 180
+    - name: rust_fmt
+      cwd: tauri-app/src-tauri
+      argv: [cargo, fmt, --check]
+      timeout_seconds: 120
+    - name: rust_clippy
+      cwd: tauri-app/src-tauri
+      argv: [cargo, clippy, --, -D, warnings]
+      timeout_seconds: 300
+    - name: rust_test
+      cwd: tauri-app/src-tauri
+      argv: [cargo, test]
+      timeout_seconds: 300
+    - name: rust_check
+      cwd: tauri-app/src-tauri
+      argv: [cargo, check]
+      timeout_seconds: 300
+  package:
+    - name: cargo_build
+      cwd: tauri-app/src-tauri
+      argv: [cargo, build]
+      timeout_seconds: 600

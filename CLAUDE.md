@@ -143,7 +143,7 @@ The macOS Sequoia/Tahoe DMG compiler has known incompatibilities with Tauri v2. 
 
 ## Agent Workflow
 
-For the upcoming app-family epic, `dm-software-machine` + Beads is planned but **not initialized** (see [planning/EXECUTION.md](planning/EXECUTION.md)).
+Feature work goes through `dm-software-machine` + Beads. Config: [planning/EXECUTION.md](planning/EXECUTION.md). Prompt: `Use sm to <one sentence>`.
 
 This project also has a phased agent pipeline in `.claude/agents/`. **Do not skip phases.**
 

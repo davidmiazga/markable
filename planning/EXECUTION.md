@@ -1,17 +1,21 @@
-# Execution contract (deferred)
+# Execution contract
 
-`dm-software-machine` (`sm`) is **not** installed in this repository yet.
+`dm-software-machine` is initialized in this repository.
 
-## When to initialize
+## Configured defaults (2026-09-23)
 
-After the shared-core / app-family directory layout is designed and the relative app folder is stable. Then:
+| Key | Value |
+|---|---|
+| profile | tauri |
+| app_folder | `.` (this repo is the app; do not use `tauri-app/`) |
+| tracker | beads |
+| auto_advance | false (pause after accept) |
+| done_means | fast gate green and the feature is visible via `npm run tauri dev` |
+| writes | `src/`, `src-tauri/src/`, `index.html`, `flavors/`, `scripts/`, `src-tauri/tauri.conf.json`, `planning/` |
 
-1. Read the `dm-software-machine` skill
-2. `init --profile tauri`
-3. Set `tracker: beads` and run `configure --tracker beads`
-4. Keep `auto_advance: false` (pause after each accepted task)
-5. Keep default done-means: fast gate green and the feature visible via the Tauri dev command
-6. Ask for the new relative `app_folder` — do not assume `.` or `tauri-app/`
+Gate cwd paths in `.dm-software-machine/profile.yaml` were rewritten from `tauri-app/` to `.` / `src-tauri`. Re-running `init --profile tauri` will try to scaffold a dummy `tauri-app/` — delete it if that happens.
+
+Prompt: `Use sm to <one sentence>`. Close-out: `just sm-finish <id>` then `just sm-accept <id>`.
 
 ## Why Beads
 

@@ -1,0 +1,61 @@
+# dm-software-machine layout — this file is the source of truth.
+# On first run the skill asks these questions, or you fill the SET_ME fields
+# yourself and set configured: true. Comments stay; do not regenerate this file
+# with a YAML dumper.
+#
+# Optional override only: APP_FOLDER / PROJ_APP_DIR in .env (never put secrets here).
+
+# Machine package version. Init overwrites this line.
+version: 1.0.0
+
+# Profile id: tauri or astro. Init overwrites this line.
+profile: tauri
+
+# false until you answer first-run questions or edit the fields below.
+# task-add / defaults refuse while this is false or app_folder is SET_ME.
+configured: true
+
+# Directory that contains the app the machine edits (relative to repo root).
+# This repo IS the Tauri app (not a nested tauri-app/ folder).
+app_folder: .
+
+# What "done" means for every task unless a prompt overrides it.
+done_means: the fast gate is green and the feature is visible in the profile dev command
+
+# Paths a task may change. Leave as SET_ME and it becomes the profile writes
+# (tauri: <app>/src/, <app>/src-tauri/src/, <app>/index.html;
+#  astro: <app>/src/, <app>/public/).
+writes:
+  - src/
+  - src-tauri/src/
+  - index.html
+  - flavors/
+  - scripts/
+  - src-tauri/tauri.conf.json
+  - planning/
+
+# Never included in a work envelope. Dirty copies warn via classify, not fail.
+protected_paths:
+  - dm-software-machine/
+  - .dm-software-machine/
+
+# Extra dirty paths that do not fail finish (still excluded from the envelope).
+# specs/ and .dm-software-machine/ are always ignored.
+ignore_dirty:
+  - justfile
+  - reference/
+  - .gitignore
+  - .beads/
+  - .cursor/
+
+# none, or beads after the first-run large-project question (or --tracker beads).
+tracker: beads
+
+max_repairs: 2
+# After accept, keep claiming ready disjoint tasks until the queue is idle or a gate fails.
+# Requires Cursor Auto-review (or Run) plus stamped `.cursor/permissions.json`.
+auto_advance: false
+# Max in-flight tasks. Overlapping writes always serialize. Worktrees not in this slice.
+parallel: 1
+artifact_dir: .dm-software-machine
+specs_dir: specs
