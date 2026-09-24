@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Current planning truth:** [planning/README.md](planning/README.md). Verified repo/test state: [planning/CURRENT_STATE.md](planning/CURRENT_STATE.md). Phase 1 session files (`PROGRESS.md`, `RESUME.md`, `QUICK_START.md`, `IMPLEMENTATION_CHECKLIST.md`, `PLAN.md`) live in [planning/old/root-trackers/](planning/old/root-trackers/) and are stale.
+
 ## Project Overview
 
 Markable 2.0 is a native macOS Markdown editor built with **Tauri v2** (Rust backend) + **CodeMirror 6** (TypeScript frontend) + **Vite**. The editor features a "Typora-style" live preview mode that hides Markdown syntax unless the cursor is on the active line.
@@ -56,7 +58,7 @@ A "vault" is a watched folder. The vault index (built by `build_vault_index` Rus
 
 ## Key Conventions
 
-- **No code without validated requirements.** Always check `docs/requirements/active_task.md` exists before implementing.
+- **No code without validated requirements.** Check `docs/requirements/active_task.md` and [planning/README.md](planning/README.md). Do not resume from archived Phase 1 trackers.
 - **No TODO comments in source code.** Log deferred work in `docs/specs/[feature]/00_index.md`.
 - **Atomic saves**: All file writes use temp-file-swap pattern (Rust side).
 - **Asset protocol**: Images use Tauri's `asset://` protocol, never base64 embedding.
@@ -141,7 +143,9 @@ The macOS Sequoia/Tahoe DMG compiler has known incompatibilities with Tauri v2. 
 
 ## Agent Workflow
 
-This project uses a phased agent pipeline in `.claude/agents/`. **Do not skip phases.**
+For the upcoming app-family epic, `dm-software-machine` + Beads is planned but **not initialized** (see [planning/EXECUTION.md](planning/EXECUTION.md)).
+
+This project also has a phased agent pipeline in `.claude/agents/`. **Do not skip phases.**
 
 1. **Requirements Analyst** — produces `docs/requirements/active_task.md`
 2. **Software Architect** — produces `docs/specs/[feature]/00_index.md` + step files

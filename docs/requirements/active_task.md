@@ -5,6 +5,8 @@ review-cadence-days: 7
 status: active
 ---
 
+> Last-known live requirement as of the 2026-09-22 baseline. The architect handoff `docs/specs/collections-hierarchy/` is missing. Current planning: `planning/README.md`.
+
 # Collections — Hierarchy, Drag-into-Container, and Composite Content Views
 
 ## Summary
