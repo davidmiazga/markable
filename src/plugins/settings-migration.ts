@@ -66,6 +66,17 @@ const FLAT_KEY_TO_PLUGIN_ID: ReadonlyArray<{
  * @returns         A new settings object with `plugins` populated, or the
  *                  original settings object if migration is a no-op.
  */
+export function settingsHaveLegacyPluginFields(settings: MarkableSettings): boolean {
+  const raw = settings as unknown as Record<string, unknown>;
+  return (
+    raw.focusMode !== undefined ||
+    raw.typewriterMode !== undefined ||
+    raw.wordCount !== undefined ||
+    raw.statusBar !== undefined ||
+    raw.userPlugins !== undefined
+  );
+}
+
 export function migratePluginSettings(settings: MarkableSettings): MarkableSettings {
   // EC-26/27/28: if plugins already exists with at least one key, migration has
   // already run on a previous launch. Return the original reference unchanged.

@@ -16,6 +16,9 @@
     "reset:themes": "node scripts/reset-themes.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
+    "dev:markable": "node scripts/tauri-flavor.mjs markable dev",
+    "dev:remarkable": "node scripts/tauri-flavor.mjs remarkable dev",
+    "dev:knowledgebank": "node scripts/tauri-flavor.mjs knowledgebank dev",
     "test": "vitest",
     "test:run": "vitest run",
     "test:ui": "vitest --ui"

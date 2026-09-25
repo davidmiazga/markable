@@ -27,11 +27,11 @@ Engine surfaces in `packs.json` → `host.modules`. Always present. Not IIFE plu
 
 ### 1. Re-markable
 
-Catch-all. Identifier `com.markable.app` (today’s Application Support). Intended first-run packs: `base` + `pkm`. No `added` plugins on install. Today's shipped first-run list is the kitchen-sink stub on [`flavors/remarkable.json`](../flavors/remarkable.json) (`defaultEnabledPlugins`) so existing data does not suddenly gain the full PKM pack. A later migration can drop that override. Bolster AI. A workspace switcher toward apps 2–6 is deferred. Launch with `VITE_FLAVOR=remarkable node scripts/tauri-flavor.mjs dev`.
+Catch-all. Identifier `com.markable.app`. First-run packs: `base` + `pkm` from [`flavors/remarkable.json`](../flavors/remarkable.json). No `added` plugins on install. No kitchen-sink override. Bolster AI. A workspace switcher toward apps 2–6 is deferred. Launch with `npm run dev:remarkable`.
 
 ### 2. Markable
 
-Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. Single-file editor. No project, PKM, or added plugins on install. Plugins remain installable. Launch with `node scripts/tauri-flavor.mjs dev`.
+Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. Single-file editor. No project, PKM, or added plugins on install. Plugins remain installable. Launch with `npm run dev:markable`.
 
 ### 3. Markable-Project
 
@@ -39,7 +39,7 @@ Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. 
 
 ### 4. Markable-KnowledgeBank
 
-`base` + `pkm` via [`flavors/knowledgebank.json`](../flavors/knowledgebank.json). Identifier `com.markable.knowledgebank`. Launch: `VITE_FLAVOR=knowledgebank node scripts/tauri-flavor.mjs dev`. Library / resource management (text, PDF, books, video, files). Heaviest AI expectation.
+`base` + `pkm` via [`flavors/knowledgebank.json`](../flavors/knowledgebank.json). Identifier `com.markable.knowledgebank`. Launch: `npm run dev:knowledgebank`. Library / resource management (text, PDF, books, video, files). Heaviest AI expectation.
 
 ### 5. Markable-QuickNote
 
@@ -51,4 +51,4 @@ Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. 
 
 ## Composition rule
 
-`flavor.enabledPacks` is the product intent. If `defaultEnabledPlugins` is present and non-empty, that list is the actual first-run enablement (legacy / migration override). Otherwise first-run is the union of the named packs.
+`flavor.enabledPacks` is the product intent and the first-run enablement. `defaultEnabledPlugins` remains an optional override; no flavor uses it now.

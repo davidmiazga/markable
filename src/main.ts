@@ -87,7 +87,10 @@ import {
   updateUserPluginDefs,
 } from "./plugins/plugins-panel/plugins-panel";
 import { pluginManager } from "./plugins/index";
-import { migratePluginSettings } from "./plugins/settings-migration";
+import {
+  migratePluginSettings,
+  settingsHaveLegacyPluginFields,
+} from "./plugins/settings-migration";
 import {
   initSidebar,
   restoreSidebarFromSettings,
@@ -110,7 +113,12 @@ import {
 } from "./lib/meta-manager";
 import type { MetaStore } from "./lib/meta-manager";
 import { getAppDataDir } from "./lib/bridge";
-import { flavorIdentifier, flavorProductName, getActiveFlavor } from "./lib/flavor";
+import {
+  flavorEnablesPack,
+  flavorIdentifier,
+  flavorProductName,
+  getActiveFlavor,
+} from "./lib/flavor";
 import { buildQuickCommandExtension } from "./editor/quick-commands";
 import {
   buildAutoRenderExtension,
@@ -1179,21 +1187,14 @@ async function initApp() {
   // statusBar.visible, userPlugins) into the unified plugins map introduced in
   // step_03c. migratePluginSettings is idempotent: if settings.plugins is already
   // non-empty it returns the input unchanged (EC-26/27/28).
-  // Fresh Markable installs have no pre-Chunk-3 flat keys. Skipping
-  // migratePluginSettings avoids stamping word-count/status-bar as
-  // enabled:false, which would override flavor first-run defaults.
+  // Skip when there are no pre-Chunk-3 flat keys so flavor first-run
+  // defaults are not stamped enabled:false (word-count / status-bar).
   const migratedSettings =
-    settings.productLine === "markable"
-      ? settings
-      : migratePluginSettings(settings);
+    settingsHaveLegacyPluginFields(settings)
+      ? migratePluginSettings(settings)
+      : settings;
 
-  // Persist the migrated map so subsequent launches skip migration entirely.
-  // Fire-and-forget (void): if the write fails the migration re-runs next launch
-  // with the same idempotent result, so no data is lost.
-  if (
-    settings.productLine !== "markable" &&
-    (!settings.plugins || Object.keys(settings.plugins).length === 0)
-  ) {
+  if (migratedSettings !== settings) {
     void updateSettings(() => migratedSettings);
   }
 
@@ -1387,13 +1388,12 @@ async function initApp() {
   // restore "open" state if at least one panel was actually registered.
   restoreSidebarFromSettings();
 
-  // File-browser-first experience for existing kitchen-sink installs only.
-  // Fresh Markable is a single-file editor — do not auto-open the sidebar.
-  // "Factory default" = open:false AND activeTabId:null (the user has not
-  // interacted with the sidebar since the vault was configured).
+  // File-browser-first when the flavor includes the PKM pack (Re-markable,
+  // KnowledgeBank). Markable (base only) stays a single-file editor.
+  // "Factory default" = open:false AND activeTabId:null.
   {
     const _s = getCurrentSettings();
-    if (_s.productLine === "legacy-kitchen-sink") {
+    if (flavorEnablesPack("pkm")) {
       const _activeId = _s.activeVaultId;
       const _hasVault = !!_activeId && (_s.vaults ?? []).some((v) => v.id === _activeId);
       if (_hasVault) {

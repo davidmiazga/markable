@@ -1,8 +1,8 @@
 /**
  * Active product flavor — first-run defaults, not capability limits.
  *
- * Packs live in /flavors/packs.json. Flavor files choose packs and may
- * override the first-run plugin list (Re-markable kitchen-sink stub).
+ * Packs live in /flavors/packs.json. Flavor files choose packs.
+ * An optional defaultEnabledPlugins list overrides pack union (unused now).
  */
 
 import packCatalog from "../../flavors/packs.json";
@@ -99,18 +99,6 @@ export function defaultEnabledPluginSet(): ReadonlySet<string> {
   return new Set(resolveFlavorFirstRunPlugins(getActiveFlavor()));
 }
 
-/**
- * Today’s kitchen-sink first-run set from the Re-markable stub override.
- * Existing `com.markable.app` installs use this until a real migration exists.
- */
-export const LEGACY_KITCHEN_SINK_PLUGINS: readonly string[] =
-  resolveFlavorFirstRunPlugins(remarkableManifest);
-
-export function defaultEnabledPluginsForProductLine(
-  productLine: string | undefined,
-): ReadonlySet<string> {
-  if (productLine === "legacy-kitchen-sink") {
-    return new Set(LEGACY_KITCHEN_SINK_PLUGINS);
-  }
-  return defaultEnabledPluginSet();
+export function flavorEnablesPack(packId: string): boolean {
+  return (getActiveFlavor().enabledPacks ?? []).includes(packId);
 }

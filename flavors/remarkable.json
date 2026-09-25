@@ -3,11 +3,5 @@
   "displayName": "Re-markable",
   "productName": "Re-markable",
   "identifier": "com.markable.app",
-  "enabledPacks": ["base", "pkm"],
-  "defaultEnabledPlugins": [
-    "media-preview",
-    "backlinks",
-    "markdown-toolbar",
-    "command-bar"
-  ]
+  "enabledPacks": ["base", "pkm"]
 }

@@ -6,7 +6,7 @@ A flavor is a first-run CX: name plus packs (and an optional plugin-list overrid
 |---|---|
 | [packs.json](packs.json) | Host modules plus base / domain / added plugin packs |
 | [markable.json](markable.json) | Minimal editor — `com.markable.editor`, `enabledPacks: ["base"]` |
-| [remarkable.json](remarkable.json) | Re-markable — `com.markable.app` (existing data); kitchen-sink first-run override |
+| [remarkable.json](remarkable.json) | Re-markable — `com.markable.app`, `base` + `pkm` |
 | [knowledgebank.json](knowledgebank.json) | Markable-KnowledgeBank — `com.markable.knowledgebank`, `base` + `pkm` |
 
 `src-tauri/tauri.conf.json` stays `com.markable.app` so `npm run tauri dev` keeps using today’s Application Support folder.
@@ -14,11 +14,11 @@ A flavor is a first-run CX: name plus packs (and an optional plugin-list overrid
 Align frontend flavor + bundle id:
 
 ```bash
-node scripts/tauri-flavor.mjs dev
-VITE_FLAVOR=remarkable node scripts/tauri-flavor.mjs dev
-VITE_FLAVOR=knowledgebank node scripts/tauri-flavor.mjs dev
+npm run dev:markable
+npm run dev:remarkable
+npm run dev:knowledgebank
 ```
 
-That is not a live switcher and does not migrate existing app data. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.
+Same targets: `just markable`, `just remarkable`, `just knowledgebank`. `npm run tauri dev` still uses `com.markable.app` without setting `VITE_FLAVOR`.
 
-Existing Application Support data is stamped `legacy-kitchen-sink` and uses the Re-markable `defaultEnabledPlugins` override until a migration exists.
+That is not a live switcher. First-run enablement is the flavor’s `enabledPacks`. Saved `settings.plugins` entries still win. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.

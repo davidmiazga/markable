@@ -12,7 +12,7 @@
 | Window + menus | One overlay window; one native menu tree in `menu.rs` / `lib.rs` |
 | Icons | `src-tauri/icons/` (workspace also has unused `jobWorking/app-icon/`) |
 | Default settings | `DEFAULT_SETTINGS` in `src/lib/settings.ts` + Rust defaults |
-| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable intends `base`+`pkm` with a kitchen-sink first-run override |
+| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable and KnowledgeBank use `base`+`pkm` |
 | Bundled resources | `help/*`, `plugins/core/*`, `themes/*` |
 | Signing | Not configured |
 
@@ -38,6 +38,6 @@
 
 ## Blockers
 
-Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json) and explained in [SeparateApp-CXrequirements-v1.0.md](SeparateApp-CXrequirements-v1.0.md). Existing `com.markable.app` directories are stamped `productLine: "legacy-kitchen-sink"` and keep the Re-markable first-run override plus file-browser-first vault chrome until a migration exists. A missing `settings.json` is stamped `markable` and enables the `base` pack. Existing `settings.plugins` entries still win. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. KnowledgeBank has [`flavors/knowledgebank.json`](../flavors/knowledgebank.json) (`base` + `pkm`). Bundle ids live on each flavor file; [`scripts/tauri-flavor.mjs`](../scripts/tauri-flavor.mjs) applies them. `tauri.conf.json` remains `com.markable.app` so existing data is not moved. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.
+Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json). First-run is the active flavor’s `enabledPacks`. Saved `settings.plugins` entries still win. File-browser-first chrome applies when the flavor includes the `pkm` pack. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. Bundle ids live on each flavor file; [`scripts/tauri-flavor.mjs`](../scripts/tauri-flavor.mjs) applies them. Named scripts: `npm run dev:markable`, `dev:remarkable`, `dev:knowledgebank` (also `just markable` / `remarkable` / `knowledgebank`). `npm run tauri dev` still uses `com.markable.app` without `VITE_FLAVOR`. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.
 
 See [EXECUTION.md](EXECUTION.md) for the software-machine contract.

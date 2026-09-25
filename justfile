@@ -48,3 +48,13 @@ sm-gate TASK KIND="fast":
 
 sm-auto MODE:
     {{sm}} auto {{MODE}}
+
+# ── Flavor dev ──────────────────────────────────────────────────────────────
+markable *ARGS:
+    node scripts/tauri-flavor.mjs markable {{ARGS}}
+
+remarkable *ARGS:
+    node scripts/tauri-flavor.mjs remarkable {{ARGS}}
+
+knowledgebank *ARGS:
+    node scripts/tauri-flavor.mjs knowledgebank {{ARGS}}

@@ -2,23 +2,41 @@
  * Run the Tauri CLI with identifier + productName from flavors/<id>.json.
  *
  * Usage:
- *   node scripts/tauri-flavor.mjs dev
+ *   node scripts/tauri-flavor.mjs markable dev
+ *   node scripts/tauri-flavor.mjs remarkable dev
+ *   node scripts/tauri-flavor.mjs knowledgebank build
  *   VITE_FLAVOR=remarkable node scripts/tauri-flavor.mjs dev
- *   VITE_FLAVOR=knowledgebank node scripts/tauri-flavor.mjs build
  *
- * `npm run tauri dev` still uses src-tauri/tauri.conf.json (com.markable.app)
- * so existing Application Support data is not moved.
+ * Named npm scripts: `npm run dev:markable`, `dev:remarkable`, `dev:knowledgebank`.
+ * `npm run tauri dev` still uses src-tauri/tauri.conf.json (com.markable.app).
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const flavorId = (process.env.VITE_FLAVOR ?? "markable").trim() || "markable";
-const flavorPath = resolve(root, "flavors", `${flavorId}.json`);
+const argv = process.argv.slice(2);
 
+function flavorFile(id) {
+  return resolve(root, "flavors", `${id}.json`);
+}
+
+let flavorId = (process.env.VITE_FLAVOR ?? "").trim();
+let command = argv;
+if (argv[0] !== undefined && existsSync(flavorFile(argv[0]))) {
+  flavorId = argv[0];
+  command = argv.slice(1);
+}
+if (flavorId === "") {
+  flavorId = "markable";
+}
+if (command.length === 0) {
+  command = ["dev"];
+}
+
+const flavorPath = flavorFile(flavorId);
 let flavor;
 try {
   flavor = JSON.parse(readFileSync(flavorPath, "utf8"));
@@ -45,9 +63,6 @@ const merge = {
   identifier,
   productName,
 };
-
-const tauriArgs = process.argv.slice(2);
-const command = tauriArgs.length > 0 ? tauriArgs : ["dev"];
 
 console.log(`[tauri-flavor] ${flavorId} → ${identifier} (${productName})`);
 
