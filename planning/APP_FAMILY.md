@@ -7,7 +7,7 @@
 | Concern | Today’s single value |
 |---|---|
 | Product name | `Markable` (`tauri.conf.json`, menus, help) |
-| Identifier / app data | `com.markable.app` → `~/Library/Application Support/com.markable.app/` |
+| Identifier / app data | Re-markable / `npm run tauri dev`: `com.markable.app`. Markable via `scripts/tauri-flavor.mjs`: `com.markable.editor`. KnowledgeBank: `com.markable.knowledgebank`. |
 | Versions | `0.1.0` in npm, Cargo, Tauri |
 | Window + menus | One overlay window; one native menu tree in `menu.rs` / `lib.rs` |
 | Icons | `src-tauri/icons/` (workspace also has unused `jobWorking/app-icon/`) |
@@ -38,6 +38,6 @@
 
 ## Blockers
 
-Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json) and explained in [SeparateApp-CXrequirements-v1.0.md](SeparateApp-CXrequirements-v1.0.md). Existing `com.markable.app` directories are stamped `productLine: "legacy-kitchen-sink"` and keep the Re-markable first-run override plus file-browser-first vault chrome until a migration exists. A missing `settings.json` is stamped `markable` and enables the `base` pack. Existing `settings.plugins` entries still win. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. Other flavor JSON files (Project, KnowledgeBank, QuickNote, Diary) are not created yet.
+Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json) and explained in [SeparateApp-CXrequirements-v1.0.md](SeparateApp-CXrequirements-v1.0.md). Existing `com.markable.app` directories are stamped `productLine: "legacy-kitchen-sink"` and keep the Re-markable first-run override plus file-browser-first vault chrome until a migration exists. A missing `settings.json` is stamped `markable` and enables the `base` pack. Existing `settings.plugins` entries still win. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. KnowledgeBank has [`flavors/knowledgebank.json`](../flavors/knowledgebank.json) (`base` + `pkm`). Bundle ids live on each flavor file; [`scripts/tauri-flavor.mjs`](../scripts/tauri-flavor.mjs) applies them. `tauri.conf.json` remains `com.markable.app` so existing data is not moved. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.
 
 See [EXECUTION.md](EXECUTION.md) for the software-machine contract.

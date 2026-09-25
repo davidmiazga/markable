@@ -8,12 +8,33 @@
 import packCatalog from "../../flavors/packs.json";
 import markableManifest from "../../flavors/markable.json";
 import remarkableManifest from "../../flavors/remarkable.json";
+import knowledgebankManifest from "../../flavors/knowledgebank.json";
 
 export interface FlavorManifest {
   id: string;
   displayName: string;
+  productName?: string;
+  /** Reverse-DNS bundle id. Controls Application Support on macOS. */
+  identifier?: string;
   enabledPacks?: string[];
   defaultEnabledPlugins?: string[];
+}
+
+/** Existing kitchen-sink / Re-markable Application Support folder. */
+export const LEGACY_BUNDLE_IDENTIFIER = "com.markable.app";
+
+export function flavorIdentifier(flavor: FlavorManifest): string {
+  if (typeof flavor.identifier === "string" && flavor.identifier.trim() !== "") {
+    return flavor.identifier.trim();
+  }
+  return LEGACY_BUNDLE_IDENTIFIER;
+}
+
+export function flavorProductName(flavor: FlavorManifest): string {
+  if (typeof flavor.productName === "string" && flavor.productName.trim() !== "") {
+    return flavor.productName.trim();
+  }
+  return flavor.displayName;
 }
 
 export interface PluginPack {
@@ -32,6 +53,7 @@ export const PACKS: PackCatalog = packCatalog;
 const REGISTRY: Record<string, FlavorManifest> = {
   markable: markableManifest,
   remarkable: remarkableManifest,
+  knowledgebank: knowledgebankManifest,
 };
 
 export function pluginsFromPacks(packIds: readonly string[]): string[] {

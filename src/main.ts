@@ -110,6 +110,7 @@ import {
 } from "./lib/meta-manager";
 import type { MetaStore } from "./lib/meta-manager";
 import { getAppDataDir } from "./lib/bridge";
+import { flavorIdentifier, flavorProductName, getActiveFlavor } from "./lib/flavor";
 import { buildQuickCommandExtension } from "./editor/quick-commands";
 import {
   buildAutoRenderExtension,
@@ -1168,7 +1169,11 @@ async function initApp() {
 
   // Load settings from disk before any UI (TC-5: read before show)
   const settings = await loadSettings();
+  const flavor = getActiveFlavor();
   console.log("Settings loaded, schema version:", settings.version);
+  console.log(
+    `[flavor] ${flavor.id} ${flavorProductName(flavor)} ${flavorIdentifier(flavor)}`,
+  );
 
   // Migrate old flat plugin settings keys (focusMode, typewriterMode, wordCount,
   // statusBar.visible, userPlugins) into the unified plugins map introduced in

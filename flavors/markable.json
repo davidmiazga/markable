@@ -1,5 +1,7 @@
 {
   "id": "markable",
   "displayName": "Markable",
+  "productName": "Markable",
+  "identifier": "com.markable.editor",
   "enabledPacks": ["base"]
 }

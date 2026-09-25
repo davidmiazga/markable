@@ -1,0 +1,7 @@
+{
+  "id": "knowledgebank",
+  "displayName": "Markable-KnowledgeBank",
+  "productName": "Markable-KnowledgeBank",
+  "identifier": "com.markable.knowledgebank",
+  "enabledPacks": ["base", "pkm"]
+}
