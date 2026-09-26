@@ -9,6 +9,9 @@ import packCatalog from "../../flavors/packs.json";
 import markableManifest from "../../flavors/markable.json";
 import remarkableManifest from "../../flavors/remarkable.json";
 import knowledgebankManifest from "../../flavors/knowledgebank.json";
+import projectManifest from "../../flavors/project.json";
+import diaryManifest from "../../flavors/diary.json";
+import quicknoteManifest from "../../flavors/quicknote.json";
 
 export interface FlavorManifest {
   id: string;
@@ -54,6 +57,9 @@ const REGISTRY: Record<string, FlavorManifest> = {
   markable: markableManifest,
   remarkable: remarkableManifest,
   knowledgebank: knowledgebankManifest,
+  project: projectManifest,
+  diary: diaryManifest,
+  quicknote: quicknoteManifest,
 };
 
 export function pluginsFromPacks(packIds: readonly string[]): string[] {

@@ -1,0 +1,7 @@
+{
+  "id": "quicknote",
+  "displayName": "Markable-QuickNote",
+  "productName": "Markable-QuickNote",
+  "identifier": "com.markable.quicknote",
+  "enabledPacks": ["base", "quicknote"]
+}

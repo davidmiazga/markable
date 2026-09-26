@@ -72,6 +72,12 @@ const PLUGINS = [
   ["auto-title",        "src/plugins/auto-title/auto-title.plugin.ts"],
   // Typing Assist — smart typography (curly quotes, smart dashes, ellipsis).
   ["typing-assist",     "src/plugins/typing-assist/typing-assist.plugin.ts"],
+  // Project pack — three-column sidebar board.
+  ["kanban",            "src/plugins/kanban/kanban.plugin.ts"],
+  // Diary pack — standalone month grid (separate from Daily Note's note calendar).
+  ["calendar",          "src/plugins/calendar/calendar.plugin.ts"],
+  // QuickNote pack — names a user sync service; does not transfer files.
+  ["sync",              "src/plugins/sync/sync.plugin.ts"],
 ];
 
 /**

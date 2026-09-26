@@ -7,12 +7,12 @@
 | Concern | Today’s single value |
 |---|---|
 | Product name | `Markable` (`tauri.conf.json`, menus, help) |
-| Identifier / app data | Re-markable / `npm run tauri dev`: `com.markable.app`. Markable via `scripts/tauri-flavor.mjs`: `com.markable.editor`. KnowledgeBank: `com.markable.knowledgebank`. |
+| Identifier / app data | Re-markable / `npm run tauri dev`: `com.markable.app`. Markable via `scripts/tauri-flavor.mjs`: `com.markable.editor`. KnowledgeBank: `com.markable.knowledgebank`. Project: `com.markable.project`. Diary: `com.markable.diary`. QuickNote: `com.markable.quicknote`. |
 | Versions | `0.1.0` in npm, Cargo, Tauri |
 | Window + menus | One overlay window; one native menu tree in `menu.rs` / `lib.rs` |
 | Icons | `src-tauri/icons/` (workspace also has unused `jobWorking/app-icon/`) |
 | Default settings | `DEFAULT_SETTINGS` in `src/lib/settings.ts` + Rust defaults |
-| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable and KnowledgeBank use `base`+`pkm` |
+| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable and KnowledgeBank use `base`+`pkm`; Project uses `base`+`project`; Diary uses `base`+`diary`; QuickNote uses `base`+`quicknote` |
 | Bundled resources | `help/*`, `plugins/core/*`, `themes/*` |
 | Signing | Not configured |
 
@@ -34,10 +34,10 @@
 
 **Likely optional plugins (toggle per app):**
 
-- Most of the current 20 IIFE plugins, especially file-browser, knowledge-graph, daily-note, diagrams, math
+- Most of the current 23 IIFE plugins, especially file-browser, knowledge-graph, daily-note, diagrams, math, kanban, calendar, sync
 
 ## Blockers
 
-Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json). First-run is the active flavor’s `enabledPacks`. Saved `settings.plugins` entries still win. File-browser-first chrome applies when the flavor includes the `pkm` pack. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. Bundle ids live on each flavor file; [`scripts/tauri-flavor.mjs`](../scripts/tauri-flavor.mjs) applies them. Named scripts: `npm run dev:markable`, `dev:remarkable`, `dev:knowledgebank` (also `just markable` / `remarkable` / `knowledgebank`). `npm run tauri dev` still uses `com.markable.app` without `VITE_FLAVOR`. Project, QuickNote, and Diary flavor files wait until those packs have shipped features.
+Host vs packs is locked in [`flavors/packs.json`](../flavors/packs.json). First-run is the active flavor’s `enabledPacks`. Saved `settings.plugins` entries still win. File-browser-first chrome applies when the flavor includes the `pkm` pack. The IIFE build list in `scripts/build-plugins.mjs` is still hard-coded. Bundle ids live on each flavor file; [`scripts/tauri-flavor.mjs`](../scripts/tauri-flavor.mjs) applies them. Named scripts: `npm run dev:markable`, `dev:remarkable`, `dev:knowledgebank` (also `just markable` / `remarkable` / `knowledgebank`). Project, Diary, and QuickNote flavor files exist (`com.markable.project`, `com.markable.diary`, `com.markable.quicknote`); launch with `node scripts/tauri-flavor.mjs project|diary|quicknote dev` until named npm scripts are added. `npm run tauri dev` still uses `com.markable.app` without `VITE_FLAVOR`.
 
 See [EXECUTION.md](EXECUTION.md) for the software-machine contract.

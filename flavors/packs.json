@@ -38,17 +38,15 @@
     },
     "project": {
       "displayName": "Project",
-      "plugins": [],
-      "planned": ["kanban"]
+      "plugins": ["kanban"]
     },
     "quicknote": {
       "displayName": "Quick note",
-      "plugins": ["templates", "insert-count", "auto-title"]
+      "plugins": ["templates", "insert-count", "auto-title", "sync"]
     },
     "diary": {
       "displayName": "Diary",
-      "plugins": ["daily-note"],
-      "planned": ["calendar"]
+      "plugins": ["daily-note", "calendar"]
     },
     "added": {
       "displayName": "Added",

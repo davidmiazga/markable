@@ -1,0 +1,7 @@
+{
+  "id": "diary",
+  "displayName": "Markable-Diary",
+  "productName": "Markable-Diary",
+  "identifier": "com.markable.diary",
+  "enabledPacks": ["base", "diary"]
+}

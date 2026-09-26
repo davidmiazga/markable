@@ -54,7 +54,7 @@ tracker: beads
 max_repairs: 2
 # After accept, keep claiming ready disjoint tasks until the queue is idle or a gate fails.
 # Requires Cursor Auto-review (or Run) plus stamped `.cursor/permissions.json`.
-auto_advance: false
+auto_advance: true
 # Max in-flight tasks. Overlapping writes always serialize. Worktrees not in this slice.
 parallel: 1
 artifact_dir: .dm-software-machine

@@ -1,0 +1,7 @@
+{
+  "id": "project",
+  "displayName": "Markable-Project",
+  "productName": "Markable-Project",
+  "identifier": "com.markable.project",
+  "enabledPacks": ["base", "project"]
+}
