@@ -1,24 +1,16 @@
 /**
- * Sync built core plugins to the dev Application Support directory.
+ * Sync built core plugins to every flavor Application Support directory.
  *
- * Unlike `cp src-tauri/plugins/core/*.js ~/Library/.../plugins/core/`,
- * this script removes stale files from the destination that are no longer
- * in the source — the same cleanup that `copy_core_plugins` does in production.
+ * Reads identifiers from flavors/*.json (plus com.markable.app if missing).
+ * Removes stale .js files the same way `copy_core_plugins` does in production.
  *
  * Also cleans Tauri's target/debug and target/release resource caches, which
  * Tauri populates on `tauri dev` / `tauri build` from bundle.resources globs.
- * These target dirs are never auto-cleaned by Tauri when a resource is removed
- * from the source — stale files there get re-copied into Application Support
- * on the next launch when the version stamp changes.
  *
  * Run via: npm run sync:plugins
- *
- * Typical dev workflow:
- *   npm run build:plugins   ← rebuild all plugin bundles
- *   npm run sync:plugins    ← clean-sync to Application Support + Tauri target caches
  */
 
-import { readdirSync, rmSync, copyFileSync, mkdirSync, existsSync } from "fs";
+import { readdirSync, rmSync, copyFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { resolve, join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -26,29 +18,46 @@ import { homedir } from "os";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const src = resolve(root, "src-tauri/plugins/core");
-const dst = join(
-  homedir(),
-  "Library/Application Support/com.markable.app/plugins/core"
-);
+const flavorsDir = resolve(root, "flavors");
+const LEGACY_IDENTIFIER = "com.markable.app";
 
-// Tauri target resource caches — populated during `tauri dev` / `tauri build`.
-// Stale files here survive until explicitly removed.
+function flavorIdentifiers() {
+  const ids = new Set([LEGACY_IDENTIFIER]);
+  if (!existsSync(flavorsDir)) return [...ids];
+  for (const name of readdirSync(flavorsDir)) {
+    if (!name.endsWith(".json") || name === "packs.json") continue;
+    let flavor;
+    try {
+      flavor = JSON.parse(readFileSync(join(flavorsDir, name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (typeof flavor.identifier === "string" && flavor.identifier.trim() !== "") {
+      ids.add(flavor.identifier.trim());
+    }
+  }
+  return [...ids];
+}
+
+function appSupportPluginsDir(identifier) {
+  return join(homedir(), "Library/Application Support", identifier, "plugins/core");
+}
+
 const tauriCacheDirs = [
   resolve(root, "src-tauri/target/debug/plugins/core"),
   resolve(root, "src-tauri/target/release/plugins/core"),
 ];
 
-mkdirSync(dst, { recursive: true });
+if (!existsSync(src)) {
+  console.error(`[sync:plugins] missing ${src} — run npm run build:plugins first`);
+  process.exit(1);
+}
 
-// Build set of source filenames.
-const srcFiles = new Set(
-  readdirSync(src).filter((f) => f.endsWith(".js"))
-);
+const srcFiles = new Set(readdirSync(src).filter((f) => f.endsWith(".js")));
 
-// Helper: remove stale .js files from a directory that aren't in srcFiles.
 function cleanStaleFrom(dir) {
   if (!existsSync(dir)) return;
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".js"))) {
+  for (const f of readdirSync(dir).filter((file) => file.endsWith(".js"))) {
     if (!srcFiles.has(f)) {
       console.log(`Removing stale from ${dir.replace(root + "/", "")}: ${f}`);
       rmSync(join(dir, f));
@@ -56,23 +65,23 @@ function cleanStaleFrom(dir) {
   }
 }
 
-// Clean Tauri target caches first (prevents them from re-polluting App Support on launch).
 for (const cacheDir of tauriCacheDirs) {
   cleanStaleFrom(cacheDir);
 }
 
-// Remove stale files in Application Support destination.
-for (const f of readdirSync(dst).filter((f) => f.endsWith(".js"))) {
-  if (!srcFiles.has(f)) {
-    console.log(`Removing stale from App Support: ${f}`);
-    rmSync(join(dst, f));
+const destinations = flavorIdentifiers().map(appSupportPluginsDir);
+const synced = [];
+
+for (const dst of destinations) {
+  mkdirSync(dst, { recursive: true });
+  cleanStaleFrom(dst);
+  for (const f of srcFiles) {
+    copyFileSync(join(src, f), join(dst, f));
   }
+  synced.push(dst);
 }
 
-// Copy all source files → destination (overwrite).
-for (const f of srcFiles) {
-  copyFileSync(join(src, f), join(dst, f));
-  console.log(`Copied: ${f}`);
+console.log(`[sync:plugins] ${srcFiles.size} plugins synced to ${synced.length} Application Support dirs:`);
+for (const dst of synced) {
+  console.log(`  ${dst}`);
 }
-
-console.log(`\n[sync:plugins] ${srcFiles.size} plugins synced to:\n  ${dst}`);

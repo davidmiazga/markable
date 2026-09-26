@@ -4,12 +4,17 @@ use tauri::{
 };
 
 pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let app_name = handle
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| handle.package_info().name.clone());
     let app_menu = Submenu::with_items(
         handle,
-        "Markable",
+        &app_name,
         true,
         &[
-            &PredefinedMenuItem::about(handle, Some("About Markable"), None)?,
+            &PredefinedMenuItem::about(handle, Some(&format!("About {app_name}")), None)?,
             &MenuItem::with_id(
                 handle,
                 "app-updates",
@@ -42,11 +47,11 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::hide(handle, Some("Hide Markable"))?,
+            &PredefinedMenuItem::hide(handle, Some(&format!("Hide {app_name}")))?,
             &PredefinedMenuItem::hide_others(handle, None)?,
             &PredefinedMenuItem::show_all(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::quit(handle, Some("Quit Markable"))?,
+            &PredefinedMenuItem::quit(handle, Some(&format!("Quit {app_name}")))?,
         ],
     )?;
 

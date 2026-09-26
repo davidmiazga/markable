@@ -56,5 +56,14 @@ markable *ARGS:
 remarkable *ARGS:
     node scripts/tauri-flavor.mjs remarkable {{ARGS}}
 
-knowledgebank *ARGS:
-    node scripts/tauri-flavor.mjs knowledgebank {{ARGS}}
+pkm *ARGS:
+    node scripts/tauri-flavor.mjs pkm {{ARGS}}
+
+project *ARGS:
+    node scripts/tauri-flavor.mjs project {{ARGS}}
+
+diary *ARGS:
+    node scripts/tauri-flavor.mjs diary {{ARGS}}
+
+quicknote *ARGS:
+    node scripts/tauri-flavor.mjs quicknote {{ARGS}}

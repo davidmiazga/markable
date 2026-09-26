@@ -1,0 +1,7 @@
+{
+  "id": "pkm",
+  "displayName": "Markable PKM",
+  "productName": "Markable PKM",
+  "identifier": "com.markable.pkm",
+  "enabledPacks": ["base", "pkm"]
+}

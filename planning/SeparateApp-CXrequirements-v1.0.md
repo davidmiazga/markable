@@ -35,19 +35,19 @@ Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. 
 
 ### 3. Markable-Project
 
-`base` + `project` via [`flavors/project.json`](../flavors/project.json). Identifier `com.markable.project`. Asana / Folia competitor. Kanban ships as a three-column sidebar board. AI compatible. iO-workflow helpers later. Launch: `node scripts/tauri-flavor.mjs project dev` (named npm script still pending).
+`base` + `project` via [`flavors/project.json`](../flavors/project.json). Identifier `com.markable.project`. Asana / Folia competitor. Kanban ships as a three-column sidebar board. AI compatible. iO-workflow helpers later. Launch with `npm run dev:project`.
 
-### 4. Markable-KnowledgeBank
+### 4. Markable PKM
 
-`base` + `pkm` via [`flavors/knowledgebank.json`](../flavors/knowledgebank.json). Identifier `com.markable.knowledgebank`. Launch: `npm run dev:knowledgebank`. Library / resource management (text, PDF, books, video, files). Heaviest AI expectation.
+`base` + `pkm` via [`flavors/pkm.json`](../flavors/pkm.json). Identifier `com.markable.pkm`. One name everywhere (Finder, Dock, menus, window title). Launch: `npm run dev:pkm`. Personal knowledge management — library / resource management (text, PDF, books, video, files). Heaviest AI expectation.
 
 ### 5. Markable-QuickNote
 
-`base` + `quicknote` via [`flavors/quicknote.json`](../flavors/quicknote.json). Identifier `com.markable.quicknote`. Fast notes and to-dos. The `sync` plugin records a user-provided service name; it does not transfer files yet. Apple Notes / SimpleNote competitor. Launch: `node scripts/tauri-flavor.mjs quicknote dev` (named npm script still pending).
+`base` + `quicknote` via [`flavors/quicknote.json`](../flavors/quicknote.json). Identifier `com.markable.quicknote`. Fast notes and to-dos. The `sync` plugin records a user-provided service name; it does not transfer files yet. Apple Notes / SimpleNote competitor. Launch with `npm run dev:quicknote`.
 
 ### 6. Markable-Diary
 
-`base` + `diary` via [`flavors/diary.json`](../flavors/diary.json). Identifier `com.markable.diary`. Daily routine, month calendar, results over time. Launch: `node scripts/tauri-flavor.mjs diary dev` (named npm script still pending).
+`base` + `diary` via [`flavors/diary.json`](../flavors/diary.json). Identifier `com.markable.diary`. Daily routine, month calendar, results over time. Launch with `npm run dev:diary`.
 
 ## Composition rule
 

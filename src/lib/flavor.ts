@@ -8,7 +8,7 @@
 import packCatalog from "../../flavors/packs.json";
 import markableManifest from "../../flavors/markable.json";
 import remarkableManifest from "../../flavors/remarkable.json";
-import knowledgebankManifest from "../../flavors/knowledgebank.json";
+import pkmManifest from "../../flavors/pkm.json";
 import projectManifest from "../../flavors/project.json";
 import diaryManifest from "../../flavors/diary.json";
 import quicknoteManifest from "../../flavors/quicknote.json";
@@ -17,6 +17,8 @@ export interface FlavorManifest {
   id: string;
   displayName: string;
   productName?: string;
+  /** Tight UI: Finder, Dock, app menu, window title. Falls back to productName. */
+  shortName?: string;
   /** Reverse-DNS bundle id. Controls Application Support on macOS. */
   identifier?: string;
   enabledPacks?: string[];
@@ -40,6 +42,13 @@ export function flavorProductName(flavor: FlavorManifest): string {
   return flavor.displayName;
 }
 
+export function flavorShortName(flavor: FlavorManifest): string {
+  if (typeof flavor.shortName === "string" && flavor.shortName.trim() !== "") {
+    return flavor.shortName.trim();
+  }
+  return flavorProductName(flavor);
+}
+
 export interface PluginPack {
   displayName: string;
   plugins: string[];
@@ -56,7 +65,7 @@ export const PACKS: PackCatalog = packCatalog;
 const REGISTRY: Record<string, FlavorManifest> = {
   markable: markableManifest,
   remarkable: remarkableManifest,
-  knowledgebank: knowledgebankManifest,
+  pkm: pkmManifest,
   project: projectManifest,
   diary: diaryManifest,
   quicknote: quicknoteManifest,
@@ -107,4 +116,23 @@ export function defaultEnabledPluginSet(): ReadonlySet<string> {
 
 export function flavorEnablesPack(packId: string): boolean {
   return (getActiveFlavor().enabledPacks ?? []).includes(packId);
+}
+
+/**
+ * Window / title-bar label: document name plus the active flavor product.
+ * Empty document label → product name only.
+ */
+export function flavorWindowTitle(documentLabel?: string): string {
+  const product = flavorShortName(getActiveFlavor());
+  const label = documentLabel?.trim() ?? "";
+  if (label === "") return product;
+  return `${label} — ${product}`;
+}
+
+/** Apply the flavor window title to document.title and the custom title bar. */
+export function applyFlavorWindowTitle(documentLabel?: string): void {
+  const title = flavorWindowTitle(documentLabel);
+  document.title = title;
+  const titleEl = document.getElementById("titlebar-title");
+  if (titleEl) titleEl.textContent = title;
 }

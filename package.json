@@ -18,7 +18,10 @@
     "tauri": "tauri",
     "dev:markable": "node scripts/tauri-flavor.mjs markable dev",
     "dev:remarkable": "node scripts/tauri-flavor.mjs remarkable dev",
-    "dev:knowledgebank": "node scripts/tauri-flavor.mjs knowledgebank dev",
+    "dev:pkm": "node scripts/tauri-flavor.mjs pkm dev",
+    "dev:project": "node scripts/tauri-flavor.mjs project dev",
+    "dev:diary": "node scripts/tauri-flavor.mjs diary dev",
+    "dev:quicknote": "node scripts/tauri-flavor.mjs quicknote dev",
     "test": "vitest",
     "test:run": "vitest run",
     "test:ui": "vitest --ui"

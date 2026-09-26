@@ -114,9 +114,11 @@ import {
 import type { MetaStore } from "./lib/meta-manager";
 import { getAppDataDir } from "./lib/bridge";
 import {
+  applyFlavorWindowTitle,
   flavorEnablesPack,
   flavorIdentifier,
   flavorProductName,
+  flavorShortName,
   getActiveFlavor,
 } from "./lib/flavor";
 import { buildQuickCommandExtension } from "./editor/quick-commands";
@@ -1182,6 +1184,8 @@ async function initApp() {
   console.log(
     `[flavor] ${flavor.id} ${flavorProductName(flavor)} ${flavorIdentifier(flavor)}`,
   );
+  applyFlavorWindowTitle();
+  void getCurrentWebviewWindow().setTitle(flavorShortName(flavor));
 
   // Migrate old flat plugin settings keys (focusMode, typewriterMode, wordCount,
   // statusBar.visible, userPlugins) into the unified plugins map introduced in
@@ -1389,7 +1393,7 @@ async function initApp() {
   restoreSidebarFromSettings();
 
   // File-browser-first when the flavor includes the PKM pack (Re-markable,
-  // KnowledgeBank). Markable (base only) stays a single-file editor.
+  // Markable PKM). Markable (base only) stays a single-file editor.
   // "Factory default" = open:false AND activeTabId:null.
   {
     const _s = getCurrentSettings();

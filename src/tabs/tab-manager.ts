@@ -27,6 +27,7 @@ import type { TabEntry, ITabRenderer } from "./tab-types";
 import { readFile, writeFile, saveFileDialog } from "../lib/bridge";
 import { extractH1, h1ToFilename } from "../plugins/auto-title/auto-title-helpers";
 import { getCurrentSettings, updateSettings, addRecentFile } from "../lib/settings";
+import { applyFlavorWindowTitle, flavorWindowTitle } from "../lib/flavor";
 import { setLivePreviewFilePath, setViewMode } from "../editor/live-preview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -326,9 +327,9 @@ export class TabManager {
           effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
         });
       }
-      // Clear the title bar and current-file globals.
-      const titleEl = document.getElementById("titlebar-title");
-      if (titleEl) titleEl.textContent = "";
+      // Flavor product name stays in the title bar when no document is open.
+      applyFlavorWindowTitle();
+      void getCurrentWebviewWindow().setTitle(flavorWindowTitle());
       (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = null;
       setLivePreviewFilePath(null);
       return;
@@ -451,9 +452,9 @@ export class TabManager {
    * @param tab  The TabEntry whose title should be displayed.
    */
   private _updateTitleBar(tab: TabEntry): void {
-    const titleEl = document.getElementById("titlebar-title");
-    if (!titleEl) return;
-    titleEl.textContent = tab.isDirty ? `${tab.title} •` : tab.title;
+    const label = tab.isDirty ? `${tab.title} •` : tab.title;
+    applyFlavorWindowTitle(label);
+    void getCurrentWebviewWindow().setTitle(flavorWindowTitle(label));
   }
 
   /**

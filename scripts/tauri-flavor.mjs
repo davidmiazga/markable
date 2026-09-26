@@ -4,10 +4,11 @@
  * Usage:
  *   node scripts/tauri-flavor.mjs markable dev
  *   node scripts/tauri-flavor.mjs remarkable dev
- *   node scripts/tauri-flavor.mjs knowledgebank build
+ *   node scripts/tauri-flavor.mjs pkm build
  *   VITE_FLAVOR=remarkable node scripts/tauri-flavor.mjs dev
  *
- * Named npm scripts: `npm run dev:markable`, `dev:remarkable`, `dev:knowledgebank`.
+ * Named npm scripts: `npm run dev:markable`, `dev:remarkable`, `dev:pkm`,
+ * `dev:project`, `dev:diary`, `dev:quicknote`.
  * `npm run tauri dev` still uses src-tauri/tauri.conf.json (com.markable.app).
  */
 
@@ -46,13 +47,16 @@ try {
   process.exit(1);
 }
 
-const identifier = typeof flavor.identifier === "string" ? flavor.identifier : "";
+function stringField(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : "";
+}
+
+const identifier = stringField(flavor.identifier);
 const productName =
-  typeof flavor.productName === "string"
-    ? flavor.productName
-    : typeof flavor.displayName === "string"
-      ? flavor.displayName
-      : "Markable";
+  stringField(flavor.shortName) ||
+  stringField(flavor.productName) ||
+  stringField(flavor.displayName) ||
+  "Markable";
 
 if (identifier === "") {
   console.error(`Flavor "${flavorId}" is missing identifier`);
