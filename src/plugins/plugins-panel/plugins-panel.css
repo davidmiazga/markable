@@ -146,6 +146,53 @@
   color: var(--text-secondary);
 }
 
+/* Pack-section Off / Default / All — compact segmented control. */
+.plugin-section-preset {
+  display: flex;
+  align-items: stretch;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+
+.plugin-section-preset-btn {
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 7px;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.plugin-section-preset-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.plugin-section-preset-btn:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.plugin-section-preset-btn + .plugin-section-preset-btn {
+  border-left: none;
+}
+
+.plugin-section-preset-btn:hover:not(:disabled):not(.active) {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.plugin-section-preset-btn.active {
+  background: var(--link-color);
+  color: #fff;
+  border-color: var(--link-color);
+}
+
+.plugin-section-preset-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── Reload button ── */
 
 .plugin-reload-btn {

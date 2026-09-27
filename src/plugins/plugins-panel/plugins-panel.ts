@@ -1,10 +1,11 @@
 /**
- * Plugins Panel — two collapsible sections: "Core Plugins" and "User Plugins".
+ * Plugins Panel — pack sections from flavors/packs.json, then User Plugins.
  *
- * After step_04a, the panel renders plugins in two sections determined by
- * UnifiedPluginDef.kind. Core plugins show a version badge and may show an
- * "Overridden" badge when a user file shadows them. The User Plugins section
- * contains a Reload button wired to the reloadPlugins callback.
+ * Each flavor shows the same packs; `enabledPacks` only changes order and
+ * which sections start expanded. Core plugins show a version badge and may
+ * show an "Overridden" badge when a user file shadows them. Pack headers
+ * have an Off / Default / All preset. The User Plugins section has Reload,
+ * not a preset.
  *
  * Public API (unchanged from step_03b):
  *   - createPluginsPanel(defs, states, toggle, reloadPlugins?)
@@ -17,7 +18,13 @@
 
 import "./plugins-panel.css";
 import type { UnifiedPluginDef } from "../index";
-import { DEFAULT_ENABLED_PLUGINS, WORKFLOW_PLUGINS } from "../index";
+import {
+  PACKS,
+  getActiveFlavor,
+  orderedPluginPackIds,
+  pluginDefaultEnabled,
+  pluginSectionStartsCollapsed,
+} from "../../lib/flavor";
 import { getCurrentSettings } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
 import { attachModalKeyboard } from "../../lib/modal-keyboard";
@@ -45,13 +52,60 @@ let keyboardDetach: (() => void) | null = null;
 
 /**
  * Per-section collapsed state (session-only, not persisted to settings).
- * All sections start open (collapsed = false) on first load.
+ * Keys are pack ids plus `"user"`. A missing key means "use the first-run
+ * default": first-run packs start open; other packs and User start collapsed.
  */
-const sectionCollapsed: Record<"workflow" | "core" | "user", boolean> = {
-  workflow: false,
-  core: false,
-  user: false,
-};
+const sectionCollapsed: Record<string, boolean> = {};
+
+function isSectionCollapsed(sectionId: string): boolean {
+  if (Object.prototype.hasOwnProperty.call(sectionCollapsed, sectionId)) {
+    return sectionCollapsed[sectionId];
+  }
+  return pluginSectionStartsCollapsed(sectionId);
+}
+
+function pluginFilenameStem(filename: string): string {
+  return filename.replace(/\.js$/i, "");
+}
+
+type SectionPreset = "off" | "default" | "all";
+
+function isToggleable(def: UnifiedPluginDef): boolean {
+  return def.status === "loaded";
+}
+
+function defDefaultEnabled(def: UnifiedPluginDef): boolean {
+  if (pluginDefaultEnabled(def.id)) return true;
+  const stem = pluginFilenameStem(def.filename);
+  return stem !== def.id && pluginDefaultEnabled(stem);
+}
+
+function sectionPresetState(defs: UnifiedPluginDef[]): SectionPreset | "custom" | "empty" {
+  const toggleable = defs.filter(isToggleable);
+  if (toggleable.length === 0) return "empty";
+  const allOff = toggleable.every((d) => !currentStates[d.id]);
+  const allOn = toggleable.every((d) => currentStates[d.id]);
+  const isDefault = toggleable.every((d) => currentStates[d.id] === defDefaultEnabled(d));
+  if (allOff) return "off";
+  if (allOn) return "all";
+  if (isDefault) return "default";
+  return "custom";
+}
+
+function applySectionPresetButtons(group: HTMLElement, defs: UnifiedPluginDef[]): void {
+  const state = sectionPresetState(defs);
+  const empty = state === "empty";
+  for (const btn of group.querySelectorAll<HTMLButtonElement>("[data-preset]")) {
+    btn.disabled = empty;
+    btn.classList.toggle("active", !empty && btn.dataset.preset === state);
+  }
+}
+
+function presetTarget(def: UnifiedPluginDef, preset: SectionPreset): boolean {
+  if (preset === "all") return true;
+  if (preset === "off") return false;
+  return defDefaultEnabled(def);
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -221,12 +275,11 @@ function buildManageVaultsFooter(): HTMLElement {
 }
 
 /**
- * Render the three-section list view: "Workflow" → "Core Plugins" → "User Plugins".
+ * Render pack sections (flavor order) then User Plugins.
  * Each section is collapsible (session state in sectionCollapsed).
  *
- * Workflow plugins (WORKFLOW_PLUGINS) are pulled out of the core bucket and
- * rendered in their own section in declared order.
- * Remaining core plugins sort featured-first then alphabetically.
+ * Pack membership comes from packs.json. Unlisted core IIFEs append to Base
+ * so they stay visible. User IIFEs always stay in User.
  */
 function showListView(): void {
   if (!bodyElement || !titleElement) return;
@@ -234,30 +287,47 @@ function showListView(): void {
   titleElement.textContent = "Plugins";
   bodyElement.innerHTML = "";
 
-  const workflowSet = new Set(WORKFLOW_PLUGINS);
-  const featuredOrder = Array.from(DEFAULT_ENABLED_PLUGINS);
+  const flavor = getActiveFlavor();
+  const packIds = orderedPluginPackIds(flavor);
+  const assigned = new Set<string>();
+  const leftover: UnifiedPluginDef[] = [];
+  const byPack = new Map<string, UnifiedPluginDef[]>();
 
-  // Workflow section: WORKFLOW_PLUGINS order, skipping any not yet loaded.
-  const workflowDefs = WORKFLOW_PLUGINS
-    .map((id) => definitions.find((d) => d.id === id))
-    .filter((d): d is UnifiedPluginDef => d !== undefined);
+  for (const packId of packIds) {
+    const pack = PACKS.packs[packId];
+    const defs: UnifiedPluginDef[] = [];
+    if (pack !== undefined) {
+      for (const pluginId of pack.plugins) {
+        const def = definitions.find((d) =>
+          d.kind !== "user" &&
+          (d.id === pluginId || pluginFilenameStem(d.filename) === pluginId),
+        );
+        if (def === undefined) continue;
+        defs.push(def);
+        assigned.add(def.id);
+      }
+    }
+    byPack.set(packId, defs);
+  }
 
-  // Core section: everything with kind==="core" that isn't in WORKFLOW_PLUGINS.
-  const coreDefs = definitions
-    .filter((d) => d.kind === "core" && !workflowSet.has(d.id))
-    .sort((a, b) => {
-      const ai = featuredOrder.indexOf(a.id);
-      const bi = featuredOrder.indexOf(b.id);
-      if (ai !== -1 && bi !== -1) return ai - bi;
-      if (ai !== -1) return -1;
-      if (bi !== -1) return 1;
-      return a.name.localeCompare(b.name);
-    });
+  for (const def of definitions) {
+    if (def.kind === "user") continue;
+    if (assigned.has(def.id)) continue;
+    leftover.push(def);
+  }
+  if (leftover.length > 0) {
+    const base = byPack.get("base") ?? [];
+    base.push(...leftover);
+    byPack.set("base", base);
+  }
+
+  for (const packId of packIds) {
+    const pack = PACKS.packs[packId];
+    const label = pack?.displayName ?? packId;
+    bodyElement.appendChild(buildSection(packId, label, byPack.get(packId) ?? []));
+  }
 
   const userDefs = definitions.filter((d) => d.kind === "user");
-
-  bodyElement.appendChild(buildSection("core", "Core Plugins", coreDefs));
-  bodyElement.appendChild(buildSection("workflow", "Organization System Plugins", workflowDefs));
   bodyElement.appendChild(buildSection("user", "User Plugins", userDefs));
 
   /*
@@ -275,39 +345,35 @@ function showListView(): void {
 // ── Section builder ───────────────────────────────────────────────────────────
 
 /**
- * Build a collapsible section element for the given kind and plugin list.
+ * Build a collapsible section for a pack id or `"user"`.
  *
  * Section layout:
- *   [header: chevron + label  |  (Reload button if user section)]
+ *   [header: chevron + label  |  (Off/Default/All if pack) (Reload if user)]
  *   [body: plugin rows or empty placeholder]
  *
  * The left portion of the header is clickable to toggle collapse.
- * The Reload button (user section only) stops event propagation so clicking
- * it does not also collapse/expand the section.
- *
- * @param kind     "core" | "user" — controls section id and collapse state key.
- * @param label    Human-readable section heading text.
- * @param defs     Plugin definitions for this section.
+ * The preset control and Reload stop propagation so they do not collapse.
  */
 function buildSection(
-  kind: "workflow" | "core" | "user",
+  sectionId: string,
   label: string,
   defs: UnifiedPluginDef[],
 ): HTMLElement {
+  const isUser = sectionId === "user";
+  const collapsed = isSectionCollapsed(sectionId);
   const section = document.createElement("div");
   section.className = "plugin-section";
+  section.dataset.sectionId = sectionId;
 
-  // Header row: [chevron + label] [reload button (user section only)]
   const header = document.createElement("div");
   header.className = "plugin-section-header";
 
   const leftGroup = document.createElement("div");
   leftGroup.className = "plugin-section-header-left";
 
-  // Chevron indicator: ▼ when expanded, ▶ when collapsed.
   const chevron = document.createElement("span");
   chevron.className = "plugin-section-chevron";
-  chevron.textContent = sectionCollapsed[kind] ? "\u25B6" : "\u25BC";
+  chevron.textContent = collapsed ? "\u25B6" : "\u25BC";
 
   const title = document.createElement("span");
   title.className = "plugin-section-title";
@@ -316,9 +382,11 @@ function buildSection(
   leftGroup.append(chevron, title);
   header.appendChild(leftGroup);
 
-  // Reload button lives only in the User Plugins section header (right side).
-  // It is disabled when no reloadPlugins callback was passed to createPluginsPanel.
-  if (kind === "user") {
+  if (!isUser) {
+    header.appendChild(buildSectionPreset(label, defs));
+  }
+
+  if (isUser) {
     const reloadBtn = document.createElement("button");
     reloadBtn.className = "plugin-reload-btn";
     reloadBtn.textContent = "Reload";
@@ -327,17 +395,13 @@ function buildSection(
       ? "Reload not available"
       : "Rescan the user plugins directory";
     reloadBtn.addEventListener("click", async (e) => {
-      // Prevent the click from also toggling the section collapse state.
       e.stopPropagation();
       if (!onReload) return;
-      // EC-23: disable the button during the async reload to prevent double-click.
       reloadBtn.disabled = true;
       reloadBtn.textContent = "Reloading\u2026";
       try {
         await onReload();
       } finally {
-        // showListView() will replace this button on re-render, but restore the
-        // text/state defensively in case the re-render does not occur immediately.
         reloadBtn.disabled = false;
         reloadBtn.textContent = "Reload";
       }
@@ -345,32 +409,33 @@ function buildSection(
     header.appendChild(reloadBtn);
   }
 
-  // Section body wraps all plugin rows. Hidden when the section is collapsed.
   const body = document.createElement("div");
   body.className = "plugin-section-body";
-  if (sectionCollapsed[kind]) {
+  if (collapsed) {
     body.classList.add("plugin-section-body--collapsed");
   }
 
-  // Clicking the left group (chevron + label) toggles section collapse.
   leftGroup.addEventListener("click", () => {
-    sectionCollapsed[kind] = !sectionCollapsed[kind];
-    chevron.textContent = sectionCollapsed[kind] ? "\u25B6" : "\u25BC";
-    body.classList.toggle("plugin-section-body--collapsed", sectionCollapsed[kind]);
+    const next = !isSectionCollapsed(sectionId);
+    sectionCollapsed[sectionId] = next;
+    chevron.textContent = next ? "\u25B6" : "\u25BC";
+    body.classList.toggle("plugin-section-body--collapsed", next);
   });
 
-  // Populate rows, or show a per-section empty placeholder.
   if (defs.length === 0) {
     const placeholder = document.createElement("p");
     placeholder.className = "plugin-empty-placeholder";
-    placeholder.textContent =
-      kind === "workflow" ? "No organization system plugins loaded." :
-      kind === "core" ? "No core plugins loaded." :
-      "No user plugins installed.";
+    placeholder.textContent = isUser
+      ? "No user plugins installed."
+      : `No ${label} plugins loaded.`;
     body.appendChild(placeholder);
   } else {
+    const syncPreset = (): void => {
+      const group = section.querySelector(".plugin-section-preset");
+      if (group instanceof HTMLElement) applySectionPresetButtons(group, defs);
+    };
     for (const def of defs) {
-      body.appendChild(buildRow(def, kind));
+      body.appendChild(buildRow(def, !isUser, syncPreset));
     }
   }
 
@@ -378,15 +443,69 @@ function buildSection(
   return section;
 }
 
+/**
+ * Pack-section Off / Default / All control. Lives on the header right so it
+ * does not steal the collapse click.
+ */
+function buildSectionPreset(label: string, defs: UnifiedPluginDef[]): HTMLElement {
+  const group = document.createElement("div");
+  group.className = "plugin-section-preset";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", `${label} section preset`);
+
+  const labels: Array<[SectionPreset, string]> = [
+    ["off", "Off"],
+    ["default", "Default"],
+    ["all", "All"],
+  ];
+  for (const [preset, text] of labels) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "plugin-section-preset-btn";
+    btn.dataset.preset = preset;
+    btn.textContent = text;
+    btn.title =
+      preset === "off" ? "Turn all plugins in this section off"
+      : preset === "all" ? "Turn all plugins in this section on"
+      : "Restore this section's first-run defaults";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const toggleable = defs.filter(isToggleable);
+      if (toggleable.length === 0) return;
+      void (async () => {
+        for (const def of toggleable) {
+          const target = presetTarget(def, preset);
+          if (currentStates[def.id] === target) continue;
+          currentStates[def.id] = target;
+          await onToggle?.(def.id, target);
+        }
+        showListView();
+      })();
+    });
+    group.appendChild(btn);
+  }
+
+  applySectionPresetButtons(group, defs);
+  group.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+  return group;
+}
+
 // ── Row dispatcher ─────────────────────────────────────────────────────────────
 
 /**
  * Dispatch to the appropriate row builder based on status.
  *
- * @param def   Plugin definition to render.
- * @param kind  Section kind — passed to buildPluginRow for version badge logic.
+ * @param def          Plugin definition to render.
+ * @param showVersion  Whether to show the version badge (pack sections).
+ * @param onToggled    Called after a loaded-row toggle so the master can resync.
  */
-function buildRow(def: UnifiedPluginDef, kind: "workflow" | "core" | "user"): HTMLElement {
+function buildRow(
+  def: UnifiedPluginDef,
+  showVersion: boolean,
+  onToggled?: () => void,
+): HTMLElement {
   if (def.status === "failed") {
     return buildFailedRow(def);
   }
@@ -397,7 +516,7 @@ function buildRow(def: UnifiedPluginDef, kind: "workflow" | "core" | "user"): HT
     return buildOverriddenRow(def);
   }
   const enabled = currentStates[def.id] ?? false;
-  return buildPluginRow(def, enabled, kind);
+  return buildPluginRow(def, enabled, showVersion, onToggled);
 }
 
 // ── Row builders ──────────────────────────────────────────────────────────────
@@ -409,14 +528,16 @@ function buildRow(def: UnifiedPluginDef, kind: "workflow" | "core" | "user"): HT
  * The version badge is shown only for core plugins because user plugins may
  * not declare a version and its absence would be confusing in context.
  *
- * @param def      The plugin definition to render.
- * @param enabled  Whether the plugin is currently enabled.
- * @param kind     "core" | "user" — controls whether the version badge is shown.
+ * @param def          The plugin definition to render.
+ * @param enabled      Whether the plugin is currently enabled.
+ * @param showVersion  Whether to show the version badge (pack sections).
+ * @param onToggled    Called after the row toggle so the section master can resync.
  */
 function buildPluginRow(
   def: UnifiedPluginDef,
   enabled: boolean,
-  kind: "workflow" | "core" | "user",
+  showVersion: boolean,
+  onToggled?: () => void,
 ): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-row";
@@ -428,8 +549,7 @@ function buildPluginRow(
   nameText.textContent = def.name;
   nameEl.appendChild(nameText);
 
-  // Version badge: shown for core and workflow plugins that have a non-empty version string.
-  if ((kind === "core" || kind === "workflow") && def.version) {
+  if (showVersion && def.version) {
     const versionBadge = document.createElement("span");
     versionBadge.className = "plugin-version-badge";
     versionBadge.textContent = `v${def.version}`;
@@ -450,6 +570,7 @@ function buildPluginRow(
   checkbox.addEventListener("change", () => {
     currentStates[def.id] = checkbox.checked;
     void onToggle?.(def.id, checkbox.checked);
+    onToggled?.();
   });
 
   row.append(nameEl, toggle);

@@ -14,14 +14,14 @@ Engine surfaces in `packs.json` → `host.modules`. Always present. Not IIFE plu
 
 | Pack | First-run plugins (today) | Planned / missing |
 |---|---|---|
-| `base` | markdown-toolbar, command-bar, typing-assist, auto-save, word-count | — |
-| `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel | — |
+| `base` | markdown-toolbar, command-bar, typing-assist, auto-save, auto-title, insert-count (on); templates, word-count, diagrams, math, focus-mode, typewriter-mode (off) | — |
+| `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on); properties-wrangler (off) | — |
 | `project` | kanban | — |
-| `quicknote` | templates, insert-count, auto-title, sync | — |
+| `quicknote` | sync | — |
 | `diary` | daily-note, calendar | — |
-| `added` | diagrams, math, focus-mode, typewriter-mode, auto-toc | AI |
+| `book` | auto-toc | — |
 
-`added` is never in a flavor's `enabledPacks`. Users can still turn those plugins on later.
+Former `added` plugins live in Base (`defaultOff`) except `auto-toc`, which is the Book pack. Users can still turn any plugin on later.
 
 ## Apps
 
@@ -48,6 +48,10 @@ Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. 
 ### 6. Markable-Diary
 
 `base` + `diary` via [`flavors/diary.json`](../flavors/diary.json). Identifier `com.markable.diary`. Daily routine, month calendar, results over time. Launch with `npm run dev:diary`.
+
+### 7. Markable Book
+
+`base` + `book` via [`flavors/book.json`](../flavors/book.json). Identifier `com.markable.book`. Long-form / TOC-first for now (`auto-toc` on at first run). Launch with `npm run dev:book`.
 
 ## Composition rule
 

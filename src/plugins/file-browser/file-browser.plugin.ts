@@ -3409,6 +3409,7 @@ function readFolderMdForBuilder(content: string): SelectBuilderInitial {
       if (key === "sort") initial.sort = val;
       if (key === "show-modified") initial.showModified = val !== "false";
       if (key === "show-extensions") initial.showExtensions = val !== "false";
+      if (key === "show-tags") initial.showTags = val === "true";
       if (key === "preview-pane") initial.previewPane = val === "true";
       if (key === "content-width") {
         if (val === "wide" || val === "full" || val === "normal") {

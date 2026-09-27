@@ -252,6 +252,25 @@ describe("renderFolderTable", () => {
     expect(chips.length).toBe(2);
   });
 
+  it("showTags=true → Tags column sits immediately after Name", () => {
+    const container = makeContainer();
+    renderFolderTable(
+      makeConfig({ showTags: true, showExtensions: true, showModified: true }),
+      [makeFileCard("note", ".md", 0, undefined, ["research"])],
+      container,
+      "/vault",
+    );
+    const headers = Array.from(container.querySelectorAll("th")).map(th => th.className);
+    const nameIdx = headers.findIndex(c => c.includes("fv-th-name"));
+    const tagsIdx = headers.findIndex(c => c.includes("fv-th-tags"));
+    expect(nameIdx).toBeGreaterThanOrEqual(0);
+    expect(tagsIdx).toBe(nameIdx + 1);
+    const cells = Array.from(container.querySelectorAll("tr.fv-row td")).map(td => td.className);
+    const nameTd = cells.findIndex(c => c.includes("fv-td-name"));
+    const tagsTd = cells.findIndex(c => c.includes("fv-td-tags"));
+    expect(tagsTd).toBe(nameTd + 1);
+  });
+
   it("showTags=false (default) → no .folder-view-tag-chip spans", () => {
     const container = makeContainer();
     renderFolderTable(

@@ -183,6 +183,7 @@ export interface SelectBuilderInitial {
   order?: string[];
   showModified?: boolean;
   showExtensions?: boolean;
+  showTags?: boolean;
   previewPane?: boolean;
   kanbanField?: string;
   contentWidth?: ContentWidth;
@@ -236,6 +237,7 @@ export function buildSelectFenceFromState(state: {
   order?: string[];
   showModified: boolean;
   showExtensions: boolean;
+  showTags: boolean;
   previewPane: boolean;
   kanbanField: string;
   contentWidth: ContentWidth;
@@ -263,6 +265,8 @@ export function buildSelectFenceFromState(state: {
     lines.push(`group-by: ${state.groupBy.trim()}`);
   }
   if (!state.showModified) lines.push("show-modified: false");
+  // Opt-in: only emit when on so existing fences stay byte-stable (default off).
+  if (state.showTags) lines.push("show-tags: true");
   // "Show file extensions" applies to Cards and to Table's simple-list option.
   const isCardsLike =
     state.display === "cards" ||
@@ -302,6 +306,7 @@ export interface SelectFormState {
   order: string[];
   showModified: boolean;
   showExtensions: boolean;
+  showTags: boolean;
   previewPane: boolean;
   kanbanField: string;
   contentWidth: ContentWidth;
@@ -343,6 +348,7 @@ export function mountSelectForm(
     order:          [...(initial.order ?? [])],
     showModified:   initial.showModified ?? true,
     showExtensions: initial.showExtensions ?? true,
+    showTags:       initial.showTags ?? false,
     previewPane:    initial.previewPane ?? false,
     kanbanField:    initial.kanbanField ?? "",
     contentWidth:   initial.contentWidth ?? "normal",
@@ -544,6 +550,7 @@ export function mountSelectForm(
     }
 
     optsHost.appendChild(checkRow("Show modified date", state.showModified, (v) => { state.showModified = v; }));
+    optsHost.appendChild(checkRow("Show tags", state.showTags, (v) => { state.showTags = v; }));
 
     if (state.display === "cards" || (state.display === "table" && state.displayOption === "simple-list")) {
       optsHost.appendChild(checkRow("Show file extensions", state.showExtensions, (v) => { state.showExtensions = v; }));

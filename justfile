@@ -68,6 +68,9 @@ diary *ARGS:
 quicknote *ARGS:
     node scripts/tauri-flavor.mjs quicknote {{ARGS}}
 
+book *ARGS:
+    node scripts/tauri-flavor.mjs book {{ARGS}}
+
 # Rebuild per-flavor Tauri icon sets from the 1024 SVG masters.
 icons:
     node scripts/build-app-icons.mjs

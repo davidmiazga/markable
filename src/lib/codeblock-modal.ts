@@ -377,6 +377,7 @@ export function openViewModal(mode: ViewModalMode, ctx: ViewModalContext): void 
     // Edit mode honours the prefilled values via `??` fallback.
     showModified: initial.showModified ?? true,
     showExtensions: initial.showExtensions ?? true,
+    showTags: initial.showTags ?? false,
     previewPane: initial.previewPane ?? true,
     kanbanField: initial.kanbanField ?? "",
     contentWidth: initial.contentWidth ?? "normal",
@@ -553,7 +554,7 @@ export function openViewModal(mode: ViewModalMode, ctx: ViewModalContext): void 
 
   // Helper to build a labelled checkbox row.
   function buildToggleRow(
-    toggleKey: "show-modified" | "show-extensions" | "preview-pane",
+    toggleKey: "show-modified" | "show-extensions" | "show-tags" | "preview-pane",
     label: string,
     getValue: () => boolean,
     setValue: (v: boolean) => void,
@@ -584,6 +585,11 @@ export function openViewModal(mode: ViewModalMode, ctx: ViewModalContext): void 
     buildToggleRow("show-extensions", "Show file extensions",
       () => state.showExtensions,
       (v) => { state.showExtensions = v; }),
+  );
+  rightCol.appendChild(
+    buildToggleRow("show-tags", "Show tags",
+      () => state.showTags,
+      (v) => { state.showTags = v; }),
   );
   rightCol.appendChild(
     buildToggleRow("preview-pane", "Include preview pane",

@@ -20,6 +20,8 @@ import {
   emptyMetaStore,
   isMetaFolderEvent,
   getVocabularyForField,
+  serializePropertiesFile,
+  rewritePropertiesSection,
   PROPERTIES_INITIAL_CONTENT,
 } from "../../src/lib/meta-manager";
 import type { VaultEntry } from "../../src/lib/vault-types";
@@ -491,5 +493,32 @@ describe("getVocabularyForField", () => {
     expect(getVocabularyForField(storeWithTags, "Status")).toEqual(["draft", "complete"]);
     expect(getVocabularyForField(storeWithTags, "STATUS")).toEqual(["draft", "complete"]);
     expect(getVocabularyForField(storeWithTags, "Tags")).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("serializePropertiesFile / rewritePropertiesSection", () => {
+  it("round-trips tags and fields", () => {
+    const raw = serializePropertiesFile({
+      tags: ["home", "recipe"],
+      fields: { status: ["draft", "complete"] },
+      dateFormat: "MM/DD/YYYY",
+    });
+    const parsed = parsePropertiesFile(raw);
+    expect(parsed.tags).toEqual(["home", "recipe"]);
+    expect(parsed.fields.status).toEqual(["draft", "complete"]);
+    expect(parsed.dateFormat).toBe("MM/DD/YYYY");
+  });
+
+  it("rewrites a section without dropping Date", () => {
+    const raw = serializePropertiesFile({
+      tags: ["home"],
+      fields: { status: ["draft"] },
+      dateFormat: "MM/DD/YY",
+    });
+    const next = rewritePropertiesSection(raw, "tags", ["home", "family"]);
+    const parsed = parsePropertiesFile(next);
+    expect(parsed.tags).toEqual(["home", "family"]);
+    expect(parsed.fields.status).toEqual(["draft"]);
+    expect(parsed.dateFormat).toBe("MM/DD/YY");
   });
 });

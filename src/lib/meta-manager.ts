@@ -258,6 +258,106 @@ export const PROPERTIES_INITIAL_CONTENT = `# Properties to validate against, for
   [ ] Mon. Day, Year
 `;
 
+const DEFAULT_DATE_OPTIONS = [
+  "MM/DD/YYYY",
+  "MM/DD/YY",
+  "MM.DD.YYYY",
+  "MM.DD.YY",
+  "Month Day, Year",
+  "Mon. Day, Year",
+];
+
+function titleCaseField(key: string): string {
+  return key
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/**
+ * Serialize a MetaStore-shaped vocabulary back to `{VaultName}_properties.md`.
+ * Used by Properties Wrangler when the user accepts a cluster or toggles
+ * which values File Properties should offer.
+ */
+export function serializePropertiesFile(
+  store: Pick<MetaStore, "tags" | "fields" | "dateFormat">,
+  fieldTitles?: Record<string, string>,
+): string {
+  const lines: string[] = [
+    "# Properties to validate against, format: Field - metadata",
+    "",
+    "## Tags",
+  ];
+  for (const tag of store.tags) {
+    lines.push(`- ${tag}`);
+  }
+
+  const fieldKeys = Object.keys(store.fields).sort((a, b) => a.localeCompare(b));
+  for (const key of fieldKeys) {
+    const title = fieldTitles?.[key] ?? titleCaseField(key);
+    lines.push("", `## ${title}`);
+    for (const value of store.fields[key] ?? []) {
+      lines.push(`- ${value}`);
+    }
+  }
+
+  const dateFormat = store.dateFormat ?? "MM/DD/YYYY";
+  lines.push("", "## Date (format style)");
+  const seen = new Set<string>();
+  const options = [dateFormat, ...DEFAULT_DATE_OPTIONS];
+  for (const opt of options) {
+    if (seen.has(opt)) continue;
+    seen.add(opt);
+    lines.push(`${opt === dateFormat ? "[x]" : "[ ]"} ${opt}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Replace one section's bullets in an existing properties file, preserving
+ * other sections (including Date) byte-for-byte. Creates the section at the
+ * end (before Date, if present) when it does not exist.
+ */
+export function rewritePropertiesSection(
+  raw: string,
+  sectionLower: string,
+  bullets: string[],
+): string {
+  const lines = raw.replace(/\r/g, "").split("\n");
+  const headingIdxs: number[] = [];
+  const headingKeys: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed.startsWith("## ")) continue;
+    const headingFull = trimmed.slice(3).trim();
+    const key = headingFull.replace(/\s*\(.*\)$/, "").trim().toLowerCase();
+    headingIdxs.push(i);
+    headingKeys.push(key);
+  }
+
+  const newBullets = bullets.map((b) => `- ${b}`);
+  const target = headingKeys.indexOf(sectionLower);
+  if (target >= 0) {
+    const start = headingIdxs[target];
+    const end = target + 1 < headingIdxs.length ? headingIdxs[target + 1] : lines.length;
+    const heading = lines[start];
+    const before = lines.slice(0, start);
+    const after = lines.slice(end);
+    return [...before, heading, ...newBullets, ...after].join("\n").replace(/\n+$/, "\n");
+  }
+
+  const dateIdx = headingKeys.indexOf("date");
+  const insertAt = dateIdx >= 0 ? headingIdxs[dateIdx] : lines.length;
+  const title = sectionLower === "tags" ? "Tags" : titleCaseField(sectionLower);
+  const insert = ["", `## ${title}`, ...newBullets, ""];
+  return [...lines.slice(0, insertAt), ...insert, ...lines.slice(insertAt)]
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n+$/, "\n");
+}
+
 // ── Meta store builder ────────────────────────────────────────────────────────
 
 /**

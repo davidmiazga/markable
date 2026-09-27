@@ -25,6 +25,7 @@ const FLAVORS = [
   { id: "project", master: "app-icon-markProject.svg" },
   { id: "diary", master: "app-icon-markDiary.svg" },
   { id: "quicknote", master: "app-icon-markQuickNote.svg" },
+  { id: "book", master: "app-icon-markStorybook.svg" },
 ];
 
 mkdirSync(srcDir, { recursive: true });

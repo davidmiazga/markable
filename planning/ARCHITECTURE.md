@@ -50,7 +50,7 @@ flowchart TB
 4. `evaluatePlugin()` runs `new Function(...)` and reads `__markablePlugin__`
 5. CM6 packages are window globals (`src/lib/cm-globals.ts`) so StateField slot IDs match the host editor
 
-**Build list (20):** focus-mode, typewriter-mode, word-count, auto-toc, markdown-toolbar, backlinks, templates, yaml-pane, math, media-preview, command-bar, diagrams, insert-count, auto-save, daily-note, file-browser, knowledge-graph, outline-panel, auto-title, typing-assist.
+**Build list:** driven by `scripts/build-plugins.mjs` (includes kanban, calendar, sync, properties-wrangler). `vite.plugins.config.ts` is a stale reference list and does not drive the build.
 
 **Not in the IIFE list:** `status-bar` is imported directly from `main.ts`. `vite.plugins.config.ts` is a stale reference list (14 plugins) and does not drive the build.
 

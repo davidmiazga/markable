@@ -40,6 +40,7 @@ function baseState(
     sort: "name-asc",
     showModified: true,
     showExtensions: true,
+    showTags: false,
     previewPane: false,
     kanbanField: "",
     contentWidth: "normal" as const,

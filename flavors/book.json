@@ -1,0 +1,8 @@
+{
+  "id": "book",
+  "displayName": "Markable Book",
+  "productName": "Markable Book",
+  "identifier": "com.markable.book",
+  "iconDir": "icons/book",
+  "enabledPacks": ["base", "book"]
+}

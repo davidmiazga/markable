@@ -4,13 +4,14 @@ A flavor is a first-run CX: name plus packs (and an optional plugin-list overrid
 
 | File | Role |
 |---|---|
-| [packs.json](packs.json) | Host modules plus base / domain / added plugin packs |
+| [packs.json](packs.json) | Host modules plus base / domain / book plugin packs |
 | [markable.json](markable.json) | Minimal editor — `com.markable.editor`, `enabledPacks: ["base"]` |
 | [remarkable.json](remarkable.json) | Re-markable — `com.markable.app`, `base` + `pkm` |
 | [pkm.json](pkm.json) | Markable PKM — `com.markable.pkm`, `base` + `pkm` |
 | [project.json](project.json) | Markable-Project — `com.markable.project`, `base` + `project` |
 | [diary.json](diary.json) | Markable-Diary — `com.markable.diary`, `base` + `diary` |
 | [quicknote.json](quicknote.json) | Markable-QuickNote — `com.markable.quicknote`, `base` + `quicknote` |
+| [book.json](book.json) | Markable Book — `com.markable.book`, `base` + `book` |
 
 `src-tauri/tauri.conf.json` stays `com.markable.app` so `npm run tauri dev` keeps using today’s Application Support folder.
 
@@ -23,9 +24,10 @@ npm run dev:pkm
 npm run dev:project
 npm run dev:diary
 npm run dev:quicknote
+npm run dev:book
 ```
 
-Same targets: `just markable`, `just remarkable`, `just pkm`, `just project`, `just diary`, `just quicknote`. Local unsigned app: `just bundle markable` (or `npm run bundle:pkm`, etc.). `just <flavor> build` runs a full Tauri bundle. `npm run tauri dev` still uses `com.markable.app` without setting `VITE_FLAVOR`.
+Same targets: `just markable`, `just remarkable`, `just pkm`, `just project`, `just diary`, `just quicknote`, `just book`. Local unsigned app: `just bundle markable` (or `npm run bundle:pkm`, etc.). `just <flavor> build` runs a full Tauri bundle. `npm run tauri dev` still uses `com.markable.app` without setting `VITE_FLAVOR`.
 
 Each flavor file has `iconDir` (`icons/<id>/`). `scripts/tauri-flavor.mjs` passes that set to Tauri. Regenerate from the 1024 SVGs with `just icons`.
 

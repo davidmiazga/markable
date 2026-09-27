@@ -235,6 +235,7 @@ export function parseSelectBodyForBuilder(body: string): SelectBuilderInitial {
 
   initial.showModified   = asBool(parsed["show-modified"],   true);
   initial.showExtensions = asBool(parsed["show-extensions"], true);
+  initial.showTags       = asBool(parsed["show-tags"],       false);
   initial.previewPane    = asBool(parsed["preview-pane"],    false);
 
   const kanbanField = asString(parsed["kanban-field"]);
@@ -547,6 +548,7 @@ function rewriteSelectFenceWithOrder(
     order:          orderedPaths,
     showModified:   initial.showModified ?? true,
     showExtensions: initial.showExtensions ?? true,
+    showTags:       initial.showTags ?? false,
     previewPane:    initial.previewPane ?? false,
     kanbanField:    initial.kanbanField ?? "",
     contentWidth:   (initial.contentWidth ?? "normal") as ContentWidth,

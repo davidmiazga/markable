@@ -34,6 +34,7 @@ function defaultState(overrides: Partial<SelectFormState> = {}): SelectFormState
     order: [],
     showModified: true,
     showExtensions: true,
+    showTags: false,
     previewPane: true,
     kanbanField: "",
     contentWidth: "normal",

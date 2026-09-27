@@ -66,6 +66,18 @@ export interface FoldRange {
   to: number;
 }
 
+/** Extra left padding (px) for each heading level below H1. */
+const OUTLINE_NEST_INDENT_PX = 16;
+
+/**
+ * How far a heading row sits to the right of H1.
+ * H1 = 0; H2 = 16; H3 = 32; … so H2–H6 nest under their parent H1.
+ */
+export function outlineIndentPx(level: number): number {
+  if (level <= 1) return 0;
+  return (level - 1) * OUTLINE_NEST_INDENT_PX;
+}
+
 // ── Module-level state ─────────────────────────────────────────────────────────
 // All variables are private to the IIFE closure after bundling.
 // Every variable is reset in onDisable() to support clean toggle cycles.
@@ -578,6 +590,12 @@ function rebuildOutline(
     // ── Row container ──
     const row = document.createElement("div");
     row.className = "outline-row";
+    row.dataset.level = String(entry.level);
+    // Indent the whole row (chevron + label) so H2+ sit under their parent H1.
+    const nestPad = outlineIndentPx(entry.level);
+    if (nestPad > 0) {
+      row.style.paddingLeft = `${nestPad}px`;
+    }
 
     // ── Chevron button ──
     // Hidden for non-collapsible sections; visible and interactive otherwise.
@@ -638,9 +656,6 @@ function rebuildOutline(
     if (i === activeIdx) {
       btn.classList.add("outline-label-active");
     }
-
-    // Indentation: H1 = 8px base, each additional level adds 12px.
-    btn.style.paddingLeft = `${(entry.level - 1) * 12 + 8}px`;
 
     // EC-6: empty heading text gets a non-breaking space so the button has
     // visible height and remains clickable.

@@ -87,7 +87,6 @@ vi.mock("../../src/plugins/index", () => ({
     removeExtensions: vi.fn(),
   },
   DEFAULT_ENABLED_PLUGINS: new Set(),
-  WORKFLOW_PLUGINS: [],
 }));
 
 // Mock sidebar to avoid import chain

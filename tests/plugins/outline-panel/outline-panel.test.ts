@@ -11,6 +11,7 @@ import {
   scanHeadings,
   findActiveIndex,
   computeFoldRange,
+  outlineIndentPx,
 } from "../../../src/plugins/outline-panel/outline-panel.plugin";
 import plugin from "../../../src/plugins/outline-panel/outline-panel.plugin";
 
@@ -299,5 +300,18 @@ describe("computeFoldRange", () => {
       { level: 1, text: "H2", lineFrom: 8, lineNumber: 3 },
     ];
     expect(computeFoldRange(entries, 0, doc)).toBeNull();
+  });
+});
+
+describe("outlineIndentPx", () => {
+  it("leaves H1 flush left", () => {
+    expect(outlineIndentPx(1)).toBe(0);
+  });
+
+  it("nests H2–H6 under H1 in 16px steps", () => {
+    expect(outlineIndentPx(2)).toBe(16);
+    expect(outlineIndentPx(3)).toBe(32);
+    expect(outlineIndentPx(4)).toBe(48);
+    expect(outlineIndentPx(6)).toBe(80);
   });
 });

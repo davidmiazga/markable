@@ -22,6 +22,7 @@ function baseState(overrides: Partial<Parameters<typeof buildSelectFenceFromStat
     sort: "name-asc",
     showModified: true,
     showExtensions: true,
+    showTags: false,
     previewPane: false,
     kanbanField: "",
     contentWidth: "normal" as const,
@@ -73,6 +74,11 @@ describe("buildSelectFenceFromState — option emission", () => {
     );
     expect(fence).not.toContain("show-extensions:");
   });
+
+  it("emits `show-tags: true` only when on", () => {
+    expect(buildSelectFenceFromState(baseState({ showTags: false }))).not.toContain("show-tags:");
+    expect(buildSelectFenceFromState(baseState({ showTags: true }))).toContain("show-tags: true");
+  });
 });
 
 describe("buildSelectFenceFromState — round-trip", () => {
@@ -101,5 +107,12 @@ describe("buildSelectFenceFromState — round-trip", () => {
     const body = fence.split("\n").slice(1, -1).join("\n");
     const parsed = parseSelectBodyForBuilder(body);
     expect(parsed.groupBy).toBe("status");
+  });
+
+  it("showTags survives the round-trip", () => {
+    const fence = buildSelectFenceFromState(baseState({ showTags: true }));
+    const body = fence.split("\n").slice(1, -1).join("\n");
+    const parsed = parseSelectBodyForBuilder(body);
+    expect(parsed.showTags).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ import pkmManifest from "../../flavors/pkm.json";
 import projectManifest from "../../flavors/project.json";
 import diaryManifest from "../../flavors/diary.json";
 import quicknoteManifest from "../../flavors/quicknote.json";
+import bookManifest from "../../flavors/book.json";
 
 export interface FlavorManifest {
   id: string;
@@ -54,6 +55,8 @@ export function flavorShortName(flavor: FlavorManifest): string {
 export interface PluginPack {
   displayName: string;
   plugins: string[];
+  /** Pack members that stay off on first run (still listed in the section). */
+  defaultOff?: string[];
   planned?: string[];
 }
 
@@ -71,6 +74,7 @@ const REGISTRY: Record<string, FlavorManifest> = {
   project: projectManifest,
   diary: diaryManifest,
   quicknote: quicknoteManifest,
+  book: bookManifest,
 };
 
 export function pluginsFromPacks(packIds: readonly string[]): string[] {
@@ -88,11 +92,49 @@ export function pluginsFromPacks(packIds: readonly string[]): string[] {
   return out;
 }
 
+/** Pack members that start on: in `packIds`, and not listed in `defaultOff`. */
+export function defaultEnabledFromPacks(packIds: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const packId of packIds) {
+    const pack = PACKS.packs[packId];
+    if (pack === undefined) continue;
+    const off = new Set(pack.defaultOff ?? []);
+    for (const pluginId of pack.plugins) {
+      if (seen.has(pluginId) || off.has(pluginId)) continue;
+      seen.add(pluginId);
+      out.push(pluginId);
+    }
+  }
+  return out;
+}
+
+export function packIdForPlugin(pluginId: string): string | undefined {
+  for (const [packId, pack] of Object.entries(PACKS.packs)) {
+    if (pack.plugins.includes(pluginId)) return packId;
+  }
+  return undefined;
+}
+
+/**
+ * First-run on/off for one plugin. Off when the plugin is unlisted, its pack
+ * is not in the flavor's `enabledPacks`, or it is in that pack's `defaultOff`.
+ */
+export function pluginDefaultEnabled(
+  pluginId: string,
+  flavor: FlavorManifest = getActiveFlavor(),
+): boolean {
+  const packId = packIdForPlugin(pluginId);
+  if (packId === undefined) return false;
+  if (!isFlavorFirstRunPack(packId, flavor)) return false;
+  return !(PACKS.packs[packId].defaultOff ?? []).includes(pluginId);
+}
+
 export function resolveFlavorFirstRunPlugins(flavor: FlavorManifest): string[] {
   if (flavor.defaultEnabledPlugins !== undefined && flavor.defaultEnabledPlugins.length > 0) {
     return flavor.defaultEnabledPlugins;
   }
-  return pluginsFromPacks(flavor.enabledPacks ?? []);
+  return defaultEnabledFromPacks(flavor.enabledPacks ?? []);
 }
 
 export function getActiveFlavorId(): string {
@@ -118,6 +160,53 @@ export function defaultEnabledPluginSet(): ReadonlySet<string> {
 
 export function flavorEnablesPack(packId: string): boolean {
   return (getActiveFlavor().enabledPacks ?? []).includes(packId);
+}
+
+/** Pack ids in `packs.json` key order. */
+export function catalogPackIds(): string[] {
+  return Object.keys(PACKS.packs);
+}
+
+/**
+ * Plugins panel pack order: the flavor's `enabledPacks` first (first-run CX),
+ * then the remaining catalog packs. `user` is not a pack.
+ */
+export function orderedPluginPackIds(flavor: FlavorManifest = getActiveFlavor()): string[] {
+  const catalogIds = catalogPackIds();
+  const enabled = flavor.enabledPacks ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of enabled) {
+    if (PACKS.packs[id] === undefined || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  for (const id of catalogIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** True when this pack is in the flavor's first-run `enabledPacks`. */
+export function isFlavorFirstRunPack(
+  packId: string,
+  flavor: FlavorManifest = getActiveFlavor(),
+): boolean {
+  return (flavor.enabledPacks ?? []).includes(packId) && PACKS.packs[packId] !== undefined;
+}
+
+/**
+ * First-open collapse default for a Plugins panel section.
+ * First-run packs start open; other packs and User start collapsed.
+ */
+export function pluginSectionStartsCollapsed(
+  sectionId: string,
+  flavor: FlavorManifest = getActiveFlavor(),
+): boolean {
+  if (sectionId === "user") return true;
+  return !isFlavorFirstRunPack(sectionId, flavor);
 }
 
 /**

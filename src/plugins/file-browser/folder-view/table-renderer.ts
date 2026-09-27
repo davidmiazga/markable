@@ -313,20 +313,6 @@ function buildFileRow(
     nameTd.title = card.path;
     tr.appendChild(nameTd);
 
-    if (config.showExtensions) {
-      const extTd = document.createElement("td");
-      extTd.className = "fv-td fv-td-ext";
-      extTd.textContent = card.ext;
-      tr.appendChild(extTd);
-    }
-
-    if (config.showModified) {
-      const modTd = document.createElement("td");
-      modTd.className = "fv-td fv-td-modified";
-      modTd.textContent = card.modified > 0 ? formatModified(card.modified) : "—";
-      tr.appendChild(modTd);
-    }
-
     if (config.showTags) {
       const tagsTd = document.createElement("td");
       tagsTd.className = "fv-td fv-td-tags";
@@ -340,6 +326,20 @@ function buildFileRow(
         }
       }
       tr.appendChild(tagsTd);
+    }
+
+    if (config.showExtensions) {
+      const extTd = document.createElement("td");
+      extTd.className = "fv-td fv-td-ext";
+      extTd.textContent = card.ext;
+      tr.appendChild(extTd);
+    }
+
+    if (config.showModified) {
+      const modTd = document.createElement("td");
+      modTd.className = "fv-td fv-td-modified";
+      modTd.textContent = card.modified > 0 ? formatModified(card.modified) : "—";
+      tr.appendChild(modTd);
     }
 
     // Extra-field cells (FR-11, FR-16). Values are inserted via .textContent to
@@ -551,6 +551,13 @@ function buildSectionTable(
     headerRow.appendChild(nameTh);
 
     if (isFiles) {
+      // Tags sit immediately after Name so they read as part of the title row.
+      if (config.showTags) {
+        const tagsTh = document.createElement("th");
+        tagsTh.className = "fv-th fv-th-tags";
+        tagsTh.textContent = "Tags";
+        headerRow.appendChild(tagsTh);
+      }
       if (config.showExtensions) {
         extTh = document.createElement("th");
         extTh.className = "fv-th fv-th-ext";
@@ -564,12 +571,6 @@ function buildSectionTable(
         modTh.textContent = "Modified";
         if (sortCol === "modified") modTh.classList.add(`fv-sorted-${sortDir}`);
         headerRow.appendChild(modTh);
-      }
-      if (config.showTags) {
-        const tagsTh = document.createElement("th");
-        tagsTh.className = "fv-th fv-th-tags";
-        tagsTh.textContent = "Tags";
-        headerRow.appendChild(tagsTh);
       }
 
       // Extra-field column headers (FR-11, FR-13). Built after Tags so extra

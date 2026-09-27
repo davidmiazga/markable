@@ -76,6 +76,17 @@ describe("openViewModal — config row (step_04)", () => {
     expect(panel().querySelector<HTMLInputElement>('input[data-vm-toggle="preview-pane"]')!.checked).toBe(true);
   });
 
+  it("Show tags toggle defaults OFF and emits `show-tags: true` when on", () => {
+    openViewModal("create", { folderPath: "/v/Foo" });
+    const tags = panel().querySelector<HTMLInputElement>('input[data-vm-toggle="show-tags"]')!;
+    expect(tags.checked).toBe(false);
+    expect(emitViewModalFence()).not.toContain("show-tags:");
+    tags.checked = true;
+    tags.dispatchEvent(new Event("change"));
+    expect(getViewModalState().showTags).toBe(true);
+    expect(emitViewModalFence()).toContain("show-tags: true");
+  });
+
   it("Content Width defaults to Normal; clicking Wide flips selection (FR-36 / FR-37)", () => {
     openViewModal("create", { folderPath: "/v/Foo" });
     const widePill = panel().querySelector<HTMLElement>('[data-vm-width="wide"]')!;

@@ -46,21 +46,9 @@ import { defaultEnabledPluginSet } from "../lib/flavor";
  * (i.e. the user has never explicitly toggled it). Once the user turns a
  * plugin off, that preference is persisted and this list is ignored.
  *
- * Order also defines their display priority in the Plugins panel Core section
- * (see plugins-panel.ts FEATURED_PLUGIN_ORDER).
+ * The Plugins panel groups by pack (see flavors/packs.json), not this set.
  */
 export const DEFAULT_ENABLED_PLUGINS: ReadonlySet<string> = defaultEnabledPluginSet();
-
-/**
- * Plugins that belong to the "Workflow" section in the Plugins panel.
- * Ordered: first entry appears first in the section.
- * These are pulled out of the Core section and rendered separately.
- */
-export const WORKFLOW_PLUGINS: readonly string[] = [
-  "file-browser",
-  "yaml-pane",
-  "knowledge-graph",
-];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

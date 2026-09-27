@@ -5,11 +5,11 @@
  * during development. This file covers:
  *   - Guard conditions that protect against calling panel functions before
  *     the panel DOM exists (EC-10).
- *   - Section rendering assertions added in step_04a: Core section with
- *     version badges, User section with Reload button, Overridden badge.
+ *   - Section rendering: pack headings, version badges, User Reload,
+ *     Overridden badge, and pack master-switch state.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createPluginsPanel,
   openPluginsPanel,
@@ -17,6 +17,8 @@ import {
   updateUserPluginDefs,
 } from "../src/plugins/plugins-panel/plugins-panel";
 import type { UnifiedPluginDef } from "../src/plugins/index";
+import * as flavor from "../src/lib/flavor";
+import pkmManifest from "../flavors/pkm.json";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -102,20 +104,23 @@ describe("plugins-panel — updateUserPluginDefs guard", () => {
 // ── Section rendering tests (step_04a) ────────────────────────────────────────
 
 /**
- * These tests exercise the two-section list view introduced in step_04a.
+ * These tests exercise pack-section list rendering.
  * Each test creates a fresh panel (appended to document.body by createPluginsPanel)
  * and then opens it to trigger the sectioned list render.
  *
  * Cleanup: the panel overlay is removed from document.body after each test
  * to prevent cross-test DOM pollution.
+ *
+ * Default test flavor is Markable (`VITE_FLAVOR` unset): Base first and open,
+ * other packs collapsed, then User.
  */
-describe("plugins-panel — Core/User section rendering (step_04a)", () => {
+describe("plugins-panel — pack section rendering", () => {
   beforeEach(() => {
     // Remove any plugins-overlay left behind by a previous test.
     document.getElementById("plugins-overlay")?.remove();
   });
 
-  it("renders a 'Core Plugins' section heading for core definitions", () => {
+  it("renders all pack section headings plus User Plugins", () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
       [makeCoreDef("focus-mode")],
@@ -126,7 +131,15 @@ describe("plugins-panel — Core/User section rendering (step_04a)", () => {
 
     const headings = document.querySelectorAll(".plugin-section-title");
     const labels = Array.from(headings).map((h) => h.textContent);
-    expect(labels).toContain("Core Plugins");
+    expect(labels).toEqual([
+      "Base editing",
+      "PKM",
+      "Project",
+      "Quick note",
+      "Diary",
+      "Book",
+      "User Plugins",
+    ]);
   });
 
   it("renders a 'User Plugins' section heading for user definitions", () => {
@@ -251,5 +264,259 @@ describe("plugins-panel — Core/User section rendering (step_04a)", () => {
     expect(badge).not.toBeNull();
     // The title attribute must contain the specific filename.
     expect(badge.title).toContain("focus-mode.js");
+  });
+
+  it("starts first-run pack sections open and others collapsed (Markable = Base)", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("focus-mode")],
+      { "markdown-toolbar": false, "focus-mode": false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": false, "focus-mode": false });
+
+    const baseBody = document.querySelector('[data-section-id="base"] .plugin-section-body');
+    const bookBody = document.querySelector('[data-section-id="book"] .plugin-section-body');
+    const userBody = document.querySelector('[data-section-id="user"] .plugin-section-body');
+    expect(baseBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
+    expect(bookBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
+    expect(userBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
+  });
+
+  it("places a PKM plugin under the PKM section, not a Workflow heading", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("file-browser")],
+      { "file-browser": false },
+      toggle,
+    );
+    openPluginsPanel({ "file-browser": false });
+
+    const headings = Array.from(document.querySelectorAll(".plugin-section-title"))
+      .map((h) => h.textContent);
+    expect(headings).not.toContain("Organization System Plugins");
+    expect(headings).not.toContain("Core Plugins");
+
+    const pkmRows = document.querySelectorAll('[data-section-id="pkm"] .plugin-row');
+    expect(pkmRows.length).toBe(1);
+    expect(pkmRows[0].textContent).toContain("Plugin file-browser");
+  });
+
+  it("appends an unlisted core plugin to Base", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("custom-extra")],
+      { "custom-extra": false },
+      toggle,
+    );
+    openPluginsPanel({ "custom-extra": false });
+
+    const baseRows = document.querySelectorAll('[data-section-id="base"] .plugin-row');
+    const names = Array.from(baseRows).map((row) => row.textContent);
+    expect(names.some((text) => text?.includes("Plugin custom-extra"))).toBe(true);
+  });
+
+  it("places auto-toc under Book and former Added plugins under Base", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("auto-toc"), makeCoreDef("diagrams"), makeCoreDef("focus-mode")],
+      { "auto-toc": false, diagrams: false, "focus-mode": false },
+      toggle,
+    );
+    openPluginsPanel({ "auto-toc": false, diagrams: false, "focus-mode": false });
+
+    const bookRows = Array.from(
+      document.querySelectorAll('[data-section-id="book"] .plugin-row'),
+    ).map((row) => row.textContent ?? "");
+    expect(bookRows.some((text) => text.includes("auto-toc"))).toBe(true);
+
+    const baseRows = Array.from(
+      document.querySelectorAll('[data-section-id="base"] .plugin-row'),
+    ).map((row) => row.textContent ?? "");
+    expect(baseRows.some((text) => text.includes("diagrams"))).toBe(true);
+    expect(baseRows.some((text) => text.includes("focus-mode"))).toBe(true);
+  });
+
+  it("places templates, auto-title, and insert-count under Base, not Quick note", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("templates"), makeCoreDef("auto-title"), makeCoreDef("insert-count"), makeCoreDef("sync")],
+      { templates: false, "auto-title": true, "insert-count": true, sync: false },
+      toggle,
+    );
+    openPluginsPanel({ templates: false, "auto-title": true, "insert-count": true, sync: false });
+
+    const baseIds = Array.from(
+      document.querySelectorAll('[data-section-id="base"] .plugin-row'),
+    ).map((row) => row.textContent);
+    expect(baseIds.some((text) => text?.includes("templates"))).toBe(true);
+    expect(baseIds.some((text) => text?.includes("auto-title"))).toBe(true);
+    expect(baseIds.some((text) => text?.includes("insert-count"))).toBe(true);
+
+    const quickIds = Array.from(
+      document.querySelectorAll('[data-section-id="quicknote"] .plugin-row'),
+    ).map((row) => row.textContent);
+    expect(quickIds.some((text) => text?.includes("sync"))).toBe(true);
+    expect(quickIds.some((text) => text?.includes("templates"))).toBe(false);
+  });
+
+  it("lists word-count last in Base", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("word-count"), makeCoreDef("markdown-toolbar"), makeCoreDef("templates")],
+      { "word-count": false, "markdown-toolbar": true, templates: false },
+      toggle,
+    );
+    openPluginsPanel({ "word-count": false, "markdown-toolbar": true, templates: false });
+
+    const names = Array.from(
+      document.querySelectorAll('[data-section-id="base"] .plugin-row'),
+    ).map((row) => row.textContent ?? "");
+    expect(names[names.length - 1]).toContain("word-count");
+  });
+
+  it("renders Off / Default / All on pack sections and not on User", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeUserDef("my-plugin")],
+      { "markdown-toolbar": false, "my-plugin": false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": false, "my-plugin": false });
+
+    expect(document.querySelectorAll(".plugin-section-preset").length).toBe(6);
+    expect(document.querySelector('[data-section-id="user"] .plugin-section-preset')).toBeNull();
+    expect(document.querySelector('[data-section-id="user"] .plugin-reload-btn')).not.toBeNull();
+  });
+
+  it("marks Default when Base matches first-run (templates off, rest on)", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("templates")],
+      { "markdown-toolbar": true, templates: false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, templates: false });
+
+    const active = document.querySelector(
+      '[data-section-id="base"] .plugin-section-preset-btn.active',
+    );
+    expect(active?.getAttribute("data-preset")).toBe("default");
+  });
+
+  it("marks no preset when the section is a custom mix", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("command-bar")],
+      { "markdown-toolbar": true, "command-bar": false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, "command-bar": false });
+
+    expect(
+      document.querySelector('[data-section-id="base"] .plugin-section-preset-btn.active'),
+    ).toBeNull();
+  });
+
+  it("turns every plugin in the section on when All is clicked", async () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("templates")],
+      { "markdown-toolbar": true, templates: false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, templates: false });
+
+    const allBtn = document.querySelector(
+      '[data-section-id="base"] [data-preset="all"]',
+    ) as HTMLButtonElement;
+    allBtn.click();
+    await vi.waitFor(() => {
+      expect(toggle).toHaveBeenCalledWith("templates", true);
+    });
+    expect(toggle).not.toHaveBeenCalledWith("markdown-toolbar", false);
+  });
+
+  it("restores first-run defaults when Default is clicked", async () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("templates")],
+      { "markdown-toolbar": true, templates: true },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, templates: true });
+
+    const defaultBtn = document.querySelector(
+      '[data-section-id="base"] [data-preset="default"]',
+    ) as HTMLButtonElement;
+    expect(
+      document.querySelector('[data-section-id="base"] .plugin-section-preset-btn.active')
+        ?.getAttribute("data-preset"),
+    ).toBe("all");
+    defaultBtn.click();
+    await vi.waitFor(() => {
+      expect(toggle).toHaveBeenCalledWith("templates", false);
+    });
+    expect(toggle).not.toHaveBeenCalledWith("markdown-toolbar", false);
+  });
+
+  it("turns the whole section off when Off is clicked", async () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("templates")],
+      { "markdown-toolbar": true, templates: false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, templates: false });
+
+    const offBtn = document.querySelector(
+      '[data-section-id="base"] [data-preset="off"]',
+    ) as HTMLButtonElement;
+    offBtn.click();
+    await vi.waitFor(() => {
+      expect(toggle).toHaveBeenCalledWith("markdown-toolbar", false);
+    });
+    expect(toggle).not.toHaveBeenCalledWith("templates", true);
+  });
+});
+
+describe("plugins-panel — Markable PKM flavor", () => {
+  const originalOrder = flavor.orderedPluginPackIds;
+  const originalCollapsed = flavor.pluginSectionStartsCollapsed;
+
+  beforeEach(() => {
+    document.getElementById("plugins-overlay")?.remove();
+    vi.spyOn(flavor, "getActiveFlavor").mockReturnValue(pkmManifest);
+    vi.spyOn(flavor, "orderedPluginPackIds").mockImplementation(() =>
+      originalOrder(pkmManifest),
+    );
+    vi.spyOn(flavor, "pluginSectionStartsCollapsed").mockImplementation((sectionId) =>
+      originalCollapsed(sectionId, pkmManifest),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps Base then PKM first, and opens both first-run packs", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("file-browser")],
+      { "markdown-toolbar": true, "file-browser": true },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": true, "file-browser": true });
+
+    const labels = Array.from(document.querySelectorAll(".plugin-section-title"))
+      .map((h) => h.textContent);
+    expect(labels.slice(0, 2)).toEqual(["Base editing", "PKM"]);
+
+    const baseBody = document.querySelector('[data-section-id="base"] .plugin-section-body');
+    const pkmBody = document.querySelector('[data-section-id="pkm"] .plugin-section-body');
+    const bookBody = document.querySelector('[data-section-id="book"] .plugin-section-body');
+    expect(baseBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
+    expect(pkmBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
+    expect(bookBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
   });
 });

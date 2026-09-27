@@ -22,7 +22,22 @@
         "command-bar",
         "typing-assist",
         "auto-save",
-        "word-count"
+        "auto-title",
+        "insert-count",
+        "templates",
+        "word-count",
+        "diagrams",
+        "math",
+        "focus-mode",
+        "typewriter-mode"
+      ],
+      "defaultOff": [
+        "templates",
+        "word-count",
+        "diagrams",
+        "math",
+        "focus-mode",
+        "typewriter-mode"
       ]
     },
     "pkm": {
@@ -32,8 +47,12 @@
         "backlinks",
         "knowledge-graph",
         "yaml-pane",
+        "properties-wrangler",
         "media-preview",
         "outline-panel"
+      ],
+      "defaultOff": [
+        "properties-wrangler"
       ]
     },
     "project": {
@@ -42,21 +61,15 @@
     },
     "quicknote": {
       "displayName": "Quick note",
-      "plugins": ["templates", "insert-count", "auto-title", "sync"]
+      "plugins": ["sync"]
     },
     "diary": {
       "displayName": "Diary",
       "plugins": ["daily-note", "calendar"]
     },
-    "added": {
-      "displayName": "Added",
-      "plugins": [
-        "diagrams",
-        "math",
-        "focus-mode",
-        "typewriter-mode",
-        "auto-toc"
-      ]
+    "book": {
+      "displayName": "Book",
+      "plugins": ["auto-toc"]
     }
   }
 }
