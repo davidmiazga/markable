@@ -67,3 +67,11 @@ diary *ARGS:
 
 quicknote *ARGS:
     node scripts/tauri-flavor.mjs quicknote {{ARGS}}
+
+# Rebuild per-flavor Tauri icon sets from the 1024 SVG masters.
+icons:
+    node scripts/build-app-icons.mjs
+
+# Local unsigned .app for one flavor: just bundle markable
+bundle FLAVOR:
+    node scripts/tauri-flavor.mjs {{FLAVOR}} build --bundles app

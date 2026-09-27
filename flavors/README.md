@@ -25,7 +25,9 @@ npm run dev:diary
 npm run dev:quicknote
 ```
 
-Same targets: `just markable`, `just remarkable`, `just pkm`, `just project`, `just diary`, `just quicknote`. `npm run tauri dev` still uses `com.markable.app` without setting `VITE_FLAVOR`.
+Same targets: `just markable`, `just remarkable`, `just pkm`, `just project`, `just diary`, `just quicknote`. Local unsigned app: `just bundle markable` (or `npm run bundle:pkm`, etc.). `just <flavor> build` runs a full Tauri bundle. `npm run tauri dev` still uses `com.markable.app` without setting `VITE_FLAVOR`.
+
+Each flavor file has `iconDir` (`icons/<id>/`). `scripts/tauri-flavor.mjs` passes that set to Tauri. Regenerate from the 1024 SVGs with `just icons`.
 
 `npm run sync:plugins` copies built IIFEs into every flavor’s Application Support folder (from each file’s `identifier`).
 

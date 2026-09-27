@@ -7,8 +7,8 @@
  *   node scripts/tauri-flavor.mjs pkm build
  *   VITE_FLAVOR=remarkable node scripts/tauri-flavor.mjs dev
  *
- * Named npm scripts: `npm run dev:markable`, `dev:remarkable`, `dev:pkm`,
- * `dev:project`, `dev:diary`, `dev:quicknote`.
+ * Named npm scripts: `npm run dev:markable` / `bundle:markable` (and the
+ * other flavor ids). `just bundle markable` is the same as bundle:markable.
  * `npm run tauri dev` still uses src-tauri/tauri.conf.json (com.markable.app).
  */
 
@@ -63,12 +63,23 @@ if (identifier === "") {
   process.exit(1);
 }
 
+const iconDir =
+  stringField(flavor.iconDir) || `icons/${flavorId}`;
 const merge = {
   identifier,
   productName,
+  bundle: {
+    icon: [
+      `${iconDir}/32x32.png`,
+      `${iconDir}/128x128.png`,
+      `${iconDir}/128x128@2x.png`,
+      `${iconDir}/icon.icns`,
+      `${iconDir}/icon.ico`,
+    ],
+  },
 };
 
-console.log(`[tauri-flavor] ${flavorId} → ${identifier} (${productName})`);
+console.log(`[tauri-flavor] ${flavorId} → ${identifier} (${productName}) icons ${iconDir}`);
 
 const child = spawn(
   "npm",

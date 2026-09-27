@@ -3,5 +3,6 @@
   "displayName": "Markable-Diary",
   "productName": "Markable-Diary",
   "identifier": "com.markable.diary",
+  "iconDir": "icons/diary",
   "enabledPacks": ["base", "diary"]
 }

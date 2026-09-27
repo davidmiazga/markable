@@ -3,5 +3,6 @@
   "displayName": "Markable PKM",
   "productName": "Markable PKM",
   "identifier": "com.markable.pkm",
+  "iconDir": "icons/pkm",
   "enabledPacks": ["base", "pkm"]
 }

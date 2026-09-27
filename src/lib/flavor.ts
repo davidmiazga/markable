@@ -21,6 +21,8 @@ export interface FlavorManifest {
   shortName?: string;
   /** Reverse-DNS bundle id. Controls Application Support on macOS. */
   identifier?: string;
+  /** src-tauri-relative folder with the Tauri icon set for this flavor. */
+  iconDir?: string;
   enabledPacks?: string[];
   defaultEnabledPlugins?: string[];
 }

@@ -3,5 +3,6 @@
   "displayName": "Re-markable",
   "productName": "Re-markable",
   "identifier": "com.markable.app",
+  "iconDir": "icons/remarkable",
   "enabledPacks": ["base", "pkm"]
 }

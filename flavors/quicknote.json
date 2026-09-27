@@ -3,5 +3,6 @@
   "displayName": "Markable-QuickNote",
   "productName": "Markable-QuickNote",
   "identifier": "com.markable.quicknote",
+  "iconDir": "icons/quicknote",
   "enabledPacks": ["base", "quicknote"]
 }

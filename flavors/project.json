@@ -3,5 +3,6 @@
   "displayName": "Markable-Project",
   "productName": "Markable-Project",
   "identifier": "com.markable.project",
+  "iconDir": "icons/project",
   "enabledPacks": ["base", "project"]
 }

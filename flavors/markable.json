@@ -3,5 +3,6 @@
   "displayName": "Markable",
   "productName": "Markable",
   "identifier": "com.markable.editor",
+  "iconDir": "icons/markable",
   "enabledPacks": ["base"]
 }
