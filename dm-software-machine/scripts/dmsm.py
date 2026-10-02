@@ -31,6 +31,7 @@ VERSION = (SKILL_ROOT / "VERSION").read_text().strip()
 MACHINE_DIR = ".dm-software-machine"
 KINDS = ("intent", "handoff", "work", "review", "quality", "acceptance")
 TASK_STATUSES = (
+    "briefing",
     "queued",
     "claimed",
     "active",
@@ -39,6 +40,15 @@ TASK_STATUSES = (
     "accepted",
     "blocked",
 )
+SPEC_HEADINGS = (
+    "Problem",
+    "In scope",
+    "Out of scope",
+    "UX / behavior",
+    "Tests",
+)
+SPEC_PLACEHOLDER = re.compile(r"\b(TODO|TBD|fill me)\b", re.I)
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 GITIGNORE_ENTRIES = [
     ".dm-software-machine/runs/",
     ".dm-software-machine/install-manifest.json",
@@ -53,6 +63,179 @@ MACHINE_OWNED_PREFIXES = (
 )
 NEVER_WRITE_DIRS = ("node_modules", "target", "dist", ".astro")
 PLACEHOLDER_TEST = re.compile(r"no test specified", re.I)
+DEFAULT_PROBLEM_HINT = (
+    "<!-- What is wrong or missing. Quote the user if they wrote it. Do not invent. -->"
+)
+TICKET_OPEN = ("briefing", "queued", "claimed", "active", "gated", "reviewed")
+TICKET_STOPWORDS = frozenset(
+    "a an the to for of and or in on at is be this that with from into "
+    "just use sm ticket spec".split()
+)
+WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def spec_sections(text: str) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    current: str | None = None
+    buf: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current is not None:
+                sections[current] = "\n".join(buf).strip()
+            current = line[3:].strip()
+            buf = []
+        elif current is not None:
+            buf.append(line)
+    if current is not None:
+        sections[current] = "\n".join(buf).strip()
+    return sections
+
+
+def _section_has_content(body: str) -> bool:
+    stripped = HTML_COMMENT.sub("", body or "").strip()
+    if not stripped:
+        return False
+    if SPEC_PLACEHOLDER.search(stripped):
+        return False
+    return True
+
+
+def spec_complete(path: Path) -> tuple[bool, list[str]]:
+    if not path.exists():
+        return False, ["missing spec file"]
+    sections = spec_sections(path.read_text())
+    missing: list[str] = []
+    for heading in SPEC_HEADINGS:
+        if heading not in sections:
+            missing.append(f"missing heading ## {heading}")
+        elif not _section_has_content(sections[heading]):
+            missing.append(f"empty or placeholder ## {heading}")
+    return (not missing, missing)
+
+
+def spec_refuse_message(task_id: str, missing: list[str], spec_path: str) -> str:
+    lines = [f"{task_id} spec is incomplete ({spec_path})"]
+    lines.extend(f"  {item}" for item in missing)
+    lines.append(f"Fill the spec, then: just sm-ready {task_id}")
+    return "\n".join(lines)
+
+
+def render_spec_template(
+    *,
+    title: str,
+    done: str,
+    writes: list[str],
+    defaults: dict,
+    problem: str = "",
+) -> str:
+    template = (SKILL_ROOT / "templates" / "spec.md").read_text()
+    problem_block = problem.strip() if problem.strip() else DEFAULT_PROBLEM_HINT
+    return (
+        template
+        .replace("{{title}}", title)
+        .replace("{{done}}", done)
+        .replace("{{writes}}", ", ".join(writes))
+        .replace("{{dev}}", f"cd {defaults['dev_cwd']} && {defaults['dev_command']}")
+        .replace("{{problem}}", problem_block)
+    )
+
+
+def require_brief(store: Store) -> bool:
+    return bool(store.cfg.get("require_brief", False))
+
+
+def ticket_tokens(text: str) -> set[str]:
+    return {
+        word for word in WORD_RE.findall((text or "").lower())
+        if word not in TICKET_STOPWORDS and len(word) > 1
+    }
+
+
+def ticket_score(query: str, task: dict) -> int:
+    raw = (query or "").strip().lower()
+    tid = str(task.get("id") or "").lower()
+    title = str(task.get("title") or "").lower()
+    spec = str(task.get("spec_path") or "").replace("\\", "/").lower()
+    if raw in {tid, spec, f"{tid}.md", f"specs/{tid}.md"}:
+        return 100
+    if raw.startswith("t-") and raw == tid:
+        return 100
+    q_tokens = ticket_tokens(query)
+    t_tokens = ticket_tokens(task.get("title") or "")
+    if raw and title and (raw in title or title in raw) and len(raw) >= 6:
+        return 85
+    if not q_tokens:
+        return 0
+    overlap = len(q_tokens & t_tokens)
+    if overlap == 0:
+        return 0
+    ratio = overlap / len(q_tokens)
+    if ratio >= 0.6:
+        return int(60 + 30 * ratio)
+    if overlap >= 2:
+        return 50 + overlap
+    return 0
+
+
+def resolve_ticket(query: str, tasks: list[dict]) -> dict | list[dict] | None:
+    exact: list[dict] = []
+    scored: list[tuple[int, dict]] = []
+    for task in tasks:
+        score = ticket_score(query, task)
+        if score >= 100:
+            exact.append(task)
+        elif score >= 70:
+            scored.append((score, task))
+    if exact:
+        return exact[0] if len(exact) == 1 else exact
+    if len(scored) == 1:
+        return scored[0][1]
+    if len(scored) > 1:
+        return [task for _, task in scored]
+    return None
+
+
+def print_ticket_ask(store: Store, task: dict, *, action: str) -> None:
+    spec_rel = task.get("spec_path") or f"specs/{task['id']}.md"
+    spec_path = store.root / spec_rel
+    ok, missing = spec_complete(spec_path)
+    print(f"action {action}")
+    print(task["id"])
+    print(task["status"])
+    print(f"spec {spec_rel}")
+    if task.get("bead_id"):
+        print(f"bead {task['bead_id']}")
+    if ok:
+        if task["status"] == "briefing":
+            print(f"Spec is complete. Then: just sm-ready {task['id']}")
+        else:
+            print(f"Spec is complete. Then: just sm-claim {task['id']}")
+        return
+    missing_heads = [
+        heading for heading in SPEC_HEADINGS
+        if any(heading in item for item in missing)
+    ]
+    print()
+    print("Please fill out this ticket so the work is well-formed.")
+    print("One-off questions can stay in chat. Software implementations need this spec.")
+    print()
+    print("Replace the HTML comments under each heading (no TODO/TBD):")
+    for heading in SPEC_HEADINGS:
+        mark = "MISSING" if heading in missing_heads else "ok"
+        print(f"  [{mark}] {heading}")
+    print()
+    print("Template to paste into the file:")
+    print()
+    print("```md")
+    for heading in missing_heads or SPEC_HEADINGS:
+        print(f"## {heading}")
+        print(f"(fill {heading.lower()})")
+        print()
+    print("```")
+    print()
+    print(f"File: {spec_rel}")
+    print(f"When filled: just sm-ready {task['id']}")
+    print("Do not implement until then.")
 
 
 def now_iso() -> str:
@@ -306,6 +489,7 @@ def resolve_defaults(store: "Store") -> dict[str, Any]:
         "tracker": cfg.get("tracker") or "none",
         "parallel": int(cfg.get("parallel") or 1),
         "auto_advance": bool(cfg.get("auto_advance", False)),
+        "require_brief": bool(cfg.get("require_brief", False)),
     }
 
 
@@ -783,6 +967,13 @@ def beads_close(root: Path, bead_id: str, reason: str) -> None:
     _bd_json(["bd", "close", bead_id, "--reason", reason, "--json"], root)
 
 
+def beads_update_description(root: Path, bead_id: str, description: str) -> None:
+    _bd_json(
+        ["bd", "update", bead_id, "--description", description, "--json"],
+        root,
+    )
+
+
 def ensure_justfile(root: Path) -> str:
     snippet = (SKILL_ROOT / "templates" / "justfile.sm").read_text()
     justfile = root / "justfile"
@@ -796,6 +987,20 @@ def ensure_justfile(root: Path) -> str:
     if "sm-auto" not in text:
         justfile.write_text(text.rstrip() + "\n\nsm-auto MODE:\n    {{sm}} auto {{MODE}}\n")
         return "justfile +sm-auto"
+    if "sm-brief" not in text:
+        justfile.write_text(
+            text.rstrip()
+            + "\n\nsm-brief *ARGS:\n    {{sm}} task-brief --title \"$@\"\n"
+            + "\nsm-ready TASK:\n    {{sm}} task-ready {{TASK}}\n"
+            + "\nsm-ticket *ARGS:\n    {{sm}} task-ticket --title \"$@\"\n"
+        )
+        return "justfile +sm-brief"
+    if "sm-ticket" not in text:
+        justfile.write_text(
+            text.rstrip()
+            + "\n\nsm-ticket *ARGS:\n    {{sm}} task-ticket --title \"$@\"\n"
+        )
+        return "justfile +sm-ticket"
     return "justfile unchanged"
 
 
@@ -1095,6 +1300,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     print(f"tracker     {defaults['tracker']}")
     print(f"parallel    {defaults['parallel']}")
     print(f"auto_advance {defaults['auto_advance']}")
+    print(f"require_brief {defaults['require_brief']}")
     return 0
 
 
@@ -1110,29 +1316,56 @@ def cmd_scope(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_task_add(args: argparse.Namespace) -> int:
-    store = Store(repo_root())
-    store.require_configured()
+def _print_new_task(task: dict) -> None:
+    print(task["id"])
+    if task["status"] == "briefing":
+        print("briefing")
+        print(f"spec {task['spec_path']}")
+        print(f"Fill the spec, then: just sm-ready {task['id']}")
+    if task.get("bead_id"):
+        print(f"bead {task['bead_id']}")
+
+
+def create_task(
+    store: Store,
+    args: argparse.Namespace,
+    *,
+    status: str,
+    spec_mode: str,
+) -> dict:
     state = ensure_run(store)
     defaults = resolve_defaults(store)
     task_id = "t-" + uuid.uuid4().hex[:4]
     writes = args.writes or defaults["writes"]
     done = args.done or defaults["done_means"]
-    spec_path = Path(store.cfg.get("specs_dir", "specs")) / f"{task_id}.md"
+    spec_rel = Path(store.cfg.get("specs_dir", "specs")) / f"{task_id}.md"
+    spec_path = store.root / spec_rel
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     if not spec_path.exists():
-        spec_path.write_text(
-            f"# {args.title}\n\nDone means: {done}\n"
-            f"Writes: {', '.join(writes)}\n"
-            f"Dev: cd {defaults['dev_cwd']} && {defaults['dev_command']}\n"
-        )
+        if spec_mode == "template":
+            spec_path.write_text(
+                render_spec_template(
+                    title=args.title,
+                    done=done,
+                    writes=writes,
+                    defaults=defaults,
+                    problem=getattr(args, "problem", "") or "",
+                )
+            )
+        else:
+            spec_path.write_text(
+                f"# {args.title}\n\nDone means: {done}\n"
+                f"Writes: {', '.join(writes)}\n"
+                f"Dev: cd {defaults['dev_cwd']} && {defaults['dev_command']}\n"
+            )
+    spec_stored = str(spec_rel).replace("\\", "/")
     task = {
         "id": task_id,
         "title": args.title,
-        "status": "queued",
+        "status": status,
         "depends_on": args.depends or [],
         "writes": writes,
-        "spec_path": str(spec_path),
+        "spec_path": spec_stored,
         "claimed_by": None,
         "repair_count": 0,
         "max_repairs": int(store.cfg.get("max_repairs", 2)),
@@ -1148,23 +1381,107 @@ def cmd_task_add(args: argparse.Namespace) -> int:
             title=args.title,
             task_id=task_id,
             run_id=state["run_id"],
-            spec_path=str(spec_path),
+            spec_path=spec_stored,
         )
     state["tasks"][task_id] = task
     store.save_state(state)
     store.emit(
         "task_added",
-        {"title": args.title, "writes": writes, "bead_id": task.get("bead_id")},
+        {
+            "title": args.title,
+            "writes": writes,
+            "bead_id": task.get("bead_id"),
+            "status": status,
+        },
         task_id,
     )
     intent = Envelope(
         status="success", kind="intent", task_id=task_id,
-        summary=args.title, writes=writes, artifacts=[str(spec_path)],
+        summary=args.title, writes=writes, artifacts=[spec_stored],
     )
     store.write_envelope(intent)
-    print(task_id)
-    if task.get("bead_id"):
-        print(f"bead {task['bead_id']}")
+    return task
+
+
+def cmd_task_add(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    if require_brief(store):
+        task = create_task(store, args, status="briefing", spec_mode="template")
+        print_ticket_ask(store, task, action="created")
+    else:
+        task = create_task(store, args, status="queued", spec_mode="stub")
+        _print_new_task(task)
+    return 0
+
+
+def cmd_task_brief(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    task = create_task(store, args, status="briefing", spec_mode="template")
+    print_ticket_ask(store, task, action="created")
+    return 0
+
+
+def cmd_task_ticket(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    state = ensure_run(store)
+    query = (args.title or "").strip()
+    if not query:
+        raise SystemExit("task-ticket needs --title (a sentence or t-xxxx)")
+    if not getattr(args, "new", False):
+        open_tasks = [
+            task for task in state["tasks"].values()
+            if task.get("status") in TICKET_OPEN
+        ]
+        match = resolve_ticket(query, open_tasks)
+        if isinstance(match, list):
+            print("ambiguous")
+            for task in match:
+                print(f"  {task['id']}  {task['status']:<10}  {task.get('title')}")
+            print(f"Pick one: just sm-ticket {match[0]['id']}")
+            print(f"Or create new: uv run dm-software-machine/scripts/dmsm.py task-ticket --new --title {query!r}")
+            return 2
+        if match is not None:
+            print_ticket_ask(store, match, action="found")
+            return 0
+    task = create_task(store, args, status="briefing", spec_mode="template")
+    print_ticket_ask(store, task, action="created")
+    return 0
+
+
+def cmd_task_ready(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    state = store.load_state()
+    task = state["tasks"].get(args.task_id)
+    if not task:
+        raise SystemExit(f"unknown task {args.task_id}")
+    if task["status"] not in ("briefing", "queued"):
+        raise SystemExit(f"{args.task_id} is {task['status']}")
+    spec_rel = task.get("spec_path") or f"specs/{args.task_id}.md"
+    spec_path = store.root / spec_rel
+    ok, missing = spec_complete(spec_path)
+    if not ok:
+        raise SystemExit(spec_refuse_message(args.task_id, missing, spec_rel))
+    task["status"] = "queued"
+    task["phase"] = None
+    store.save_state(state)
+    store.emit("task_ready", {"spec_path": spec_rel}, args.task_id)
+    if tracker_is_beads(store) and task.get("bead_id"):
+        try:
+            description = (
+                f"sm task {args.task_id} (run {state['run_id']})\n"
+                f"Spec: {spec_rel}\n\n"
+                + spec_path.read_text()
+            )
+            beads_update_description(store.root, task["bead_id"], description)
+        except SystemExit as error:
+            print(f"bead update failed (sm already queued): {error}")
+    print(args.task_id)
+    print("queued")
+    print(f"spec {spec_rel}")
     return 0
 
 
@@ -1195,14 +1512,21 @@ def overlapping_inflight(task: dict, flying: list[dict]) -> list[str]:
     return hits
 
 
-def ready_tasks(state: dict) -> list[dict]:
+def ready_tasks(state: dict, store: Store | None = None) -> list[dict]:
     accepted = {tid for tid, task in state["tasks"].items() if task["status"] == "accepted"}
+    brief = bool(store and require_brief(store))
     ready = []
     for task in state["tasks"].values():
         if task["status"] != "queued":
             continue
-        if all(dep in accepted for dep in task.get("depends_on") or []):
-            ready.append(task)
+        if not all(dep in accepted for dep in task.get("depends_on") or []):
+            continue
+        if brief and store is not None:
+            spec_rel = task.get("spec_path") or f"specs/{task['id']}.md"
+            ok, _ = spec_complete(store.root / spec_rel)
+            if not ok:
+                continue
+        ready.append(task)
     return ready
 
 
@@ -1215,7 +1539,7 @@ def cmd_task_next(args: argparse.Namespace) -> int:
     if len(flying) >= parallel and not args.force:
         print(f"paused on {flying[0]['id']} ({flying[0]['status']}) parallel={parallel}")
         return 2
-    ready = ready_tasks(state)
+    ready = ready_tasks(state, store)
     if not ready:
         print("no ready tasks")
         return 1
@@ -1241,8 +1565,18 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
     unmet = [dep for dep in task.get("depends_on") or [] if dep not in accepted]
     if unmet:
         raise SystemExit(f"{task_id} blocked by {unmet}")
+    if task["status"] == "briefing":
+        spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
+        raise SystemExit(
+            f"{task_id} is briefing — fill {spec_rel} then: just sm-ready {task_id}"
+        )
     if task["status"] not in ("queued", "claimed"):
         raise SystemExit(f"{task_id} is {task['status']}")
+    if require_brief(store):
+        spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
+        ok, missing = spec_complete(store.root / spec_rel)
+        if not ok:
+            raise SystemExit(spec_refuse_message(task_id, missing, spec_rel))
     if task["status"] == "queued" and not force:
         flying = in_flight_tasks(state)
         hits = overlapping_inflight(task, flying)
@@ -1556,7 +1890,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     for task in tasks:
         gate = (task.get("last_gate") or {}).get("passed")
         review = (task.get("last_review") or {}).get("approved")
-        print(f"  {task['id']}  {task['status']:<9}  phase={task.get('phase') or '-':<16}  "
+        print(f"  {task['id']}  {task['status']:<10}  phase={task.get('phase') or '-':<16}  "
               f"gate={_yn(gate)} review={_yn(review)}  {task['title']}")
     events = _read_events(store, limit=1)
     if events:
@@ -1666,6 +2000,38 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--writes", action="append", default=[])
     add.add_argument("--depends", action="append", default=[])
     add.set_defaults(func=cmd_task_add)
+
+    brief = sub.add_parser("task-brief", help="create a briefing task; not claimable until sm-ready")
+    brief.add_argument("--title", required=True)
+    brief.add_argument("--done", default="")
+    brief.add_argument("--writes", action="append", default=[])
+    brief.add_argument("--depends", action="append", default=[])
+    brief.add_argument(
+        "--problem",
+        default="",
+        help="optional verbatim Problem section; other headings stay empty",
+    )
+    brief.set_defaults(func=cmd_task_brief)
+
+    ticket = sub.add_parser(
+        "task-ticket",
+        help="find an open specs/<id>.md or create a briefing ticket",
+    )
+    ticket.add_argument("--title", required=True)
+    ticket.add_argument("--done", default="")
+    ticket.add_argument("--writes", action="append", default=[])
+    ticket.add_argument("--depends", action="append", default=[])
+    ticket.add_argument("--problem", default="")
+    ticket.add_argument(
+        "--new",
+        action="store_true",
+        help="create even if an open ticket already matches",
+    )
+    ticket.set_defaults(func=cmd_task_ticket)
+
+    ready = sub.add_parser("task-ready", help="validate spec and move a briefing task to queued")
+    ready.add_argument("task_id")
+    ready.set_defaults(func=cmd_task_ready)
 
     nxt = sub.add_parser("task-next", help="claim next ready task")
     nxt.add_argument("--agent", default=os.environ.get("USER", "agent"))

@@ -11,7 +11,7 @@ Same seven sections in every flavor. Pack ids are the section ids.
 | Section | Pack id | Plugins | Default off |
 |---|---|---|---|
 | Base editing | `base` | markdown-toolbar, command-bar, typing-assist, auto-save, auto-title, insert-count, templates, word-count, diagrams, math, focus-mode, typewriter-mode | templates, word-count, diagrams, math, focus-mode, typewriter-mode |
-| PKM | `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, properties-wrangler, media-preview, outline-panel | properties-wrangler |
+| PKM | `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel | |
 | Project | `project` | kanban | |
 | Quick note | `quicknote` | sync | |
 | Diary | `diary` | daily-note, calendar | |
@@ -68,4 +68,4 @@ The active segment is the preset that matches the current rows. Priority if two 
 
 The `added` pack is gone. Markable Book (`flavors/book.json`) is `base` + `book`.
 
-`properties-wrangler` is a PKM companion to File Properties (`yaml-pane`), default off. See [`PROPERTIES_WRANGLER.md`](PROPERTIES_WRANGLER.md).
+The vocabulary editor lives in File Properties as the Edit tags section. See [`PROPERTIES_WRANGLER.md`](PROPERTIES_WRANGLER.md).

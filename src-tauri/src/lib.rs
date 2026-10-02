@@ -25,15 +25,15 @@ fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha
 pub use commands::{
     build_vault_index, check_paths_exist, copy_core_plugins, copy_default_themes,
     create_daily_note, create_directory, create_file, create_vault, delete_directory, delete_file,
-    delete_vault, ensure_directory, get_app_data_dir, get_exif_data, get_home_dir,
+    delete_vault, ensure_directory, find_tag_page, get_app_data_dir, get_exif_data, get_home_dir,
     get_image_dimensions, get_settings, get_vault_index, list_core_plugins, list_md_files,
-    list_preset_files, list_themes, list_user_plugins, list_vault_files, move_file,
-    open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, read_plugin_file,
-    read_plugin_settings, read_theme_css, rename_file, reveal_in_finder, save_file_dialog,
-    save_html_dialog, save_image_dialog, save_settings, save_vault_index, scan_vault_tags,
-    search_vault_content, settings_file_existed, sidecar_exists, switch_vault, unwatch_vault,
-    update_vault, update_wiki_links, validate_vault_paths, watch_vault, write_binary_file,
-    write_file, write_plugin_settings, WatcherRegistry,
+    list_preset_files, list_themes, list_user_plugins, list_vault_files, merge_vault_property,
+    move_file, open_asset_dialog, open_file_dialog, open_folder_dialog, read_file,
+    read_plugin_file, read_plugin_settings, read_theme_css, rename_file, rename_vault_property,
+    reveal_in_finder, save_file_dialog, save_html_dialog, save_image_dialog, save_settings,
+    save_vault_index, scan_vault_tags, search_vault_content, settings_file_existed, sidecar_exists,
+    switch_vault, unwatch_vault, update_vault, update_wiki_links, validate_vault_paths,
+    watch_vault, write_binary_file, write_file, write_plugin_settings, WatcherRegistry,
 };
 
 // Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
@@ -535,6 +535,9 @@ pub fn run() {
             update_wiki_links,
             reveal_in_finder,
             scan_vault_tags,
+            find_tag_page,
+            rename_vault_property,
+            merge_vault_property,
             search_vault_content,
             get_image_dimensions,
             get_exif_data,

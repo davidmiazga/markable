@@ -277,8 +277,8 @@ function titleCaseField(key: string): string {
 
 /**
  * Serialize a MetaStore-shaped vocabulary back to `{VaultName}_properties.md`.
- * Used by Properties Wrangler when the user accepts a cluster or toggles
- * which values File Properties should offer.
+ * Used by Properties Wrangler when the user accepts a cluster or edits
+ * which values File Properties treats as definitions.
  */
 export function serializePropertiesFile(
   store: Pick<MetaStore, "tags" | "fields" | "dateFormat">,

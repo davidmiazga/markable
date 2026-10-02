@@ -18,11 +18,26 @@ Four surfaces. Change them together.
 - `ignore_dirty` — extra dirty paths that do not fail finish (include `.cursor/` so permissions stamps do not fail finish)
 - `max_repairs` — default 2
 - `auto_advance` — default false. When true, accept does not pause; the agent claims the next ready task until idle or a red gate
+- `require_brief` — default false. When true, `task-add` creates `briefing` tasks (same as `task-brief`). `task-claim` / `task-next` refuse until `task-ready` validates the spec. `--force` does not skip the spec check. Briefing tasks are never ready.
 - `parallel` — max in-flight tasks (default 1). Overlapping `writes` always serialize.
 
 `init` also stamps `.cursor/permissions.json` from `templates/permissions.json` (Cursor Auto-review allow/block for `just sm-*`, uv CLI, npm/cargo in the app folder). It does not turn Auto-review on; the engineer still picks Run / Auto-review in Cursor.
 
 `init` copies `templates/machine.yaml` with comments intact. It must not dump YAML (that strips comments). `defaults` and `task-add` refuse until `configured` is true and `app_folder` is not `SET_ME`.
+
+## Specs
+
+`specs/<task-id>.md` is the write surface. Beads is the tracker pointer only.
+
+A spec is complete when these headings exist and each body has real content (not empty, not HTML comments only, not `TODO` / `TBD` / `fill me`):
+
+- Problem
+- In scope
+- Out of scope
+- UX / behavior
+- Tests
+
+`task-brief` (and `task-add` when `require_brief` is true) stamps `templates/spec.md` and leaves the task in `briefing`. `task-ticket` finds an open `specs/<id>.md` by title or id, or creates a briefing ticket (Beads via SM). `task-ready` moves it to `queued` only if the spec is complete. The agent prints a fill template and stops; it may quote the engineer under Problem and must not invent the other sections.
 
 ## Profile
 

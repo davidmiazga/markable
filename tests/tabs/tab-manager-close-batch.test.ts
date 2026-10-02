@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: vi.fn(() => ({
     close: vi.fn(() => Promise.resolve()),
+    setTitle: vi.fn(() => Promise.resolve()),
   })),
 }));
 vi.mock("@tauri-apps/api/dpi", () => ({
@@ -389,7 +390,10 @@ describe("TabManager.closeAllTabs", () => {
   it("TCA-01: is a no-op when there are no tabs open", async () => {
     const mgr = makeManager(0);
     const closeSpy = vi.fn(() => Promise.resolve());
-    mockGetCurrentWebviewWindow.mockReturnValue({ close: closeSpy });
+    mockGetCurrentWebviewWindow.mockReturnValue({
+      close: closeSpy,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     await expect(mgr.closeAllTabs()).resolves.toBeUndefined();
 
@@ -398,18 +402,23 @@ describe("TabManager.closeAllTabs", () => {
   });
 
   /**
-   * TCA-02: All clean tabs, no active vault — window.close() is called.
+   * TCA-02: All clean tabs, no active vault — empty workspace, window stays open.
    */
-  it("TCA-02: calls window.close() when all clean tabs close and no vault is active", async () => {
+  it("TCA-02: stays at 0 tabs when all clean tabs close, even with no vault", async () => {
     mockNoVault();
     const closeSpy = vi.fn(() => Promise.resolve());
-    mockGetCurrentWebviewWindow.mockReturnValue({ close: closeSpy });
+    mockGetCurrentWebviewWindow.mockReturnValue({
+      close: closeSpy,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     const mgr = makeManager(2); // two clean tabs
 
     await mgr.closeAllTabs();
 
-    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(mgr.getTabCount()).toBe(0);
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(document.body.classList.contains("no-open-tabs")).toBe(true);
   });
 
   /**
@@ -418,7 +427,10 @@ describe("TabManager.closeAllTabs", () => {
   it("TCA-03: stays at 0 tabs when vault is active, does not close window", async () => {
     mockActiveVault();
     const closeSpy = vi.fn(() => Promise.resolve());
-    mockGetCurrentWebviewWindow.mockReturnValue({ close: closeSpy });
+    mockGetCurrentWebviewWindow.mockReturnValue({
+      close: closeSpy,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     const mgr = makeManager(2); // two clean tabs
 

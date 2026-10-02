@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
     close: vi.fn(() => Promise.resolve()),
     destroy: vi.fn(() => Promise.resolve()),
     listen: vi.fn(() => Promise.resolve(() => {})),
+    setTitle: vi.fn(() => Promise.resolve()),
   })),
 }));
 
@@ -826,21 +827,21 @@ describe("EC-14 — rapid successive openMediaInTab calls", () => {
 
 describe("EC-12 (window-close variant) — closing last media tab with no vault", () => {
   /**
-   * When no vault is configured, closing the last tab must close the application
-   * window. For media tabs specifically, this must happen WITHOUT showing a
-   * confirm() dirty-check dialog (media tabs are never dirty).
+   * Closing the last media tab must leave a blank workspace without a
+   * confirm() dirty-check (media tabs are never dirty) and without quitting.
    */
-  it("closing the last media tab (no vault) calls appWindow.close() without confirm()", async () => {
+  it("closing the last media tab (no vault) leaves 0 tabs without confirm()", async () => {
     setupDom();
     vi.clearAllMocks();
-    // No vault — closing last tab should close the window
     mockGetCurrentSettings.mockReturnValue(baseSettings());
 
-    // Capture the mock close function so we can assert it was called
     const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const mockGetWindow = getCurrentWebviewWindow as ReturnType<typeof vi.fn>;
     const closeMock = vi.fn(() => Promise.resolve());
-    mockGetWindow.mockReturnValue({ close: closeMock });
+    mockGetWindow.mockReturnValue({
+      close: closeMock,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     const manager = new TabManager();
     const view = makeEditorView();
@@ -858,10 +859,10 @@ describe("EC-12 (window-close variant) — closing last media tab with no vault"
     const mediaTabId = manager.getActiveTab()!.id;
     await manager.closeTab(mediaTabId);
 
-    // confirm() must NOT have been called — media tabs have no dirty state
     expect(confirmSpy).not.toHaveBeenCalled();
-    // The window must have been closed
-    expect(closeMock).toHaveBeenCalledOnce();
+    expect(manager.getTabCount()).toBe(0);
+    expect(closeMock).not.toHaveBeenCalled();
+    expect(document.body.classList.contains("no-open-tabs")).toBe(true);
   });
 });
 

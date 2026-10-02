@@ -185,6 +185,8 @@ export function classifyScanTag(
     const field = trimmed.slice(0, colon).trim().toLowerCase();
     const value = trimmed.slice(colon + 1).trim();
     if (field && value && !field.includes(" ")) {
+      // Notes often use a `Tags:` field. That is the tag list, not a category.
+      if (field === "tags") return { kind: "tag", value };
       return { kind: "field", field, value };
     }
   }

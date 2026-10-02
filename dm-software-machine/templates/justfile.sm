@@ -25,6 +25,15 @@ sm-tail *ARGS:
 sm-add *ARGS:
     {{sm}} task-add --title "$@"
 
+sm-brief *ARGS:
+    {{sm}} task-brief --title "$@"
+
+sm-ticket *ARGS:
+    {{sm}} task-ticket --title "$@"
+
+sm-ready TASK:
+    {{sm}} task-ready {{TASK}}
+
 sm-claim TASK:
     {{sm}} task-claim {{TASK}}
 

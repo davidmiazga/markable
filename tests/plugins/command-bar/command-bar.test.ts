@@ -3825,4 +3825,63 @@ describe("content mode", () => {
 
     commandBarPlugin.onDisable(api as any);
   });
+
+  it("tag:# and -tag:# search the scanned notes instead of the literal text", async () => {
+    const api = makeMockApi();
+    vaultManagerMock.getVaultIndex.mockReturnValue({
+      entries: [
+        { path: "/vault/Recipe.md" },
+        { path: "/vault/Plain.md" },
+      ],
+    });
+    const invoke = vi.fn().mockImplementation((cmd: string) => {
+      if (cmd === "scan_vault_tags") {
+        return Promise.resolve([
+          { tag: "Tags:recipe", filePaths: ["/vault/Recipe.md"], count: 1 },
+        ]);
+      }
+      return Promise.resolve({ results: [], capped: false, skippedCount: 0 });
+    });
+    (window as any).__TAURI_INTERNALS__ = { invoke };
+    await commandBarPlugin.onEnable(api as any);
+
+    const search = (window as any).__MARKABLE_TAG_SEARCH__ as (
+      clause: string,
+      kind: "include" | "exclude",
+    ) => void;
+    search("tag:#recipe", "include");
+    await vi.waitFor(() => {
+      const titles = [...document.querySelectorAll(".cb-result--content-header")].map(
+        (row) => row.textContent,
+      );
+      expect(titles).toEqual(["Recipe.md"]);
+    });
+    expect((document.querySelector(".cb-input") as HTMLInputElement).value).toBe("tag:#recipe");
+    expect(invoke).not.toHaveBeenCalledWith("search_vault_content", expect.anything());
+
+    search("-tag:#recipe", "exclude");
+    await vi.waitFor(() => {
+      expect(document.querySelector(".cb-content-notice")?.textContent).toContain("No results");
+    });
+    expect((document.querySelector(".cb-input") as HTMLInputElement).value).toBe(
+      "tag:#recipe -tag:#recipe",
+    );
+
+    commandBarPlugin.onDisable(api as any);
+    await commandBarPlugin.onEnable(api as any);
+    const searchAgain = (window as any).__MARKABLE_TAG_SEARCH__ as (
+      clause: string,
+      kind: "include" | "exclude",
+    ) => void;
+    searchAgain("-tag:#recipe", "exclude");
+    await vi.waitFor(() => {
+      const titles = [...document.querySelectorAll(".cb-result--content-header")].map(
+        (row) => row.textContent,
+      );
+      expect(titles).toEqual(["Plain.md"]);
+    });
+    expect((document.querySelector(".cb-input") as HTMLInputElement).value).toBe("-tag:#recipe");
+
+    commandBarPlugin.onDisable(api as any);
+  });
 });

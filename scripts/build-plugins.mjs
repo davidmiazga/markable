@@ -78,8 +78,6 @@ const PLUGINS = [
   ["calendar",          "src/plugins/calendar/calendar.plugin.ts"],
   // QuickNote pack — names a user sync service; does not transfer files.
   ["sync",              "src/plugins/sync/sync.plugin.ts"],
-  // PKM companion to File Properties — tag/category scan + offer list.
-  ["properties-wrangler", "src/plugins/properties-wrangler/properties-wrangler.plugin.ts"],
 ];
 
 /**

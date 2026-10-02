@@ -229,7 +229,7 @@ fn sanitise_vault_name(name: &str) -> String {
 ///
 /// Called inside `build_vault_index` walk loop to filter out meta folder files
 /// (FR-4 / NFR-6).
-fn is_meta_folder_component(rel_path: &Path, meta_folder_component: &str) -> bool {
+pub(crate) fn is_meta_folder_component(rel_path: &Path, meta_folder_component: &str) -> bool {
     rel_path
         .components()
         .any(|c| c.as_os_str().to_string_lossy().as_ref() == meta_folder_component)
@@ -242,7 +242,7 @@ fn is_meta_folder_component(rel_path: &Path, meta_folder_component: &str) -> boo
 /// the vault-relative segments are tested — the absolute path segments leading
 /// to the root (e.g. `/var/folders/.tmpXXX/`) must not be tested because the
 /// user has no control over where the OS places the temp or app directory.
-fn should_exclude(rel_path: &Path, exclude_patterns: &[String]) -> bool {
+pub(crate) fn should_exclude(rel_path: &Path, exclude_patterns: &[String]) -> bool {
     for component in rel_path.components() {
         let name = component.as_os_str().to_string_lossy();
         // Skip root and parent sentinel components (should not occur in a relative
@@ -1416,6 +1416,141 @@ pub fn scan_vault_tags(
     result.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
 
     Ok(result)
+}
+
+/// File name for a new tag page. Rejects names that are not a single path segment.
+pub fn tag_page_file_name(tag: &str) -> Result<String, String> {
+    let name = tag.trim();
+    let bad = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '/' | '\\' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+        });
+    if bad {
+        return Err("That tag is not a safe file name.".to_string());
+    }
+    Ok(format!("{name}.md"))
+}
+
+fn unquote_yaml(value: &str) -> String {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        return trimmed[1..trimmed.len() - 1].to_string();
+    }
+    trimmed.to_string()
+}
+
+fn front_matter_aliases(content: &str) -> Vec<String> {
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"));
+    let Some(rest) = rest else {
+        return Vec::new();
+    };
+    let end = rest.find("\n---").unwrap_or(rest.len());
+    let block = &rest[..end];
+    let mut aliases = Vec::new();
+    let mut in_list = false;
+    for line in block.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("aliases:") {
+            let value = value.trim();
+            in_list = value.is_empty();
+            if value.starts_with('[') && value.ends_with(']') {
+                for part in value[1..value.len() - 1].split(',') {
+                    let item = unquote_yaml(part);
+                    if !item.is_empty() {
+                        aliases.push(item);
+                    }
+                }
+                in_list = false;
+            } else if !value.is_empty() {
+                aliases.push(unquote_yaml(value));
+            }
+            continue;
+        }
+        if in_list && trimmed.starts_with("- ") {
+            let item = unquote_yaml(&trimmed[2..]);
+            if !item.is_empty() {
+                aliases.push(item);
+            }
+            continue;
+        }
+        if !trimmed.is_empty() {
+            in_list = false;
+        }
+    }
+    aliases
+}
+
+/// Absolute path of a note whose front matter `aliases` include `tag`, if one exists.
+#[tauri::command]
+pub fn find_tag_page(
+    root_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+    tag: String,
+) -> Result<Option<String>, String> {
+    let wanted = tag.trim();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let mut found: Option<String> = None;
+    for root_str in &root_paths {
+        let root = Path::new(root_str);
+        if !root.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if is_meta_folder_component(rel, "VaultSettings")
+                || should_exclude(rel, &exclude_patterns)
+            {
+                continue;
+            }
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let hit = front_matter_aliases(&content)
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(wanted));
+            if !hit {
+                continue;
+            }
+            let path_str = path.to_string_lossy().to_string();
+            let preferred = tag_page_file_name(wanted)
+                .ok()
+                .is_some_and(|file| path_str.ends_with(&format!("/Tags/{file}")));
+            if preferred || found.is_none() {
+                found = Some(path_str);
+            }
+            if preferred {
+                return Ok(found);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Extract inline `#hashtag` mentions from document text.
@@ -2602,5 +2737,27 @@ mod tag_scan_tests {
         let tags: Vec<&str> = result.iter().map(|e| e.tag.as_str()).collect();
         assert!(tags.contains(&"category:design"));
         assert!(tags.contains(&"category:ux"));
+    }
+
+    #[test]
+    fn find_tag_page_reads_aliases_and_rejects_unsafe_names() {
+        assert!(tag_page_file_name("work/project").is_err());
+        assert_eq!(tag_page_file_name("recipe").unwrap(), "recipe.md");
+
+        let dir = tempfile::tempdir().unwrap();
+        let tags = dir.path().join("Tags");
+        std::fs::create_dir(&tags).unwrap();
+        write_file(&tags, "recipe.md", "---\naliases:\n  - recipe\n---\n");
+        write_file(dir.path(), "other.md", "---\naliases: [cooking]\n---\n");
+
+        let root = dir.path().to_str().unwrap().to_string();
+        let found = find_tag_page(vec![root.clone()], vec![], "recipe".to_string())
+            .unwrap()
+            .unwrap();
+        assert!(found.ends_with("Tags/recipe.md"));
+        let other = find_tag_page(vec![root], vec![], "Cooking".to_string())
+            .unwrap()
+            .unwrap();
+        assert!(other.ends_with("other.md"));
     }
 }

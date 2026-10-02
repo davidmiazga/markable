@@ -65,4 +65,8 @@ describe("classifyScanTag", () => {
   it("keeps plain tags", () => {
     expect(classifyScanTag("recipe")).toEqual({ kind: "tag", value: "recipe" });
   });
+
+  it("treats a Tags field as tags", () => {
+    expect(classifyScanTag("Tags:Great")).toEqual({ kind: "tag", value: "Great" });
+  });
 });

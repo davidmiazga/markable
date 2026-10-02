@@ -47,13 +47,10 @@
         "backlinks",
         "knowledge-graph",
         "yaml-pane",
-        "properties-wrangler",
         "media-preview",
         "outline-panel"
       ],
-      "defaultOff": [
-        "properties-wrangler"
-      ]
+      "defaultOff": []
     },
     "project": {
       "displayName": "Project",

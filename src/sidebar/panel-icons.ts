@@ -81,12 +81,6 @@ const CALENDAR =
   `<line x1="3"  y1="10" x2="21" y2="10"/>` +
   `</svg>`;
 
-const TAGS =
-  `<svg ${COMMON_ATTRS}>` +
-  `<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>` +
-  `<line x1="7" y1="7" x2="7.01" y2="7"/>` +
-  `</svg>`;
-
 /** Map panel id → SVG markup. Missing keys → no icon rendered. */
 export const PANEL_ICONS: Readonly<Record<string, string>> = {
   "auto-toc":            TOC,
@@ -97,5 +91,4 @@ export const PANEL_ICONS: Readonly<Record<string, string>> = {
   "knowledge-graph":     HUB,
   "file-browser":        FOLDER,
   "daily-note-calendar": CALENDAR,
-  "properties-wrangler": TAGS,
 };

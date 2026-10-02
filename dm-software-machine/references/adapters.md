@@ -17,7 +17,9 @@ A bead may point at a machine `run_id` and task id. Beads does not store gate lo
 
 When `tracker: beads`:
 
-- `task-add` runs `bd create` with `--external-ref sm:<task-id>` and stores `bead_id` on the task
+- `task-add` / `task-brief` / `task-ticket` runs `bd create` with `--external-ref sm:<task-id>` and stores `bead_id` on the task
+- `task-ticket` reuses an open spec when the title or id matches; `--new` always creates
+- `task-ready` updates the bead description from the spec (failure does not un-queue the sm task)
 - `accept` runs `bd close <bead-id>` after sm acceptance
 - Create failure refuses the add. Close failure does not un-accept the sm task.
 

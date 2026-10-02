@@ -11,6 +11,7 @@ just sm-status
 ```
 
 Engineer prompt: `Use sm to <one sentence>`.
+When `require_brief` is true: `just sm-ticket "…"`, fill `specs/<id>.md`, then `just sm-ready <id>` before claim.
 Close-out: `just sm-finish <id>` then `just sm-accept <id>`.
 For a feature set without pausing: `just sm-auto on`, Cursor Auto-review, then `Use sm to …`. Pause is the default (`just sm-auto off`).
 The machine fills writes and done-means from `.dm-software-machine/machine.yaml`.

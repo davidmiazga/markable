@@ -26,6 +26,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: vi.fn(() => ({
     close: vi.fn(() => Promise.resolve()),
+    setTitle: vi.fn(() => Promise.resolve()),
   })),
 }));
 vi.mock("@tauri-apps/api/dpi", () => ({
@@ -339,17 +340,21 @@ describe("TabManager — closeTab", () => {
     await manager.init(view);
   });
 
-  it("calls window close when the last tab is closed (EC-2)", async () => {
-    // The mock for getCurrentWebviewWindow returns a fresh object on each call,
-    // so we must capture the reference before the code under test calls it.
-    // Re-configure the mock to return a stable object with a tracked close fn.
+  it("leaves a blank workspace when the last tab is closed", async () => {
     const closeMock = vi.fn(() => Promise.resolve());
     const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({ close: closeMock });
+    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({
+      close: closeMock,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     const id = manager.getActiveTab()!.id;
     await manager.closeTab(id);
-    expect(closeMock).toHaveBeenCalled();
+    expect(manager.getTabCount()).toBe(0);
+    expect(manager.getActiveTab()).toBeNull();
+    expect(closeMock).not.toHaveBeenCalled();
+    expect(document.body.classList.contains("no-open-tabs")).toBe(true);
+    expect(document.getElementById("titlebar-title")?.textContent).toBe("");
   });
 
   it("shows confirm dialog when closing the last dirty tab (EC-3)", async () => {
@@ -370,7 +375,10 @@ describe("TabManager — closeTab", () => {
   it("proceeds with close when user confirms dirty last tab (EC-3)", async () => {
     const closeMock = vi.fn(() => Promise.resolve());
     const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({ close: closeMock });
+    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({
+      close: closeMock,
+      setTitle: vi.fn(() => Promise.resolve()),
+    });
 
     // Install window.confirm that returns true (user confirms close)
     (window as unknown as Record<string, unknown>).confirm = vi.fn().mockReturnValue(true);
@@ -378,9 +386,8 @@ describe("TabManager — closeTab", () => {
     manager.markActiveTabDirty();
     const id = manager.getActiveTab()!.id;
     await manager.closeTab(id);
-    // Tab array is cleared before close(); getTabCount() returns 0
     expect(manager.getTabCount()).toBe(0);
-    expect(closeMock).toHaveBeenCalled();
+    expect(closeMock).not.toHaveBeenCalled();
 
     delete (window as unknown as Record<string, unknown>).confirm;
   });

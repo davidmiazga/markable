@@ -83,6 +83,7 @@ export const KNOWN_MODAL_OVERLAYS: ReadonlyArray<KnownModalOverlay> = [
   // requires the overlay to be VISIBLE (no `.cb-hidden` class).
   { source: "Command Bar",           kind: "selector", match: "#markable-command-bar-overlay:not(.cb-hidden)" },
   { source: "Collision Dialog",      kind: "id",       match: "__collision-dialog-overlay__" },
+  { source: "Properties Wrangler",   kind: "id",       match: "__properties-wrangler-overlay__" },
 ];
 
 /**

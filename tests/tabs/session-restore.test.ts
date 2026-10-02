@@ -27,6 +27,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
     close: vi.fn(() => Promise.resolve()),
     destroy: vi.fn(() => Promise.resolve()),
     listen: vi.fn(() => Promise.resolve(() => {})),
+    setTitle: vi.fn(() => Promise.resolve()),
   })),
 }));
 vi.mock("@tauri-apps/api/dpi", () => ({

@@ -325,6 +325,27 @@ body.tab-mode-vertical #titlebar {
   transition: color 0.25s ease;
 }
 
+/* Empty workspace: last document closed. No name, tabs, or editor marks. */
+body.no-open-tabs #titlebar #titlebar-title,
+body.no-open-tabs #titlebar:hover #titlebar-title {
+  color: transparent !important;
+}
+body.no-open-tabs #tab-strip,
+body.no-open-tabs #tab-vertical-strip,
+body.no-open-tabs #tab-tooltip,
+body.no-open-tabs .tab-new-btn {
+  display: none !important;
+}
+body.no-open-tabs #editor,
+body.no-open-tabs #media-viewer,
+body.no-open-tabs #custom-tab-host,
+body.no-open-tabs .md-toolbar,
+body.no-open-tabs #statusbar,
+body.no-open-tabs .cm-gutters {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* ============================================================
    Main Application Container
    ============================================================ */

@@ -1,0 +1,33 @@
+---
+description: Stop product/UX work until the engineer fills an SM spec. Do not implement from chat.
+alwaysApply: true
+---
+
+# Brief first, then SM one ticket at a time
+
+This repo has `require_brief: true`. Product, UX, and behavior changes go through dm-software-machine. Conversation is not a spec. Small UX nits are not exempt.
+
+One-off questions (what does X do, why did Y fail) may stay in chat. Software implementations need a ticket.
+
+## Stop
+
+When the user asks to implement or change app behavior and there is no complete spec for that change:
+
+1. `just sm-ticket "<one sentence>"` from the repo root (`markable/`). That finds `specs/<id>.md` or creates a briefing ticket (Beads via SM). Fallback: `uv run dm-software-machine/scripts/sm_ticket.py "…"`.
+2. You may pass their last message verbatim as `--problem`. Do not invent In scope / UX / Tests.
+3. Stop. Paste the CLI fill template into the reply and **ask them to fill it** so the ticket is well-formed.
+4. Do not edit `src/`, `src-tauri/`, `index.html`, `flavors/`, or other writes.
+5. Do not `sm-claim`. Do not `bd create` or `bd update --claim` as a shortcut around SM.
+
+They replace the HTML comments under Problem, In scope, Out of scope, UX / behavior, and Tests.
+
+## After they say the spec is filled
+
+`just sm-ready <id>`, then `just sm-claim <id>` or `just sm-next`. Implement that ticket only. `sm-finish` then `sm-accept`. Auto-advance may claim the next **queued complete** ticket. Briefing tickets stay parked.
+
+## Carve-outs
+
+- Already-claimed SM task in a gate repair loop
+- One-off questions or analysis with no code
+
+Beads tracks SM tasks (`sm:<task-id>`). SM creates and closes those beads. Do not start product work from `bd ready` alone.

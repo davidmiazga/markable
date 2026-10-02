@@ -314,7 +314,7 @@ export class TabManager {
    *   - openNewTab() or openFileInTab() adds a tab and activates it
    */
   private _applyActiveTab(): void {
-    // Zero-tab guard: last tab was closed. Show a blank screen.
+    // Zero-tab guard: last tab was closed. Show a blank workspace.
     if (this.tabs.length === 0) {
       this.editorContainer?.classList.remove("has-media-tab");
       document.body.classList.remove("has-custom-tab");
@@ -327,13 +327,17 @@ export class TabManager {
           effects: editableCompartment.reconfigure(EditorView.editable.of(false)),
         });
       }
-      // Flavor product name stays in the title bar when no document is open.
-      applyFlavorWindowTitle();
-      void getCurrentWebviewWindow().setTitle(flavorWindowTitle());
+      // Native window title stays the product name; the in-app title bar is blank.
+      void getCurrentWebviewWindow().setTitle?.(flavorWindowTitle());
+      const titleEl = document.getElementById("titlebar-title");
+      if (titleEl) titleEl.textContent = "";
+      document.body.classList.add("no-open-tabs");
       (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] = null;
       setLivePreviewFilePath(null);
       return;
     }
+
+    document.body.classList.remove("no-open-tabs");
 
     if (this.editorView === null) return;
 
@@ -454,7 +458,7 @@ export class TabManager {
   private _updateTitleBar(tab: TabEntry): void {
     const label = tab.isDirty ? `${tab.title} •` : tab.title;
     applyFlavorWindowTitle(label);
-    void getCurrentWebviewWindow().setTitle(flavorWindowTitle(label));
+    void getCurrentWebviewWindow().setTitle?.(flavorWindowTitle(label));
   }
 
   /**
@@ -956,7 +960,7 @@ export class TabManager {
    *
    * Special cases:
    *   - Last tab + dirty → confirm dialog; on cancel do nothing (EC-3).
-   *   - Last tab + clean → close the window (EC-2).
+   *   - Last tab + clean → empty workspace (no tabs, no document name).
    *   - Non-last tab + dirty → confirm dialog; on cancel do nothing.
    *   - Non-last tab + clean → remove tab; recalculate active index.
    *
@@ -985,22 +989,12 @@ export class TabManager {
         );
         if (!confirmed) return;
       }
-      // When a vault is active, stay open at 0 tabs — the file browser leads.
-      // When no vault is configured, closing the last tab closes the window.
-      const hasActiveVault = this._settingsHaveActiveVault();
-      if (hasActiveVault) {
-        this.tabs = [];
-        this.activeIndex = -1;
-        this._applyActiveTab();
-        this._notifyRenderer();
-        void this.saveSession();
-        return;
-      }
-      // Remove the tab from in-memory state before closing the window so that
-      // if the window-close event triggers saveSession() it writes empty state.
+      // Always stay open at 0 tabs: blank workspace, no document name or tab marks.
       this.tabs = [];
-      const appWindow = getCurrentWebviewWindow();
-      await appWindow.close();
+      this.activeIndex = -1;
+      this._applyActiveTab();
+      this._notifyRenderer();
+      void this.saveSession();
       return;
     }
 
@@ -1115,13 +1109,13 @@ export class TabManager {
    * Closes all open tabs.
    *
    * Dirty tabs each receive their own confirm dialog. Cancelling one does not
-   * prevent others from being evaluated. The last-tab side effects (vault-stay
-   * vs window-close) are applied once after all removals, not per-iteration.
+   * prevent others from being evaluated. The last-tab empty-workspace path
+   * is applied once after all removals, not per-iteration.
    *
    * Why NOT a closeTab() loop: closeTab() checks `this.tabs.length === 1` on
-   * every call and fires the last-tab window/vault branch when only one tab
+   * every call and fires the last-tab empty-workspace branch when only one tab
    * remains. In a loop that starts with N tabs, iteration N-1 would trigger
-   * that branch early and call window.close() or saveSession() prematurely.
+   * that branch early and call saveSession() prematurely.
    *
    * Safe pattern: snapshot → collect confirmed IDs → apply all removals once
    * → execute last-tab branch exactly once.
@@ -1174,21 +1168,9 @@ export class TabManager {
 
     // All tabs were closed (every confirm was accepted, or no dirty tabs existed).
     this.activeIndex = -1;
-
-    const hasActiveVault = this._settingsHaveActiveVault();
-    if (hasActiveVault) {
-      // Vault active: stay open at 0 tabs. The file browser leads the next action.
-      this._applyActiveTab();
-      this._notifyRenderer();
-      void this.saveSession();
-      return;
-    }
-
-    // No vault: close the app window.
-    // Clear state before closing so any saveSession() triggered by the window-close
-    // event (if any) writes empty state.
-    const appWindow = getCurrentWebviewWindow();
-    await appWindow.close();
+    this._applyActiveTab();
+    this._notifyRenderer();
+    void this.saveSession();
   }
 
   /**
@@ -1673,9 +1655,8 @@ export class TabManager {
   /**
    * Returns the currently active TabEntry, or null if no tabs are open.
    *
-   * The no-tabs case should not occur in normal operation because init()
-   * always ensures at least one tab exists. The null return satisfies the
-   * type system and guards against the period between construction and init().
+   * Returns null when no document is open (empty workspace after the last
+   * tab was closed, or between construction and init()).
    */
   getActiveTab(): TabEntry | null {
     return this.tabs[this.activeIndex] ?? null;
@@ -1719,6 +1700,32 @@ export class TabManager {
     if (!tab) return;
     tab.doc = newContent;
     tab.isDirty = true;
+    this._notifyRenderer();
+  }
+
+  /**
+   * Replace an open note with text that was just written to disk.
+   *
+   * Merge and rename write the file directly. The editor keeps its own copy,
+   * and File Properties reads that copy. Leaving it stale shows the old YAML
+   * and a later save writes the old YAML back over the merge.
+   */
+  applyExternalFileContent(filePath: string, content: string): void {
+    const tab = this.tabs.find((t) => t.filePath === filePath);
+    if (!tab || tab.kind !== "editor") return;
+    tab.doc = content;
+    const isActive = this.tabs[this.activeIndex]?.id === tab.id;
+    if (isActive && this.editorView) {
+      const current = this.editorView.state.doc.toString();
+      if (current !== content) {
+        this.editorView.dispatch({
+          changes: { from: 0, to: this.editorView.state.doc.length, insert: content },
+        });
+      }
+    }
+    tab.doc = content;
+    tab.isDirty = false;
+    this._updateTitleBar(tab);
     this._notifyRenderer();
   }
 }

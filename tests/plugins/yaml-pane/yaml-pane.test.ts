@@ -1612,6 +1612,72 @@ describe("Step 05 — onEnable / onDisable lifecycle", () => {
     const api = makeMockApi();
     expect(() => YamlPanePlugin.onDisable(api as any)).not.toThrow();
   });
+
+  it("Manage lists every tag and category from the properties file and the vault", async () => {
+    const invoke = vi.fn().mockImplementation((cmd: string) => {
+      if (cmd === "read_file") {
+        return Promise.resolve("## Tags\n- recipe\n- home\n## Status\n- draft\n## Source\n- article\n");
+      }
+      if (cmd === "scan_vault_tags") {
+        return Promise.resolve([
+          { tag: "from-notes", count: 1 },
+          { tag: "priority:high", count: 2 },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
+    vi.stubGlobal("__MARKABLE_CURRENT_FILE__", "/vault/note.md");
+    vi.stubGlobal("__MARKABLE_EDITOR_VIEW__", {
+      state: { doc: { toString: () => "---\ntitle: Hello\n---\nBody\n" } },
+    });
+    vi.stubGlobal("__MARKABLE_VAULT_MANAGER__", {
+      getActiveVault: () => ({
+        id: "v1",
+        name: "Demo",
+        rootPaths: ["/vault"],
+        excludePatterns: [],
+      }),
+    });
+    vi.stubGlobal("__CM_VIEW__", undefined);
+
+    const api = makeMockApi();
+    YamlPanePlugin.onEnable(api as any);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    api._registeredPanels[0].render(host);
+
+    const manage = host.querySelector(".yaml-pane-manage") as HTMLButtonElement;
+    expect(manage.textContent).toBe("Manage");
+    const titleInput = () =>
+      Array.from(host.querySelectorAll<HTMLInputElement>(".yaml-pane-scroll input")).find(
+        (input) => input.value === "Hello",
+      );
+    expect(titleInput()).toBeTruthy();
+
+    manage.click();
+    const sheet = await vi.waitFor(() => {
+      const overlay = document.getElementById("__properties-wrangler-overlay__");
+      expect(overlay).not.toBeNull();
+      return overlay!;
+    });
+    await vi.waitFor(() => {
+      expect(sheet.textContent).toContain("from-notes");
+      expect(sheet.textContent).toContain("high");
+    });
+    for (const name of ["recipe", "home", "draft", "article", "from-notes", "high"]) {
+      expect(sheet.textContent).toContain(name);
+    }
+    expect(sheet.querySelector(".pw-scan-btn")).toBeNull();
+    expect(invoke).toHaveBeenCalledWith(
+      "scan_vault_tags",
+      expect.objectContaining({ rootPaths: ["/vault"], vaultName: "Demo" }),
+    );
+    expect(titleInput()).toBeTruthy();
+
+    host.remove();
+    YamlPanePlugin.onDisable(api as any);
+  });
 });
 
 describe("Step 05 — updateListener debounce and panel state", () => {

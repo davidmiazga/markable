@@ -810,8 +810,8 @@ function handleAction(action: string): void {
     case "file-save-as":    void saveFileAs();        break;
     case "file-close-all":
       // Close all open tabs in order. Each closeTab() call handles its own
-      // dirty-check dialog and stops the loop when the last tab closes the
-      // window (EC-2). Async IIFE because handleAction() is synchronous.
+      // dirty-check dialog. The last tab leaves a blank workspace. Async IIFE
+      // because handleAction() is synchronous.
       void (async () => {
         // Snapshot the id list before the loop — the array shrinks as we close.
         const ids = tabManager.getTabs().map((t) => t.id);

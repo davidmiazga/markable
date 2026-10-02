@@ -16,6 +16,7 @@
  *   - Mode state is module-level (_mode variable), never derived from DOM (AD-CB-01).
  */
 
+import { filesMatchingTagQuery, parseTagSearch } from "../../lib/tag-search";
 import { fuzzyMatch, renderHighlightedLabel } from "./fuzzy-ranker";
 import type { FuzzyMatch } from "./fuzzy-ranker";
 import {
@@ -2972,6 +2973,69 @@ async function fetchWorkspaceFiles(generation: number): Promise<void> {
 // Content mode helpers (Step 03)
 // ---------------------------------------------------------------------------
 
+function tagSearchPayload(paths: string[]): { results: Array<{ path: string; title: string; matches: [] }>; capped: boolean; skippedCount: number } {
+  return {
+    results: paths.map((path) => ({
+      path,
+      title: path.split("/").pop() || path,
+      matches: [],
+    })),
+    capped: false,
+    skippedCount: 0,
+  };
+}
+
+/** Resolve `tag:#` / `-tag:#` clauses, then optionally intersect a leftover text search. */
+async function searchByTagClauses(
+  query: string,
+  rootPaths: string[],
+  excludePatterns: string[],
+  vaultName: string,
+  knownPaths: string[],
+): Promise<{ results: unknown[]; capped: boolean; skippedCount: number }> {
+  const entries = await (window as any).__TAURI_INTERNALS__.invoke("scan_vault_tags", {
+    rootPaths,
+    excludePatterns,
+    vaultName,
+  });
+  const match = filesMatchingTagQuery(knownPaths, entries ?? [], query);
+  if (!match.text || match.paths.length === 0) return tagSearchPayload(match.paths);
+  const payload = await (window as any).__TAURI_INTERNALS__.invoke("search_vault_content", {
+    rootPaths,
+    excludePatterns,
+    query: match.text,
+    maxResults: 50,
+  });
+  const allowed = new Set(match.paths);
+  payload.results = (payload.results ?? []).filter(
+    (row: { path?: string }) => row.path && allowed.has(row.path),
+  );
+  return payload;
+}
+
+/**
+ * Open content search filled with a tag clause.
+ * Include replaces the query. Exclude appends when a search is already open.
+ */
+function applyTagSearch(clause: string, kind: "include" | "exclude"): void {
+  if (!_overlayEl || !_inputEl || !_resultsEl) return;
+  const alreadyOpen = _isOpen && _inputEl.value.trim().length > 0;
+  if (!_isOpen) {
+    _isOpen = true;
+    _openGeneration++;
+    setMode("content");
+    openCommandBar(_overlayEl, _inputEl);
+  } else if (_mode !== "content") {
+    if (_capturingFor !== null) exitKeyCapture();
+    setMode("content");
+    _openGeneration++;
+  }
+  _contentSearchGeneration++;
+  _contentSearchInFlight = false;
+  _inputEl.value = kind === "exclude" && alreadyOpen ? `${_inputEl.value.trim()} ${clause}` : clause;
+  void handleContentSearchEnter();
+}
+
 /**
  * Called when the user presses Enter in content mode.
  *
@@ -3020,6 +3084,10 @@ async function handleContentSearchEnter(): Promise<void> {
   // Extract root paths and exclude patterns from the active vault object.
   const rootPaths: string[] = activeVault.rootPaths ?? [];
   const excludePatterns: string[] = activeVault.excludePatterns ?? [];
+  const parsed = parseTagSearch(query);
+  const knownPaths: string[] = (vaultIdx.entries ?? [])
+    .map((entry: { path?: string }) => entry.path)
+    .filter((path: string | undefined): path is string => Boolean(path));
 
   // EC-12: prevent duplicate in-flight calls (a second Enter while searching is a no-op).
   if (_contentSearchInFlight) return;
@@ -3034,15 +3102,25 @@ async function handleContentSearchEnter(): Promise<void> {
 
   let payload: any;
   try {
-    payload = await (window as any).__TAURI_INTERNALS__.invoke(
-      "search_vault_content",
-      {
+    if (parsed.clauses.length > 0) {
+      payload = await searchByTagClauses(
+        query,
         rootPaths,
         excludePatterns,
-        query,
-        maxResults: 50,
-      },
-    );
+        activeVault.name ?? "",
+        knownPaths,
+      );
+    } else {
+      payload = await (window as any).__TAURI_INTERNALS__.invoke(
+        "search_vault_content",
+        {
+          rootPaths,
+          excludePatterns,
+          query,
+          maxResults: 50,
+        },
+      );
+    }
   } catch (err) {
     // Only update UI if this generation is still current (EC-13, EC-14).
     if (_contentSearchGeneration !== gen || !_isOpen || _mode !== "content") {
@@ -4917,6 +4995,8 @@ export default {
     // Existing callers that call __MARKABLE_COMMAND_BAR_OPEN__() with no argument
     // continue to open in Files mode (FR-11.3 default).
     (window as any).__MARKABLE_COMMAND_BAR_OPEN__ = (mode?: BarMode) => openBar(mode);
+    (window as any).__MARKABLE_TAG_SEARCH__ = (clause: string, kind: "include" | "exclude") =>
+      applyTagSearch(clause, kind);
   },
 
   onDisable(_unusedApi: MarkablePluginAPI): void {
@@ -4929,6 +5009,7 @@ export default {
 
     // Deregister window globals so handleAction() becomes a no-op (EC-19).
     (window as any).__MARKABLE_COMMAND_BAR_OPEN__     = null;
+    (window as any).__MARKABLE_TAG_SEARCH__           = null;
     (window as any).__MARKABLE_COMMAND_BAR_IS_OPEN__  = false;
 
     removeCSS();

@@ -20,6 +20,7 @@ import { livePreviewExtension, tablePreviewField, fencedCodePreviewField, viewMo
 import { formatKeymap, pasteURLHandler } from "./format";
 import { searchTheme } from "./search-theme";
 import { listKeymap } from "./list-keybindings";
+import { inlineTagMenuExtension } from "./inline-tag-menu";
 
 /** Base theme — overrides basicSetup's hardcoded colors with CSS variables. */
 const baseTheme = EditorView.theme({
@@ -146,6 +147,7 @@ export function buildExtensions(): Extension[] {
   }
 
   extensions.push(EditorView.lineWrapping);
+  extensions.push(inlineTagMenuExtension());
   extensions.push(Prec.high(keymap.of(formatKeymap)));
   extensions.push(pasteURLHandler);
 

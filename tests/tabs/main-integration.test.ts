@@ -26,6 +26,7 @@ const _mockAppWindow = {
   close: vi.fn(() => Promise.resolve()),
   destroy: vi.fn(() => Promise.resolve()),
   listen: vi.fn(() => Promise.resolve(() => {})),
+  setTitle: vi.fn(() => Promise.resolve()),
 };
 
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
@@ -417,13 +418,12 @@ describe("step_07 main integration — file-close-all", () => {
     document.body.innerHTML = "";
   });
 
-  // ── FR-5.2 (close-all): closing all clean tabs closes the window ─────────────
+  // ── FR-5.2 (close-all): closing all clean tabs leaves a blank workspace ──────
   //
   // This test verifies the logic at the TabManager level: a sequence of closeTab()
-  // calls should eventually reduce tab count to 0 and invoke appWindow.close().
-  // (The main.ts "file-close-all" handler wraps this in a loop.)
+  // calls should eventually reduce tab count to 0 without quitting the app.
 
-  it("closeTab() on the last clean tab calls appWindow.close() (FR-5.2, EC-2)", async () => {
+  it("closeTab() on the last clean tab leaves a blank workspace", async () => {
     const { manager } = await setupTabManager();
 
     // Confirm only one tab (the untitled fallback) is open.
@@ -435,7 +435,9 @@ describe("step_07 main integration — file-close-all", () => {
 
     await manager.closeTab(lastTabId);
 
-    expect(_mockAppWindow.close).toHaveBeenCalled();
+    expect(manager.getTabCount()).toBe(0);
+    expect(_mockAppWindow.close).not.toHaveBeenCalled();
+    expect(document.body.classList.contains("no-open-tabs")).toBe(true);
   });
 
   it("closeTab() with multiple clean tabs removes one tab at a time without window close (FR-5.2)", async () => {

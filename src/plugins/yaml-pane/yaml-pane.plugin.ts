@@ -26,6 +26,11 @@
 
 import jsYaml from "js-yaml";
 import type { MarkablePluginAPI } from "../markable-plugin-api";
+import {
+  openVocabularyManager,
+  releaseWranglerEditor,
+  unmountWranglerEditor,
+} from "../properties-wrangler/properties-wrangler.plugin";
 
 // ---------------------------------------------------------------------------
 // Step 01 — Types
@@ -974,6 +979,27 @@ const YAML_PANE_CSS = `
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
+  min-height: 0;
+}
+.yaml-pane-vocab {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+  padding: 8px 10px;
+}
+.yaml-pane-manage {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #333);
+  cursor: pointer;
+}
+.yaml-pane-manage:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
 }
 .yaml-pane-warning {
   background: color-mix(in srgb, #f5a623 20%, var(--bg-secondary, #f8f8f8));
@@ -1423,6 +1449,17 @@ function rebuildPanelDOM(): void {
   }
 
   wrapper.appendChild(scrollEl);
+
+  const vocab = document.createElement("div");
+  vocab.className = "yaml-pane-vocab";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = "yaml-pane-manage";
+  manage.textContent = "Manage";
+  manage.addEventListener("click", () => { void openVocabularyManager(); });
+  vocab.appendChild(manage);
+  wrapper.appendChild(vocab);
+
   _panelContainer.appendChild(wrapper);
 }
 
@@ -2830,6 +2867,7 @@ export default {
       },
 
       destroy(_container: HTMLElement): void {
+        unmountWranglerEditor();
         _panelContainer = null;
         _editingKey = null;
         _addFieldVisible = false;
@@ -2936,7 +2974,8 @@ export default {
     // 3. Unregister sidebar panel
     api.unregisterSidebarPanel("yaml-pane");
 
-    // 4. Remove CSS
+    // 4. Remove CSS and the vocabulary editor
+    releaseWranglerEditor();
     removeYamlPaneCSS();
 
     // 5. Clear module-level state
