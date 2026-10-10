@@ -97,7 +97,8 @@ describe("first-run defaults", () => {
     expect(enabled).not.toContain("templates");
     expect(enabled).not.toContain("word-count");
     expect(enabled).not.toContain("sync");
-    expect(enabled).not.toContain("file-browser");
+    expect(enabled).toContain("file-browser");
+    expect(enabled).not.toContain("backlinks");
     expect(enabled).not.toContain("auto-toc");
     expect(enabled).not.toContain("diagrams");
   });
@@ -119,6 +120,24 @@ describe("first-run defaults", () => {
     expect(resolveFlavorFirstRunPlugins(bookManifest)).toContain("auto-toc");
     expect(resolveFlavorFirstRunPlugins(bookManifest)).toContain("markdown-toolbar");
     expect(resolveFlavorFirstRunPlugins(bookManifest)).not.toContain("diagrams");
+  });
+
+  it("starts File Browser on for every flavor because it sits in Base", () => {
+    for (const flavor of [
+      markableManifest,
+      remarkableManifest,
+      pkmManifest,
+      projectManifest,
+      diaryManifest,
+      quicknoteManifest,
+      bookManifest,
+    ]) {
+      expect(pluginDefaultEnabled("file-browser", flavor)).toBe(true);
+      expect(resolveFlavorFirstRunPlugins(flavor)).toContain("file-browser");
+    }
+    expect(pluginDefaultEnabled("backlinks", markableManifest)).toBe(false);
+    expect(pluginDefaultEnabled("backlinks", projectManifest)).toBe(false);
+    expect(pluginDefaultEnabled("backlinks", pkmManifest)).toBe(true);
   });
 
   it("turns PKM pack plugins on for Markable PKM", () => {

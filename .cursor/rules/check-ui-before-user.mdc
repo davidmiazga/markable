@@ -1,0 +1,17 @@
+---
+description: Render the file-browser row and confirm the loaded plugin before asking David to restart.
+alwaysApply: true
+---
+
+# Look before asking David to look
+
+The file browser is an IIFE. The CSS that runs is the `FILE_BROWSER_CSS` string in `file-browser.plugin.ts`. `file-browser.css` is not loaded.
+
+`just remarkable` rebuilds plugins, then the app may copy them on launch. A source edit stays invisible until `~/Library/Application Support/com.markable.app/plugins/core/file-browser.js` contains it.
+
+Before telling him to restart:
+
+- Render the row with that CSS and read the picture.
+- Confirm the built file has the new rule and has dropped the old one. The stray dot beside V was `.vault-name-caret` in the loaded plugin, while the source had already moved on.
+
+Do not send him through a restart for a change that exists only in the TypeScript source. When he reports a bug, fix it. Do not stop after an explanation.

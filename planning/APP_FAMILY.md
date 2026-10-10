@@ -12,7 +12,7 @@
 | Window + menus | One overlay window; one native menu tree in `menu.rs` / `lib.rs` |
 | Icons | Per-flavor sets in `src-tauri/icons/<id>/`. Masters: `src-tauri/icons/src/` (from `jobWorking/app-icon/`). Re-markable is the `tauri.conf.json` default. |
 | Default settings | `DEFAULT_SETTINGS` in `src/lib/settings.ts` + Rust defaults |
-| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable and Markable PKM use `base`+`pkm`; Project uses `base`+`project`; Diary uses `base`+`diary`; QuickNote uses `base`+`quicknote`; Book uses `base`+`book` |
+| Default-enabled plugins | Packs in [`flavors/packs.json`](../flavors/packs.json); Markable uses `base`; Re-markable and Markable PKM use `base`+`pkm`; Project uses `base`+`project`; Diary uses `base`+`diary`; QuickNote uses `base`+`quicknote`; Book uses `base`+`book`. File Browser is in `base` and starts on for every flavor. |
 | Bundled resources | `help/*`, `plugins/core/*`, `themes/*` |
 | Signing | Not configured |
 

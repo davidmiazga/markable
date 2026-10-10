@@ -19,6 +19,7 @@
       "displayName": "Base editing",
       "plugins": [
         "markdown-toolbar",
+        "file-browser",
         "command-bar",
         "typing-assist",
         "auto-save",
@@ -43,7 +44,6 @@
     "pkm": {
       "displayName": "PKM",
       "plugins": [
-        "file-browser",
         "backlinks",
         "knowledge-graph",
         "yaml-pane",

@@ -546,10 +546,12 @@ async function handleSave(
 function renderFormView(container: HTMLElement, vault: VaultEntry | null): void {
   const isEdit = vault !== null;
 
-  const sectionLabel = document.createElement("span");
-  sectionLabel.className = "settings-label";
-  sectionLabel.textContent = isEdit ? "Edit Vault" : "New Vault";
-  container.appendChild(sectionLabel);
+  if (!isEdit) {
+    const sectionLabel = document.createElement("span");
+    sectionLabel.className = "settings-label";
+    sectionLabel.textContent = "New Vault";
+    container.appendChild(sectionLabel);
+  }
 
   const form = document.createElement("div");
   form.className = "vault-form";

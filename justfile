@@ -63,6 +63,7 @@ markable *ARGS:
     node scripts/tauri-flavor.mjs markable {{ARGS}}
 
 remarkable *ARGS:
+    npm run dev:plugins
     node scripts/tauri-flavor.mjs remarkable {{ARGS}}
 
 pkm *ARGS:

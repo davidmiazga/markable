@@ -14,8 +14,8 @@ Engine surfaces in `packs.json` → `host.modules`. Always present. Not IIFE plu
 
 | Pack | First-run plugins (today) | Planned / missing |
 |---|---|---|
-| `base` | markdown-toolbar, command-bar, typing-assist, auto-save, auto-title, insert-count (on); templates, word-count, diagrams, math, focus-mode, typewriter-mode (off) | — |
-| `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on); properties-wrangler (off) | — |
+| `base` | markdown-toolbar, file-browser, command-bar, typing-assist, auto-save, auto-title, insert-count (on); templates, word-count, diagrams, math, focus-mode, typewriter-mode (off) | — |
+| `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on); properties-wrangler (off) | — |
 | `project` | kanban | — |
 | `quicknote` | sync | — |
 | `diary` | daily-note, calendar | — |
@@ -31,7 +31,7 @@ Catch-all. Identifier `com.markable.app`. First-run packs: `base` + `pkm` from [
 
 ### 2. Markable
 
-Base editing only (`enabledPacks: ["base"]`). Identifier `com.markable.editor`. Single-file editor. No project, PKM, or added plugins on install. Plugins remain installable. Launch with `npm run dev:markable`.
+`enabledPacks: ["base"]`. Identifier `com.markable.editor`. File Browser is in Base and starts on. The rest of the PKM pack stays off, as do project, diary, quick note, and book. Plugins remain installable. Launch with `npm run dev:markable`.
 
 ### 3. Markable-Project
 

@@ -333,6 +333,33 @@ export async function switchVault(id: string): Promise<void> {
 }
 
 /**
+ * Collapse the active vault without removing it from the saved list.
+ *
+ * The vault record, its folder, and its notes stay. `activeVaultId` is cleared
+ * so the tree can show this vault as an unmounted row and the user can mount
+ * it again with switchVault. A different vault is not activated.
+ *
+ * No-op when `id` is not the currently active vault.
+ */
+export async function unmountVault(id: string): Promise<void> {
+  if (activeVault?.id !== id) return;
+
+  switchGeneration++;
+  const myGeneration = switchGeneration;
+
+  await updateSettings((s) => ({
+    ...s,
+    activeVaultId: null,
+  }));
+
+  if (switchGeneration !== myGeneration) return;
+
+  activeVault = null;
+  vaultIndex = null;
+  emitVaultChanged(null);
+}
+
+/**
  * Create a new vault, persist it to settings, and immediately activate it.
  *
  * Validates:
@@ -630,6 +657,7 @@ export function _resetForTests(): void {
   deleteVault,
   updateVault,
   switchVault,
+  unmountVault,
   getActiveVault,
   getAllVaults,
   getVaultIndex,

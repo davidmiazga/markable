@@ -53,6 +53,7 @@ import {
   deleteVault,
   updateVault,
   switchVault,
+  unmountVault,
   getActiveVault,
   getAllVaults,
   getVaultIndex,
@@ -443,6 +444,51 @@ describe("deleteVault()", () => {
     mockInvokeOnce(undefined); // delete_vault
     await deleteVault("other-vault");
     expect(getActiveVault()?.id).toBe("active-vault");
+  });
+});
+
+describe("unmountVault()", () => {
+  async function seedActive(id: string) {
+    setSettings({
+      vaults: [
+        {
+          id,
+          name: "Kept",
+          rootPaths: ["/x"],
+          created: new Date().toISOString(),
+          lastOpened: new Date().toISOString(),
+          excludePatterns: [],
+          maxIndexSize: 500,
+        },
+      ],
+      activeVaultId: id,
+    });
+    mockInvokeOnce(null);
+    mockInvokeOnce(makeIndex(id));
+    mockInvokeOnce(undefined);
+    await init();
+  }
+
+  it("clears the active vault and keeps the saved record", async () => {
+    await seedActive("keep-1");
+    const cb = vi.fn();
+    onVaultChanged(cb);
+
+    await unmountVault("keep-1");
+
+    expect(getActiveVault()).toBeNull();
+    expect(getVaultIndex()).toBeNull();
+    expect(getSettings().activeVaultId).toBeNull();
+    expect(getAllVaults().map((v) => v.id)).toEqual(["keep-1"]);
+    expect(cb).toHaveBeenCalledWith(null);
+    offVaultChanged(cb);
+  });
+
+  it("does nothing when the vault is not mounted", async () => {
+    await seedActive("keep-2");
+    await unmountVault("someone-else");
+    expect(getActiveVault()?.id).toBe("keep-2");
+    expect(getAllVaults()).toHaveLength(1);
   });
 });
 

@@ -758,7 +758,7 @@ describe("headerActions", () => {
     plugin.onDisable(api as any);
   });
 
-  it("headerActions first entry has icon '⋯' and title 'Panel menu'", () => {
+  it("headerActions first entry has icon '⋯' and title 'Manage Vaults'", () => {
     /*
      * The search button is now registered at index 0; the ⋯ manage-vaults
      * button was moved to index 1 during the vault UX refactor. We therefore
@@ -770,7 +770,7 @@ describe("headerActions", () => {
     const descriptor = (api.registerSidebarPanel as any).mock.calls[0][0];
     const action = descriptor.headerActions[1];
     expect(action.icon).toBe("⋯");
-    expect(action.title).toBe("Panel menu");
+    expect(action.title).toBe("Manage Vaults");
     expect(action.id).toBe("file-browser-manage-vaults-btn");
     plugin.onDisable(api as any);
   });
@@ -1543,7 +1543,7 @@ describe("delete file via context menu", () => {
     const deleteItem = items.find((i) => i.textContent === "Delete") as HTMLElement | undefined;
     expect(deleteItem).not.toBeUndefined();
 
-    deleteItem!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    deleteItem!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     await new Promise((r) => setTimeout(r, 10));
 
@@ -1571,7 +1571,7 @@ describe("delete file via context menu", () => {
     const items = Array.from(document.querySelectorAll(".context-menu-item"));
     const deleteItem = items.find((i) => i.textContent === "Delete") as HTMLElement | undefined;
 
-    deleteItem?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    deleteItem?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     await new Promise((r) => setTimeout(r, 10));
     expect(invokeMock).not.toHaveBeenCalledWith("delete_file", expect.anything());

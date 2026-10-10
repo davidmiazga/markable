@@ -125,6 +125,33 @@ export function getVaultIconClass(vault: VaultEntry): string {
   return ICON_MAP[vault.iconId] ?? "vault-icon-default";
 }
 
+/**
+ * One collapsed root row per saved vault that is not the mounted vault.
+ *
+ * These rows stay in the tree after unmount so the user can mount a different
+ * vault. They have no children: only the mounted vault's index is loaded.
+ */
+export function unmountedVaultNodes(
+  vaults: VaultEntry[],
+  activeId: string | null,
+): TreeNode[] {
+  const rows: TreeNode[] = [];
+  for (const vault of vaults) {
+    if (vault.id === activeId) continue;
+    rows.push({
+      type: "vault",
+      path: vault.rootPaths[0] ?? "",
+      name: vault.name,
+      children: [],
+      expanded: false,
+      depth: 0,
+      iconClass: getVaultIconClass(vault),
+      vaultId: vault.id,
+    });
+  }
+  return rows;
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /**

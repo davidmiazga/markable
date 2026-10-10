@@ -52,6 +52,7 @@ import {
   sortNodes,
   filterTree,
   diffTree,
+  unmountedVaultNodes,
   type TreeNode,
 } from "./file-tree";
 
@@ -244,9 +245,61 @@ const FILE_BROWSER_CSS = `
 }
 .tree-node-vault {
   font-weight: 600;
-  height: 28px;
+  height: auto;
+  min-height: 36px;
+  margin: 2px 6px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-primary, #888) 7%, transparent);
 }
 .tree-node-vault .tree-node-label { line-height: 28px; }
+.tree-node-vault.is-disabled {
+  font-weight: 500;
+  background: transparent;
+}
+.tree-node-vault.is-disabled .tree-node-label,
+.tree-node-vault.is-disabled .vault-icon,
+.tree-node-vault.is-disabled .vault-row-unmount-btn {
+  color: var(--text-secondary, rgba(128,128,128,.75));
+}
+.tree-node-vault.is-disabled .vault-row-unmount-btn {
+  opacity: 1;
+}
+.tree-node-vault.is-disabled .vault-row-unmount-btn.is-mount svg {
+  transform: scaleX(-1);
+}
+.tree-node-vault .vault-icon {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  flex-shrink: 0;
+  opacity: 1;
+  color: var(--text-primary);
+}
+.tree-node-vault .vault-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: currentColor;
+}
+.tree-node-vault .vault-row-unmount-btn {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  margin-right: 8px;
+  opacity: 0.9;
+  color: var(--text-secondary, rgba(128,128,128,.8));
+}
+.tree-node-vault .vault-row-unmount-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.tree-node-vault:hover .vault-row-unmount-btn,
+.tree-node-vault:focus-visible .vault-row-unmount-btn {
+  opacity: 1;
+}
 
 /* ── Hover-reveal unmount button on vault rows (step_02) ─────────────────── */
 /*
@@ -274,15 +327,14 @@ const FILE_BROWSER_CSS = `
   line-height: 1;
   transition: opacity 0.12s ease, color 0.12s ease;
 }
-/* Row hover: reveal button to partial opacity, color stays neutral */
 .tree-node-vault:hover .vault-row-unmount-btn,
-.tree-node-vault:focus-visible .vault-row-unmount-btn {
-  opacity: 0.5;
-}
-/* Button hover: full opacity + red danger color */
+.tree-node-vault:focus-visible .vault-row-unmount-btn,
 .vault-row-unmount-btn:hover {
-  opacity: 1 !important;
-  color: var(--error-color, #c0392b) !important;
+  opacity: 1;
+  color: var(--text-primary);
+}
+.vault-row-unmount-btn.is-mount:hover {
+  color: var(--text-primary) !important;
 }
 .file-tree-card {
   margin: 6px 8px;
@@ -1162,14 +1214,25 @@ function buildPinnedSection(activeFile: string | null, vaultId: string): HTMLEle
  *
  * @returns The configured overlay <div> element.
  */
+const MANAGE_VAULTS_OVERLAY_ID = "__fb_manage_vaults_overlay__";
+let manageVaultsOpening = false;
+
+function closeManageVaultsModal(): void {
+  manageVaultsOpening = false;
+  document.querySelectorAll(`#${MANAGE_VAULTS_OVERLAY_ID}`).forEach((el) => el.remove());
+}
+
 function buildModalOverlay(): HTMLDivElement {
   const overlay = document.createElement("div");
-  overlay.id = "__fb_manage_vaults_overlay__";
+  overlay.id = MANAGE_VAULTS_OVERLAY_ID;
   overlay.className = "settings-overlay";
   overlay.style.zIndex = "9999";
   const backdrop = document.createElement("div");
   backdrop.className = "settings-backdrop";
-  backdrop.addEventListener("click", () => overlay.remove());
+  backdrop.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeManageVaultsModal();
+  });
   overlay.appendChild(backdrop);
   return overlay;
 }
@@ -1200,7 +1263,10 @@ function buildModalContent(overlay: HTMLDivElement): HTMLDivElement {
   closeBtn.className = "settings-close-btn";
   closeBtn.setAttribute("aria-label", "Close");
   closeBtn.textContent = "✕";
-  closeBtn.addEventListener("click", () => overlay.remove());
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeManageVaultsModal();
+  });
   header.appendChild(closeBtn);
   modal.appendChild(header);
 
@@ -1226,14 +1292,22 @@ function buildModalContent(overlay: HTMLDivElement): HTMLDivElement {
  * @param selectedVaultId - Optional vault ID to pre-select for editing.
  */
 function openManageVaultsModal(selectedVaultId?: string): void {
-  /* Guard against double-opening */
-  if (document.getElementById("__fb_manage_vaults_overlay__")) return;
+  /* A click listener may pass the MouseEvent. Only a real vault id counts. */
+  const vaultId = typeof selectedVaultId === "string" ? selectedVaultId : undefined;
+  if (manageVaultsOpening) return;
+  if (document.getElementById(MANAGE_VAULTS_OVERLAY_ID)) return;
 
+  manageVaultsOpening = true;
   const overlay = buildModalOverlay();
-  const body = buildModalContent(overlay);
-  mountManageVaultsPanel(body, selectedVaultId, () => overlay.remove());
-
+  /* In the document before any further work, so a second opener in this
+   * same turn sees it and stops. */
   document.body.appendChild(overlay);
+  try {
+    const body = buildModalContent(overlay);
+    mountManageVaultsPanel(body, vaultId, closeManageVaultsModal);
+  } finally {
+    manageVaultsOpening = false;
+  }
 }
 
 /**
@@ -1247,18 +1321,25 @@ function openManageVaultsModal(selectedVaultId?: string): void {
  * calling openNewVaultModal() twice does not produce two overlays (EC-VUX-07).
  */
 function openNewVaultModal(): void {
-  if (document.getElementById("__fb_manage_vaults_overlay__")) return;
+  if (manageVaultsOpening) return;
+  if (document.getElementById(MANAGE_VAULTS_OVERLAY_ID)) return;
 
+  manageVaultsOpening = true;
   const overlay = buildModalOverlay();
-  const body = buildModalContent(overlay);
-  mountManageVaultsPanel(body, undefined, () => overlay.remove());
+  document.body.appendChild(overlay);
+  let body: HTMLDivElement;
+  try {
+    body = buildModalContent(overlay);
+    mountManageVaultsPanel(body, undefined, closeManageVaultsModal);
+  } finally {
+    manageVaultsOpening = false;
+  }
   /*
    * Attach the overlay to the DOM *before* calling showCreateVaultForm()
    * so that any internal DOM queries inside showCreateVaultForm() (e.g.
    * querying the modal body for an active input to focus) find the element
    * already attached. Order matters: mount → append → navigate.
    */
-  document.body.appendChild(overlay);
   /* Skip the list view: navigate directly to the create form (step_01) */
   showCreateVaultForm();
 }
@@ -1351,13 +1432,15 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
   /* VSCode-style: depth * 16px padding-left, then [chevron][icon][label] */
   li.style.paddingLeft = `${node.depth * 16}px`;
 
-  /* Chevron — present for vault/directory, empty spacer for files */
-  const chevron = document.createElement("span");
-  chevron.className = "tree-node-chevron";
-  if (node.type === "vault" || node.type === "directory") {
-    chevron.innerHTML = wrapSvg(ICON_CHEVRON, 14);
+  /* Chevron for folders. Vault rows use the inventory icon as their only mark. */
+  if (node.type !== "vault") {
+    const chevron = document.createElement("span");
+    chevron.className = "tree-node-chevron";
+    if (node.type === "directory") {
+      chevron.innerHTML = wrapSvg(ICON_CHEVRON, 14);
+    }
+    li.appendChild(chevron);
   }
-  li.appendChild(chevron);
 
   /* Icon — resolved through the active icon set.
      Smart Folder nodes use the folder_managed Material Symbol (FR-17 / step_04).
@@ -1408,7 +1491,7 @@ function appendIconAndLabel(li: HTMLElement, node: TreeNode): void {
       node.type === "directory" ? "folder-icon" : "file-icon"
     }`;
     if (node.type === "vault") {
-      icon.innerHTML = _iconSet.vault();
+      icon.innerHTML = wrapSvg(ICON_VAULT, 20).replace("<path ", '<path fill="currentColor" ');
     } else if (node.type === "directory") {
       icon.innerHTML = _iconSet.folder(node.name, node.expanded);
     } else {
@@ -1482,20 +1565,44 @@ function buildNodeEl(node: TreeNode, activeFile: string | null): HTMLElement {
   }
 
   /*
-   * Vault rows: append a hover-reveal unmount button (step_02).
-   * Using display:none as base means it consumes no space and intercepts no
-   * pointer events when invisible. The click handler is wired in
-   * attachVaultUnmountListener() (called from attachNodeListeners) so all event
-   * wiring stays in one place.
+   * Vault rows keep the vault icon. Mount, Unmount, and Remove from list
+   * live on the right-click menu. The name still opens the other-vaults menu.
    */
   if (node.type === "vault") {
-    const unmountBtn = document.createElement("button");
-    unmountBtn.className = "vault-row-unmount-btn";
-    unmountBtn.setAttribute("aria-label", `Unmount vault ${node.name}`);
-    unmountBtn.setAttribute("title", "Unmount vault");
-    /* Render the chip_extraction icon at 16×16 */
-    unmountBtn.innerHTML = wrapSvg(ICON_UNMOUNT, 16);
-    li.appendChild(unmountBtn);
+    const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+    const mounted = vm?.getActiveVault?.()?.id === node.vaultId;
+    if (!mounted) li.classList.add("is-disabled");
+    const name = li.querySelector<HTMLElement>(".tree-node-label");
+    if (name && node.vaultId) {
+      name.classList.add("vault-name-menu");
+      const openMenu = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        openVaultNameMenu(name, node.vaultId as string);
+      };
+      name.addEventListener("click", openMenu);
+      name.addEventListener("dblclick", (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+      });
+    }
+    if (node.vaultId) {
+      const icon = li.querySelector<HTMLElement>(".vault-icon");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "vault-row-unmount-btn";
+      btn.innerHTML = wrapSvg(ICON_UNMOUNT, 16);
+      if (mounted) {
+        btn.setAttribute("aria-label", `Unmount vault ${node.name}`);
+        btn.title = "Unmount";
+      } else {
+        btn.classList.add("is-mount");
+        btn.setAttribute("aria-label", `Mount vault ${node.name}`);
+        btn.title = "Mount";
+        if (icon) icon.title = "Mount";
+      }
+      li.appendChild(btn);
+    }
   }
 
   /* Active file highlight — open tab (markdown). */
@@ -1904,8 +2011,19 @@ function renderTreeContent(wrapper: HTMLElement): void {
 
   const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
   const activeVault: VaultEntry | null = vaultManager?.getActiveVault?.() ?? null;
+  const allVaults: VaultEntry[] = vaultManager?.getAllVaults?.() ?? [];
 
-  if (!activeVault) { renderEmptyState(wrapper, "no-vault"); return; }
+  if (!activeVault) {
+    if (allVaults.length === 0) {
+      renderEmptyState(wrapper, "no-vault");
+      return;
+    }
+    const nodes = unmountedVaultNodes(allVaults, null);
+    sortNodes(nodes);
+    _currentTree = nodes;
+    buildTreeUl(wrapper, nodes, null, "", new Set());
+    return;
+  }
   if (_isLoading)   { renderLoadingState(wrapper); return; }
 
   const vaultIndex = vaultManager?.getVaultIndex?.() as VaultIndex | null;
@@ -1916,6 +2034,22 @@ function renderTreeContent(wrapper: HTMLElement): void {
       (vaultIndex.nonMdFiles?.length ?? 0) > 0 ||
       (vaultIndex.directories?.length ?? 0) > 0);
   if (!hasContent) {
+    const tree = [
+      ...buildTreeFromIndex(
+        [],
+        activeVault.rootPaths,
+        _expandedPaths,
+        activeVault,
+        [],
+        [],
+        _folderIconMap,
+      ),
+      ...unmountedVaultNodes(allVaults, activeVault.id),
+    ];
+    sortNodes(tree);
+    _currentTree = tree;
+    const activeFile = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
+    buildTreeUl(wrapper, tree, activeFile, activeVault.id, new Set());
     renderEmptyState(wrapper, "no-files");
     return;
   }
@@ -1969,15 +2103,18 @@ function renderTreeContent(wrapper: HTMLElement): void {
 
   /* Build, sort, and cache the tree. Smart folder injections are prepended
      inside buildTreeFromIndex; sortNodes then keeps them at the top (AD-6). */
-  const tree = buildTreeFromIndex(
-    allEntries,
-    activeVault.rootPaths,
-    _expandedPaths,
-    activeVault,
-    vaultIndex.directories,
-    sfNodes,
-    _folderIconMap,
-  );
+  const tree = [
+    ...buildTreeFromIndex(
+      allEntries,
+      activeVault.rootPaths,
+      _expandedPaths,
+      activeVault,
+      vaultIndex.directories,
+      sfNodes,
+      _folderIconMap,
+    ),
+    ...unmountedVaultNodes(allVaults, activeVault.id),
+  ];
   sortNodes(tree);
   _currentTree = tree;
 
@@ -2315,15 +2452,42 @@ function attachKeyboardHandler(
  * Extracted from attachNodeListeners so all vault-specific event wiring lives
  * in a single helper (≤30 lines rule).
  *
- * Behaviour (OQ-VUX-01 resolution):
- *   - Active vault: shows a native window.confirm() before deleting.
- *   - Inactive vault: silent unmount with no dialog (EC-VUX-02).
- *   - stopPropagation() prevents the vault-switch activate handler from firing
- *     (AC-5, EC-VUX-06 note: context-menu's outside-click dismissal handles
- *     the menu itself naturally since the click still reaches document).
+ * Behaviour:
+ *   - Mounted vault: Unmount clears the active vault and keeps the saved row.
+ *   - Other saved vaults: Mount calls switchVault. One vault is mounted at a time.
+ *   - stopPropagation() keeps the button from also firing the row click.
  *
  * @param el - The vault <li> element that contains the unmount button.
  */
+/**
+ * Open the vault-name menu: other remembered vaults, plus Remove from list.
+ *
+ * Choosing another vault mounts it. Remove from list drops this vault from
+ * the file browser and leaves its folder on disk.
+ */
+function openVaultNameMenu(anchor: HTMLElement, vaultId: string): void {
+  const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const all = (vm?.getAllVaults?.() ?? []) as VaultEntry[];
+  const items: Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> = [];
+  for (const vault of all) {
+    if (vault.id === vaultId) continue;
+    items.push({
+      label: vault.name,
+      handler: () => { void vm?.switchVault?.(vault.id); },
+    });
+  }
+  if (items.length === 0) {
+    items.push({ label: "No other vaults", handler: null, disabled: true });
+  }
+  items.push({ separator: true, label: "", handler: null });
+  items.push({
+    label: "Remove from list",
+    handler: () => { void vm?.deleteVault?.(vaultId); },
+  });
+  const rect = anchor.getBoundingClientRect();
+  showContextMenu(items, rect.left, rect.bottom + 2);
+}
+
 function attachVaultUnmountListener(el: HTMLElement): void {
   const btn = el.querySelector<HTMLButtonElement>(".vault-row-unmount-btn");
   if (!btn) return;
@@ -2347,15 +2511,10 @@ function attachVaultUnmountListener(el: HTMLElement): void {
     const activeVault = vm?.getActiveVault?.();
 
     if (activeVault?.id === nodeVaultId) {
-      /* EC-VUX-01: confirm before unmounting the active vault */
-      const vaultName = activeVault.name ?? "this vault";
-      const confirmed = window.confirm(
-        `Unmount "${vaultName}"? You can re-add it later. Your notes are not deleted.`,
-      );
-      if (!confirmed) return;
+      void vm?.unmountVault?.(nodeVaultId);
+    } else {
+      void vm?.switchVault?.(nodeVaultId);
     }
-    /* EC-VUX-02: silent unmount for inactive vaults */
-    void vm?.deleteVault?.(nodeVaultId);
   });
 }
 
@@ -3037,8 +3196,15 @@ function addMenuItem(
   li.className = "context-menu-item" + (disabled ? " disabled" : "");
   li.textContent = label;
   if (handler && !disabled) {
+    /* Click, not mousedown. Removing the menu on mousedown lets that same
+     * gesture hit whatever sits behind the menu and open a second window. */
     li.addEventListener("mousedown", (e) => {
       e.preventDefault();
+      e.stopPropagation();
+    });
+    li.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       closeContextMenu();
       handler();
     });
@@ -3552,13 +3718,13 @@ async function resetFolderViewFile(
  * Build the context menu items for a vault root node (step_04).
  *
  * Items:
- *   Unmount   — calls deleteVault (removes from Markable, does not touch disk).
- *               Confirms first when the vault is active (EC-VUX-01).
+ *   Unmount   — mounted row only. Clears the active vault and keeps the record.
+ *   Mount     — saved but unmounted row. Calls switchVault.
  *   Rename    — activates inline rename on the row (same as double-click, step_03).
- *   Edit Type — opens Manage Vaults modal focused on this vault's edit form.
+ *   Manage Vaults — opens the Manage Vaults window on this vault's form.
+ *   Remove from list — drops the vault from the file browser. The folder stays.
  *
- * The old "New Vault…", "Edit Vault…", "Delete Vault…" items are removed.
- * Creating vaults is now via the "+ Add…" row (step_01).
+ * Creating vaults is via the "+ Add…" row.
  *
  * @param el      - The vault <li> element (forwarded to startVaultInlineRename).
  * @param _path   - Vault path (unused; kept for API consistency with other builders).
@@ -3597,18 +3763,13 @@ function buildVaultContextMenuItems(
     },
     { separator: true, label: "", handler: null },
     {
-      label: "Unmount",
+      label: activeVault?.id === vaultId ? "Unmount" : "Mount",
       handler: () => {
-        const isActive = activeVault?.id === vaultId;
-        if (isActive) {
-          const name = activeVault.name ?? "this vault";
-          const confirmed = window.confirm(
-            `Unmount "${name}"? You can re-add it later. Your notes are not deleted.`,
-          );
-          if (!confirmed) return;
+        if (activeVault?.id === vaultId) {
+          void vm?.unmountVault?.(vaultId);
+        } else {
+          void vm?.switchVault?.(vaultId);
         }
-        /* EC-VUX-02: silent unmount for inactive vaults */
-        void vm?.deleteVault?.(vaultId);
       },
     },
     {
@@ -3618,9 +3779,13 @@ function buildVaultContextMenuItems(
     },
     { separator: true, label: "", handler: null },
     {
-      label: "Edit Type",
-      /* Opens Manage Vaults modal focused on the edit form for this vault */
-      handler: () => openManageVaultsModal(vaultId),
+      label: "Manage Vaults",
+      handler: () => openManageVaultsModal(),
+    },
+    { separator: true, label: "", handler: null },
+    {
+      label: "Remove from list",
+      handler: () => { void vm?.deleteVault?.(vaultId); },
     },
   ];
 }
@@ -4466,8 +4631,8 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
         /* ⋯ (horizontal ellipsis) matches the spec icon for panel menus */
         id: "file-browser-manage-vaults-btn",
         icon: "⋯",
-        title: "Panel menu",
-        onClick: openManageVaultsModal,
+        title: "Manage Vaults",
+        onClick: () => openManageVaultsModal(),
       },
     ],
   };

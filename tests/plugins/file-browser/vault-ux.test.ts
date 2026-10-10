@@ -7,7 +7,7 @@
  *   step_01 — openNewVaultModal() opens the create form directly.
  *   step_02 — Vault rows contain a hover-reveal unmount button.
  *   step_03 — Double-click on a vault row activates inline rename.
- *   step_04 — buildVaultContextMenuItems() returns Unmount/Rename/Edit Type.
+ *   step_04 — buildVaultContextMenuItems() returns Unmount/Rename/Manage Vaults.
  *   step_05 — Plugin Panel "Manage Vaults" footer + vault-manage keybinding.
  *
  * Mocking approach:
@@ -103,6 +103,7 @@ beforeEach(() => {
     getActiveVault: vi.fn(() => makeVault()),
     getAllVaults: vi.fn(() => [makeVault()]),
     deleteVault: vi.fn().mockResolvedValue(undefined),
+    unmountVault: vi.fn().mockResolvedValue(undefined),
     updateVault: vi.fn().mockResolvedValue(undefined),
     switchVault: vi.fn().mockResolvedValue(undefined),
     reloadVaultIndex: vi.fn().mockResolvedValue(undefined),
@@ -175,6 +176,7 @@ describe("step_01 — openNewVaultModal()", () => {
     document.body.appendChild(container);
     _testing.setPanelContainer(container);
     (window as any).__MARKABLE_VAULT_MANAGER__.getActiveVault = vi.fn(() => null);
+    (window as any).__MARKABLE_VAULT_MANAGER__.getAllVaults = vi.fn(() => []);
 
     _testing.renderPanel();
 
@@ -190,171 +192,35 @@ describe("step_01 — openNewVaultModal()", () => {
 
 // ── step_02: Vault row unmount button ─────────────────────────────────────────
 
-describe("step_02 — vault row unmount button", () => {
-  it("vault <li> element contains a .vault-row-unmount-btn child", () => {
-    const vaultNode = makeVaultNode();
-    const li = _testing.buildNodeEl(vaultNode, null);
-
-    expect(li.querySelector(".vault-row-unmount-btn")).not.toBeNull();
-  });
-
-  it("directory <li> does NOT contain .vault-row-unmount-btn", () => {
-    const dirNode = makeDirNode();
-    const li = _testing.buildNodeEl(dirNode, null);
-
-    expect(li.querySelector(".vault-row-unmount-btn")).toBeNull();
-  });
-
-  it("clicking unmount on an inactive vault calls deleteVault without window.confirm", () => {
-    const deleteVault = vi.fn().mockResolvedValue(undefined);
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
-      getAllVaults: vi.fn(() => [makeVault({ id: "vault-A" }), makeVault({ id: "vault-B" })]),
-      deleteVault,
-    };
-    window.confirm = vi.fn();
-
-    /* Build a vault-B node (inactive — active is vault-A) */
-    const li = _testing.buildNodeEl(makeVaultNode("vault-B"), null);
-    document.body.appendChild(li);
-    /* Wire the unmount listener as attachNodeListeners would do */
-    _testing.attachVaultUnmountListener(li);
-
-    li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!.click();
-
-    expect(window.confirm).not.toHaveBeenCalled();
-    expect(deleteVault).toHaveBeenCalledWith("vault-B");
-
-    li.remove();
-  });
-
-  it("clicking unmount on the active vault shows window.confirm, then calls deleteVault", () => {
-    const deleteVault = vi.fn().mockResolvedValue(undefined);
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Active Vault" })),
-      getAllVaults: vi.fn(() => [makeVault({ id: "vault-A", name: "Active Vault" })]),
-      deleteVault,
-    };
-    window.confirm = vi.fn().mockReturnValue(true);
-
-    const li = _testing.buildNodeEl(makeVaultNode("vault-A"), null);
-    document.body.appendChild(li);
-    _testing.attachVaultUnmountListener(li);
-
-    li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!.click();
-
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Active Vault"),
-    );
-    expect(deleteVault).toHaveBeenCalledWith("vault-A");
-
-    li.remove();
-  });
-
-  it("cancelling the confirm dialog does NOT call deleteVault", () => {
-    const deleteVault = vi.fn();
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Active Vault" })),
-      getAllVaults: vi.fn(() => [makeVault({ id: "vault-A" })]),
-      deleteVault,
-    };
-    window.confirm = vi.fn().mockReturnValue(false);
-
-    const li = _testing.buildNodeEl(makeVaultNode("vault-A"), null);
-    document.body.appendChild(li);
-    _testing.attachVaultUnmountListener(li);
-
-    li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!.click();
-
-    expect(deleteVault).not.toHaveBeenCalled();
-
-    li.remove();
-  });
-
-  it("unmount button is in layout (not display:none) at rest — 12% opacity affordance", () => {
-    /*
-     * OQ-VUX-02 spec: the button must always be in layout at 12% opacity so the
-     * affordance is visible. Using display:none would remove it from layout and
-     * break the hover transition. This test guards against that regression.
-     */
+describe("step_02 — vault row icon", () => {
+  it("mounted vault row shows the inventory icon and an unmount button", () => {
     const li = _testing.buildNodeEl(makeVaultNode(), null);
-    document.body.appendChild(li);
-    const btn = li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!;
-    expect(getComputedStyle(btn).display).not.toBe("none");
-    li.remove();
+
+    const svg = li.querySelector(".vault-icon svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("width")).toBe("20");
+    expect(li.querySelector(".tree-node-chevron")).toBeNull();
+    expect(svg?.innerHTML).toContain("M180-80");
+    const unmount = li.querySelector(".vault-row-unmount-btn");
+    expect(unmount?.querySelector("svg")?.getAttribute("width")).toBe("16");
+    expect(unmount?.getAttribute("title")).toBe("Unmount");
+    expect(unmount?.classList.contains("is-mount")).toBe(false);
   });
 
-  it("unmount button click does not propagate to the row's activate handler (switchVault not called)", () => {
-    const switchVault = vi.fn();
-    const deleteVault = vi.fn().mockResolvedValue(undefined);
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      /* vault-B is inactive: clicking its row would normally call switchVault */
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
-      getAllVaults: vi.fn(() => [makeVault({ id: "vault-A" }), makeVault({ id: "vault-B" })]),
-      deleteVault,
-      switchVault,
-    };
-
+  it("disabled vault row uses a mount button on the same glyph", () => {
     const li = _testing.buildNodeEl(makeVaultNode("vault-B"), null);
-    document.body.appendChild(li);
-    /* Wire the unmount listener first, then add a row-level click that represents the activate handler */
-    _testing.attachVaultUnmountListener(li);
-    li.addEventListener("click", () => switchVault());
 
-    const btn = li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!;
-    btn.click();
-
-    /*
-     * stopPropagation() in attachVaultUnmountListener prevents the row's
-     * click handler from firing when the button is clicked.
-     */
-    expect(switchVault).not.toHaveBeenCalled();
-
-    li.remove();
+    expect(li.classList.contains("is-disabled")).toBe(true);
+    const btn = li.querySelector(".vault-row-unmount-btn");
+    expect(btn?.classList.contains("is-mount")).toBe(true);
+    expect(btn?.getAttribute("title")).toBe("Mount");
+    expect(li.querySelector(".vault-icon")?.getAttribute("title")).toBe("Mount");
   });
 
-  it("EC-VUX-06: clicking unmount button closes any open context menu first", () => {
-    /*
-     * EC-VUX-06: stopPropagation() in the unmount button handler prevents the
-     * document mousedown dismiss listener from firing. Without an explicit
-     * closeContextMenu() call, a previously-open context menu would remain
-     * visible after the unmount button is clicked.
-     *
-     * This test verifies that clicking the unmount button removes any open
-     * context menu from the DOM before executing the unmount.
-     */
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
-      getAllVaults: vi.fn(() => [makeVault({ id: "vault-A" }), makeVault({ id: "vault-B" })]),
-      deleteVault: vi.fn().mockResolvedValue(undefined),
-    };
+  it("directory row does not use the vault icon", () => {
+    const li = _testing.buildNodeEl(makeDirNode(), null);
 
-    /* Simulate an open context menu in the DOM */
-    const fakeMenu = document.createElement("ul");
-    fakeMenu.className = "context-menu";
-    document.body.appendChild(fakeMenu);
-
-    /* Use the _testing helper to open a real context menu so _contextMenu is set */
-    _testing.showContextMenu(
-      [{ label: "Rename", handler: () => {}, separator: false }],
-      50,
-      50,
-    );
-    /* Verify the context menu is now in the DOM */
-    expect(document.querySelector(".context-menu")).not.toBeNull();
-
-    const li = _testing.buildNodeEl(makeVaultNode("vault-B"), null);
-    document.body.appendChild(li);
-    _testing.attachVaultUnmountListener(li);
-
-    /* Click the unmount button — should close the context menu */
-    li.querySelector<HTMLButtonElement>(".vault-row-unmount-btn")!.click();
-
-    /* The context menu opened by showContextMenu should be gone */
-    expect(_testing.getContextMenu()).toBeNull();
-
-    li.remove();
-    fakeMenu.remove();
+    expect(li.querySelector(".vault-icon")).toBeNull();
   });
 });
 
@@ -501,7 +367,7 @@ describe("step_03 — vault inline rename", () => {
 // ── step_04: buildVaultContextMenuItems ───────────────────────────────────────
 
 describe("step_04 — buildVaultContextMenuItems()", () => {
-  it("returns exactly 6 non-separator items: New File, New Folder, New Smart Folder, Unmount, Rename, Edit Type", () => {
+  it("returns New File, New Folder, New Smart Folder, Unmount, Rename, Manage Vaults, Remove from list", () => {
     const mockEl = document.createElement("li");
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
@@ -509,69 +375,68 @@ describe("step_04 — buildVaultContextMenuItems()", () => {
     const items = _testing.buildVaultContextMenuItems(mockEl, "/path", "vault-A");
 
     const nonSep = items.filter((i: any) => !i.separator);
-    expect(nonSep).toHaveLength(6);
+    expect(nonSep).toHaveLength(7);
     expect(nonSep[0].label).toBe("New File");
     expect(nonSep[1].label).toBe("New Folder");
     expect(nonSep[2].label).toBe("New Smart Folder");
     expect(nonSep[3].label).toBe("Unmount");
     expect(nonSep[4].label).toBe("Rename");
-    expect(nonSep[5].label).toBe("Edit Type");
+    expect(nonSep[5].label).toBe("Manage Vaults");
+    expect(nonSep[6].label).toBe("Remove from list");
   });
 
-  it("total item count is 8 (6 actions + 2 separators)", () => {
+  it("total item count is 10 (7 actions + 3 separators)", () => {
     const mockEl = document.createElement("li");
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
     };
     const items = _testing.buildVaultContextMenuItems(mockEl, "/path", "vault-A");
 
-    expect(items).toHaveLength(8);
+    expect(items).toHaveLength(10);
   });
 
-  it("Unmount handler on inactive vault calls deleteVault without window.confirm", () => {
+  it("Remove from list drops the vault from the browser and leaves the folder alone", () => {
     const deleteVault = vi.fn();
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
       deleteVault,
     };
-    window.confirm = vi.fn();
-
-    const mockEl = document.createElement("li");
-    const items = _testing.buildVaultContextMenuItems(mockEl, "", "vault-B");
-    items.find((i) => i.label === "Unmount")!.handler!();
-
-    expect(window.confirm).not.toHaveBeenCalled();
-    expect(deleteVault).toHaveBeenCalledWith("vault-B");
-  });
-
-  it("Unmount handler on active vault calls window.confirm then deleteVault", () => {
-    const deleteVault = vi.fn();
-    (window as any).__MARKABLE_VAULT_MANAGER__ = {
-      getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Active" })),
-      deleteVault,
-    };
-    window.confirm = vi.fn().mockReturnValue(true);
-
-    const mockEl = document.createElement("li");
-    const items = _testing.buildVaultContextMenuItems(mockEl, "", "vault-A");
-    items.find((i) => i.label === "Unmount")!.handler!();
-
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Active"));
+    const items = _testing.buildVaultContextMenuItems(document.createElement("li"), "", "vault-A");
+    items.find((i) => i.label === "Remove from list")!.handler!();
     expect(deleteVault).toHaveBeenCalledWith("vault-A");
   });
 
-  it("Unmount handler on active vault does nothing when confirm is declined", () => {
+  it("Mount handler on an unmounted vault calls switchVault and does not delete it", () => {
     const deleteVault = vi.fn();
+    const switchVault = vi.fn();
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => makeVault({ id: "vault-A" })),
+      deleteVault,
+      switchVault,
+    };
+
+    const mockEl = document.createElement("li");
+    const items = _testing.buildVaultContextMenuItems(mockEl, "", "vault-B");
+    items.find((i) => i.label === "Mount")!.handler!();
+
+    expect(switchVault).toHaveBeenCalledWith("vault-B");
+    expect(deleteVault).not.toHaveBeenCalled();
+  });
+
+  it("Unmount handler on the mounted vault calls unmountVault and keeps the record", () => {
+    const deleteVault = vi.fn();
+    const unmountVault = vi.fn();
     (window as any).__MARKABLE_VAULT_MANAGER__ = {
       getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Active" })),
       deleteVault,
+      unmountVault,
     };
-    window.confirm = vi.fn().mockReturnValue(false);
 
     const mockEl = document.createElement("li");
     const items = _testing.buildVaultContextMenuItems(mockEl, "", "vault-A");
     items.find((i) => i.label === "Unmount")!.handler!();
 
+    expect(unmountVault).toHaveBeenCalledWith("vault-A");
     expect(deleteVault).not.toHaveBeenCalled();
   });
 
@@ -603,20 +468,18 @@ describe("step_04 — buildVaultContextMenuItems()", () => {
     mockEl.remove();
   });
 
-  it("Edit Type handler opens Manage Vaults modal focused on the vault", () => {
+  it("Manage Vaults handler opens Manage Vaults modal focused on the vault", () => {
     (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__ = null;
     /* Overlay must not exist already */
     document.getElementById("__fb_manage_vaults_overlay__")?.remove();
 
     const mockEl = document.createElement("li");
     const items = _testing.buildVaultContextMenuItems(mockEl, "", "vault-A");
-    items.find((i) => i.label === "Edit Type")!.handler!();
+    const open = items.find((i) => i.label === "Manage Vaults")!.handler!;
+    open();
+    open();
 
-    /*
-     * openManageVaultsModal creates the overlay — verify it appeared in the DOM.
-     * We can't spy on the private function directly, so we check the DOM side-effect.
-     */
-    expect(document.getElementById("__fb_manage_vaults_overlay__")).not.toBeNull();
+    expect(document.querySelectorAll("#__fb_manage_vaults_overlay__")).toHaveLength(1);
   });
 
   it("old items 'New Vault…', 'Edit Vault…', 'Delete Vault…' are NOT present", () => {
@@ -729,5 +592,108 @@ describe("step_05 — __MARKABLE_OPEN_MANAGE_VAULTS__ window global", () => {
       const fn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
       if (typeof fn === "function") fn();
     }).not.toThrow();
+  });
+});
+
+describe("saved vault rows", () => {
+  it("shows every saved vault when none is mounted", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    _testing.setPanelContainer(container);
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => null),
+      getAllVaults: vi.fn(() => [
+        makeVault({ id: "vault-A", name: "Alpha" }),
+        makeVault({ id: "vault-B", name: "Beta", rootPaths: ["/notes/beta"] }),
+      ]),
+    };
+
+    _testing.renderPanel();
+
+    const rows = container.querySelectorAll(".tree-node-vault");
+    expect(rows).toHaveLength(2);
+    expect(container.textContent).not.toContain("Create your first vault");
+    expect(container.querySelector("[data-vault-id='vault-A'] .vault-icon svg")).not.toBeNull();
+    expect(container.querySelector("[data-vault-id='vault-B'] .vault-icon svg")).not.toBeNull();
+    expect(container.querySelectorAll(".vault-row-unmount-btn.is-mount")).toHaveLength(2);
+
+    container.remove();
+  });
+
+  it("shows unmounted vaults beside the mounted vault, and only the mounted vault has notes", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    _testing.setPanelContainer(container);
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Alpha", rootPaths: ["/notes/alpha"] })),
+      getAllVaults: vi.fn(() => [
+        makeVault({ id: "vault-A", name: "Alpha", rootPaths: ["/notes/alpha"] }),
+        makeVault({ id: "vault-B", name: "Beta", rootPaths: ["/notes/beta"] }),
+      ]),
+      getVaultIndex: vi.fn(() => ({
+        vaultId: "vault-A",
+        builtAt: 0,
+        entries: [{
+          path: "/notes/alpha/note.md",
+          name: "note",
+          title: "Note",
+          outboundLinks: [],
+          tags: [],
+          modified: 0,
+          size: 0,
+        }],
+        totalFilesFound: 1,
+        skippedCount: 0,
+        capped: false,
+        nonMdFiles: [],
+        directories: [],
+      })),
+    };
+
+    _testing.renderPanel();
+
+    expect(container.querySelectorAll(".tree-node-vault")).toHaveLength(2);
+    expect(container.querySelector("[data-path='/notes/alpha/note.md']")).not.toBeNull();
+    expect(container.querySelector("[data-vault-id='vault-A'] .vault-icon svg")).not.toBeNull();
+    expect(container.querySelector("[data-vault-id='vault-B'] .vault-icon svg")).not.toBeNull();
+    expect(container.querySelector("[data-vault-id='vault-A'] .vault-row-unmount-btn")?.getAttribute("title")).toBe("Unmount");
+    expect(container.querySelector("[data-vault-id='vault-B'] .vault-row-unmount-btn")?.classList.contains("is-mount")).toBe(true);
+    expect(container.querySelector("[data-vault-id='vault-A']")?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-vault-id='vault-B']")?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("[data-vault-id='vault-A']")?.classList.contains("is-disabled")).toBe(false);
+    expect(container.querySelector("[data-vault-id='vault-B']")?.classList.contains("is-disabled")).toBe(true);
+
+    container.remove();
+  });
+
+  it("the vault name lists other vaults and mounts the one you choose", () => {
+    const switchVault = vi.fn();
+    const deleteVault = vi.fn();
+    (window as any).__MARKABLE_VAULT_MANAGER__ = {
+      getActiveVault: vi.fn(() => makeVault({ id: "vault-A", name: "Alpha" })),
+      getAllVaults: vi.fn(() => [
+        makeVault({ id: "vault-A", name: "Alpha" }),
+        makeVault({ id: "vault-B", name: "Beta" }),
+      ]),
+      switchVault,
+      deleteVault,
+    };
+
+    const li = _testing.buildNodeEl(makeVaultNode("vault-A"), null);
+    document.body.appendChild(li);
+    li.querySelector<HTMLElement>(".tree-node-label")!.click();
+
+    const menu = document.querySelector(".context-menu");
+    expect(menu?.textContent).toContain("Beta");
+    expect(menu?.textContent).toContain("Remove from list");
+    expect(menu?.textContent).not.toContain("Alpha");
+
+    const beta = [...(menu?.querySelectorAll(".context-menu-item") ?? [])]
+      .find((el) => el.textContent === "Beta");
+    beta?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(switchVault).toHaveBeenCalledWith("vault-B");
+
+    li.remove();
+    document.querySelector(".context-menu")?.remove();
   });
 });

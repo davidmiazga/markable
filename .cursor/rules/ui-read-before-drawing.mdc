@@ -1,0 +1,17 @@
+---
+description: Settle a row's marks and clicks before drawing them. One window, same name as its menu item.
+alwaysApply: true
+---
+
+# Read the control before drawing it
+
+When a file-browser row or menu is described, settle the unset parts before writing markup. Ask only what is still open. Then build that.
+
+- Mounted row: left mark, what the name click does, what sits on the right edge, and its size.
+- Disabled row: one grey, the name's color. The right-edge control uses that grey, a different glyph, and a tooltip. It mounts the vault.
+- The name opens the other-vaults menu. The icons mount and unmount. A click on the rest of a disabled row mounts it.
+- A menu item uses the same words as the window it opens. One window.
+
+The test vault is named V. That letter is the name.
+
+"Two panels" means a second window behind the first. The menu used to open on mousedown, then the click hit the control underneath and opened another copy. Close every copy, and activate the menu on click so the gesture cannot fall through. A wrong heading inside one window is a different bug. Fix the one he described.

@@ -16,6 +16,7 @@ import {
   filterTree,
   diffTree,
   getVaultIconClass,
+  unmountedVaultNodes,
   type TreeNode,
 } from "../../../src/plugins/file-browser/file-tree";
 import type { VaultIndexEntry, VaultEntry } from "../../../src/lib/vault-types";
@@ -97,6 +98,28 @@ describe("getVaultIconClass", () => {
 });
 
 // ── buildTreeFromIndex ────────────────────────────────────────────────────────
+
+describe("unmountedVaultNodes", () => {
+  it("returns a collapsed row for every vault except the mounted one", () => {
+    const alpha = makeVault({ id: "vault-A", name: "Alpha" });
+    const beta = makeVault({ id: "vault-B", name: "Beta", rootPaths: ["/notes/beta"] });
+    const rows = unmountedVaultNodes([alpha, beta], "vault-A");
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].vaultId).toBe("vault-B");
+    expect(rows[0].name).toBe("Beta");
+    expect(rows[0].expanded).toBe(false);
+    expect(rows[0].children).toEqual([]);
+  });
+
+  it("returns every saved vault when none is mounted", () => {
+    const rows = unmountedVaultNodes(
+      [makeVault({ id: "vault-A" }), makeVault({ id: "vault-B", name: "Beta" })],
+      null,
+    );
+    expect(rows.map((row) => row.vaultId)).toEqual(["vault-A", "vault-B"]);
+  });
+});
 
 describe("buildTreeFromIndex", () => {
   it("returns a single vault root node when entries is empty", () => {

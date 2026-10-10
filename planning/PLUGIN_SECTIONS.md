@@ -10,8 +10,8 @@ Same seven sections in every flavor. Pack ids are the section ids.
 
 | Section | Pack id | Plugins | Default off |
 |---|---|---|---|
-| Base editing | `base` | markdown-toolbar, command-bar, typing-assist, auto-save, auto-title, insert-count, templates, word-count, diagrams, math, focus-mode, typewriter-mode | templates, word-count, diagrams, math, focus-mode, typewriter-mode |
-| PKM | `pkm` | file-browser, backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel | |
+| Base editing | `base` | markdown-toolbar, file-browser, command-bar, typing-assist, auto-save, auto-title, insert-count, templates, word-count, diagrams, math, focus-mode, typewriter-mode | templates, word-count, diagrams, math, focus-mode, typewriter-mode |
+| PKM | `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel | |
 | Project | `project` | kanban | |
 | Quick note | `quicknote` | sync | |
 | Diary | `diary` | daily-note, calendar | |
@@ -65,6 +65,7 @@ The active segment is the preset that matches the current rows. Priority if two 
 | focus-mode | Added | Base | off |
 | typewriter-mode | Added | Base | off |
 | auto-toc | Added | Book | on when the flavor includes `book` |
+| file-browser | PKM | Base, second, after markdown-toolbar | on (Base is a first-run pack for every flavor) |
 
 The `added` pack is gone. Markable Book (`flavors/book.json`) is `base` + `book`.
 

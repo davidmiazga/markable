@@ -283,7 +283,7 @@ describe("plugins-panel — pack section rendering", () => {
     expect(userBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
   });
 
-  it("places a PKM plugin under the PKM section, not a Workflow heading", () => {
+  it("places File Browser under Base, not PKM", () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
       [makeCoreDef("file-browser")],
@@ -297,9 +297,34 @@ describe("plugins-panel — pack section rendering", () => {
     expect(headings).not.toContain("Organization System Plugins");
     expect(headings).not.toContain("Core Plugins");
 
-    const pkmRows = document.querySelectorAll('[data-section-id="pkm"] .plugin-row');
-    expect(pkmRows.length).toBe(1);
-    expect(pkmRows[0].textContent).toContain("Plugin file-browser");
+    const baseRows = document.querySelectorAll('[data-section-id="base"] .plugin-row');
+    expect(baseRows.length).toBe(1);
+    expect(baseRows[0].textContent).toContain("Plugin file-browser");
+    expect(document.querySelectorAll('[data-section-id="pkm"] .plugin-row').length).toBe(0);
+  });
+
+  it("lists File Browser second in Base, after Markdown Toolbar", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [
+        makeCoreDef("command-bar"),
+        makeCoreDef("file-browser"),
+        makeCoreDef("markdown-toolbar"),
+      ],
+      { "command-bar": true, "file-browser": true, "markdown-toolbar": true },
+      toggle,
+    );
+    openPluginsPanel({
+      "command-bar": true,
+      "file-browser": true,
+      "markdown-toolbar": true,
+    });
+
+    const names = Array.from(
+      document.querySelectorAll('[data-section-id="base"] .plugin-row'),
+    ).map((row) => row.textContent ?? "");
+    expect(names[0]).toContain("markdown-toolbar");
+    expect(names[1]).toContain("file-browser");
   });
 
   it("appends an unlisted core plugin to Base", () => {
