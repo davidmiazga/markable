@@ -1,0 +1,14 @@
+---
+description: When the original ask is unclear, research it before executing an interpretation.
+alwaysApply: true
+---
+
+# Research an unclear ask before building it
+
+When the original ask leaves a point unclear, look it up before writing that point. Do not pick an interpretation and ship it.
+
+Read the ask first. For anything it does not settle, read the reference it names: that product's own docs, README, and the format it stores. The plan for the unclear part comes from that reading. Then build.
+
+A screenshot from David is a check after the reading, not a substitute for it. A guess that contradicts the ask is a wrong execution, not a clarification.
+
+Folia and Asana are the kanban reference in the Project board ask. Their docs already separate a column (a status) from a todo (a checkbox on the card) and open the card's fields in a detail panel. Inventing a different shape, then waiting to be corrected, skips this step.
