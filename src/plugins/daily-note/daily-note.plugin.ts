@@ -44,6 +44,16 @@ import {
 import { substituteTokens } from "./template-tokens";
 import { injectFrontMatter } from "./frontmatter";
 import { buildCalendarGrid } from "./calendar-grid";
+import {
+  collectHabitNames,
+  eachDayOfYear,
+  filterNotes,
+  onThisDayDates,
+  parseDiaryNote,
+  parseHabitNames,
+  type DiaryNote,
+} from "./diary-stats";
+import { mountDashboard, mountHeatmap, mountOnThisDay, mountViewBar, type DashboardState } from "./diary-views";
 import type { SidebarPanelDescriptor } from "../markable-plugin-api";
 import { buildToggleRow, buildSelectRow, buildTextRow, buildButton } from "../../settings/settings-fields";
 
@@ -78,6 +88,11 @@ export interface DailyNoteSettings {
    * When false (default), a confirmation dialog is shown first.
    */
   autoCreateOnCalendarClick: boolean;
+  /**
+   * Comma-separated habit property names. Empty means detect boolean and
+   * numeric frontmatter, plus checkboxes under a ## Habits heading.
+   */
+  habitProperties: string;
 }
 
 /**
@@ -97,6 +112,7 @@ const DEFAULT_SETTINGS: DailyNoteSettings = {
   firstDayOfWeek: "monday",
   showWeekNumbers: false,
   autoCreateOnCalendarClick: false,
+  habitProperties: "",
 };
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -199,6 +215,18 @@ let _calContainer: HTMLElement | null = null;
  * Initialised to -1 (no cell focused).
  */
 let _focusedCellIndex = -1;
+
+/** Month grid or GitHub-style year heatmap in the calendar sidebar. */
+let _sidebarView: "month" | "heatmap" = "month";
+
+/** Year drawn by the sidebar heatmap. Independent of the month grid. */
+let _heatYear = new Date().getFullYear();
+
+/** Bumps when on-this-day reloads so a late read cannot paint a stale list. */
+let _otdGeneration = 0;
+
+/** Year of notes already read during this enable. */
+let _yearCache = new Map<number, DiaryNote[]>();
 
 /**
  * Tab-change listener reference stored so it can be removed in onDisable.
@@ -304,6 +332,11 @@ export function loadAndMergeSettings(
       ? raw.autoCreateOnCalendarClick
       : DEFAULT_SETTINGS.autoCreateOnCalendarClick;
 
+  const habitProperties =
+    typeof raw.habitProperties === "string"
+      ? raw.habitProperties
+      : DEFAULT_SETTINGS.habitProperties;
+
   // Return a new object containing only the known DailyNoteSettings keys.
   // Unknown keys from `raw` are intentionally excluded (forward compatibility).
   return {
@@ -316,6 +349,7 @@ export function loadAndMergeSettings(
     firstDayOfWeek,
     showWeekNumbers,
     autoCreateOnCalendarClick,
+    habitProperties,
   };
 }
 
@@ -1003,6 +1037,202 @@ function buildDowHeaders(firstDay: "monday" | "sunday"): string[] {
   return ALL_DAYS;
 }
 
+function showMonth(): void {
+  _sidebarView = "month";
+  if (_calContainer) renderCalendarPanel(_calContainer);
+}
+
+function showHeatmap(): void {
+  _sidebarView = "heatmap";
+  _heatYear = _calYear;
+  if (_calContainer) renderCalendarPanel(_calContainer);
+}
+
+function weekStartsOn(): 0 | 1 {
+  return _settings.firstDayOfWeek === "sunday" ? 0 : 1;
+}
+
+function tauriInvoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const internals = (window as any).__TAURI_INTERNALS__;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  if (!internals?.invoke) return Promise.reject(new Error("tauri unavailable"));
+  return internals.invoke(command, args) as Promise<T>;
+}
+
+async function readDiaryNote(path: string, iso: string): Promise<DiaryNote | null> {
+  try {
+    const content = await tauriInvoke<string>("read_file", { path });
+    return parseDiaryNote(path, content, parseHabitNames(_settings.habitProperties), iso);
+  } catch {
+    return null;
+  }
+}
+
+async function loadYearNotes(year: number): Promise<DiaryNote[]> {
+  const workspaceDir = resolveWorkspaceDir();
+  if (!workspaceDir) return [];
+  const days = eachDayOfYear(year);
+  const paths = days.map((date) => buildNotePath(date, workspaceDir, _settings));
+  let exists: Record<string, boolean> = {};
+  try {
+    exists = await tauriInvoke<Record<string, boolean>>("check_paths_exist", { paths });
+  } catch (err) {
+    console.warn("[daily-note] year index failed:", err);
+    return [];
+  }
+  const hits: Array<{ path: string; iso: string }> = [];
+  days.forEach((date, index) => {
+    const path = paths[index];
+    if (exists?.[path]) hits.push({ path, iso: formatDate(date, "YYYY-MM-DD") });
+  });
+  const notes: DiaryNote[] = [];
+  for (let i = 0; i < hits.length; i += 8) {
+    const chunk = hits.slice(i, i + 8);
+    const parsed = await Promise.all(chunk.map((hit) => readDiaryNote(hit.path, hit.iso)));
+    for (const note of parsed) if (note) notes.push(note);
+  }
+  return notes;
+}
+
+async function notesForYear(year: number): Promise<DiaryNote[]> {
+  const cached = _yearCache.get(year);
+  if (cached) return cached;
+  const notes = await loadYearNotes(year);
+  _yearCache.set(year, notes);
+  return notes;
+}
+
+async function paintOnThisDay(host: HTMLElement): Promise<void> {
+  const gen = ++_otdGeneration;
+  const workspaceDir = resolveWorkspaceDir();
+  host.replaceChildren();
+  if (!workspaceDir) return;
+  const dates = onThisDayDates(new Date(), 8);
+  const paths = dates.map((date) => buildNotePath(date, workspaceDir, _settings));
+  let exists: Record<string, boolean> = {};
+  try {
+    exists = await tauriInvoke<Record<string, boolean>>("check_paths_exist", { paths });
+  } catch {
+    return;
+  }
+  if (gen !== _otdGeneration || !_calContainer) return;
+  const notes: DiaryNote[] = [];
+  for (let i = 0; i < dates.length; i += 1) {
+    if (!exists?.[paths[i]]) continue;
+    const note = await readDiaryNote(paths[i], formatDate(dates[i], "YYYY-MM-DD"));
+    if (note) notes.push(note);
+  }
+  if (gen !== _otdGeneration || !_calContainer) return;
+  host.replaceChildren();
+  mountOnThisDay(host, notes, (iso) => openIso(iso));
+}
+
+function openIso(iso: string): void {
+  const parsed = parseNaturalDate(iso);
+  if (parsed) void openDailyNote(parsed);
+}
+
+function renderHeatmapPanel(container: HTMLElement): void {
+  const root = document.createElement("div");
+  root.className = "dn-cal-root";
+  mountViewBar(root, "heatmap", showMonth, showHeatmap, openDiaryDashboard);
+
+  const yearRow = document.createElement("div");
+  yearRow.className = "dn-cal-header";
+  const prev = document.createElement("button");
+  prev.type = "button";
+  prev.className = "dn-cal-view";
+  prev.textContent = "‹";
+  prev.addEventListener("click", () => {
+    _heatYear -= 1;
+    if (_calContainer) renderCalendarPanel(_calContainer);
+  });
+  const label = document.createElement("span");
+  label.className = "dn-cal-month-title";
+  label.textContent = String(_heatYear);
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "dn-cal-view";
+  next.textContent = "›";
+  next.addEventListener("click", () => {
+    _heatYear += 1;
+    if (_calContainer) renderCalendarPanel(_calContainer);
+  });
+  yearRow.append(prev, label, next);
+  root.appendChild(yearRow);
+
+  const heatHost = document.createElement("div");
+  const onThisDayHost = document.createElement("div");
+  root.append(heatHost, onThisDayHost);
+  container.appendChild(root);
+
+  const yearShown = _heatYear;
+  void notesForYear(yearShown).then((notes) => {
+    if (_sidebarView !== "heatmap" || !_calContainer || _heatYear !== yearShown) return;
+    const byIso = new Map(notes.map((note) => [note.iso, note]));
+    heatHost.replaceChildren();
+    mountHeatmap(heatHost, yearShown, weekStartsOn(), byIso, "words", openIso);
+  });
+  void paintOnThisDay(onThisDayHost);
+}
+
+let _dashState: DashboardState | null = null;
+let _dashGeneration = 0;
+
+function openDiaryDashboard(): void {
+  if (!_api?.openCustomRenderTab) return;
+  _dashState = {
+    year: new Date().getFullYear(),
+    query: "",
+    newestFirst: true,
+    view: "heatmap",
+    weekStartsOn: weekStartsOn(),
+    notes: [],
+    habitNames: parseHabitNames(_settings.habitProperties),
+  };
+  _api.openCustomRenderTab("Diary", (host) => {
+    void refreshDashboard(host);
+  });
+}
+
+function paintDashboard(host: HTMLElement): void {
+  if (!_dashState) return;
+  const state = _dashState;
+  const previous = document.activeElement;
+  const keepSearch = previous instanceof HTMLInputElement && previous.classList.contains("dn-dash-search");
+  const caret = keepSearch ? previous.selectionStart : null;
+  mountDashboard(host, state, (patch) => {
+    const reload = patch.year !== undefined || patch.query !== undefined;
+    Object.assign(state, patch);
+    if (reload) void refreshDashboard(host);
+    else paintDashboard(host);
+  }, openIso);
+  if (!keepSearch) return;
+  const input = host.querySelector<HTMLInputElement>(".dn-dash-search");
+  input?.focus();
+  if (input && caret !== null) input.setSelectionRange(caret, caret);
+}
+
+async function refreshDashboard(host: HTMLElement): Promise<void> {
+  if (!_dashState) return;
+  const generation = ++_dashGeneration;
+  const state = _dashState;
+  if (!_yearCache.has(state.year)) {
+    host.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "dn-dash-stat";
+    loading.textContent = "Reading daily notes…";
+    host.appendChild(loading);
+  }
+  const notes = filterNotes(await notesForYear(state.year), state.query);
+  if (generation !== _dashGeneration || _dashState !== state) return;
+  state.notes = notes;
+  state.habitNames = collectHabitNames(notes, parseHabitNames(_settings.habitProperties));
+  state.weekStartsOn = weekStartsOn();
+  paintDashboard(host);
+}
+
 /**
  * Render the full calendar panel DOM into `container`.
  *
@@ -1024,11 +1254,17 @@ function renderCalendarPanel(container: HTMLElement): void {
   // Clear any previous render.
   container.innerHTML = "";
 
+  if (_sidebarView === "heatmap") {
+    renderHeatmapPanel(container);
+    return;
+  }
+
   const grid = buildCalendarGrid(_calYear, _calMonth, _settings.firstDayOfWeek);
 
   // ── Root wrapper ──────────────────────────────────────────────────────────
   const root = document.createElement("div");
   root.className = "dn-cal-root";
+  mountViewBar(root, "month", showMonth, showHeatmap, openDiaryDashboard);
 
   // ── Month/year header ─────────────────────────────────────────────────────
   const header = document.createElement("div");
@@ -1252,7 +1488,10 @@ function renderCalendarPanel(container: HTMLElement): void {
   });
 
   root.appendChild(daysGrid);
+  const onThisDayHost = document.createElement("div");
+  root.appendChild(onThisDayHost);
   container.appendChild(root);
+  void paintOnThisDay(onThisDayHost);
 
   // Paint 2: fire the async dot resolution after the synchronous grid render.
   // This call is deliberately not awaited — the two-paint strategy requires the
@@ -1734,6 +1973,101 @@ function injectCSS(): void {
     .dn-cal-day.dn-cal-selected .dn-cal-dot {
       background: var(--bg-primary, #fff);
     }
+
+    .dn-cal-views {
+      display: flex;
+      gap: 4px;
+      padding: 0 0 8px;
+    }
+    .dn-cal-view {
+      border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+      background: transparent;
+      color: var(--text-secondary, #aaa);
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+    .dn-cal-view-on {
+      color: var(--text-color, #fff);
+      border-color: var(--accent-color, #3d9a6a);
+    }
+    .dn-heat-row { display: flex; gap: 4px; }
+    .dn-heat-dows {
+      display: grid;
+      grid-template-rows: repeat(7, 11px);
+      gap: 2px;
+      margin-top: 14px;
+      font-size: 9px;
+      color: var(--text-secondary, #888);
+    }
+    .dn-heat-scroll { overflow-x: auto; flex: 1; min-width: 0; }
+    .dn-heat-months {
+      display: grid;
+      gap: 2px;
+      height: 14px;
+      font-size: 9px;
+      color: var(--text-secondary, #888);
+    }
+    .dn-heat-grid {
+      display: grid;
+      grid-auto-flow: column;
+      gap: 2px;
+    }
+    .dn-heat-cell {
+      width: 11px;
+      height: 11px;
+      padding: 0;
+      border: 0;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .dn-heat-0 { background: #2d333b; }
+    .dn-heat-1 { background: #0e4429; }
+    .dn-heat-2 { background: #006d32; }
+    .dn-heat-3 { background: #26a641; }
+    .dn-heat-4 { background: #39d353; }
+    .dn-heat-out { opacity: 0.25; }
+    .dn-heat-legend {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--text-secondary, #888);
+    }
+    .dn-otd { margin-top: 10px; }
+    .dn-otd-title { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+    .dn-otd-empty, .dn-dash-stat { font-size: 11px; color: var(--text-secondary, #888); }
+    .dn-otd-item, .dn-time-row {
+      display: flex;
+      width: 100%;
+      text-align: left;
+      gap: 8px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 12px;
+      padding: 3px 0;
+      cursor: pointer;
+    }
+    .dn-dash { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .dn-dash-head, .dn-dash-year { display: flex; align-items: center; gap: 8px; }
+    .dn-dash-search {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg-secondary, transparent);
+      color: inherit;
+      border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+    .dn-time-month { font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
+    .dn-time-date { width: 24px; color: var(--text-secondary, #888); }
+    .dn-time-title { flex: 1; }
+    .dn-time-meta { color: var(--text-secondary, #888); font-size: 11px; }
+    .dn-habit { margin-bottom: 16px; }
+    .dn-habit-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   `;
   document.head.appendChild(style);
 }
@@ -1858,6 +2192,16 @@ function buildDateFormatRow(api: MarkablePluginAPI): DocumentFragment {
   info.className = "dn-info-text";
   info.textContent = "Changing date format does not rename existing notes.";
   fragment.appendChild(info);
+
+  const preview = document.createElement("div");
+  preview.className = "dn-info-text";
+  const paintPreview = (value: string) => {
+    if (validateDateFormat(value) !== null) return;
+    preview.textContent = `Your current syntax looks like this: ${formatDate(new Date(), value)}`;
+  };
+  paintPreview(_settings.dateFormat);
+  input.addEventListener("input", () => paintPreview(input.value));
+  fragment.appendChild(preview);
 
   return fragment;
 }
@@ -2145,6 +2489,11 @@ function onDisable(_unusedApi: MarkablePluginAPI): void {
   // counter. Any pending check_paths_exist result will be discarded (EC-34).
   _dotGeneration++;
   _dotCache = new Map();
+  _otdGeneration++;
+  _dashGeneration++;
+  _yearCache = new Map();
+  _sidebarView = "month";
+  _dashState = null;
 
   // Detach the tab-change listener before unregistering the panel.
   detachTabChangeListener();
@@ -2233,6 +2582,18 @@ function renderDetailExtra(container: HTMLElement): void {
   container.appendChild(buildCheckboxRow("Show Week Numbers", "showWeekNumbers", api));
   container.appendChild(
     buildCheckboxRow("Auto-create Note on Calendar Click", "autoCreateOnCalendarClick", api)
+  );
+  container.appendChild(
+    buildTextRow(
+      "Habits",
+      _settings.habitProperties,
+      "exercise, mood",
+      async (value) => {
+        _settings.habitProperties = value;
+        _yearCache.clear();
+        await api.saveSettings(_settings as unknown as Record<string, unknown>);
+      },
+    ),
   );
 }
 

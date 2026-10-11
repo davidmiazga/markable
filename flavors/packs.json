@@ -62,7 +62,8 @@
     },
     "diary": {
       "displayName": "Diary",
-      "plugins": ["daily-note", "calendar"]
+      "plugins": ["daily-note", "calendar"],
+      "defaultOff": ["calendar"]
     },
     "book": {
       "displayName": "Book",

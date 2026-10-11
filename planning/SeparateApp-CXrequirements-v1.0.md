@@ -18,7 +18,7 @@ Engine surfaces in `packs.json` → `host.modules`. Always present. Not IIFE plu
 | `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on); properties-wrangler (off) | — |
 | `project` | kanban | — |
 | `quicknote` | sync | — |
-| `diary` | daily-note, calendar | — |
+| `diary` | daily-note (on); calendar (off — Daily Note owns the month calendar) | — |
 | `book` | auto-toc | — |
 
 Former `added` plugins live in Base (`defaultOff`) except `auto-toc`, which is the Book pack. Users can still turn any plugin on later.

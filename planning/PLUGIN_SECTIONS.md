@@ -14,7 +14,7 @@ Same seven sections in every flavor. Pack ids are the section ids.
 | PKM | `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel | |
 | Project | `project` | kanban | |
 | Quick note | `quicknote` | sync | |
-| Diary | `diary` | daily-note, calendar | |
+| Diary | `diary` | daily-note, calendar | calendar |
 | Book | `book` | auto-toc | |
 | User Plugins | `user` | user IIFEs (unchanged; Reload stays here) | |
 
