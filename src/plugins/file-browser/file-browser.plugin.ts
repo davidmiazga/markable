@@ -134,6 +134,20 @@ import {
   isSmartFolderPath,
 } from "./smart-folders/tree-injection";
 
+import {
+  PLACES_CSS,
+  buildBookmarkSection,
+  isNotePath,
+  listFolderItems,
+  mergeVaultSlices,
+  readNotePreview,
+  renderFileDashboard,
+  renderPinCanvas,
+  sanitizePathList,
+  sanitizePinLayout,
+  type PinCardLayout,
+} from "./places";
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Unique identifier for this plugin. */
@@ -793,7 +807,7 @@ const FILE_BROWSER_CSS = `
   background: #e05252;
 }
 
-` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS + COLLECTIONS_CSS;
+` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS + COLLECTIONS_CSS + PLACES_CSS;
 
 
 // ── CSS injection / removal ───────────────────────────────────────────────────
@@ -889,6 +903,18 @@ let _expandedPaths: Set<string> = new Set();
  * of the tree. Keyed per vault via FileBrowserSettings.pinnedPaths.
  */
 let _pinnedPaths: Set<string> = new Set();
+
+/**
+ * Bookmarked file paths for the active vault. Independent of pins: a note
+ * can be bookmarked, pinned, or both. Values are paths only.
+ */
+let _bookmarkPaths: Set<string> = new Set();
+
+/** Pin-canvas positions for the active vault, keyed by note path. */
+let _pinLayouts: Record<string, PinCardLayout> = {};
+
+/** Open folder dashboard / pin canvas views, redrawn when pins change. */
+let _placeRefresh: Array<{ host: HTMLElement; draw: () => void }> = [];
 
 /**
  * Smart Folder definitions for the currently active vault (step_01).
@@ -1036,6 +1062,10 @@ interface FileBrowserSettings {
   pinnedPaths?: Record<string, string[]>;
   /** Per-vault Smart Folder definitions. Optional so legacy settings files stay valid. */
   smartFolders?: Record<string, SmartFolderDef[]>;
+  /** Per-vault bookmark paths. Optional so older settings files stay valid. */
+  bookmarks?: Record<string, string[]>;
+  /** Per-vault pin-canvas positions. Paths and coordinates only — never note text. */
+  pinLayouts?: Record<string, Record<string, PinCardLayout>>;
 }
 
 /**
@@ -1063,12 +1093,16 @@ async function loadExpandedPaths(vaultId: string): Promise<void> {
     _expandedPaths = new Set(paths);
     const pinned = saved?.pinnedPaths?.[vaultId] ?? [];
     _pinnedPaths = new Set(pinned);
+    _bookmarkPaths = new Set(sanitizePathList(saved?.bookmarks?.[vaultId]));
+    _pinLayouts = sanitizePinLayout(saved?.pinLayouts?.[vaultId]);
     // Load smart folders for this vault (step_01). sanitizeAll inside
     // loadSmartFolders prunes corruption silently (EC-08, NFR-06).
     _smartFolders = await loadSmartFolders(_api, vaultId);
   } catch {
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
+    _bookmarkPaths = new Set();
+    _pinLayouts = {};
     // Cleanup #4: defensively reset _smartFolders on load failure so
     // a previous vault's definitions never persist into a new vault.
     _smartFolders = [];
@@ -1092,15 +1126,13 @@ function scheduleSettingsSave(vaultId: string): void {
     if (!_api || !_enabled) return;
     try {
       const existing = (await _api.loadSettings()) as FileBrowserSettings | null;
-      const expandedPaths = existing?.expandedPaths ?? {};
-      expandedPaths[vaultId] = Array.from(_expandedPaths);
-      const pinnedPaths = existing?.pinnedPaths ?? {};
-      pinnedPaths[vaultId] = Array.from(_pinnedPaths);
-      // Persist smart folders alongside expanded/pinned state (step_01).
-      // We spread the existing record to avoid overwriting other vaults' smart folders.
-      const smartFolders = existing?.smartFolders ?? {};
-      smartFolders[vaultId] = _smartFolders;
-      await _api.saveSettings({ expandedPaths, pinnedPaths, smartFolders });
+      await _api.saveSettings(mergeVaultSlices(existing as Record<string, unknown> | null, vaultId, {
+        expandedPaths: Array.from(_expandedPaths),
+        pinnedPaths: Array.from(_pinnedPaths),
+        smartFolders: _smartFolders,
+        bookmarks: Array.from(_bookmarkPaths),
+        pinLayouts: _pinLayouts,
+      }));
     } catch {
       /* Save failure is non-critical — expanded state is in-memory until next open. */
     }
@@ -1113,12 +1145,32 @@ function pinPath(path: string, vaultId: string): void {
   _pinnedPaths.add(path);
   scheduleSettingsSave(vaultId);
   renderPanel();
+  refreshPlaceViews();
 }
 
 function unpinPath(path: string, vaultId: string): void {
   _pinnedPaths.delete(path);
+  delete _pinLayouts[path];
   scheduleSettingsSave(vaultId);
   renderPanel();
+  refreshPlaceViews();
+}
+
+function bookmarkPath(path: string, vaultId: string): void {
+  _bookmarkPaths.add(path);
+  scheduleSettingsSave(vaultId);
+  renderPanel();
+}
+
+function unbookmarkPath(path: string, vaultId: string): void {
+  _bookmarkPaths.delete(path);
+  scheduleSettingsSave(vaultId);
+  renderPanel();
+}
+
+function refreshPlaceViews(): void {
+  _placeRefresh = _placeRefresh.filter((view) => view.host.isConnected);
+  for (const view of _placeRefresh) view.draw();
 }
 
 /**
@@ -1173,6 +1225,16 @@ function buildPinnedSection(activeFile: string | null, vaultId: string): HTMLEle
 
     li.appendChild(dot);
     li.appendChild(nameSpan);
+
+    if (!isDir && isNotePath(pinnedPath)) {
+      li.classList.add("has-preview");
+      const preview = document.createElement("p");
+      preview.className = "file-browser-pin-preview";
+      li.appendChild(preview);
+      void readNotePreview(pinnedPath).then((text) => {
+        if (preview.isConnected) preview.textContent = text;
+      });
+    }
 
     if (!isDir) {
       li.addEventListener("click", () => {
@@ -1923,6 +1985,19 @@ function buildTreeUl(
     ], e.clientX, e.clientY);
   });
 
+  if (vaultId) {
+    const bookmarkSection = buildBookmarkSection(Array.from(_bookmarkPaths), {
+      activePath: activeFile,
+      onOpen: openListedFile,
+      onContextMenu: (event, path, row) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showContextMenu(buildFileContextMenuItems(row, path, vaultId), event.clientX, event.clientY);
+      },
+    });
+    if (bookmarkSection) wrapper.appendChild(bookmarkSection);
+  }
+
   const pinnedSection = buildPinnedSection(activeFile, vaultId);
   if (pinnedSection) wrapper.appendChild(pinnedSection);
   wrapper.appendChild(card);
@@ -2008,6 +2083,7 @@ function renderTreeContent(wrapper: HTMLElement): void {
   /* Remove any existing tree card / empty-state / loading / cap-notice content */
   wrapper.querySelector(".file-tree-card, .file-browser-empty, .file-browser-loading")?.remove();
   wrapper.querySelector(".file-browser-cap-notice")?.remove();
+  wrapper.querySelectorAll(".file-tree-pinned-section").forEach((el) => el.remove());
 
   const vaultManager = (window as any).__MARKABLE_VAULT_MANAGER__;
   const activeVault: VaultEntry | null = vaultManager?.getActiveVault?.() ?? null;
@@ -3346,6 +3422,10 @@ function buildFileContextMenuItems(
       label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
     },
+    {
+      label: _bookmarkPaths.has(path) ? "Remove Bookmark" : "Bookmark",
+      handler: () => _bookmarkPaths.has(path) ? unbookmarkPath(path, vaultId) : bookmarkPath(path, vaultId),
+    },
     { separator: true, label: "", handler: null },
     {
       label: "Reveal in Finder",
@@ -3451,6 +3531,10 @@ function buildDirContextMenuItems(
     {
       label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
+    },
+    {
+      label: "Folder dashboard",
+      handler: () => openFileDashboard(path),
     },
     { separator: true, label: "", handler: null },
     // folder-icon-assignment step_07 — entry for the modal picker.
@@ -4587,6 +4671,99 @@ function setupVaultSubscriptions(vaultManager: any): void {
  *
  * @returns The fully configured descriptor ready for api.registerSidebarPanel.
  */
+function openListedFile(path: string): void {
+  const lpath = path.toLowerCase();
+  if (lpath.endsWith(".md") || lpath.endsWith(".txt") || lpath.endsWith(".markdown")) {
+    const openFn = (window as any).__MARKABLE_OPEN_FILE_IN_TAB__;
+    if (typeof openFn === "function") openFn(path);
+    else void (window as any).__MARKABLE_TAB_MANAGER__?.openFileInTab?.(path);
+    return;
+  }
+  void (window as any).__MARKABLE_TAB_MANAGER__?.openMediaInTab?.(path);
+}
+
+function activeVaultId(): string {
+  return (window as any).__MARKABLE_VAULT_MANAGER__?.getActiveVault?.()?.id ?? "";
+}
+
+function resolveBrowserFolder(): string {
+  if (_selectedFolderPath) return _selectedFolderPath;
+  const current = (window as any).__MARKABLE_CURRENT_FILE__ as string | null;
+  if (current) return getParentDir(current);
+  const root = (window as any).__MARKABLE_VAULT_MANAGER__?.getActiveVault?.()?.rootPaths?.[0];
+  return typeof root === "string" ? root : "";
+}
+
+function rememberPlaceView(host: HTMLElement, draw: () => void): void {
+  _placeRefresh = _placeRefresh.filter((view) => view.host !== host && view.host.isConnected);
+  _placeRefresh.push({ host, draw });
+}
+
+/**
+ * Folder dashboard in the content area. Uses openCustomRenderTab when the
+ * plugin API provides it.
+ */
+function openFileDashboard(folderPath?: string): void {
+  const openTab = _api?.openCustomRenderTab;
+  if (typeof openTab !== "function") return;
+  const start = folderPath || resolveBrowserFolder();
+  if (!start) return;
+  const vaultId = activeVaultId();
+  openTab("Folder", (host) => {
+    let current = start;
+    const draw = (): void => {
+      const vm = (window as any).__MARKABLE_VAULT_MANAGER__;
+      const root = (vm?.getActiveVault?.()?.rootPaths?.[0] as string | undefined) ?? "";
+      const parent = getParentDir(current);
+      const canUp = !!root && current !== root && (parent === root || parent.startsWith(root + "/"));
+      renderFileDashboard(host, {
+        folderPath: current,
+        items: listFolderItems(current, vm?.getVaultIndex?.() ?? null),
+        onOpenFile: openListedFile,
+        onOpenFolder: (path) => { current = path; draw(); },
+        onUp: canUp ? () => { current = parent; draw(); } : undefined,
+        onRename: (row, item) => startInlineRename(row, item.path, vaultId),
+        onMove: (source, targetPath, targetType) => {
+          const dest = resolveDropTarget(targetPath, targetType, source);
+          if (!dest) return;
+          void moveNode(source, dest, _panelContainer);
+        },
+        onContextMenu: (event, item, row) => {
+          const items = item.kind === "directory"
+            ? buildDirContextMenuItems(row, item.path, vaultId, _lastFolderViewSet.has(item.path))
+            : buildFileContextMenuItems(row, item.path, vaultId);
+          showContextMenu(items, event.clientX, event.clientY);
+        },
+      });
+    };
+    rememberPlaceView(host, draw);
+    draw();
+  });
+}
+
+/** Pin canvas in the content area. Cards are the pinned markdown notes. */
+function openPinCanvas(): void {
+  const openTab = _api?.openCustomRenderTab;
+  if (typeof openTab !== "function") return;
+  const vaultId = activeVaultId();
+  openTab("Pins", (host) => {
+    const draw = (): void => {
+      renderPinCanvas(host, {
+        paths: Array.from(_pinnedPaths).filter(isNotePath),
+        layout: _pinLayouts,
+        loadPreview: readNotePreview,
+        onOpen: openListedFile,
+        onLayout: (layout) => {
+          _pinLayouts = layout;
+          if (vaultId) scheduleSettingsSave(vaultId);
+        },
+      });
+    };
+    rememberPlaceView(host, draw);
+    draw();
+  });
+}
+
 function makePanelDescriptor(): SidebarPanelDescriptor {
   return {
     id: PANEL_ID,
@@ -4633,6 +4810,20 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
         icon: "⋯",
         title: "Manage Vaults",
         onClick: () => openManageVaultsModal(),
+      },
+      {
+        id: "file-browser-folder-dashboard",
+        icon: "",
+        iconHTML: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>`,
+        title: "Folder dashboard",
+        onClick: () => openFileDashboard(),
+      },
+      {
+        id: "file-browser-pin-canvas",
+        icon: "",
+        iconHTML: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="4" y="5" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>`,
+        title: "Pin canvas",
+        onClick: () => openPinCanvas(),
       },
     ],
   };
@@ -4823,6 +5014,9 @@ const plugin = {
     _isLoading = false;
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
+    _bookmarkPaths = new Set();
+    _pinLayouts = {};
+    _placeRefresh = [];
     _lastKnownFile = null;
     _contextMenu = null;
     _contextMenuDismiss = null;
@@ -4907,6 +5101,14 @@ export const _testing = {
   /** Get pinned paths. */
   getPinnedPaths(): Set<string> {
     return _pinnedPaths;
+  },
+  /** Set bookmarked paths for the active vault. */
+  setBookmarkPaths(paths: Set<string>): void {
+    _bookmarkPaths = paths;
+  },
+  /** Get bookmarked paths. */
+  getBookmarkPaths(): Set<string> {
+    return _bookmarkPaths;
   },
   /** Expose buildPinnedSection for testing. */
   buildPinnedSection,

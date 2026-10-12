@@ -15,10 +15,10 @@ Engine surfaces in `packs.json` → `host.modules`. Always present. Not IIFE plu
 | Pack | First-run plugins (today) | Planned / missing |
 |---|---|---|
 | `base` | markdown-toolbar, file-browser, command-bar, typing-assist, auto-save, auto-title, insert-count (on); templates, word-count, diagrams, math, focus-mode, typewriter-mode (off) | — |
-| `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on); properties-wrangler (off) | — |
+| `pkm` | backlinks, knowledge-graph, yaml-pane, media-preview, outline-panel (on). Tag wrangling lives inside File Properties. | — |
 | `project` | kanban | — |
 | `quicknote` | sync | — |
-| `diary` | daily-note (on); calendar (off — Daily Note owns the month calendar) | — |
+| `diary` | daily-note (on); calendar (off — turning it on enables Daily Note and reveals Daily Note's calendar) | — |
 | `book` | auto-toc | — |
 
 Former `added` plugins live in Base (`defaultOff`) except `auto-toc`, which is the Book pack. Users can still turn any plugin on later.
@@ -35,7 +35,7 @@ Catch-all. Identifier `com.markable.app`. First-run packs: `base` + `pkm` from [
 
 ### 3. Markable-Project
 
-`base` + `project` via [`flavors/project.json`](../flavors/project.json). Identifier `com.markable.project`. Asana / Folia competitor. Kanban ships as a three-column sidebar board. AI compatible. iO-workflow helpers later. Launch with `npm run dev:project`.
+`base` + `project` via [`flavors/project.json`](../flavors/project.json). Identifier `com.markable.project`. Asana / Folia competitor. Kanban opens a folder of notes as lanes in the editor. AI compatible. iO-workflow helpers later. Launch with `npm run dev:project`.
 
 ### 4. Markable PKM
 

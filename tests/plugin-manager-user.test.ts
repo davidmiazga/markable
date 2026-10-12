@@ -569,3 +569,125 @@ describe("PluginManager — reloadUserPlugins EC-23 idempotency", () => {
     expect(callsAfterSecond).toBe(callsAfterFirst);
   });
 });
+
+describe("PluginManager — dependency toggles", () => {
+  const order: string[] = [];
+  const dailySrc = `
+    return {
+      id: "daily-note",
+      name: "Daily Note",
+      description: "Daily note.",
+      version: "1.0.0",
+      onEnable() { globalThis.__depOrder.push("daily-note-on"); },
+      onDisable() { globalThis.__depOrder.push("daily-note-off"); },
+    };
+  `;
+  const calendarSrc = `
+    return {
+      id: "calendar",
+      name: "Calendar",
+      description: "Calendar.",
+      version: "1.0.0",
+      onEnable() { globalThis.__depOrder.push("calendar-on"); },
+      onDisable() { globalThis.__depOrder.push("calendar-off"); },
+    };
+  `;
+
+  let mgr: PluginManager;
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    order.length = 0;
+    (globalThis as { __depOrder?: string[] }).__depOrder = order;
+    const bridge = await import("../src/lib/bridge");
+    (bridge.listCorePlugins as ReturnType<typeof vi.fn>).mockResolvedValue({
+      files: ["calendar.js", "daily-note.js"],
+      truncated: [],
+    });
+    (bridge.listUserPlugins as ReturnType<typeof vi.fn>).mockResolvedValue({
+      files: [],
+      truncated: [],
+    });
+    (bridge.readPluginFile as ReturnType<typeof vi.fn>).mockImplementation(async (filename: string) => {
+      if (filename === "daily-note.js") return { source: dailySrc };
+      if (filename === "calendar.js") return { source: calendarSrc };
+      return { error: "missing" };
+    });
+    mgr = new PluginManager();
+    await mgr.loadPlugins(
+      makeSettings({
+        plugins: {
+          calendar: { enabled: false, kind: "core" },
+          "daily-note": { enabled: false, kind: "core" },
+        },
+      }),
+      makeZones(),
+    );
+    order.length = 0;
+  });
+
+  it("enables daily-note before calendar", async () => {
+    await mgr.toggle("calendar", true);
+    expect(order).toEqual(["daily-note-on", "calendar-on"]);
+    expect(mgr.getStates()["daily-note"]).toBe(true);
+    expect(mgr.getStates()["calendar"]).toBe(true);
+  });
+
+  it("leaves daily-note on when calendar is turned off", async () => {
+    await mgr.toggle("daily-note", true);
+    order.length = 0;
+    await mgr.toggle("calendar", true);
+    expect(order).toEqual(["calendar-on"]);
+    order.length = 0;
+    await mgr.toggle("calendar", false);
+    expect(order).toEqual(["calendar-off"]);
+    expect(mgr.getStates()["daily-note"]).toBe(true);
+    expect(mgr.getStates()["calendar"]).toBe(false);
+  });
+
+  it("turns calendar off when daily-note is turned off", async () => {
+    await mgr.toggle("calendar", true);
+    order.length = 0;
+    await mgr.toggle("daily-note", false);
+    expect(order).toEqual(["calendar-off", "daily-note-off"]);
+    expect(mgr.getStates()["calendar"]).toBe(false);
+    expect(mgr.getStates()["daily-note"]).toBe(false);
+  });
+
+  it("persists both ids when enabling calendar", async () => {
+    const { updateSettings } = await import("../src/lib/settings");
+    (updateSettings as ReturnType<typeof vi.fn>).mockClear();
+    await mgr.toggle("calendar", true);
+    const updateFn = (updateSettings as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    const result = updateFn(makeSettings());
+    expect(result.plugins.calendar.enabled).toBe(true);
+    expect(result.plugins["daily-note"].enabled).toBe(true);
+  });
+
+  it("enables daily-note at load when a saved calendar enable needs it", async () => {
+    const fresh = new PluginManager();
+    order.length = 0;
+    await fresh.loadPlugins(
+      makeSettings({
+        plugins: {
+          calendar: { enabled: true, kind: "core" },
+          "daily-note": { enabled: false, kind: "core" },
+        },
+      }),
+      makeZones(),
+    );
+    expect(order[0]).toBe("daily-note-on");
+    expect(order).toContain("calendar-on");
+    expect(fresh.getStates()["daily-note"]).toBe(true);
+    expect(fresh.getStates()["calendar"]).toBe(true);
+  });
+
+  it("restarts daily-note without turning calendar off", async () => {
+    await mgr.toggle("calendar", true);
+    order.length = 0;
+    await mgr.restart("daily-note");
+    expect(order).toEqual(["daily-note-off", "daily-note-on"]);
+    expect(mgr.getStates()["calendar"]).toBe(true);
+    expect(mgr.getStates()["daily-note"]).toBe(true);
+  });
+});

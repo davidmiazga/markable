@@ -1681,7 +1681,8 @@ async function initApp() {
     pluginManager.getDefinitions(),
     pluginManager.getStates(),
     async (id, enabled) => {
-      if (editor) await pluginManager.toggle(id, enabled);
+      if (!editor) return undefined;
+      return pluginManager.toggle(id, enabled);
     },
     // Reload callback: rescans the user plugins directory for new .js files,
     // enables any that were previously saved as enabled, then refreshes the panel.

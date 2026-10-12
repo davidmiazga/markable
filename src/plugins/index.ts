@@ -34,6 +34,7 @@ import { updateSettings } from "../lib/settings";
 import type { MarkableSettings } from "../lib/settings";
 import { pluginCompartment } from "../editor/extensions";
 import { defaultEnabledPluginSet } from "../lib/flavor";
+import { updatePluginStates } from "./plugins-panel/plugins-panel";
 
 // ── Default-enabled plugins ───────────────────────────────────────────────────
 
@@ -49,6 +50,18 @@ import { defaultEnabledPluginSet } from "../lib/flavor";
  * The Plugins panel groups by pack (see flavors/packs.json), not this set.
  */
 export const DEFAULT_ENABLED_PLUGINS: ReadonlySet<string> = defaultEnabledPluginSet();
+
+/**
+ * Plugin id → ids that must be enabled first.
+ *
+ * Enabling a plugin enables each dependency that is still off.
+ * Disabling a plugin disables plugins that list it as a dependency.
+ * A plugin stays independently togglable once its dependency is already on.
+ * Outline and auto-toc are not a pair: both can run alone.
+ */
+export const PLUGIN_DEPENDENCIES: Readonly<Record<string, readonly string[]>> = {
+  calendar: ["daily-note"],
+};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -382,7 +395,9 @@ export class PluginManager {
         saved?.enabled === true ||
         (neverTouched && firstRunDefaults.has(record.plugin.id));
       if (shouldEnable) {
-        await this._enable(record);
+        const changed = await this._enableDependencies(record, new Set());
+        if (!record._enabled) await this._enable(record);
+        if (changed.length > 0) this._persistEnabled(changed);
       }
     }
   }
@@ -513,7 +528,9 @@ export class PluginManager {
       if (record.status === "loaded" && record.plugin && record.api) {
         const saved = settings.plugins?.[record.plugin.id];
         if (saved?.enabled === true) {
-          await this._enable(record);
+          const changed = await this._enableDependencies(record, new Set());
+          if (!record._enabled) await this._enable(record);
+          if (changed.length > 0) this._persistEnabled(changed);
         }
       }
     }
@@ -524,37 +541,62 @@ export class PluginManager {
   /**
    * Enable or disable a plugin by id.
    *
-   * Calls onEnable or onDisable and persists the new state to settings.plugins.
+   * Enabling turns dependencies on first. Disabling turns off plugins that
+   * depend on this one first. Each changed id is persisted from its actual
+   * `_enabled` flag, then the plugins panel is updated.
+   *
    * No-op (with console.warn) for unknown, failed, or overridden plugin ids.
    *
    * EC-13/EC-14/EC-15: errors in onEnable/onDisable are caught per-plugin.
    *
    * @param id       Plugin id — must match a loaded plugin's id.
    * @param enabled  Target enabled state.
+   * @returns        Id → enabled for every plugin this call changed, including
+   *                 the requested id. Empty when the id is not toggleable.
    */
-  async toggle(id: string, enabled: boolean): Promise<void> {
+  async toggle(id: string, enabled: boolean): Promise<Record<string, boolean>> {
     const record = this._recordById(id);
     if (!record || record.status !== "loaded" || !record.plugin || !record.api) {
       console.warn(`PluginManager.toggle: unknown or non-loaded plugin id "${id}"`);
-      return;
+      return {};
     }
+    const touched: PluginRecord[] = [];
     if (enabled) {
+      touched.push(...await this._enableDependencies(record, new Set()));
       await this._enable(record);
     } else {
+      touched.push(...await this._disableDependents(record, new Set()));
       await this._disable(record);
     }
+    touched.push(record);
     // Persist the ACTUAL outcome, not the requested `enabled` parameter.
     // If _enable() threw internally (EC-13/EC-14), record._enabled will be
     // false even though `enabled` was true — persisting `enabled` in that case
     // would create a persistent broken-enable loop on every subsequent launch.
     // Using record._enabled guarantees the stored state reflects reality.
-    void updateSettings((s) => ({
-      ...s,
-      plugins: {
-        ...(s.plugins ?? {}),
-        [id]: { enabled: record._enabled, kind: record.kind },
-      },
-    }));
+    this._persistEnabled(touched);
+    const partial = this._enabledPartial(touched);
+    updatePluginStates(partial);
+    return partial;
+  }
+
+  /**
+   * Disable then enable one plugin without cascading dependencies.
+   *
+   * Settings screens call this to rebuild a plugin after a change. Cascading
+   * would turn off plugins that depend on it (for example Calendar when Daily
+   * Note restarts to apply a new week start).
+   */
+  async restart(id: string): Promise<void> {
+    const record = this._recordById(id);
+    if (!record || record.status !== "loaded" || !record.plugin || !record.api) {
+      console.warn(`PluginManager.restart: unknown or non-loaded plugin id "${id}"`);
+      return;
+    }
+    await this._disable(record);
+    await this._enable(record);
+    this._persistEnabled([record]);
+    updatePluginStates(this._enabledPartial([record]));
   }
 
   // ── State and definitions ─────────────────────────────────────────────────
@@ -622,6 +664,86 @@ export class PluginManager {
    */
   private _recordById(id: string): PluginRecord | undefined {
     return this._records.find((r) => r.id === id && r.status !== "overridden");
+  }
+
+  /**
+   * Enable dependencies that are still off, depth-first.
+   * Does not enable `record` itself. Skips a dependency that is already on
+   * so an explicit toggle of the dependent still runs only that plugin.
+   */
+  private async _enableDependencies(
+    record: PluginRecord,
+    stack: Set<string>,
+  ): Promise<PluginRecord[]> {
+    const changed: PluginRecord[] = [];
+    if (!record.plugin) return changed;
+    if (stack.has(record.plugin.id)) return changed;
+    stack.add(record.plugin.id);
+    for (const depId of PLUGIN_DEPENDENCIES[record.plugin.id] ?? []) {
+      const dep = this._recordById(depId);
+      if (!dep || dep.status !== "loaded" || !dep.plugin || !dep.api) {
+        console.warn(
+          `PluginManager: "${record.plugin.id}" depends on "${depId}", which is not loaded`,
+        );
+        continue;
+      }
+      changed.push(...await this._enableDependencies(dep, stack));
+      if (!dep._enabled) {
+        await this._enable(dep);
+        changed.push(dep);
+      }
+    }
+    stack.delete(record.plugin.id);
+    return changed;
+  }
+
+  /**
+   * Disable plugins that list `record` as a dependency, dependents first.
+   * Does not disable `record` itself.
+   */
+  private async _disableDependents(
+    record: PluginRecord,
+    stack: Set<string>,
+  ): Promise<PluginRecord[]> {
+    const changed: PluginRecord[] = [];
+    if (!record.plugin) return changed;
+    if (stack.has(record.plugin.id)) return changed;
+    stack.add(record.plugin.id);
+    for (const dependent of this._records) {
+      if (!dependent.plugin || dependent.status !== "loaded" || !dependent._enabled) continue;
+      const deps = PLUGIN_DEPENDENCIES[dependent.plugin.id] ?? [];
+      if (!deps.includes(record.plugin.id)) continue;
+      changed.push(...await this._disableDependents(dependent, stack));
+      if (dependent._enabled) {
+        await this._disable(dependent);
+        changed.push(dependent);
+      }
+    }
+    stack.delete(record.plugin.id);
+    return changed;
+  }
+
+  private _enabledPartial(records: PluginRecord[]): Record<string, boolean> {
+    const partial: Record<string, boolean> = {};
+    for (const record of records) {
+      if (record.id) partial[record.id] = record._enabled;
+    }
+    return partial;
+  }
+
+  private _persistEnabled(records: PluginRecord[]): void {
+    const unique = new Map<string, PluginRecord>();
+    for (const record of records) {
+      if (record.id) unique.set(record.id, record);
+    }
+    if (unique.size === 0) return;
+    void updateSettings((s) => {
+      const plugins = { ...(s.plugins ?? {}) };
+      for (const [pluginId, record] of unique) {
+        plugins[pluginId] = { enabled: record._enabled, kind: record.kind };
+      }
+      return { ...s, plugins };
+    });
   }
 
   /**

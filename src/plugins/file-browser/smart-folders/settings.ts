@@ -21,6 +21,7 @@
 
 import type { SmartFolderDef, SmartFolderRule, SmartFolderId } from "./types";
 import type { MarkablePluginAPI } from "../../markable-plugin-api";
+import { mergeVaultSlices } from "../places";
 
 // ── Operator whitelists (FR-09) ───────────────────────────────────────────────
 
@@ -303,9 +304,5 @@ export async function saveSmartFolders(
   defs: SmartFolderDef[],
 ): Promise<void> {
   const existing = (await api.loadSettings()) as Record<string, unknown> | null;
-  const expandedPaths = (existing?.["expandedPaths"] as Record<string, unknown>) ?? {};
-  const pinnedPaths   = (existing?.["pinnedPaths"]   as Record<string, unknown>) ?? {};
-  const smartFolders  = (existing?.["smartFolders"]  as Record<string, unknown>) ?? {};
-  smartFolders[vaultId] = defs;
-  await api.saveSettings({ expandedPaths, pinnedPaths, smartFolders });
+  await api.saveSettings(mergeVaultSlices(existing, vaultId, { smartFolders: defs }));
 }

@@ -42,8 +42,22 @@ let currentView: "list" | "detail" = "list";
 let definitions: UnifiedPluginDef[] = [];
 /** Current enable/disable state map. */
 let currentStates: Record<string, boolean> = {};
-/** Toggle callback wired by createPluginsPanel. */
-let onToggle: ((id: string, enabled: boolean) => Promise<void>) | null = null;
+/** Toggle callback wired by createPluginsPanel. May return the ids it changed. */
+let onToggle: ((id: string, enabled: boolean) => Promise<Record<string, boolean> | void>) | null = null;
+
+/**
+ * Persist one toggle, then merge any dependency flips the callback reports
+ * so a dependent row updates in the same turn.
+ */
+async function commitPluginToggle(
+  id: string,
+  enabled: boolean,
+): Promise<Record<string, boolean> | void> {
+  currentStates[id] = enabled;
+  const next = await onToggle?.(id, enabled);
+  if (next) updatePluginStates(next);
+  return next;
+}
 /** Reload callback wired by createPluginsPanel (optional). */
 let onReload: (() => Promise<void>) | null = null;
 
@@ -116,13 +130,15 @@ function presetTarget(def: UnifiedPluginDef, preset: SectionPreset): boolean {
  * @param defs          Unified plugin metadata from pluginManager.getDefinitions().
  * @param states        Current plugin states from pluginManager.getStates().
  * @param toggle        Called when user toggles a plugin (unified callback).
+ *                      Return the ids whose enabled state changed, including
+ *                      dependencies, so the panel can refresh those rows.
  * @param reloadPlugins Optional: called when user clicks "Reload" in User Plugins section.
  *                      When omitted the Reload button is rendered but disabled.
  */
 export function createPluginsPanel(
   defs: UnifiedPluginDef[],
   states: Record<string, boolean>,
-  toggle: (id: string, enabled: boolean) => Promise<void>,
+  toggle: (id: string, enabled: boolean) => Promise<Record<string, boolean> | void>,
   reloadPlugins?: () => Promise<void>,
 ): void {
   definitions = defs;
@@ -476,8 +492,7 @@ function buildSectionPreset(label: string, defs: UnifiedPluginDef[]): HTMLElemen
         for (const def of toggleable) {
           const target = presetTarget(def, preset);
           if (currentStates[def.id] === target) continue;
-          currentStates[def.id] = target;
-          await onToggle?.(def.id, target);
+          await commitPluginToggle(def.id, target);
         }
         showListView();
       })();
@@ -568,9 +583,7 @@ function buildPluginRow(
 
   const checkbox = toggle.querySelector("input") as HTMLInputElement;
   checkbox.addEventListener("change", () => {
-    currentStates[def.id] = checkbox.checked;
-    void onToggle?.(def.id, checkbox.checked);
-    onToggled?.();
+    void commitPluginToggle(def.id, checkbox.checked).then(() => onToggled?.());
   });
 
   row.append(nameEl, toggle);
@@ -742,9 +755,14 @@ function showDetailView(def: UnifiedPluginDef): void {
   const checkbox = toggleRow.querySelector("input") as HTMLInputElement;
   const statusEl = toggleRow.querySelector(".plugin-detail-status") as HTMLElement;
   checkbox.addEventListener("change", () => {
-    statusEl.textContent = checkbox.checked ? "Enabled" : "Disabled";
-    currentStates[def.id] = checkbox.checked;
-    void onToggle?.(def.id, checkbox.checked);
+    const target = checkbox.checked;
+    statusEl.textContent = target ? "Enabled" : "Disabled";
+    void commitPluginToggle(def.id, target).then((next) => {
+      const actual = next?.[def.id];
+      if (typeof actual !== "boolean") return;
+      checkbox.checked = actual;
+      statusEl.textContent = actual ? "Enabled" : "Disabled";
+    });
   });
 
   bodyElement.appendChild(toggleRow);

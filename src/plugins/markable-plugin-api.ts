@@ -222,7 +222,8 @@ export interface MarkablePluginAPI {
   openCustomRenderTab(title: string, renderFn: (container: HTMLElement) => void): void;
 
   /**
-   * Disable then re-enable this plugin in a single async call.
+   * Disable then re-enable this plugin in a single async call, without
+   * turning dependent plugins off.
    *
    * Useful for applying settings changes that require a full onEnable cycle
    * (e.g. switching toolbar mode). The caller should save new settings to disk
@@ -422,8 +423,7 @@ export function buildMarkablePluginAPI(
      * the fresh onEnable reads the new values.
      */
     async restartSelf(): Promise<void> {
-      await pluginManager.toggle(pluginId, false);
-      await pluginManager.toggle(pluginId, true);
+      await pluginManager.restart(pluginId);
     },
   };
 }

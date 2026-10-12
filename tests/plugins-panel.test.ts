@@ -485,6 +485,30 @@ describe("plugins-panel — pack section rendering", () => {
     expect(toggle).not.toHaveBeenCalledWith("markdown-toolbar", false);
   });
 
+  it("updates a dependency row from the toggle result", async () => {
+    const toggle = vi.fn(async (id: string, enabled: boolean) => {
+      if (id === "calendar" && enabled) return { calendar: true, "daily-note": true };
+      return { [id]: enabled };
+    });
+    createPluginsPanel(
+      [makeCoreDef("daily-note"), makeCoreDef("calendar")],
+      { "daily-note": false, calendar: false },
+      toggle,
+    );
+    openPluginsPanel({ "daily-note": false, calendar: false });
+
+    const calendarRow = [...document.querySelectorAll(".plugin-row")].find((row) =>
+      row.textContent?.includes("Plugin calendar"),
+    );
+    calendarRow?.querySelector("input")?.click();
+    await vi.waitFor(() => {
+      const daily = [...document.querySelectorAll(".plugin-row")].find((row) =>
+        row.textContent?.includes("Plugin daily-note"),
+      );
+      expect(daily?.querySelector("input")?.checked).toBe(true);
+    });
+  });
+
   it("turns the whole section off when Off is clicked", async () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
