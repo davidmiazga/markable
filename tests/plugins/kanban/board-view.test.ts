@@ -502,7 +502,7 @@ describe("project board flows", () => {
     color.value = "#112233";
     color.dispatchEvent(new Event("change"));
     await flush();
-    expect(files.get("/proj/board.md")).toContain("lane: Ready|#112233");
+    expect(files.get("/proj/board.md")).toContain('  - "Ready|#112233"');
 
     const search = document.querySelector<HTMLInputElement>("input[type=search]");
     if (!search) throw new Error("missing search");

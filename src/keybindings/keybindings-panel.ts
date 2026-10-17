@@ -52,6 +52,8 @@ export const COMMANDS: CommandDef[] = [
   // file-print has no default keybinding and is accessible via the menu or
   // the Commands bar (FR-01.5, AD-CB confirmed decision).
   { id: "file-print",      label: "Print",                  defaultKey: "",                section: "File" },
+  { id: "note-merge",      label: "Merge notes…",           defaultKey: "",                section: "File" },
+  { id: "note-split",      label: "Split note…",            defaultKey: "",                section: "File" },
   // Edit
   { id: "edit-find",           label: "Find",                     defaultKey: "Cmd-F",     section: "Edit" },
   { id: "edit-find-replace",   label: "Find & Replace",           defaultKey: "Cmd-Alt-F", section: "Edit" },

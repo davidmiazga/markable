@@ -2,9 +2,10 @@
  * Note-based project board.
  *
  * A board is a markdown file whose frontmatter says `kanban: board`.
- * Lanes are repeated `lane:` lines. Cards are other markdown files in the
- * same folder. A card's `status:` is the lane it sits in. Nothing here is
- * stored in plugin settings.
+ * Lanes are a YAML list under `lane:`. Older boards used one `lane:` line per
+ * column; those still read, and the next save writes the list. Cards are other
+ * markdown files in the same folder. A card's `status:` is the lane it sits in.
+ * Nothing here is stored in plugin settings.
  */
 
 import {
@@ -105,6 +106,25 @@ function unquote(raw: string): string {
   return value;
 }
 
+function laneValues(lines: string[]): string[] {
+  const found: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^lane\s*:\s*(.*)$/i.exec(lines[i].trim());
+    if (!match) continue;
+    const inline = match[1].trim();
+    if (inline !== "") {
+      found.push(unquote(inline));
+      continue;
+    }
+    let j = i + 1;
+    while (j < lines.length && /^\s+-\s+/.test(lines[j])) {
+      found.push(unquote(lines[j].replace(/^\s+-\s+/, "").trim()));
+      j += 1;
+    }
+  }
+  return found;
+}
+
 function scalarLines(lines: string[], key: string): string[] {
   const want = key.toLowerCase();
   const found: string[] = [];
@@ -155,12 +175,36 @@ function parseLane(raw: string): Lane | null {
   };
 }
 
-function laneLine(lane: Lane): string {
+function laneItemText(lane: { title: string; color: string; collapsed?: boolean; hidden?: boolean }): string {
   const bits = [lane.title];
   if (lane.color) bits.push(lane.color);
   if (lane.collapsed) bits.push("collapsed");
   if (lane.hidden) bits.push("hidden");
-  return `lane: ${bits.join("|")}`;
+  return bits.join("|");
+}
+
+function quoteLaneItem(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function laneBlock(lanes: ReadonlyArray<{ title: string; color: string; collapsed?: boolean; hidden?: boolean }>): string[] {
+  if (lanes.length === 0) return [];
+  return ["lane:", ...lanes.map((lane) => `  - ${quoteLaneItem(laneItemText(lane))}`)];
+}
+
+function stripLaneLines(lines: string[]): string[] {
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^lane\s*:/i.test(lines[i].trim())) {
+      const rest = lines[i].slice(lines[i].indexOf(":") + 1).trim();
+      if (rest === "") {
+        while (i + 1 < lines.length && /^\s+-\s+/.test(lines[i + 1])) i += 1;
+      }
+      continue;
+    }
+    kept.push(lines[i]);
+  }
+  return kept;
 }
 
 export function isBoardContent(content: string): boolean {
@@ -171,7 +215,7 @@ export function isBoardContent(content: string): boolean {
 export function parseBoard(content: string, path: string): BoardNote | null {
   if (!isBoardContent(content)) return null;
   const parsed = parseYamlFrontmatter(content);
-  const lanes = scalarLines(parsed.frontmatterLines, "lane")
+  const lanes = laneValues(parsed.frontmatterLines)
     .map(parseLane)
     .filter((lane): lane is Lane => lane !== null);
   const title = scalar(parsed.frontmatterLines, "title") || fileStem(path);
@@ -314,10 +358,7 @@ function setOrClear(content: string, key: string, value: string | undefined): st
 }
 
 export function withLanes(content: string, lanes: Lane[]): string {
-  return rewrite(content, (lines) => {
-    const kept = lines.filter((line) => !line.startsWith("lane:") && line !== "lane:");
-    return [...kept, ...lanes.map(laneLine)];
-  });
+  return rewrite(content, (lines) => [...stripLaneLines(lines), ...laneBlock(lanes)]);
 }
 
 export function withShowFlags(
@@ -447,7 +488,6 @@ export function projectFolderName(title: string, taken: ReadonlySet<string> = ne
 }
 
 export function defaultBoardContent(title = DEFAULT_PROJECT_NAME): string {
-  const lanes = DEFAULT_LANES.map((lane) => `lane: ${lane.title}|${lane.color}`).join("\n");
   return [
     "---",
     "kanban: board",
@@ -455,7 +495,7 @@ export function defaultBoardContent(title = DEFAULT_PROJECT_NAME): string {
     "show-title: yes",
     "show-tags: yes",
     "show-progress: yes",
-    lanes,
+    ...laneBlock(DEFAULT_LANES),
     "---",
     "",
     "This folder is the project. This file is the board. Every other note here is a task.",
@@ -522,6 +562,16 @@ function collapseFrontmatter(lines: string[]): { kept: string[]; rescued: string
     if (match) {
       const key = match[1];
       let value = match[2].trim();
+      if (key === "lane" && value === "") {
+        scalars.push("lane:");
+        let j = i + 1;
+        while (j < lines.length && LIST_ITEM.test(lines[j])) {
+          scalars.push(lines[j].replace(/\s+$/, ""));
+          j += 1;
+        }
+        i = j - 1;
+        continue;
+      }
       if (key === "kanban" && value.toLowerCase() === "board") value = "board";
       scalars.push(value === "" ? `${key}:` : `${key}: ${value}`);
       continue;
@@ -532,7 +582,7 @@ function collapseFrontmatter(lines: string[]): { kept: string[]; rescued: string
   const order: string[] = [];
   const values = new Map<string, string>();
   for (const line of scalars) {
-    if (line.startsWith("lane:") || line.startsWith("lane:\t")) {
+    if (line === "lane:" || line.startsWith("lane:") || line.startsWith("lane:\t") || /^\s+-\s+/.test(line)) {
       lanes.push(line);
       continue;
     }

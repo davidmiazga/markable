@@ -23,17 +23,19 @@ fn set_window_alpha<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, alpha: 
 fn set_window_alpha<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>, _alpha: f64) {}
 
 pub use commands::{
-    build_vault_index, check_paths_exist, copy_core_plugins, copy_default_themes,
-    create_daily_note, create_directory, create_file, create_vault, delete_directory, delete_file,
-    delete_vault, ensure_directory, find_tag_page, get_app_data_dir, get_exif_data, get_home_dir,
-    get_image_dimensions, get_settings, get_vault_index, list_core_plugins, list_md_files,
-    list_preset_files, list_themes, list_user_plugins, list_vault_files, merge_vault_property,
-    move_file, open_asset_dialog, open_file_dialog, open_folder_dialog, read_file,
-    read_plugin_file, read_plugin_settings, read_theme_css, rename_file, rename_vault_property,
-    reveal_in_finder, save_file_dialog, save_html_dialog, save_image_dialog, save_settings,
-    save_vault_index, scan_vault_tags, search_vault_content, settings_file_existed, sidecar_exists,
-    switch_vault, unwatch_vault, update_vault, update_wiki_links, validate_vault_paths,
-    watch_vault, write_binary_file, write_file, write_plugin_settings, WatcherRegistry,
+    build_vault_index, check_paths_exist, compose_merge_notes, compose_split_note,
+    copy_core_plugins, copy_default_themes, create_daily_note, create_directory, create_file,
+    create_vault, delete_directory, delete_file, delete_vault, ensure_directory, find_tag_page,
+    get_app_data_dir, get_exif_data, get_home_dir, get_image_dimensions, get_settings,
+    get_vault_index, list_core_plugins, list_md_files, list_preset_files, list_recovered_notes,
+    list_themes, list_user_plugins, list_vault_files, merge_vault_property, move_file,
+    open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, read_plugin_file,
+    read_plugin_settings, read_theme_css, rename_file, rename_vault_property,
+    restore_recovered_note, reveal_in_finder, reveal_recovered_notes, save_file_dialog,
+    save_html_dialog, save_image_dialog, save_settings, save_vault_index, scan_vault_tags,
+    search_vault_content, settings_file_existed, sidecar_exists, switch_vault, unwatch_vault,
+    update_vault, update_wiki_links, validate_vault_paths, watch_vault, write_binary_file,
+    write_file, write_plugin_settings, WatcherRegistry,
 };
 
 // Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
@@ -483,6 +485,8 @@ pub fn run() {
         .manage(WatcherRegistry::default())
         .invoke_handler(tauri::generate_handler![
             greet,
+            compose_merge_notes,
+            compose_split_note,
             create_daily_note,
             check_paths_exist,
             open_asset_dialog,
@@ -505,6 +509,8 @@ pub fn run() {
             list_core_plugins,
             list_md_files,
             list_preset_files,
+            list_recovered_notes,
+            reveal_recovered_notes,
             ensure_directory,
             get_home_dir,
             get_app_data_dir,
@@ -543,6 +549,7 @@ pub fn run() {
             get_exif_data,
             sidecar_exists,
             read_folder_icon_map,
+            restore_recovered_note,
             stat_file
         ])
         .on_window_event(|window, event| {
@@ -558,10 +565,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, _event| {
+        .run(|app_handle, event| {
             // Resumed / Reopen: do nothing. The window stays hidden until the
             // user explicitly opens a file (File > Open) or creates one (File > New).
             // The macOS menu bar is always accessible without a visible window.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                commands::file_recovery::handle_exit_requested(app_handle, || api.prevent_exit());
+            }
         });
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { load } from "js-yaml";
 import {
   addCheckItem,
   applyCardDraft,
@@ -30,6 +31,30 @@ describe("project board notes", () => {
     expect(board?.lanes.map((lane) => lane.title)).toEqual(["To Do", "In Progress", "Done"]);
     expect(board?.lanes[0].color).toBe("#4c78e8");
     expect(board?.showTitle).toBe(true);
+    const fm = BOARD.split("---")[1] ?? "";
+    expect(load(fm)).toMatchObject({ kanban: "board", title: "Launch" });
+  });
+
+  it("reads the old repeated lane lines and writes them back as one list", () => {
+    const legacy = [
+      "---",
+      "kanban: board",
+      "title: testingMarkdown",
+      "lane: To Do|#4c78e8",
+      "lane: In Progress|#e6a23c",
+      "lane: Done|#3d9a6a",
+      "---",
+      "",
+    ].join("\n");
+    const board = parseBoard(legacy, "board.md");
+    expect(board?.lanes.map((lane) => lane.title)).toEqual(["To Do", "In Progress", "Done"]);
+    const next = withLanes(legacy, board?.lanes ?? []);
+    expect(next).toContain("lane:\n");
+    expect(next).toContain('  - "To Do|#4c78e8"');
+    expect(next).not.toContain("lane: To Do");
+    expect(load((next.split("---")[1] ?? ""))).toMatchObject({
+      lane: ["To Do|#4c78e8", "In Progress|#e6a23c", "Done|#3d9a6a"],
+    });
   });
 
   it("ignores a note that is not a board", () => {
@@ -186,7 +211,7 @@ describe("project board notes", () => {
     const board = messy.files.find((file) => file.name === "board.md");
     expect(board?.content).toContain("kanban: board");
     expect(board?.content).toContain("Someone replaced the board.");
-    expect(board?.content).toContain("lane: Waiting");
+    expect(board?.content).toContain('  - "Waiting|#888888"');
     const loose = parseCard(messy.files.find((file) => file.name === "loose.md")?.content ?? "", "loose.md");
     expect(loose.status).toBe("To Do");
     expect(loose.description).toContain("A task with no properties.");

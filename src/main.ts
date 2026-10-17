@@ -80,6 +80,8 @@ import {
   EDITOR_CONSTRAINTS,
 } from "./lib/settings";
 import { createSettingsPanel, toggleSettingsPanel, initAppearanceCallbacks } from "./settings/settings-panel";
+import { mountTrashFooter } from "./lib/trash-footer";
+import { charsBefore, openMergeComposer, openSplitComposer } from "./lib/note-composer";
 import { createKeybindingsPanel, toggleKeybindingsPanel, resolveAction, COMMANDS } from "./keybindings/keybindings-panel";
 import {
   createPluginsPanel,
@@ -502,6 +504,45 @@ async function openRecentFileByPath(path: string): Promise<void> {
  * Delegates entirely to TabManager, which handles the untitled → save-as
  * redirect and clears the dirty flag on success.
  */
+function replaceEditorDoc(next: string): void {
+  if (!editor) return;
+  editor.dispatch({
+    changes: { from: 0, to: editor.state.doc.length, insert: next },
+  });
+}
+
+function vaultMarkdownFiles(): { path: string; title: string }[] {
+  const index = (window as unknown as { __MARKABLE_VAULT_MANAGER__?: { getVaultIndex?: () => { entries?: Array<{ path?: string; title?: string; name?: string }> } } }).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.();
+  return (index?.entries ?? [])
+    .filter((entry) => typeof entry.path === "string" && entry.path.endsWith(".md"))
+    .map((entry) => ({
+      path: entry.path as string,
+      title: entry.title || entry.name || (entry.path as string),
+    }));
+}
+
+function openNoteMerge(): void {
+  const path = (window as unknown as { __MARKABLE_CURRENT_FILE__?: string | null }).__MARKABLE_CURRENT_FILE__;
+  if (!path) return;
+  openMergeComposer(path, vaultMarkdownFiles(), (merged) => {
+    replaceEditorDoc(merged);
+    void (window as unknown as { __MARKABLE_VAULT_MANAGER__?: { reloadVaultIndex?: () => void } }).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+  });
+}
+
+function openNoteSplit(): void {
+  const path = (window as unknown as { __MARKABLE_CURRENT_FILE__?: string | null }).__MARKABLE_CURRENT_FILE__;
+  if (!editor || !path) return;
+  const text = editor.state.doc.toString();
+  const at = charsBefore(text, editor.state.selection.main.head);
+  const stem = path.replace(/\.md$/i, "");
+  openSplitComposer(path, at, `${stem} split.md`, (head, newPath) => {
+    replaceEditorDoc(head);
+    void tabManager.openFileInTab(newPath);
+    void (window as unknown as { __MARKABLE_VAULT_MANAGER__?: { reloadVaultIndex?: () => void } }).__MARKABLE_VAULT_MANAGER__?.reloadVaultIndex?.();
+  });
+}
+
 async function saveFile(): Promise<void> {
   await tabManager.saveActiveTab();
   await refreshRecentFilesMenu();
@@ -807,6 +848,8 @@ function handleAction(action: string): void {
 
     case "file-open":       void openFile();          break;
     case "file-save":       void saveFile();          break;
+    case "note-merge":      openNoteMerge();          break;
+    case "note-split":      openNoteSplit();          break;
     case "file-save-as":    void saveFileAs();        break;
     case "file-close-all":
       // Close all open tabs in order. Each closeTab() call handles its own
@@ -1665,6 +1708,7 @@ async function initApp() {
 
   // Create settings panel (DOM injection, hidden by default)
   createSettingsPanel();
+  mountTrashFooter();
   initAppearanceCallbacks({
     getThemeOrder,
     getCurrentTheme: () => getCurrentSettings().theme.active,

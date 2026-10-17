@@ -123,10 +123,19 @@ pub fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
 
 /// Delete a file at `path`.
 ///
+/// Markdown files follow the Data Protection preference: off removes the
+/// file, ask shows an Are you sure dialog, and trash keeps a restorable copy.
+/// Other files are removed.
+///
 /// - Fails if the path does not exist.
 /// - Fails if the path points to a directory (use `delete_directory` instead).
 #[tauri::command]
-pub fn delete_file(path: String) -> Result<(), String> {
+pub fn delete_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    super::file_recovery::protected_delete_file(&app, &path)
+}
+
+/// Remove a file with no Data Protection check. Used by the permanent-delete tests.
+pub(crate) fn remove_file_now(path: String) -> Result<(), String> {
     let target = PathBuf::from(&path);
 
     if !target.exists() {
@@ -145,10 +154,18 @@ pub fn delete_file(path: String) -> Result<(), String> {
 
 /// Recursively delete the directory at `path` and all its contents.
 ///
+/// Markdown files inside the directory follow Data Protection before the
+/// directory is removed.
+///
 /// - Fails if the path does not exist.
 /// - Fails if the path is not a directory.
 #[tauri::command]
-pub fn delete_directory(path: String) -> Result<(), String> {
+pub fn delete_directory(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    super::file_recovery::protected_delete_directory(&app, &path)
+}
+
+/// Remove a directory with no Data Protection check.
+pub(crate) fn remove_directory_now(path: String) -> Result<(), String> {
     let target = PathBuf::from(&path);
 
     if !target.exists() {
@@ -500,7 +517,7 @@ mod tests {
         let path = dir.path().join("del.md");
         fs::write(&path, "bye").unwrap();
 
-        let result = delete_file(path.to_string_lossy().to_string());
+        let result = remove_file_now(path.to_string_lossy().to_string());
         assert!(result.is_ok());
         assert!(!path.exists());
     }
@@ -509,7 +526,7 @@ mod tests {
     fn delete_file_fails_if_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.md");
-        let result = delete_file(path.to_string_lossy().to_string());
+        let result = remove_file_now(path.to_string_lossy().to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Not found"));
     }
@@ -523,7 +540,7 @@ mod tests {
         fs::create_dir(&sub).unwrap();
         fs::write(sub.join("file.md"), "inner").unwrap();
 
-        let result = delete_directory(sub.to_string_lossy().to_string());
+        let result = remove_directory_now(sub.to_string_lossy().to_string());
         assert!(result.is_ok());
         assert!(!sub.exists());
     }
@@ -534,7 +551,7 @@ mod tests {
         let file = dir.path().join("notadir.md");
         fs::write(&file, "content").unwrap();
 
-        let result = delete_directory(file.to_string_lossy().to_string());
+        let result = remove_directory_now(file.to_string_lossy().to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not a directory"));
     }

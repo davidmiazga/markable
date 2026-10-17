@@ -11,6 +11,10 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import type { VaultEntry } from "./vault-types";
 import type { FindScope } from "../editor/vault-search-utils";
+import {
+  DEFAULT_DATA_PROTECTION,
+  type DataProtectionSettings,
+} from "./data-protection";
 
 // --- Types (mirror Rust MarkableSettings) ---
 
@@ -254,6 +258,12 @@ export interface MarkableSettings {
   quickCapture?: QuickCaptureSettings;
 
   /**
+   * Core safeguard for Markdown deletes. Absent settings files mean off.
+   * Rust `delete_file` reads this same object from settings.json.
+   */
+  dataProtection?: DataProtectionSettings;
+
+  /**
    * Cross-vault custom folder-icon list (folder-icon-assignment step_06c).
    *
    * User-curated list of absolute SVG paths surfaced by the folder-icon
@@ -408,6 +418,7 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
     inboxFolder: "Inbox",
     fallbackPath: "~/Documents/Markable Inbox",
   },
+  dataProtection: { ...DEFAULT_DATA_PROTECTION },
   sidebar: {
     left: { ...DEFAULT_SIDEBAR_SLOT },
     right: { ...DEFAULT_SIDEBAR_SLOT },

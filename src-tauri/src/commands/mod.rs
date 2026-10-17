@@ -6,9 +6,11 @@
 pub mod daily_note;
 pub mod dialogs;
 pub mod file_ops;
+pub mod file_recovery;
 pub mod files;
 pub mod folder_icon;
 pub mod io;
+pub mod note_composer;
 pub mod plugins;
 pub mod property_rename;
 pub mod settings;
@@ -24,12 +26,14 @@ pub use file_ops::{
     create_directory, create_file, delete_directory, delete_file, move_file, rename_file,
     reveal_in_finder, update_wiki_links,
 };
+pub use file_recovery::{list_recovered_notes, restore_recovered_note, reveal_recovered_notes};
 pub use files::{
     ensure_directory, get_app_data_dir, get_home_dir, list_md_files, list_preset_files,
 };
 pub use io::{
     get_exif_data, get_image_dimensions, read_file, sidecar_exists, write_binary_file, write_file,
 };
+pub use note_composer::{compose_merge_notes, compose_split_note};
 pub use plugins::{
     copy_core_plugins, list_core_plugins, list_user_plugins, read_plugin_file,
     read_plugin_settings, write_plugin_settings,

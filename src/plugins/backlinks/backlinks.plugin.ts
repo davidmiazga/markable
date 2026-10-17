@@ -371,6 +371,39 @@ export function extractOutgoingLinks(content: string): string[] {
 }
 
 /**
+ * Note names mentioned in `content` that are not already outgoing links.
+ *
+ * A mention is the other note's filename without `.md`, matched on a
+ * boundary so "Plan" does not match "Planet". Fenced code and existing
+ * links are ignored. The current note is never listed.
+ */
+export function extractUnlinkedMentions(
+  content: string,
+  currentFilename: string,
+  knownFilenames: Iterable<string>,
+  outgoing: readonly string[],
+): string[] {
+  const linked = new Set(outgoing.map((name) => name.toLowerCase()));
+  const plain = content
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[\[[^\]]*\]\]/g, " ")
+    .replace(/\[[^\]]*\]\([^)]*\)/g, " ");
+  const mentions: string[] = [];
+  for (const filename of knownFilenames) {
+    if (!filename.toLowerCase().endsWith(".md")) continue;
+    if (filename.toLowerCase() === currentFilename.toLowerCase()) continue;
+    if (linked.has(filename.toLowerCase())) continue;
+    const stem = filename.slice(0, -3);
+    if (stem.length < 2) continue;
+    const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(^|[^\\w/])${escaped}(?=$|[^\\w/])`, "i");
+    if (pattern.test(plain)) mentions.push(filename);
+  }
+  mentions.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  return mentions;
+}
+
+/**
  * A note path that can be opened inside the vault.
  * Web, mail, and same-page hash links are not page previews.
  */
@@ -1627,6 +1660,14 @@ export async function buildIndex(
  * @param callback - Function called with the computed backlinks array
  *                   after the index rebuild completes.
  */
+function editorDocFor(filePath: string): string {
+  const tabManager = (window as any).__MARKABLE_TAB_MANAGER__;
+  const tabs: Array<{ kind: string; filePath: string | null; doc: string }> =
+    tabManager?.tabs ?? [];
+  const tab = tabs.find((item) => item.kind === "editor" && item.filePath === filePath);
+  return tab?.doc ?? "";
+}
+
 export function scheduleIndexRebuild(
   callback: (backlinks: string[], outgoing: string[]) => void
 ): void {
@@ -1649,6 +1690,7 @@ export function scheduleIndexRebuild(
       _linkIndex.clear();
       _currentDir = null;
       setCachedFileList([]);
+      _currentUnlinked = [];
       callback([], []);
       return;
     }
@@ -1705,6 +1747,12 @@ export function scheduleIndexRebuild(
 
         const backlinks = computeBacklinks(_linkIndex, currentFilename);
         const outgoing = _linkIndex.get(currentFilename) ?? [];
+        _currentUnlinked = extractUnlinkedMentions(
+          editorDocFor(currentFile),
+          currentFilename,
+          newIndex.keys(),
+          outgoing,
+        );
         callback(backlinks, outgoing);
         return;
       }
@@ -1719,6 +1767,12 @@ export function scheduleIndexRebuild(
       /* Compute backlinks and outgoing links for the current file */
       const backlinks = computeBacklinks(_linkIndex, currentFilename);
       const outgoing = _linkIndex.get(currentFilename) ?? [];
+      _currentUnlinked = extractUnlinkedMentions(
+        editorDocFor(currentFile),
+        currentFilename,
+        newIndex.keys(),
+        outgoing,
+      );
       callback(backlinks, outgoing);
     } finally {
       _rebuildInProgress = false;
@@ -1777,6 +1831,9 @@ let _currentBacklinks: string[] = [];
 
 /** Outgoing links from the current file (forward links). */
 let _currentOutgoing: string[] = [];
+
+/** Other notes named in the current file that are not linked. */
+let _currentUnlinked: string[] = [];
 
 /**
  * Callback invoked by the index builder (Step 7) when the scanning
@@ -1944,9 +2001,10 @@ export function rebuildBacklinksDOM(): void {
 
   const hasBacklinks = _currentBacklinks.length > 0;
   const hasOutgoing = _currentOutgoing.length > 0;
+  const hasUnlinked = _currentUnlinked.length > 0;
 
-  /* Empty state: neither backlinks nor outgoing */
-  if (!hasBacklinks && !hasOutgoing) {
+  /* Empty state: neither backlinks nor outgoing nor unlinked mentions */
+  if (!hasBacklinks && !hasOutgoing && !hasUnlinked) {
     const el = document.createElement("div");
     el.className = "backlink-empty";
     el.textContent = "No links";
@@ -2001,6 +2059,21 @@ export function rebuildBacklinksDOM(): void {
       _backlinksListEl.appendChild(makeItem(filename));
     }
   }
+
+  /* Section: note names in this file that are not links yet */
+  if (hasUnlinked) {
+    const header = document.createElement("div");
+    header.className = "backlinks-section-header";
+    header.textContent = `Unlinked mentions (${_currentUnlinked.length})`;
+    _backlinksListEl.appendChild(header);
+
+    const sorted = [..._currentUnlinked].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+    for (const filename of sorted) {
+      _backlinksListEl.appendChild(makeItem(filename));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2033,6 +2106,11 @@ export const _testing = {
   /** Set the current backlinks array. */
   setCurrentBacklinks(backlinks: string[]): void {
     _currentBacklinks = backlinks;
+  },
+
+  /** Set unlinked mentions for the panel render. */
+  setCurrentUnlinked(mentions: string[]): void {
+    _currentUnlinked = mentions;
   },
 
   /** Get the current backlinks list element (for assertions). */
@@ -3802,6 +3880,7 @@ const plugin = {
     _lastKnownFile = null;
     _currentBacklinks = [];
     _currentOutgoing = [];
+    _currentUnlinked = [];
     _isScanning = false;
     _backlinksListEl = null;
     _onScanningStateChanged = null;

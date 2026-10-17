@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
   getCurrentSettings,
   updateSettings,
@@ -6,6 +7,11 @@ import {
   clearRecentFiles,
   DEFAULT_SETTINGS,
 } from "../lib/settings";
+import {
+  resolveDataProtection,
+  type DataProtectionSettings,
+  type RecoveredNote,
+} from "../lib/data-protection";
 import type { WindowSizeMode } from "../lib/settings";
 import { updateRecentFilesMenu } from "../lib/bridge";
 // tabManager is imported so the "Tabs" settings section can call setMode()
@@ -137,6 +143,47 @@ export function createSettingsPanel(): void {
             </label>
           </div>
           <p class="settings-description">Underline misspelled words using the system dictionary.</p>
+        </div>
+
+        <div class="settings-section">
+          <label class="settings-label">Data Protection</label>
+          <div class="settings-row">
+            <span class="settings-description">Markdown deletes</span>
+            <select class="settings-select" id="settings-data-protection-mode">
+              <option value="off">Off — no file protection</option>
+              <option value="ask">Ask before deleting files</option>
+              <option value="trash">Use local trash bin</option>
+            </select>
+          </div>
+          <div id="settings-data-protection-trash" hidden>
+            <div class="settings-row">
+              <span class="settings-description">Keep backup copies</span>
+              <select class="settings-select" id="settings-data-protection-retention">
+                <option value="duration">For a period</option>
+                <option value="untilQuit">Until the app quits</option>
+                <option value="askOnQuit">Ask when the app quits</option>
+              </select>
+            </div>
+            <div class="settings-row" id="settings-data-protection-period">
+              <span class="settings-description">Keep for</span>
+              <input type="number" class="settings-input" id="settings-data-protection-amount" min="1" max="8760" />
+              <select class="settings-select" id="settings-data-protection-unit">
+                <option value="days">days</option>
+                <option value="hours">hours</option>
+              </select>
+            </div>
+          </div>
+          <p class="settings-description">Off removes the note. Ask shows an Are you sure dialog. Local trash keeps a copy you can restore here.</p>
+          <div class="settings-maximize-row">
+            <label class="settings-checkbox-label">
+              <input type="checkbox" id="settings-data-protection-trash-icon" />
+              <span>Show trash icon</span>
+            </label>
+          </div>
+          <p class="settings-description">Puts a trash can in the footer. Click opens the copies in Finder. Command-click or Control-click opens these settings. A closed can means the queue is empty. An open can means notes are waiting.</p>
+          <div class="settings-sub-label" style="margin-top: 12px;">Recoverable notes</div>
+          <ul class="settings-recovery-list" id="settings-recovery-list"></ul>
+          <p class="settings-description" id="settings-recovery-status"></p>
         </div>
 
         <div class="settings-section">
@@ -424,6 +471,8 @@ function wireEvents(): void {
     }));
   });
 
+  wireDataProtection();
+
   // List style dropdown — persist the selected style immediately so the list
   // engine picks it up on the next Enter/Tab keypress. Follows the same
   // pattern as the window size dropdowns (wSelect/hSelect above).
@@ -533,6 +582,125 @@ function syncPanelToSettings(): void {
   const qcFallbackPath = document.querySelector("#settings-qc-fallback-path") as HTMLInputElement;
   if (qcInboxFolder) qcInboxFolder.value = settings.quickCapture?.inboxFolder ?? "Inbox";
   if (qcFallbackPath) qcFallbackPath.value = settings.quickCapture?.fallbackPath ?? "~/Documents/Markable Inbox";
+
+  syncDataProtection(resolveDataProtection(settings.dataProtection));
+  void refreshRecoveryList();
+  window.dispatchEvent(new CustomEvent("markable-data-protection"));
+}
+
+function dataProtectionFromPanel(): DataProtectionSettings {
+  const mode = (document.querySelector("#settings-data-protection-mode") as HTMLSelectElement | null)?.value;
+  const retention = (document.querySelector("#settings-data-protection-retention") as HTMLSelectElement | null)?.value;
+  const unit = (document.querySelector("#settings-data-protection-unit") as HTMLSelectElement | null)?.value;
+  const amountRaw = (document.querySelector("#settings-data-protection-amount") as HTMLInputElement | null)?.value;
+  const showTrashIcon = (document.querySelector("#settings-data-protection-trash-icon") as HTMLInputElement | null)?.checked === true;
+  return resolveDataProtection({
+    mode: mode as DataProtectionSettings["mode"],
+    retention: retention as DataProtectionSettings["retention"],
+    retentionUnit: unit as DataProtectionSettings["retentionUnit"],
+    retentionAmount: Number(amountRaw),
+    showTrashIcon,
+  });
+}
+
+function syncDataProtection(protection: DataProtectionSettings): void {
+  const mode = document.querySelector("#settings-data-protection-mode") as HTMLSelectElement | null;
+  const retention = document.querySelector("#settings-data-protection-retention") as HTMLSelectElement | null;
+  const amount = document.querySelector("#settings-data-protection-amount") as HTMLInputElement | null;
+  const unit = document.querySelector("#settings-data-protection-unit") as HTMLSelectElement | null;
+  const trash = document.querySelector("#settings-data-protection-trash") as HTMLElement | null;
+  const period = document.querySelector("#settings-data-protection-period") as HTMLElement | null;
+  if (mode) mode.value = protection.mode;
+  if (retention) retention.value = protection.retention;
+  if (amount) amount.value = String(protection.retentionAmount);
+  if (unit) unit.value = protection.retentionUnit;
+  if (trash) trash.hidden = protection.mode !== "trash";
+  if (period) period.hidden = protection.retention !== "duration";
+  const showIcon = document.querySelector("#settings-data-protection-trash-icon") as HTMLInputElement | null;
+  if (showIcon) showIcon.checked = protection.showTrashIcon;
+}
+
+async function persistDataProtection(): Promise<void> {
+  const protection = dataProtectionFromPanel();
+  syncDataProtection(protection);
+  await updateSettings((s) => ({ ...s, dataProtection: protection }));
+  window.dispatchEvent(new CustomEvent("markable-data-protection"));
+}
+
+function wireDataProtection(): void {
+  for (const id of [
+    "settings-data-protection-mode",
+    "settings-data-protection-retention",
+    "settings-data-protection-unit",
+    "settings-data-protection-trash-icon",
+  ]) {
+    document.querySelector(`#${id}`)?.addEventListener("change", () => {
+      void persistDataProtection();
+    });
+  }
+  const amount = document.querySelector("#settings-data-protection-amount") as HTMLInputElement | null;
+  amount?.addEventListener("change", () => {
+    void persistDataProtection();
+  });
+  document.querySelector("#settings-recovery-list")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest("button[data-recovery-id]") as HTMLButtonElement | null;
+    if (!button?.dataset.recoveryId) return;
+    void restoreRecoveredNote(button.dataset.recoveryId);
+  });
+}
+
+function recoveryWhen(note: RecoveredNote): string {
+  if (note.sessionOnly) return "Kept until the app quits";
+  if (note.expiresAtMs) return `Kept until ${new Date(note.expiresAtMs).toLocaleString()}`;
+  return "Kept until you restore it";
+}
+
+async function refreshRecoveryList(): Promise<void> {
+  const list = document.querySelector("#settings-recovery-list");
+  const status = document.querySelector("#settings-recovery-status");
+  if (!list) return;
+  let notes: RecoveredNote[] = [];
+  try {
+    const value = await invoke<RecoveredNote[]>("list_recovered_notes");
+    if (Array.isArray(value)) notes = value;
+  } catch {
+    notes = [];
+  }
+  list.replaceChildren();
+  if (notes.length === 0) {
+    if (status) status.textContent = "No Markdown copies to restore.";
+    return;
+  }
+  if (status) status.textContent = "";
+  for (const note of notes) {
+    const row = document.createElement("li");
+    row.className = "settings-recovery-row";
+    const name = document.createElement("span");
+    name.className = "settings-recovery-name";
+    name.textContent = note.name;
+    name.title = note.originalPath;
+    const meta = document.createElement("span");
+    meta.className = "settings-recovery-meta";
+    meta.textContent = recoveryWhen(note);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-tertiary";
+    button.dataset.recoveryId = note.id;
+    button.textContent = "Restore";
+    row.append(name, meta, button);
+    list.append(row);
+  }
+}
+
+async function restoreRecoveredNote(id: string): Promise<void> {
+  const status = document.querySelector("#settings-recovery-status");
+  try {
+    const restored = await invoke<string>("restore_recovered_note", { id });
+    await refreshRecoveryList();
+    if (status) status.textContent = `Restored ${restored}`;
+  } catch (error) {
+    if (status) status.textContent = error instanceof Error ? error.message : String(error);
+  }
 }
 
 /**
