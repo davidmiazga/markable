@@ -371,6 +371,38 @@ export function extractOutgoingLinks(content: string): string[] {
 }
 
 /**
+ * A note path that can be opened inside the vault.
+ * Web, mail, and same-page hash links are not page previews.
+ */
+export function previewTargetFromHref(href: string): string | null {
+  const value = href.trim();
+  if (!value || value.startsWith("#")) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
+  const cut = value.search(/[#?]/);
+  const path = (cut === -1 ? value : value.slice(0, cut)).trim();
+  return path || null;
+}
+
+/** Visible label ranges for internal markdown links, skipping fenced code. */
+export function computeMarkdownPreviewMarks(
+  text: string
+): Array<{ from: number; to: number; target: string }> {
+  const marks: Array<{ from: number; to: number; target: string }> = [];
+  const re = /(?<!!)\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const label = match[1];
+    const target = previewTargetFromHref(match[2]);
+    if (!label || !target) continue;
+    const from = match.index + 1;
+    const to = from + label.length;
+    if (from >= to || isInsideFencedCode(text, from)) continue;
+    marks.push({ from, to, target });
+  }
+  return marks;
+}
+
+/**
  * Extract the filename component from an absolute file path.
  *
  * Splits on the last `/` and returns everything after it.
@@ -742,6 +774,19 @@ export function buildWikiLinkDecorations(view: any): any {
         }).range(range.from, range.to)
       );
     }
+  }
+
+  /*
+   * Markdown links such as [Note](other.md) are not wiki-links. Mark the
+   * visible label so the same Ctrl/Cmd hover preview can resolve them.
+   * External URLs are left styled by live preview and are not previewed.
+   */
+  for (const mark of computeMarkdownPreviewMarks(docText)) {
+    decorations.push(
+      Decoration.mark({
+        attributes: { "data-wiki-target": mark.target },
+      }).range(mark.from, mark.to)
+    );
   }
 
   return Decoration.set(decorations, true);
@@ -2204,16 +2249,16 @@ export function __test_only_getDecorationCallbacks(): {
  *   dismiss (FR-10.5).
  * - z-index 10000 matches the markdown toolbar layer (FR-10.4). See
  *   the z-index audit in `00_index.md` for the full layer table.
- * - `-webkit-line-clamp: 7` limits the excerpt to ~7 lines at 1.5 line
- *   height (≈126px), staying within the 240px max-height when title and
- *   path rows are included.
+ * - `-webkit-line-clamp: 12` keeps a readable excerpt inside the 380px
+ *   max-height, with a 16px title that wraps instead of truncating.
  */
 const WIKI_POPOVER_CSS = `
 [data-markable-wiki-popover] {
   position: fixed;
   z-index: 10000;
-  max-width: 320px;
-  max-height: 240px;
+  min-width: 280px;
+  max-width: 440px;
+  max-height: 380px;
   overflow: hidden;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
@@ -2234,13 +2279,12 @@ const WIKI_POPOVER_CSS = `
  */
 
 .wl-popover-title {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--link-color);
-  margin-bottom: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-bottom: 4px;
+  line-height: 1.35;
+  white-space: normal;
 }
 
 .wl-popover-path {
@@ -2253,12 +2297,12 @@ const WIKI_POPOVER_CSS = `
 }
 
 .wl-popover-excerpt {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text-secondary);
   line-height: 1.5;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 7;
+  -webkit-line-clamp: 12;
   -webkit-box-orient: vertical;
 }
 
@@ -2316,6 +2360,12 @@ export function removeWikiPopoverStyles(): void {
 
 /** Document-level mouseover handler reference, stored for cleanup in onDisable. */
 let _wikiLinkHoverHandler: ((e: MouseEvent) => void) | null = null;
+
+/** Ctrl/Cmd while the pointer is already on a link. */
+let _previewKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+/** Link under the pointer, so pressing Ctrl/Cmd can open its preview. */
+let _hoverAnchor: { el: HTMLElement; target: string } | null = null;
 
 /**
  * Document-level mouseleave/click handler for popover dismissal.
@@ -3171,33 +3221,61 @@ export function buildHoverHandler(): (e: MouseEvent) => void {
 
     /* Find the closest ancestor (or self) with a data-wiki-target attribute. */
     const spanEl = target.closest("[data-wiki-target]") as HTMLElement | null;
-    if (!spanEl) return;
-
-    /*
-     * The cursor has moved onto a new wiki-link span. Cancel any timers
-     * from a prior span so they don't fire for the wrong target.
-     */
-    if (_hoverShowTimer !== null) {
-      clearTimeout(_hoverShowTimer);
-      _hoverShowTimer = null;
-    }
-    if (_hoverDismissTimer !== null) {
-      clearTimeout(_hoverDismissTimer);
-      _hoverDismissTimer = null;
+    if (!spanEl) {
+      _hoverAnchor = null;
+      return;
     }
 
     const wikiTarget = spanEl.getAttribute("data-wiki-target");
     /* EC-12: empty target attribute — skip to avoid a vacuous fetch. */
-    if (!wikiTarget) return;
+    if (!wikiTarget) {
+      _hoverAnchor = null;
+      return;
+    }
+
+    _hoverAnchor = { el: spanEl, target: wikiTarget };
 
     /*
-     * Start the 180 ms show-delay timer (FR-1.1).
-     * If the user leaves before it fires, the dismiss handler cancels it.
+     * Page preview opens only while Ctrl (Windows/Linux) or Cmd (macOS)
+     * is held. A plain hover still styles the link and remembers it, so
+     * pressing the modifier afterwards can open the same preview.
      */
-    _hoverShowTimer = setTimeout(() => {
-      _hoverShowTimer = null;
-      void showWikiPopover(spanEl, wikiTarget);
-    }, 180);
+    if (!e.metaKey && !e.ctrlKey) {
+      if (_hoverShowTimer !== null) {
+        clearTimeout(_hoverShowTimer);
+        _hoverShowTimer = null;
+      }
+      return;
+    }
+
+    armPagePreview(spanEl, wikiTarget);
+  };
+}
+
+/** Start the 180 ms delay, replacing any preview already waiting to open. */
+function armPagePreview(spanEl: HTMLElement, wikiTarget: string): void {
+  if (_hoverShowTimer !== null) {
+    clearTimeout(_hoverShowTimer);
+    _hoverShowTimer = null;
+  }
+  if (_hoverDismissTimer !== null) {
+    clearTimeout(_hoverDismissTimer);
+    _hoverDismissTimer = null;
+  }
+  _hoverShowTimer = setTimeout(() => {
+    _hoverShowTimer = null;
+    void showWikiPopover(spanEl, wikiTarget);
+  }, 180);
+}
+
+/** Open the preview for the link under the pointer when Ctrl/Cmd goes down. */
+export function buildPreviewKeyHandler(): (e: KeyboardEvent) => void {
+  return (e: KeyboardEvent) => {
+    if (!_enabled || e.repeat) return;
+    if (!e.metaKey && !e.ctrlKey) return;
+    const anchor = _hoverAnchor;
+    if (!anchor || !anchor.el.isConnected) return;
+    armPagePreview(anchor.el, anchor.target);
   };
 }
 
@@ -3247,6 +3325,7 @@ export function buildDismissHandler(): (e: MouseEvent) => void {
       evTarget.hasAttribute("data-wiki-target") ||
       evTarget.closest("[data-wiki-target]")
     );
+    if (isLeavingSpan) _hoverAnchor = null;
     const isLeavingPopover = !!(
       _activePopoverEl &&
       (evTarget === _activePopoverEl || _activePopoverEl.contains(evTarget))
@@ -3321,6 +3400,8 @@ function _wireHoverListeners(): void {
    */
   _wikiLinkHoverHandler = buildHoverHandler();
   document.addEventListener("mouseover", _wikiLinkHoverHandler, true);
+  _previewKeyHandler = buildPreviewKeyHandler();
+  document.addEventListener("keydown", _previewKeyHandler, true);
 
   /*
    * Build and register the dismiss handler (mouseleave + click, capture phase).
@@ -3684,6 +3765,11 @@ const plugin = {
       document.removeEventListener("mouseover", _wikiLinkHoverHandler, true);
       _wikiLinkHoverHandler = null;
     }
+    if (_previewKeyHandler) {
+      document.removeEventListener("keydown", _previewKeyHandler, true);
+      _previewKeyHandler = null;
+    }
+    _hoverAnchor = null;
     if (_wikiLinkHoverLeaveHandler) {
       /*
        * The same function reference was registered for both `mouseleave` and
