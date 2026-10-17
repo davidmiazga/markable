@@ -104,7 +104,13 @@
 
 .sidebar-icon-btn:hover {
   background: var(--code-bg);
-  color: var(--text-primary);
+}
+
+/* Hidden panel: grey the icon. The strip still reveals buttons on hover;
+   only the shown panel (is-active) stays full strength. */
+.sidebar-icon-strip:hover .sidebar-icon-btn:not(.is-active),
+.sidebar-icon-strip.is-expanded .sidebar-icon-btn:not(.is-active) {
+  opacity: 0.4;
 }
 
 /* SVG icons inside strip buttons: constrain to 18 px so the 32 px button has padding. */

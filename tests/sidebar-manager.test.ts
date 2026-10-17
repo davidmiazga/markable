@@ -15,7 +15,14 @@
  *   3. The settings mock is re-initialised to its default state.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+
+const SIDEBAR_ICON_STATE_CSS = readFileSync(
+  join(process.cwd(), "src/sidebar/sidebar.css"),
+  "utf8",
+);
 
 // ── Module-level mocks — must be defined BEFORE the module under test is imported ──
 
@@ -1135,6 +1142,64 @@ describe("SidebarManager — icon strip", () => {
     // Panel should be un-iconized and visible.
     expect(wrapper.classList.contains("is-iconized")).toBe(false);
     expect(wrapper.style.display).not.toBe("none");
+  });
+
+  it("icon button is full strength when the panel is shown and greyed when hidden", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    register("plugin-b", makeDescriptor("panel-2", "right", { title: "Second" }));
+
+    const style = document.createElement("style");
+    style.textContent = SIDEBAR_ICON_STATE_CSS;
+    document.head.appendChild(style);
+
+    const strip = document.querySelector<HTMLElement>("#sidebar-right .sidebar-icon-strip")!;
+    strip.classList.add("is-expanded");
+
+    const shown = strip.querySelector<HTMLButtonElement>('[data-panel-id="panel-1"]')!;
+    const hidden = strip.querySelector<HTMLButtonElement>('[data-panel-id="panel-2"]')!;
+
+    expect(shown.classList.contains("is-active")).toBe(true);
+    expect(hidden.classList.contains("is-active")).toBe(true);
+    expect(getComputedStyle(shown).opacity).toBe("1");
+
+    hidden.click();
+
+    expect(hidden.classList.contains("is-active")).toBe(false);
+    expect(getComputedStyle(hidden).opacity).toBe("0.4");
+    expect(getComputedStyle(shown).opacity).toBe("1");
+
+    hidden.click();
+
+    expect(hidden.classList.contains("is-active")).toBe(true);
+    expect(getComputedStyle(hidden).opacity).toBe("1");
+  });
+
+  it("a panel restored as hidden starts with a greyed icon button", () => {
+    mockGetCurrentSettings.mockReturnValue({
+      sidebar: {
+        right: {
+          open: true,
+          activeTabId: "panel-1",
+          width: 220,
+          panels: { "panel-1": { accordionExpanded: true, iconized: true } },
+        },
+      },
+    });
+
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const style = document.createElement("style");
+    style.textContent = SIDEBAR_ICON_STATE_CSS;
+    document.head.appendChild(style);
+
+    const strip = document.querySelector<HTMLElement>("#sidebar-right .sidebar-icon-strip")!;
+    strip.classList.add("is-expanded");
+    const btn = strip.querySelector<HTMLButtonElement>(".sidebar-icon-btn")!;
+
+    expect(btn.classList.contains("is-active")).toBe(false);
+    expect(getComputedStyle(btn).opacity).toBe("0.4");
   });
 
   it("clicking icon on non-pinned expanded panel iconizes it", () => {

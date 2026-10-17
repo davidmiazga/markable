@@ -33,6 +33,7 @@ writes:
   - scripts/
   - src-tauri/tauri.conf.json
   - planning/
+  - tests/
 
 # Never included in a work envelope. Dirty copies warn via classify, not fail.
 protected_paths:
