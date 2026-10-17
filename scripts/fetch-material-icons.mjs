@@ -32,6 +32,10 @@ const ICONS = {
   EXPAND:          "keyboard_arrow_down",
   UNMOUNT:         "chip_extraction",   // Vault unmount button
   DASHBOARD:       "dashboard",         // File tree hover badge — opens Page Layout assignment
+  ADD_CIRCLE:      "add_circle",        // File row menu — pin, bookmark, page layout
+  STAR:            "star",              // Bookmark mark — click removes it
+  PIN:             "keep",              // Pin mark — click unpins
+  SEARCH:          "search",            // Pinned or bookmarked file search
 };
 
 /** Strip width/height attributes so we can set them per-use-site. */

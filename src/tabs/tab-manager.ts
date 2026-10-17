@@ -627,6 +627,32 @@ export class TabManager {
   }
 
   /**
+   * Scroll to a heading requested by a pin. The file browser sets
+   * window.__MARKABLE_REVEAL_HEADING__ before openFileInTab.
+   */
+  private _revealPendingHeading(filePath: string): void {
+    const pending = (window as unknown as {
+      __MARKABLE_REVEAL_HEADING__?: { path?: string; heading?: string } | null;
+    }).__MARKABLE_REVEAL_HEADING__;
+    if (!this.editorView || !pending || pending.path !== filePath || !pending.heading) return;
+    (window as unknown as { __MARKABLE_REVEAL_HEADING__?: unknown }).__MARKABLE_REVEAL_HEADING__ = null;
+    const wanted = pending.heading.trim().toLowerCase();
+    const doc = this.editorView.state.doc;
+    for (let n = 1; n <= doc.lines; n++) {
+      const line = doc.line(n);
+      const match = /^(#{1,6})\s+(.*)$/.exec(line.text);
+      const title = match?.[2].replace(/\s+#+\s*$/, "").trim().toLowerCase();
+      if (title !== wanted) continue;
+      this.editorView.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+      });
+      this.editorView.focus();
+      return;
+    }
+  }
+
+  /**
    * Opens a file in a new tab, or activates the existing tab if the file is
    * already open (EC-4 duplicate-path guard).
    *
@@ -643,6 +669,7 @@ export class TabManager {
       this.activeIndex = existingIdx;
       this._applyActiveTab();
       this._notifyRenderer();
+      this._revealPendingHeading(filePath);
       return false;
     }
 
@@ -670,6 +697,7 @@ export class TabManager {
     this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
 
     this._applyActiveTab(); // enters view mode via the combined dispatch
+    this._revealPendingHeading(filePath);
 
     this._notifyRenderer();
 

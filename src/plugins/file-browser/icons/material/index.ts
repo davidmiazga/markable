@@ -62,6 +62,22 @@ export const ICON_PREVIEW =
 export const ICON_VISIBILITY =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M480-320q75 0 127.5-52.5T660-500q0-75-52.5-127.5T480-680q-75 0-127.5 52.5T300-500q0 75 52.5 127.5T480-320Zm0-72q-45 0-76.5-31.5T372-500q0-45 31.5-76.5T480-608q45 0 76.5 31.5T588-500q0 45-31.5 76.5T480-392Zm0 192q-146 0-266-81.5T40-500q54-137 174-218.5T480-800q146 0 266 81.5T920-500q-54 137-174 218.5T480-200Zm0-300Zm0 220q113 0 207.5-59.5T832-500q-50-101-144.5-160.5T480-720q-113 0-207.5 59.5T128-500q50 101 144.5 160.5T480-280Z"/></svg>`;
 
+/** Material Symbols: star — shown on a bookmarked row; click removes the bookmark. */
+export const ICON_STAR =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="m323-245 157-94 157 95-42-178 138-120-182-16-71-168-71 167-182 16 138 120-42 178Zm-90 125 65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-355Z"/></svg>`;
+
+/** Material Symbols: keep — shown on a pinned row; click unpins. */
+export const ICON_PIN =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="m634-448 86 77v60H510v241l-30 30-30-30v-241H240v-60l80-77v-332h-50v-60h414v60h-50v332Zm-313 77h312l-59-55v-354H380v354l-59 55Zm156 0Z"/></svg>`;
+
+/** Material Symbols: search — pinned or bookmarked file search. */
+export const ICON_SEARCH =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg>`;
+
+/** Material Symbols: add_circle — row menu for pin, bookmark, and page layout. */
+export const ICON_ADD_CIRCLE =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M453-280h60v-166h167v-60H513v-174h-60v174H280v60h173v166Zm27.27 200q-82.74 0-155.5-31.5Q252-143 197.5-197.5t-86-127.34Q80-397.68 80-480.5t31.5-155.66Q143-709 197.5-763t127.34-85.5Q397.68-880 480.5-880t155.66 31.5Q709-817 763-763t85.5 127Q880-563 880-480.27q0 82.74-31.5 155.5Q817-252 763-197.68q-54 54.31-127 86Q563-80 480.27-80Zm.23-60Q622-140 721-239.5t99-241Q820-622 721.19-721T480-820q-141 0-240.5 98.81T140-480q0 141 99.5 240.5t241 99.5Zm-.5-340Z"/></svg>`;
+
 /** Material Symbols: dashboard — used as the file-tree hover badge that opens the Page Layout assign modal. */
 export const ICON_DASHBOARD =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M520-600v-240h320v240H520ZM120-440v-400h320v400H120Zm400 320v-400h320v400H520Zm-400 0v-240h320v240H120Zm60-380h200v-280H180v280Zm400 320h200v-280H580v280Zm0-480h200v-120H580v120ZM180-180h200v-120H180v120Zm200-320Zm200-160Zm0 240ZM380-300Z"/></svg>`;

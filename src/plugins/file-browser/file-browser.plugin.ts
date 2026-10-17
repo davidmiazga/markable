@@ -43,7 +43,10 @@ import {
   ICON_CHEVRON,
   ICON_UNMOUNT,
   ICON_VISIBILITY,
-  ICON_DASHBOARD,
+  ICON_ADD_CIRCLE,
+  ICON_STAR,
+  ICON_PIN,
+  ICON_SEARCH,
 } from "./icons/material/index";
 
 // Pure utility modules — bundled inline by Rollup (no window globals needed).
@@ -136,16 +139,33 @@ import {
 
 import {
   PLACES_CSS,
-  buildBookmarkSection,
+  addFilePlace,
+  addGroupPlace,
+  addHeadingPlace,
+  addSearchPlace,
+  buildPlaceSection,
+  entriesFromPaths,
+  filePathsIn,
+  headingsIn,
   isNotePath,
   listFolderItems,
   mergeVaultSlices,
   readNotePreview,
+  relocatePlace,
+  removeFilePlace,
+  removePlace,
+  renamePlace,
   renderFileDashboard,
   renderPinCanvas,
   sanitizePathList,
   sanitizePinLayout,
+  sanitizePlaceList,
+  sanitizePlaceSections,
+  setPlaceColor,
+  togglePlaceCollapsed,
   type PinCardLayout,
+  type PlaceColor,
+  type PlaceEntry,
 } from "./places";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -798,14 +818,6 @@ const FILE_BROWSER_CSS = `
   background: var(--selection-bg, rgba(92,107,192,.2));
 }
 
-/* Red dot shown before each pinned item label */
-.tree-node-pinned-dot {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #e05252;
-}
 
 ` + FOLDER_VIEW_CSS + FOLDER_TABLE_CSS + BOOKSHELF_CSS + COLLECTIONS_CSS + PLACES_CSS;
 
@@ -903,6 +915,10 @@ let _expandedPaths: Set<string> = new Set();
  * of the tree. Keyed per vault via FileBrowserSettings.pinnedPaths.
  */
 let _pinnedPaths: Set<string> = new Set();
+let _pinItems: PlaceEntry[] = [];
+let _bookmarkItems: PlaceEntry[] = [];
+let _pinsCollapsed = false;
+let _bookmarksCollapsed = false;
 
 /**
  * Bookmarked file paths for the active vault. Independent of pins: a note
@@ -1066,6 +1082,10 @@ interface FileBrowserSettings {
   bookmarks?: Record<string, string[]>;
   /** Per-vault pin-canvas positions. Paths and coordinates only — never note text. */
   pinLayouts?: Record<string, Record<string, PinCardLayout>>;
+  /** Ordered pin tree. Absent on older settings, which still use pinnedPaths. */
+  pinItems?: Record<string, PlaceEntry[]>;
+  bookmarkItems?: Record<string, PlaceEntry[]>;
+  placeSections?: Record<string, { pinsCollapsed?: boolean; bookmarksCollapsed?: boolean }>;
 }
 
 /**
@@ -1092,8 +1112,16 @@ async function loadExpandedPaths(vaultId: string): Promise<void> {
     const paths = saved?.expandedPaths?.[vaultId] ?? [];
     _expandedPaths = new Set(paths);
     const pinned = saved?.pinnedPaths?.[vaultId] ?? [];
-    _pinnedPaths = new Set(pinned);
-    _bookmarkPaths = new Set(sanitizePathList(saved?.bookmarks?.[vaultId]));
+    _pinItems = saved?.pinItems?.[vaultId] === undefined
+      ? entriesFromPaths(sanitizePathList(pinned))
+      : sanitizePlaceList(saved?.pinItems?.[vaultId]);
+    _bookmarkItems = saved?.bookmarkItems?.[vaultId] === undefined
+      ? entriesFromPaths(sanitizePathList(saved?.bookmarks?.[vaultId]))
+      : sanitizePlaceList(saved?.bookmarkItems?.[vaultId]);
+    const sections = sanitizePlaceSections(saved?.placeSections?.[vaultId]);
+    _pinsCollapsed = sections.pinsCollapsed;
+    _bookmarksCollapsed = sections.bookmarksCollapsed;
+    syncPlacePathSets();
     _pinLayouts = sanitizePinLayout(saved?.pinLayouts?.[vaultId]);
     // Load smart folders for this vault (step_01). sanitizeAll inside
     // loadSmartFolders prunes corruption silently (EC-08, NFR-06).
@@ -1102,6 +1130,10 @@ async function loadExpandedPaths(vaultId: string): Promise<void> {
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
     _bookmarkPaths = new Set();
+    _pinItems = [];
+    _bookmarkItems = [];
+    _pinsCollapsed = false;
+    _bookmarksCollapsed = false;
     _pinLayouts = {};
     // Cleanup #4: defensively reset _smartFolders on load failure so
     // a previous vault's definitions never persist into a new vault.
@@ -1128,10 +1160,13 @@ function scheduleSettingsSave(vaultId: string): void {
       const existing = (await _api.loadSettings()) as FileBrowserSettings | null;
       await _api.saveSettings(mergeVaultSlices(existing as Record<string, unknown> | null, vaultId, {
         expandedPaths: Array.from(_expandedPaths),
-        pinnedPaths: Array.from(_pinnedPaths),
+        pinnedPaths: filePathsIn(_pinItems),
         smartFolders: _smartFolders,
-        bookmarks: Array.from(_bookmarkPaths),
+        bookmarks: filePathsIn(_bookmarkItems),
         pinLayouts: _pinLayouts,
+        pinItems: _pinItems,
+        bookmarkItems: _bookmarkItems,
+        placeSections: { pinsCollapsed: _pinsCollapsed, bookmarksCollapsed: _bookmarksCollapsed },
       }));
     } catch {
       /* Save failure is non-critical — expanded state is in-memory until next open. */
@@ -1141,31 +1176,159 @@ function scheduleSettingsSave(vaultId: string): void {
 
 // ── Pinned paths helpers ──────────────────────────────────────────────────────
 
-function pinPath(path: string, vaultId: string): void {
-  _pinnedPaths.add(path);
+function syncPlacePathSets(): void {
+  _pinnedPaths = new Set(filePathsIn(_pinItems));
+  _bookmarkPaths = new Set(filePathsIn(_bookmarkItems));
+}
+
+function commitPlaces(vaultId: string): void {
+  syncPlacePathSets();
   scheduleSettingsSave(vaultId);
   renderPanel();
   refreshPlaceViews();
+}
+
+function pinPath(path: string, vaultId: string): void {
+  _pinItems = addFilePlace(_pinItems, path);
+  commitPlaces(vaultId);
 }
 
 function unpinPath(path: string, vaultId: string): void {
-  _pinnedPaths.delete(path);
+  _pinItems = removeFilePlace(_pinItems, path);
   delete _pinLayouts[path];
-  scheduleSettingsSave(vaultId);
-  renderPanel();
-  refreshPlaceViews();
+  commitPlaces(vaultId);
 }
 
 function bookmarkPath(path: string, vaultId: string): void {
-  _bookmarkPaths.add(path);
-  scheduleSettingsSave(vaultId);
-  renderPanel();
+  _bookmarkItems = addFilePlace(_bookmarkItems, path);
+  commitPlaces(vaultId);
 }
 
 function unbookmarkPath(path: string, vaultId: string): void {
-  _bookmarkPaths.delete(path);
-  scheduleSettingsSave(vaultId);
-  renderPanel();
+  _bookmarkItems = removeFilePlace(_bookmarkItems, path);
+  commitPlaces(vaultId);
+}
+
+function placeList(which: "pins" | "bookmarks"): PlaceEntry[] {
+  return which === "pins" ? _pinItems : _bookmarkItems;
+}
+
+function setPlaceList(which: "pins" | "bookmarks", entries: PlaceEntry[], vaultId: string): void {
+  if (which === "pins") _pinItems = entries;
+  else _bookmarkItems = entries;
+  commitPlaces(vaultId);
+}
+
+function placeSectionOpts(
+  title: string,
+  entries: PlaceEntry[],
+  collapsed: boolean,
+  activeFile: string | null,
+  vaultId: string,
+  which: "pins" | "bookmarks",
+  removeIcon: string,
+  removeTitle: string,
+) {
+  return {
+    title,
+    entries,
+    collapsed,
+    activePath: activeFile,
+    removeIcon,
+    removeTitle,
+    onToggleSection: () => {
+      if (which === "pins") _pinsCollapsed = !_pinsCollapsed;
+      else _bookmarksCollapsed = !_bookmarksCollapsed;
+      commitPlaces(vaultId);
+    },
+    onToggleGroup: (id: string) => {
+      setPlaceList(which, togglePlaceCollapsed(placeList(which), id), vaultId);
+    },
+    onNewGroup: () => {
+      const name = window.prompt("Group name", "Group");
+      if (!name?.trim()) return;
+      setPlaceList(which, addGroupPlace(placeList(which), name.trim()), vaultId);
+    },
+    onOpenFile: (path: string, heading?: string) => {
+      if (heading) {
+        (window as unknown as { __MARKABLE_REVEAL_HEADING__?: { path: string; heading: string } })
+          .__MARKABLE_REVEAL_HEADING__ = { path, heading };
+      }
+      openListedFile(path);
+    },
+    onRunSearch: (query: string) => {
+      _searchVisible = true;
+      _searchQuery = query;
+      _updateSearchToggleState();
+      renderPanel();
+    },
+    onRemove: (id: string) => setPlaceList(which, removePlace(placeList(which), id), vaultId),
+    onReorder: (id: string, parentId: string | null, index: number) => {
+      setPlaceList(which, relocatePlace(placeList(which), id, parentId, index), vaultId);
+    },
+    onContextMenu: (event: MouseEvent, entry: PlaceEntry, _row: HTMLElement) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showPlaceMenu(entry, which, vaultId, event.clientX, event.clientY);
+    },
+  };
+}
+
+const PLACE_SWATCHES: PlaceColor[] = ["red", "orange", "yellow", "green", "blue", "purple"];
+
+function showPlaceMenu(
+  entry: PlaceEntry,
+  which: "pins" | "bookmarks",
+  vaultId: string,
+  x: number,
+  y: number,
+): void {
+  const items: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> = [];
+  if (entry.kind === "group") {
+    items.push({
+      label: "Rename group",
+      handler: () => {
+        const name = window.prompt("Group name", entry.name ?? "Group");
+        if (!name?.trim()) return;
+        setPlaceList(which, renamePlace(placeList(which), entry.id, name.trim()), vaultId);
+      },
+    });
+  }
+  showContextMenu(items, x, y);
+  const menu = _contextMenu;
+  if (!menu) return;
+
+  const row = document.createElement("li");
+  row.className = "place-swatch-row";
+  for (const color of PLACE_SWATCHES) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = `place-swatch place-color-${color}`;
+    swatch.title = color;
+    if (entry.color === color) swatch.classList.add("is-selected");
+    swatch.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPlaceList(which, setPlaceColor(placeList(which), entry.id, color), vaultId);
+      closeContextMenu();
+    });
+    row.appendChild(swatch);
+  }
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "place-swatch-remove";
+  remove.title = "Remove";
+  remove.textContent = "×";
+  remove.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setPlaceList(which, removePlace(placeList(which), entry.id), vaultId);
+    closeContextMenu();
+  });
+  row.appendChild(remove);
+  menu.appendChild(row);
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - rect.width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - rect.height - 4))}px`;
 }
 
 function refreshPlaceViews(): void {
@@ -1215,16 +1378,13 @@ function buildPinnedSection(activeFile: string | null, vaultId: string): HTMLEle
     li.tabIndex = 0;
     if (pinnedPath === activeFile) li.classList.add("tree-node-active");
 
-    const dot = document.createElement("span");
-    dot.className = "tree-node-pinned-dot";
-
     const nameSpan = document.createElement("span");
     nameSpan.className = "tree-node-label";
     nameSpan.textContent = name;
     nameSpan.title = pinnedPath;
 
-    li.appendChild(dot);
     li.appendChild(nameSpan);
+    li.appendChild(buildStatusMark(ICON_PIN, "Unpin", () => unpinPath(pinnedPath, vaultId)));
 
     if (!isDir && isNotePath(pinnedPath)) {
       li.classList.add("has-preview");
@@ -1821,7 +1981,38 @@ export function renderPanel(): void {
   searchInput.value = _searchQuery;
   searchInput.setAttribute("aria-label", "Filter files");
 
+  const pinSearch = document.createElement("button");
+  pinSearch.type = "button";
+  pinSearch.className = "file-browser-search-save";
+  pinSearch.title = "Pin this search";
+  pinSearch.innerHTML = wrapSvg(ICON_SEARCH, 16);
+  pinSearch.hidden = !searchInput.value.trim();
+  const bookmarkSearch = document.createElement("button");
+  bookmarkSearch.type = "button";
+  bookmarkSearch.className = "file-browser-search-save";
+  bookmarkSearch.title = "Bookmark this search";
+  bookmarkSearch.innerHTML = wrapSvg(ICON_STAR, 16);
+  bookmarkSearch.hidden = !searchInput.value.trim();
+  const showSearchSaves = (): void => {
+    const hasQuery = searchInput.value.trim().length > 0;
+    pinSearch.hidden = !hasQuery;
+    bookmarkSearch.hidden = !hasQuery;
+  };
+  pinSearch.addEventListener("click", () => {
+    const vaultId = (window as any).__MARKABLE_VAULT_MANAGER__?.getActiveVault?.()?.id as string | undefined;
+    if (!vaultId || !searchInput.value.trim()) return;
+    _pinItems = addSearchPlace(_pinItems, searchInput.value);
+    commitPlaces(vaultId);
+  });
+  bookmarkSearch.addEventListener("click", () => {
+    const vaultId = (window as any).__MARKABLE_VAULT_MANAGER__?.getActiveVault?.()?.id as string | undefined;
+    if (!vaultId || !searchInput.value.trim()) return;
+    _bookmarkItems = addSearchPlace(_bookmarkItems, searchInput.value);
+    commitPlaces(vaultId);
+  });
+
   searchInput.addEventListener("input", () => {
+    showSearchSaves();
     if (_searchTimer !== null) clearTimeout(_searchTimer);
     _searchTimer = setTimeout(() => {
       _searchQuery = searchInput.value;
@@ -1830,7 +2021,7 @@ export function renderPanel(): void {
     }, SEARCH_DEBOUNCE_MS);
   });
 
-  searchRow.appendChild(searchInput);
+  searchRow.append(searchInput, pinSearch, bookmarkSearch);
   header.appendChild(searchRow);
   wrapper.appendChild(header);
   _searchEl = searchInput;
@@ -1933,6 +2124,17 @@ function buildTreeUl(
     if (basename.startsWith("view-") && basename.endsWith(".md")) {
       el.classList.add("tree-node-is-view-md");
     }
+    const trailing = document.createElement("span");
+    trailing.className = "tree-node-trailing";
+    if (_bookmarkPaths.has(path)) {
+      trailing.appendChild(buildStatusMark(ICON_STAR, "Remove bookmark", () => unbookmarkPath(path, vaultId)));
+    }
+    if (_pinnedPaths.has(path)) {
+      trailing.appendChild(buildStatusMark(ICON_PIN, "Unpin", () => unpinPath(path, vaultId)));
+    }
+    if (el.getAttribute("data-type") === "file") {
+      trailing.appendChild(buildRowAddButton(path, vaultId));
+    }
     if (isNamedViewFile) {
       // Visibility eye on `_folder.md` (and the legacy view-*.md naming).
       // Click → open the folder view, same flow as the folder's own badge.
@@ -1949,23 +2151,9 @@ function buildTreeUl(
           (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__?.(parentDir, path);
         }
       });
-      el.appendChild(viewBadge);
-    } else if (
-      el.getAttribute("data-type") === "file" &&
-      (path.toLowerCase().endsWith(".md") || path.toLowerCase().endsWith(".markdown"))
-    ) {
-      // Ghost assign button on all other .md files — visible on hover
-      const assignBtn = document.createElement("span");
-      assignBtn.className = "tree-node-assign-btn";
-      assignBtn.setAttribute("aria-hidden", "true");
-      assignBtn.title = "Apply Page Layout";
-      assignBtn.innerHTML = wrapSvg(ICON_DASHBOARD, 12);
-      assignBtn.addEventListener("click", (e: MouseEvent) => {
-        e.stopPropagation();
-        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
-      });
-      el.appendChild(assignBtn);
+      trailing.appendChild(viewBadge);
     }
+    if (trailing.childElementCount > 0) el.appendChild(trailing);
     attachNodeListeners(el, vaultId, hasFolderView);
   }
 
@@ -1986,20 +2174,29 @@ function buildTreeUl(
   });
 
   if (vaultId) {
-    const bookmarkSection = buildBookmarkSection(Array.from(_bookmarkPaths), {
-      activePath: activeFile,
-      onOpen: openListedFile,
-      onContextMenu: (event, path, row) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showContextMenu(buildFileContextMenuItems(row, path, vaultId), event.clientX, event.clientY);
-      },
-    });
-    if (bookmarkSection) wrapper.appendChild(bookmarkSection);
+    const bookmarks = buildPlaceSection(placeSectionOpts(
+      "Bookmarks",
+      _bookmarkItems,
+      _bookmarksCollapsed,
+      activeFile,
+      vaultId,
+      "bookmarks",
+      wrapSvg(ICON_STAR, 16),
+      "Remove bookmark",
+    ));
+    if (bookmarks) wrapper.appendChild(bookmarks);
+    const pins = buildPlaceSection(placeSectionOpts(
+      "Pinned",
+      _pinItems,
+      _pinsCollapsed,
+      activeFile,
+      vaultId,
+      "pins",
+      wrapSvg(ICON_PIN, 16),
+      "Unpin",
+    ));
+    if (pins) wrapper.appendChild(pins);
   }
-
-  const pinnedSection = buildPinnedSection(activeFile, vaultId);
-  if (pinnedSection) wrapper.appendChild(pinnedSection);
   wrapper.appendChild(card);
 }
 
@@ -3136,6 +3333,8 @@ export async function refreshVaultData(): Promise<void> {
    * the user's last open/close state when the vault changes.
    */
   _pinnedPaths = new Set();
+  _pinItems = [];
+  _bookmarkItems = [];
   await loadExpandedPaths(activeVault.id);
 
   /* Fast path: vault-manager already has a loaded index — render immediately */
@@ -3299,11 +3498,16 @@ function addMenuItem(
  * @param x     - Desired left position (viewport-relative).
  * @param y     - Desired top position (viewport-relative).
  */
+let _lastMenuX = 80;
+let _lastMenuY = 80;
+
 function showContextMenu(
   items: Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }>,
   x: number,
   y: number,
 ): void {
+  _lastMenuX = x;
+  _lastMenuY = y;
   closeContextMenu();
 
   const ul = document.createElement("ul");
@@ -3351,6 +3555,102 @@ function showContextMenu(
 }
 
 /**
+ * Pin, bookmark, and — for a markdown note — page layout.
+ * `hasLayout` null omits the layout item (folders and non-notes).
+ */
+function rowActionItems(
+  path: string,
+  vaultId: string,
+  hasLayout: boolean | null,
+): Array<{ label: string; handler: (() => void) | null; separator?: boolean }> {
+  const items: Array<{ label: string; handler: (() => void) | null; separator?: boolean }> = [
+    {
+      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
+      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
+    },
+    {
+      label: _bookmarkPaths.has(path) ? "Remove Bookmark" : "Bookmark",
+      handler: () => _bookmarkPaths.has(path) ? unbookmarkPath(path, vaultId) : bookmarkPath(path, vaultId),
+    },
+  ];
+  if (hasLayout !== null) {
+    items.push({
+      label: "Pin heading",
+      handler: () => { void pinHeadingMenu(path, vaultId); },
+    });
+  }
+  if (hasLayout !== null) {
+    items.push({
+      label: hasLayout ? "Edit Page Layout" : "Apply Page Layout",
+      handler: () => {
+        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
+      },
+    });
+  }
+  return items;
+}
+
+async function pinHeadingMenu(path: string, vaultId: string): Promise<void> {
+  const content = await readFileContentForMenu(path);
+  const headings = headingsIn(content ?? "");
+  if (headings.length === 0) {
+    showContextMenu([{ label: "No headings", handler: null, disabled: true }], _lastMenuX, _lastMenuY);
+    return;
+  }
+  showContextMenu(
+    headings.map((heading) => ({
+      label: heading,
+      handler: () => {
+        _pinItems = addHeadingPlace(_pinItems, path, heading);
+        commitPlaces(vaultId);
+      },
+    })),
+    _lastMenuX,
+    _lastMenuY,
+  );
+}
+
+/** Notes report whether a layout is already set. Other files omit that item. */
+async function layoutFlagForMenu(path: string): Promise<boolean | null> {
+  if (!isNotePath(path)) return null;
+  const content = await readFileContentForMenu(path);
+  return content ? detectLayout(content) : false;
+}
+
+/** Star or pin on the right of a row. Clicking it clears that mark. */
+function buildStatusMark(icon: string, title: string, onRemove: () => void): HTMLElement {
+  const btn = document.createElement("span");
+  btn.className = "tree-node-mark";
+  btn.setAttribute("role", "button");
+  btn.title = title;
+  btn.innerHTML = wrapSvg(icon, 16);
+  btn.addEventListener("click", (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onRemove();
+  });
+  return btn;
+}
+
+/** Circled plus. Same 18px hover slot the layout grid used. Opens the row menu. */
+function buildRowAddButton(path: string, vaultId: string): HTMLElement {
+  const btn = document.createElement("span");
+  btn.className = "tree-node-add-btn";
+  btn.setAttribute("role", "button");
+  btn.title = isNotePath(path) ? "Pin, bookmark, or page layout" : "Pin or bookmark";
+  btn.innerHTML = wrapSvg(ICON_ADD_CIRCLE, 16);
+  btn.addEventListener("click", (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = btn.getBoundingClientRect();
+    void layoutFlagForMenu(path).then((hasLayout) => {
+      showContextMenu(rowActionItems(path, vaultId, hasLayout), rect.left, rect.bottom + 2);
+    });
+  });
+  return btn;
+}
+
+/**
  * Build the context menu items for a file node.
  *
  * @param el           - The node <li> element.
@@ -3362,25 +3662,15 @@ function buildFileContextMenuItems(
   path: string,
   vaultId: string,
   hasCodeblock = false,
-  hasLayout = false,
+  _hasLayout = false,
 ): Array<{ label: string; handler: (() => void) | null; disabled?: boolean; separator?: boolean }> {
   const parentDir = getParentDir(path);
   const container = _panelContainer;
-  const isMd = path.toLowerCase().endsWith(".md");
 
   return [
-    // Layout entry point — label flips Apply ↔ Edit based on whether the
-    // file's YAML frontmatter already carries a `layout:` key. .md only.
-    ...(isMd ? [{
-      label: hasLayout ? "Edit Page Layout" : "Apply Page Layout",
-      handler: () => {
-        (window as any).__MARKABLE_OPEN_ASSIGN_MODAL__?.(path);
-      },
-    }] : []),
     // Codeblock entry point — label flips Insert ↔ Edit based on whether
-    // the file already contains a select/sidebar/grid fence. Either way the
-    // handler just opens the file in a tab; the user uses slash commands /
-    // the gear icon to actually insert or edit.
+    // the file already contains a select/sidebar/grid fence. Pin, bookmark,
+    // and page layout live on the row's add-circle menu.
     {
       label: hasCodeblock ? "Edit CodeBlock" : "Insert CodeBlock",
       handler: () => {
@@ -3417,14 +3707,6 @@ function buildFileContextMenuItems(
       handler: () => {
         void deleteFile(path, container ?? document.createElement("div"));
       },
-    },
-    {
-      label: _pinnedPaths.has(path) ? "Unpin" : "Pin",
-      handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
-    },
-    {
-      label: _bookmarkPaths.has(path) ? "Remove Bookmark" : "Bookmark",
-      handler: () => _bookmarkPaths.has(path) ? unbookmarkPath(path, vaultId) : bookmarkPath(path, vaultId),
     },
     { separator: true, label: "", handler: null },
     {
@@ -4322,7 +4604,7 @@ function attachDragDropListeners(el: HTMLElement, _vaultId: string): void {
       // Don't capture the pointer when the click originated on an interactive child
       // (badge, assign button, or other button). setPointerCapture would redirect the
       // synthesized click to el, bypassing the child's own click handler entirely.
-      if ((e.target as Element).closest(".tree-node-fv-badge,.tree-node-assign-btn,button")) return;
+      if ((e.target as Element).closest(".tree-node-fv-badge,.tree-node-add-btn,.tree-node-mark,button")) return;
       startX = e.clientX;
       startY = e.clientY;
       dragActive = false;
@@ -4729,10 +5011,27 @@ function openFileDashboard(folderPath?: string): void {
           void moveNode(source, dest, _panelContainer);
         },
         onContextMenu: (event, item, row) => {
-          const items = item.kind === "directory"
-            ? buildDirContextMenuItems(row, item.path, vaultId, _lastFolderViewSet.has(item.path))
-            : buildFileContextMenuItems(row, item.path, vaultId);
-          showContextMenu(items, event.clientX, event.clientY);
+          const x = event.clientX;
+          const y = event.clientY;
+          if (item.kind === "directory") {
+            showContextMenu(
+              buildDirContextMenuItems(row, item.path, vaultId, _lastFolderViewSet.has(item.path)),
+              x,
+              y,
+            );
+            return;
+          }
+          void layoutFlagForMenu(item.path).then((hasLayout) => {
+            showContextMenu(
+              [
+                ...rowActionItems(item.path, vaultId, hasLayout),
+                { separator: true, label: "", handler: null },
+                ...buildFileContextMenuItems(row, item.path, vaultId),
+              ],
+              x,
+              y,
+            );
+          });
         },
       });
     };
@@ -5015,6 +5314,10 @@ const plugin = {
     _expandedPaths = new Set();
     _pinnedPaths = new Set();
     _bookmarkPaths = new Set();
+    _pinItems = [];
+    _bookmarkItems = [];
+    _pinsCollapsed = false;
+    _bookmarksCollapsed = false;
     _pinLayouts = {};
     _placeRefresh = [];
     _lastKnownFile = null;
@@ -5144,6 +5447,8 @@ export const _testing = {
   buildVaultContextMenuItems,
   /** Expose buildFileContextMenuItems for testing. */
   buildFileContextMenuItems,
+  /** Pin, bookmark, and page layout for the row add-circle menu. */
+  rowActionItems,
   /** Expose buildDirContextMenuItems for context-menu integration tests (step_06). */
   buildDirContextMenuItems,
   /** Expose handleContextMenu for EC-24 (smart folder exclusion) tests (step_06). */
@@ -5214,6 +5519,12 @@ export const _testing = {
   },
   /** Expose closeContextMenu for testing. */
   closeContextMenu,
+  /** Color-dot menu for a bookmark or pin. */
+  openPlaceMenu: showPlaceMenu,
+  bookmarkPath,
+  getBookmarkItems(): PlaceEntry[] {
+    return _bookmarkItems;
+  },
   /**
    * Expose showContextMenu for testing (EC-VUX-06: verify context menu is closed
    * when unmount button is clicked while the menu is open).

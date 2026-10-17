@@ -343,8 +343,7 @@ export const FOLDER_VIEW_CSS = `
 
 /* ── Ghost assign button (appears on hover for regular .md files) ─── */
 
-.tree-node-assign-btn {
-  margin-left: auto;
+.tree-node-add-btn {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
@@ -357,14 +356,14 @@ export const FOLDER_VIEW_CSS = `
   cursor: pointer;
   transition: opacity 0.12s;
 }
-.tree-node-assign-btn svg {
+.tree-node-add-btn svg {
   display: block;
   fill: currentColor;
-  width: 100%;
-  height: 100%;
+  width: 16px;
+  height: 16px;
 }
-.tree-node:hover .tree-node-assign-btn { opacity: 0.35; }
-.tree-node-assign-btn:hover { opacity: 1 !important; background: var(--bg-hover, rgba(255,255,255,.07)); }
+.tree-node:hover .tree-node-add-btn { opacity: 1; }
+.tree-node-add-btn:hover { background: var(--bg-hover, rgba(255,255,255,.07)); }
 
 /* ── Card metadata line (.fv-card-meta) ─────────────────────────────── */
 

@@ -4,18 +4,26 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  addGroupPlace,
+  addSearchPlace,
+  buildBookmarkSection,
+  buildPlaceSection,
+  headingsIn,
   isNotePath,
   listFolderItems,
   layoutsFor,
   mergeVaultSlices,
   moveCard,
   notePreview,
+  relocatePlace,
   renderFileDashboard,
   renderPinCanvas,
   sanitizePathList,
   sanitizePinLayout,
   stackOnto,
+  togglePlaceCollapsed,
   NOTE_PREVIEW_MAX,
+  type PlaceEntry,
 } from "../../../src/plugins/file-browser/places";
 import { _testing } from "../../../src/plugins/file-browser/file-browser.plugin";
 
@@ -208,16 +216,48 @@ describe("pin canvas", () => {
   });
 });
 
+describe("bookmark marks", () => {
+  it("puts a star on the right of a bookmark and removes it on click", () => {
+    const onUnbookmark = vi.fn();
+    const onOpen = vi.fn();
+    const section = buildBookmarkSection(["/vault/Meeting notes.md"], {
+      activePath: null,
+      onOpen,
+      onContextMenu: () => {},
+      onUnbookmark,
+      unbookmarkIcon: "<svg></svg>",
+    });
+    const row = section?.querySelector("li");
+    const mark = row?.querySelector(".tree-node-mark");
+    expect(row?.lastElementChild).toBe(mark);
+    expect(mark?.getAttribute("title")).toBe("Remove bookmark");
+    mark?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onUnbookmark).toHaveBeenCalledWith("/vault/Meeting notes.md");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
 describe("file browser menus", () => {
-  it("offers Bookmark on a file and Folder dashboard on a folder", () => {
+  it("keeps pin and bookmark off the file right-click and on the row menu", () => {
     _testing.setBookmarkPaths(new Set());
+    _testing.setPinnedPaths(new Set());
     const fileItems = _testing.buildFileContextMenuItems(document.createElement("div"), "/vault/note.md", "vault-1");
-    expect(fileItems.map((item) => item.label)).toContain("Bookmark");
-    expect(fileItems.map((item) => item.label)).toContain("Pin");
+    const fileLabels = fileItems.map((item) => item.label);
+    expect(fileLabels).not.toContain("Bookmark");
+    expect(fileLabels).not.toContain("Pin");
+    expect(fileLabels).not.toContain("Apply Page Layout");
+    expect(fileLabels).toContain("Rename");
+
+    const actions = _testing.rowActionItems("/vault/note.md", "vault-1", false);
+    expect(actions.map((item) => item.label)).toEqual(["Pin", "Bookmark", "Pin heading", "Apply Page Layout"]);
 
     _testing.setBookmarkPaths(new Set(["/vault/note.md"]));
-    const again = _testing.buildFileContextMenuItems(document.createElement("div"), "/vault/note.md", "vault-1");
-    expect(again.map((item) => item.label)).toContain("Remove Bookmark");
+    _testing.setPinnedPaths(new Set(["/vault/note.md"]));
+    const again = _testing.rowActionItems("/vault/note.md", "vault-1", true);
+    expect(again.map((item) => item.label)).toEqual(["Unpin", "Remove Bookmark", "Pin heading", "Edit Page Layout"]);
+
+    const plain = _testing.rowActionItems("/vault/photo.png", "vault-1", null);
+    expect(plain.map((item) => item.label)).toEqual(["Pin", "Bookmark"]);
 
     const dir = document.createElement("div");
     const dirItems = _testing.buildDirContextMenuItems(dir, "/vault/A", "vault-1", false);
@@ -226,5 +266,123 @@ describe("file browser menus", () => {
     expect(labels.indexOf("Pin")).toBe(labels.indexOf("Delete") + 1);
     const visible = dirItems.filter((item) => !item.separator);
     expect(visible[visible.length - 1]?.label).toBe("Reveal in Finder");
+  });
+});
+
+describe("place lists", () => {
+  const file = (id: string, path: string): PlaceEntry => ({ id, kind: "file", path });
+
+  it("reads headings and ignores duplicates", () => {
+    expect(headingsIn("# Title\n\n## Title\n### Notes")).toEqual(["Title", "Notes"]);
+  });
+
+  it("moves an item into a group and collapses that group", () => {
+    let entries = [file("a", "/vault/a.md"), file("b", "/vault/b.md")];
+    entries = addGroupPlace(entries, "Daily");
+    const group = entries.find((entry) => entry.kind === "group")!;
+    entries = relocatePlace(entries, "a", group.id, 0);
+    expect(entries.find((entry) => entry.id === group.id)?.children?.map((child) => child.id)).toEqual(["a"]);
+    entries = togglePlaceCollapsed(entries, group.id);
+    expect(entries.find((entry) => entry.id === group.id)?.collapsed).toBe(true);
+  });
+
+  it("stores a search once and draws it with the search icon", () => {
+    let entries = addSearchPlace([], "  invoices  ");
+    entries = addSearchPlace(entries, "invoices");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].query).toBe("invoices");
+
+    const section = buildPlaceSection({
+      title: "Pinned",
+      entries,
+      collapsed: false,
+      activePath: null,
+      removeIcon: "<svg></svg>",
+      removeTitle: "Unpin",
+      onToggleSection: () => {},
+      onToggleGroup: () => {},
+      onNewGroup: () => {},
+      onOpenFile: () => {},
+      onRunSearch: () => {},
+      onRemove: () => {},
+      onReorder: () => {},
+      onContextMenu: () => {},
+    });
+    const icon = section?.querySelector(".place-kind-icon svg");
+    expect(icon).not.toBeNull();
+    expect(section?.querySelector(".tree-node-label")?.textContent).toBe("invoices");
+    expect(section?.querySelector(".place-twist.is-open")).not.toBeNull();
+  });
+
+  it("hides rows when the section is collapsed", () => {
+    const section = buildPlaceSection({
+      title: "Bookmarks",
+      entries: [file("a", "/vault/a.md")],
+      collapsed: true,
+      activePath: null,
+      removeIcon: "<svg></svg>",
+      removeTitle: "Remove bookmark",
+      onToggleSection: () => {},
+      onToggleGroup: () => {},
+      onNewGroup: () => {},
+      onOpenFile: () => {},
+      onRunSearch: () => {},
+      onRemove: () => {},
+      onReorder: () => {},
+      onContextMenu: () => {},
+    });
+    expect(section?.querySelector(".tree-node")).toBeNull();
+    expect(section?.querySelector(".place-section-header")?.textContent).toContain("Bookmarks");
+  });
+
+  it("paints a colored row with that color instead of the selection blue", () => {
+    const section = buildPlaceSection({
+      title: "Pinned",
+      entries: [{ id: "a", kind: "file", path: "/vault/Test02.md", color: "purple" }],
+      collapsed: false,
+      activePath: "/vault/Test02.md",
+      removeIcon: "<svg></svg>",
+      removeTitle: "Unpin",
+      onToggleSection: () => {},
+      onToggleGroup: () => {},
+      onNewGroup: () => {},
+      onOpenFile: () => {},
+      onRunSearch: () => {},
+      onRemove: () => {},
+      onReorder: () => {},
+      onContextMenu: () => {},
+    });
+    const row = section?.querySelector(".place-row");
+    expect(row?.classList.contains("tree-node-active")).toBe(true);
+    expect(row?.classList.contains("place-tinted")).toBe(true);
+    expect(row?.classList.contains("place-tint-purple")).toBe(true);
+    expect(row?.querySelector(".place-color-dot")).not.toBeNull();
+  });
+
+  it("opens a row of color circles and an X", () => {
+    _testing.bookmarkPath("/vault/a.md", "vault-1");
+    const entry = _testing.getBookmarkItems()[0];
+    _testing.openPlaceMenu(entry, "bookmarks", "vault-1", 20, 20);
+
+    const colors = Array.from(document.querySelectorAll(".place-swatch")).map((el) => el.className);
+    expect(colors).toEqual([
+      "place-swatch place-color-red",
+      "place-swatch place-color-orange",
+      "place-swatch place-color-yellow",
+      "place-swatch place-color-green",
+      "place-swatch place-color-blue",
+      "place-swatch place-color-purple",
+    ]);
+    expect(document.querySelector(".place-swatch-remove")?.textContent).toBe("×");
+    expect(document.querySelector(".context-menu-item")).toBeNull();
+
+    (document.querySelector(".place-color-blue") as HTMLButtonElement).click();
+    expect(_testing.getBookmarkItems()[0]?.color).toBe("blue");
+
+    _testing.openPlaceMenu(_testing.getBookmarkItems()[0], "bookmarks", "vault-1", 20, 20);
+    expect(document.querySelector(".place-color-blue")?.classList.contains("is-selected")).toBe(true);
+    (document.querySelector(".place-swatch-remove") as HTMLButtonElement).click();
+    expect(_testing.getBookmarkItems()).toEqual([]);
+    expect(document.querySelector(".context-menu")).toBeNull();
   });
 });
