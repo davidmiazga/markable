@@ -20,11 +20,63 @@ import { updateRecentFilesMenu } from "../lib/bridge";
 // permitted to import from the tabs module directly.
 import { tabManager } from "../tabs";
 import { attachModalKeyboard } from "../lib/modal-keyboard";
+import { isSectionJumpLocked, scrollSectionIntoPane, sectionNearestPaneTop } from "../lib/section-jump";
 import "./settings-panel.css";
 
 let panelElement: HTMLElement | null = null;
 let isOpen = false;
 let keyboardDetach: (() => void) | null = null;
+
+const SETTINGS_SECTION_IDS = [
+  "window",
+  "appearance",
+  "editor",
+  "data-protection",
+  "recent",
+  "tabs",
+  "list-style",
+  "quick-capture",
+] as const;
+
+type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
+
+/** Last section jumped to. Kept for this page session across close and reopen. */
+let selectedSection: SettingsSectionId = "window";
+
+function isSettingsSectionId(value: string): value is SettingsSectionId {
+  return (SETTINGS_SECTION_IDS as readonly string[]).includes(value);
+}
+
+function markSettingsNav(sectionId: SettingsSectionId): void {
+  if (!panelElement) return;
+  panelElement.querySelectorAll<HTMLButtonElement>(".settings-nav-btn").forEach((btn) => {
+    btn.setAttribute("aria-selected", btn.dataset.section === sectionId ? "true" : "false");
+  });
+}
+
+/** Highlight a section and scroll it to the top of the pane. Every section stays in the document. */
+function selectSettingsSection(sectionId: string): void {
+  if (!isSettingsSectionId(sectionId) || !panelElement) return;
+  selectedSection = sectionId;
+  markSettingsNav(sectionId);
+  const pane = panelElement.querySelector(".settings-nav-pane");
+  const section = panelElement.querySelector(`.settings-section[data-section="${sectionId}"]`);
+  if (pane instanceof HTMLElement && section instanceof HTMLElement) {
+    scrollSectionIntoPane(pane, section);
+  }
+}
+
+function syncSettingsNavToScroll(): void {
+  if (!panelElement || isSectionJumpLocked()) return;
+  const pane = panelElement.querySelector(".settings-nav-pane");
+  if (!(pane instanceof HTMLElement)) return;
+  const sections = Array.from(pane.querySelectorAll<HTMLElement>(".settings-section"));
+  const nearest = sectionNearestPaneTop(pane, sections);
+  const sectionId = nearest?.dataset.section ?? "";
+  if (!isSettingsSectionId(sectionId) || sectionId === selectedSection) return;
+  selectedSection = sectionId;
+  markSettingsNav(sectionId);
+}
 
 interface ThemeCallbacks {
   getThemeOrder: () => string[];
@@ -56,13 +108,24 @@ export function createSettingsPanel(): void {
 
   overlay.innerHTML = `
     <div class="settings-backdrop"></div>
-    <div class="settings-panel" role="dialog" aria-label="Settings" tabindex="-1">
+    <div class="settings-panel settings-panel--nav" role="dialog" aria-label="Settings" tabindex="-1">
       <div class="settings-header">
         <h2 class="settings-title">Settings</h2>
         <button class="settings-close-btn" aria-label="Close">&times;</button>
       </div>
-      <div class="settings-body">
-        <div class="settings-section">
+      <div class="settings-nav-layout">
+        <nav class="settings-nav" role="tablist" aria-label="Settings sections">
+          <button type="button" class="settings-nav-btn" role="tab" data-section="window" aria-selected="true">Window &amp; Content</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="appearance" aria-selected="false">Appearance</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="editor" aria-selected="false">Editor</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="data-protection" aria-selected="false">Data Protection</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="recent" aria-selected="false">Recent Files</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="tabs" aria-selected="false">Tabs</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="list-style" aria-selected="false">List Style</button>
+          <button type="button" class="settings-nav-btn" role="tab" data-section="quick-capture" aria-selected="false">Quick Capture</button>
+        </nav>
+        <div class="settings-nav-pane" role="tabpanel">
+        <div class="settings-section" data-section="window">
           <label class="settings-label">Window &amp; Content</label>
 
           <div class="settings-maximize-row">
@@ -125,7 +188,7 @@ export function createSettingsPanel(): void {
           <p class="settings-description">Preset sizes apply immediately and center the window. Manual remembers your last size &amp; position. Maximize overrides all.</p>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="appearance">
           <label class="settings-label">Appearance</label>
           <div class="settings-row">
             <span class="settings-description">Theme</span>
@@ -133,7 +196,7 @@ export function createSettingsPanel(): void {
           </div>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="editor">
           <label class="settings-label">Editor</label>
 
           <div class="settings-maximize-row">
@@ -145,7 +208,7 @@ export function createSettingsPanel(): void {
           <p class="settings-description">Underline misspelled words using the system dictionary.</p>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="data-protection">
           <label class="settings-label">Data Protection</label>
           <div class="settings-row">
             <span class="settings-description">Markdown deletes</span>
@@ -186,7 +249,7 @@ export function createSettingsPanel(): void {
           <p class="settings-description" id="settings-recovery-status"></p>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="recent">
           <label class="settings-label">Recent Files</label>
           <p class="settings-description" id="settings-recent-count"></p>
           <button class="btn btn-tertiary" id="settings-clear-recent">
@@ -194,7 +257,7 @@ export function createSettingsPanel(): void {
           </button>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="tabs">
           <h3 class="settings-label">Tabs</h3>
 
           <div class="settings-row">
@@ -207,7 +270,7 @@ export function createSettingsPanel(): void {
           </div>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="list-style">
           <label class="settings-label">List Style</label>
           <select class="settings-select" id="settings-list-style">
             <option value="standard">Standard (1. 2. 3.)</option>
@@ -218,7 +281,7 @@ export function createSettingsPanel(): void {
           <p class="settings-description">Default style for new lists. Existing lists auto-detect their style from markers, or use a <code>&lt;!-- list: style --&gt;</code> comment override.</p>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" data-section="quick-capture">
           <label class="settings-label">Quick Capture</label>
           <div class="settings-row">
             <span class="settings-description">Inbox folder (relative to vault root)</span>
@@ -229,6 +292,7 @@ export function createSettingsPanel(): void {
             <input type="text" class="settings-input settings-input-wide" id="settings-qc-fallback-path" placeholder="~/Documents/Markable Inbox" />
           </div>
           <p class="settings-description">Open with <kbd>⌃C</kbd>. Notes are saved silently to the inbox folder and do not open as tabs.</p>
+        </div>
         </div>
       </div>
       <div class="settings-footer">
@@ -243,6 +307,7 @@ export function createSettingsPanel(): void {
   panelElement = overlay;
 
   wireEvents();
+  selectSettingsSection(selectedSection);
 }
 
 export function toggleSettingsPanel(): void {
@@ -250,16 +315,20 @@ export function toggleSettingsPanel(): void {
   else openSettingsPanel();
 }
 
-export function openSettingsPanel(): void {
-  if (!panelElement || isOpen) return;
-  syncPanelToSettings();
-  panelElement.classList.remove("hidden");
-  panelElement.setAttribute("aria-hidden", "false");
-  isOpen = true;
-  keyboardDetach = attachModalKeyboard({
-    modal: panelElement,
-    onClose: closeSettingsPanel,
-  });
+export function openSettingsPanel(sectionId?: string): void {
+  if (!panelElement) return;
+  const target = sectionId ?? selectedSection;
+  if (!isOpen) {
+    syncPanelToSettings();
+    panelElement.classList.remove("hidden");
+    panelElement.setAttribute("aria-hidden", "false");
+    isOpen = true;
+    keyboardDetach = attachModalKeyboard({
+      modal: panelElement,
+      onClose: closeSettingsPanel,
+    });
+  }
+  selectSettingsSection(target);
 }
 
 export function closeSettingsPanel(): void {
@@ -306,6 +375,16 @@ function wireEvents(): void {
     ?.addEventListener("click", closeSettingsPanel);
   panelElement.querySelector(".settings-close-btn")
     ?.addEventListener("click", closeSettingsPanel);
+
+  panelElement.querySelector(".settings-nav-pane")
+    ?.addEventListener("scroll", syncSettingsNavToScroll);
+
+  panelElement.querySelector(".settings-nav")
+    ?.addEventListener("click", (event: Event) => {
+      const btn = (event.target as HTMLElement).closest(".settings-nav-btn") as HTMLButtonElement | null;
+      if (!btn?.dataset.section) return;
+      selectSettingsSection(btn.dataset.section);
+    });
 
   // Theme picker
   const themeSelect = panelElement.querySelector("#settings-theme-select") as HTMLSelectElement;

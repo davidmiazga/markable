@@ -17,6 +17,8 @@
  */
 
 import { filesMatchingTagQuery, parseTagSearch } from "../../lib/tag-search";
+import { classifyScanTag } from "../../lib/near-dup-clusters";
+import { rewritePropertiesSection } from "../../lib/meta-manager";
 import { fuzzyMatch, renderHighlightedLabel } from "./fuzzy-ranker";
 import type { FuzzyMatch } from "./fuzzy-ranker";
 import {
@@ -3346,12 +3348,19 @@ export function renderContentResults(payload: any | null, query: string): void {
  * Shape of a tag row used internally by renderTagsMode.
  */
 interface TagRow {
-  /** The tag string value. */
+  /** The tag string value, or a category value when `field` is set. */
   tag: string;
-  /** Files from vault index that carry this tag. */
+  /** Files from the vault that carry this tag or category value. */
   files: Array<{ path: string; title: string }>;
-  /** True for tags defined in window.__MARKABLE_META__.tags. */
+  /** True for values defined in the properties vocabulary. */
   defined: boolean;
+  /** Set for a category value. The section header is this field name. */
+  field?: string;
+}
+
+interface CategoryGroup {
+  field: string;
+  rows: TagRow[];
 }
 
 /** A group of similar-looking tags that may be duplicates or variants. */
@@ -3462,22 +3471,23 @@ function findSimilarGroups(allTags: string[]): SimilarGroup[] {
  *
  * @remarks Exported for unit tests only — do not call from other production code.
  */
-export function buildTagRows(query: string): { defined: TagRow[]; uncategorised: TagRow[] } {
+export function buildTagRows(query: string): {
+  defined: TagRow[];
+  uncategorised: TagRow[];
+  categories: CategoryGroup[];
+} {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meta: any = (window as any).__MARKABLE_META__;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
 
-  // EC-1: no vault open → both sections are empty.
   if (!vm?.getActiveVault?.()) {
-    return { defined: [], uncategorised: [] };
+    return { defined: [], uncategorised: [], categories: [] };
   }
 
   const definedVocab: string[] = meta?.tags ?? [];
+  const fieldVocab: Record<string, string[]> = meta?.fields ?? {};
 
-  // Build tag → file list map.
-  // Priority: _scannedTags (fresh full-disk scan including inline #hashtags).
-  // Fallback: vault index entries (covers YAML front matter only, may be stale).
   const tagFileMap = new Map<string, Array<{ path: string; title: string }>>();
 
   if (_scannedTags) {
@@ -3491,7 +3501,6 @@ export function buildTagRows(query: string): { defined: TagRow[]; uncategorised:
       );
     }
   } else {
-    // Fallback to vault index while scan is in progress (EC-17).
     const index = vm?.getVaultIndex?.() ?? null;
     if (index) {
       for (const entry of index.entries) {
@@ -3503,25 +3512,68 @@ export function buildTagRows(query: string): { defined: TagRow[]; uncategorised:
     }
   }
 
+  const plain = new Map<string, Array<{ path: string; title: string }>>();
+  const discoveredFields = new Map<string, Map<string, Array<{ path: string; title: string }>>>();
+  for (const [raw, files] of tagFileMap) {
+    const kind = classifyScanTag(raw);
+    if (kind.kind === "tag") {
+      const list = plain.get(kind.value) ?? [];
+      for (const file of files) {
+        if (!list.some((item) => item.path === file.path)) list.push(file);
+      }
+      plain.set(kind.value, list);
+      continue;
+    }
+    const values =
+      discoveredFields.get(kind.field) ??
+      new Map<string, Array<{ path: string; title: string }>>();
+    const list = values.get(kind.value) ?? [];
+    for (const file of files) {
+      if (!list.some((item) => item.path === file.path)) list.push(file);
+    }
+    values.set(kind.value, list);
+    discoveredFields.set(kind.field, values);
+  }
+
   const lowerQuery = query.toLowerCase();
+  const matches = (text: string) => !lowerQuery || text.toLowerCase().includes(lowerQuery);
 
-  // Defined section: tags present in the meta vocabulary.
   const defined: TagRow[] = definedVocab
-    .filter((tag) => !lowerQuery || tag.toLowerCase().includes(lowerQuery))
+    .filter((tag) => matches(tag))
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-    .map((tag) => ({ tag, files: tagFileMap.get(tag) ?? [], defined: true }));
+    .map((tag) => ({ tag, files: plain.get(tag) ?? [], defined: true }));
 
-  // Uncategorised: discovered tags that are NOT in the meta vocabulary.
   const definedSet = new Set(definedVocab);
   const uncategorised: TagRow[] = [];
-  for (const [tag, files] of tagFileMap) {
-    if (!definedSet.has(tag) && (!lowerQuery || tag.toLowerCase().includes(lowerQuery))) {
+  for (const [tag, files] of plain) {
+    if (!definedSet.has(tag) && matches(tag)) {
       uncategorised.push({ tag, files, defined: false });
     }
   }
   uncategorised.sort((a, b) => a.tag.toLowerCase().localeCompare(b.tag.toLowerCase()));
 
-  return { defined, uncategorised };
+  const fieldNames = new Set<string>([
+    ...Object.keys(fieldVocab),
+    ...discoveredFields.keys(),
+  ]);
+  const categories: CategoryGroup[] = [];
+  for (const field of [...fieldNames].sort((a, b) => a.localeCompare(b))) {
+    const vocab = new Set(fieldVocab[field] ?? []);
+    const found = discoveredFields.get(field) ?? new Map();
+    const values = new Set<string>([...vocab, ...found.keys()]);
+    const rows: TagRow[] = [...values]
+      .filter((value) => matches(value) || matches(field))
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+      .map((value) => ({
+        tag: value,
+        files: found.get(value) ?? [],
+        defined: vocab.has(value),
+        field,
+      }));
+    if (rows.length > 0) categories.push({ field, rows });
+  }
+
+  return { defined, uncategorised, categories };
 }
 
 // ---------------------------------------------------------------------------
@@ -3538,8 +3590,8 @@ let _expandedTags = new Set<string>();
  * Render the tags mode result area.
  *
  * Called by filterAndRender() when _mode === "tags".
- * Shows two sections: "DEFINED TAGS" and "UNCATEGORISED".
- * Handles all four empty states (FR-7).
+ * Shows defined tags, uncategorised tags, then one section per category
+ * field. Each row carries a note count. Handles the empty states (FR-7).
  *
  * @param query - Current input value (substring filter, case-insensitive).
  */
@@ -3548,17 +3600,25 @@ let _expandedTags = new Set<string>();
  * Build a lightweight CommandBarResult stub for a tag header row.
  * The action toggles expansion; the bar stays open (activateSelected guards this).
  */
-function makeTagResult(id: string, tag: string, _query: string): CommandBarResult {
+function tagRowKey(row: TagRow): string {
+  return row.field ? `${row.field}:${row.tag}` : row.tag;
+}
+
+function noteCountLabel(count: number): string {
+  return `${count} note${count === 1 ? "" : "s"}`;
+}
+
+function makeTagResult(id: string, key: string, label: string): CommandBarResult {
   return {
     id,
     category: "commands",
-    label: tag,
+    label,
     dimmed: false,
     action: () => {
-      if (_expandedTags.has(tag)) {
-        _expandedTags.delete(tag);
+      if (_expandedTags.has(key)) {
+        _expandedTags.delete(key);
       } else {
-        _expandedTags.add(tag);
+        _expandedTags.add(key);
       }
       renderTagsMode(_inputEl?.value.trim() ?? "");
     },
@@ -3608,10 +3668,11 @@ function renderTagsMode(query: string): void {
     return;
   }
 
-  const { defined, uncategorised } = buildTagRows(query);
+  const { defined, uncategorised, categories } = buildTagRows(query);
+  const categoryCount = categories.reduce((total, group) => total + group.rows.length, 0);
 
   // Both sections empty.
-  if (defined.length === 0 && uncategorised.length === 0) {
+  if (defined.length === 0 && uncategorised.length === 0 && categoryCount === 0) {
     if (query) {
       _resultsEl.appendChild(buildTagsNotice(`No tags match "${query}"`));
     } else if (_tagsLoading) {
@@ -3638,11 +3699,12 @@ function renderTagsMode(query: string): void {
 
   // Helper: register a tag row + its expanded file rows into _visibleResults.
   const registerTagRow = (row: TagRow) => {
-    const rowId = `tag-row:${row.tag}`;
-    _visibleResults.push(makeTagResult(rowId, row.tag, query));
+    const key = tagRowKey(row);
+    const rowId = `tag-row:${key}`;
+    _visibleResults.push(makeTagResult(rowId, key, row.tag));
     _resultsEl!.appendChild(buildTagRow(row, _selectedId === rowId));
     // When expanded, file rows are visible and should be arrow-key navigable.
-    if (_expandedTags.has(row.tag)) {
+    if (_expandedTags.has(key)) {
       for (const file of row.files) {
         const fileId = `tag-file:${file.path}`;
         _visibleResults.push({
@@ -3678,6 +3740,11 @@ function renderTagsMode(query: string): void {
     }
     _resultsEl.appendChild(hdr);
     for (const row of uncategorised) registerTagRow(row);
+  }
+
+  for (const group of categories) {
+    _resultsEl.appendChild(buildTagsSectionHeader(group.field.toUpperCase()));
+    for (const row of group.rows) registerTagRow(row);
   }
 
   // If _selectedId is no longer in the visible set (e.g. query filtered it out), clear it.
@@ -3755,16 +3822,17 @@ function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
   // header and file-list sections share a closure over `row` and `_expandedTags`
   // — splitting into sub-functions would require passing these as parameters
   // with no readability gain.
-  const isExpanded = _expandedTags.has(row.tag);
+  const key = tagRowKey(row);
+  const isExpanded = _expandedTags.has(key);
 
   const container = document.createElement("div");
   container.className = "cb-tag-row" + (isExpanded ? " cb-tag-row--expanded" : "");
-  container.setAttribute("data-tag", row.tag);
+  container.setAttribute("data-tag", key);
 
   // ── Header line ────────────────────────────────────────────────────────────
   const header = document.createElement("div");
   header.className = "cb-tag-row-header" + (isSelected ? " cb-result--selected" : "");
-  header.setAttribute("data-id", `tag-row:${row.tag}`);
+  header.setAttribute("data-id", `tag-row:${key}`);
 
   // Chevron icon indicates expand/collapse state.
   const chevron = document.createElement("span");
@@ -3778,7 +3846,7 @@ function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
 
   const count = document.createElement("span");
   count.className = "cb-tag-row-count";
-  count.textContent = `${row.files.length} file${row.files.length === 1 ? "" : "s"}`;
+  count.textContent = noteCountLabel(row.files.length);
 
   header.appendChild(chevron);
   header.appendChild(tagName);
@@ -3790,11 +3858,14 @@ function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
     const addBtn = document.createElement("button");
     addBtn.className = "cb-tag-add-btn";
     addBtn.textContent = "Add to Properties";
-    addBtn.title = `Add "${row.tag}" to the Properties vocabulary`;
+    addBtn.title = row.field
+      ? `Add "${row.tag}" to the ${row.field} vocabulary`
+      : `Add "${row.tag}" to the Properties vocabulary`;
     addBtn.addEventListener("click", (e) => {
       // Prevent the click from also toggling the row expansion.
       e.stopPropagation();
-      void handleAddToMeta(row.tag);
+      if (row.field) void handleAddFieldToMeta(row.field, row.tag);
+      else void handleAddToMeta(row.tag);
     });
     header.appendChild(addBtn);
   }
@@ -3823,16 +3894,16 @@ function buildTagRow(row: TagRow, isSelected: boolean): HTMLElement {
   } else if (isExpanded && row.files.length === 0) {
     const empty = document.createElement("div");
     empty.className = "cb-tag-files cb-tag-files--empty";
-    empty.textContent = "No files with this tag";
+    empty.textContent = row.field ? "No notes with this value" : "No notes with this tag";
     container.appendChild(empty);
   }
 
   // Toggle expansion on header click.
   header.addEventListener("click", () => {
-    if (_expandedTags.has(row.tag)) {
-      _expandedTags.delete(row.tag);
+    if (_expandedTags.has(key)) {
+      _expandedTags.delete(key);
     } else {
-      _expandedTags.add(row.tag);
+      _expandedTags.add(key);
     }
     // Re-render the tags view to reflect the new expansion state.
     if (_inputEl) renderTagsMode(_inputEl.value.trim());
@@ -3953,6 +4024,64 @@ async function handleAddToMeta(tag: string): Promise<void> {
   }
 
   // Re-render so the tag moves from Uncategorised to Defined section.
+  if (_inputEl) renderTagsMode(_inputEl.value.trim());
+}
+
+/**
+ * Add one category value to its properties section and update the in-memory store.
+ * Other sections stay as they are. On a failed write, the store is left unchanged.
+ */
+async function handleAddFieldToMeta(field: string, value: string): Promise<void> {
+  const tauri = (window as any).__TAURI_INTERNALS__;
+  if (!tauri?.invoke) {
+    console.warn("[handleAddFieldToMeta] __TAURI_INTERNALS__ unavailable");
+    return;
+  }
+
+  const vm: any = (window as any).__MARKABLE_VAULT_MANAGER__;
+  const vault = vm?.getActiveVault?.();
+  if (!vault) return;
+
+  const meta: any = (window as any).__MARKABLE_META__;
+  const fields: Record<string, string[]> = meta?.fields ?? {};
+  const current: string[] = fields[field] ?? [];
+  if (current.includes(value)) {
+    if (_inputEl) renderTagsMode(_inputEl.value.trim());
+    return;
+  }
+
+  // eslint-disable-next-line no-control-regex
+  const safeName: string = vault.name.replace(/[/:\x00]/g, "_");
+  const root: string = vault.rootPaths[0];
+  const metaDirPath = `${root}/VaultSettings`;
+  const metaFilePath = `${metaDirPath}/${safeName}_properties.md`;
+
+  try {
+    await tauri.invoke("ensure_directory", { path: metaDirPath });
+  } catch (err) {
+    console.warn("[handleAddFieldToMeta] ensure_directory failed:", err);
+    return;
+  }
+
+  let existingContent = "";
+  try {
+    const readResult = await tauri.invoke("read_file", { path: metaFilePath });
+    if (typeof readResult === "string") existingContent = readResult;
+  } catch {
+    existingContent = "";
+  }
+
+  const newContent = rewritePropertiesSection(existingContent, field, [...current, value]);
+  try {
+    await tauri.invoke("write_file", { path: metaFilePath, content: newContent });
+  } catch (err) {
+    console.warn("[handleAddFieldToMeta] write_file failed:", err);
+    return;
+  }
+
+  if (meta) {
+    meta.fields = { ...fields, [field]: [...current, value] };
+  }
   if (_inputEl) renderTagsMode(_inputEl.value.trim());
 }
 

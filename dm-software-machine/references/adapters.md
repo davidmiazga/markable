@@ -30,6 +30,6 @@ When `tracker: beads`:
 `task-next` / `task-claim` refuse a second task when:
 
 - in-flight count is already `parallel`, or
-- declared `writes` overlap an in-flight task (missing writes count as overlap)
+- declared file `writes` overlap an in-flight task (directory writes do not; missing writes count as overlap)
 
 `--force` overrides both. Isolated worktrees are still deferred: two claimed tasks share the same tree, so only raise `parallel` when you really have disjoint paths and two agents.

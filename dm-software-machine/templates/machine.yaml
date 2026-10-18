@@ -52,7 +52,8 @@ auto_advance: false
 # When true, sm-add creates briefing tasks. Claim/next refuse until the spec is filled
 # and sm-ready succeeds. Pause after brief; do not invent In scope / UX / Tests.
 require_brief: false
-# Max in-flight tasks. Overlapping writes always serialize. Worktrees not in this slice.
-parallel: 1
+# Max in-flight tasks. Exact file writes serialize. Directory writes do not.
+# Worktrees not in this slice.
+parallel: 4
 artifact_dir: .dm-software-machine
 specs_dir: specs

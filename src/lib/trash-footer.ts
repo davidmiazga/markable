@@ -63,8 +63,7 @@ async function paintCan(button: HTMLButtonElement): Promise<void> {
 function onTrashClick(event: MouseEvent): void {
   if (event.metaKey || event.ctrlKey) {
     event.preventDefault();
-    openSettingsPanel();
-    document.querySelector("#settings-data-protection-mode")?.scrollIntoView({ block: "nearest" });
+    openSettingsPanel("data-protection");
     return;
   }
   void invoke("reveal_recovered_notes");

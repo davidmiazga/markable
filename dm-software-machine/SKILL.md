@@ -2,9 +2,11 @@
 name: dm-software-machine
 description: >-
   Advances one bounded coding task at a time through typed handoff envelopes
-  and deterministic command gates. Use when the user says Use sm, sm to
-  implement, dm-software-machine, or asks to queue, gate, review, or accept a
-  machine task. Use when require_brief is on and they ask to implement or
+  and deterministic command gates. Inside a claimed ticket, fans disjoint
+  files out to agents when the user asks for multi-agent work or the task
+  splits cleanly. Use when the user says Use sm, sm to implement,
+  dm-software-machine, multi-agent, or asks to queue, gate, review, or accept
+  a machine task. Use when require_brief is on and they ask to implement or
   change product, UX, or app behavior.
 ---
 
@@ -63,7 +65,7 @@ One-off questions (what does X do, why did Y fail) may stay in this chat. Softwa
 2. **Stop.** Paste the CLI's fill template into your reply. Explicitly ask them to fill `specs/<id>.md` (replace the HTML comments; no TODO/TBD). Do not edit `src/` or other writes. Do not `sm-claim`. Do not `bd create` / `bd update --claim` as a shortcut.
 3. After they say the spec is filled: `just sm-ready <id>`. If it refuses, tell them which headings are empty and stop again.
 4. `just sm-claim <id>` (or `just sm-next`).
-5. Read `just sm-handoff <id>` and `specs/<id>.md`. Do only that task. Stay inside the task `writes` paths.
+5. Read `just sm-handoff <id>` and `specs/<id>.md`. Do only that task. Stay inside the task `writes` paths. When the task splits across disjoint files, follow **Agents inside one ticket**.
 6. `just sm-finish <id>` — work envelope from git, fast gate, review. Does **not** accept.
 7. If the gate fails, repair at most twice, then `sm-finish` again. Stop and report after two repairs.
 8. `just sm-accept <id>` only when finish printed `ready to accept`.
@@ -76,7 +78,7 @@ Carve-outs (no new brief): an already-claimed task in a repair loop; one-off que
 1. `just sm-add "<their ask, one sentence>"`
 2. `just sm-claim <id>`
 3. Read `just sm-handoff <id>` (or `handoff --task <id> --print`) and `specs/<id>.md`.
-4. Do only that task. Stay inside the task `writes` paths.
+4. Do only that task. Stay inside the task `writes` paths. When the task splits across disjoint files, follow **Agents inside one ticket**.
 5. `just sm-finish <id>` — builds the work envelope from git, runs the fast gate, reviews that dirty files stay in writes. Does **not** accept.
 6. If the gate fails, repair at most twice, then `sm-finish` again. Stop and report after two repairs.
 7. `just sm-accept <id>` only when finish printed `ready to accept`.
@@ -93,8 +95,22 @@ If `defaults` shows `tracker beads`, `sm-add` / `sm-brief` / `sm-ticket` / `sm-r
 - Review answers "does the diff match the spec." Gates answer "does it run."
 - Agent progress percentages are estimates. They never decide acceptance.
 - Pause after accept unless `auto_advance` is on. Then keep going until the queue is idle or a gate fails.
-- At most `parallel` tasks may be in flight. Overlapping `writes` always serialize. Worktrees are still out of scope.
-- When `require_brief` is on, pause after `sm-ticket`. Print the fill template and ask the engineer to complete it. You implement one ready ticket at a time.
+- At most `parallel` claimed tickets may be in flight. A second claim is refused when both tickets name the same file. Directory writes (a trailing slash) are scope, not a lock. An empty writes list still overlaps everything. Worktrees are still out of scope.
+- When `require_brief` is on, pause after `sm-ticket`. Print the fill template and ask the engineer to complete it. You implement one ready ticket at a time. Inside that ticket, fan out when **Agents inside one ticket** says to.
+
+## Agents inside one ticket
+
+One claim, several agents, when one ticket splits across files. A different ready ticket can be claimed beside it when `parallel` has room and the two tickets do not name the same file.
+
+Fan out after `sm-claim` when the user asks for multiple agents, or when the spec splits into pieces that do not edit the same files. Do not fan out during a briefing.
+
+1. List each agent and the files it may edit. The lists are disjoint. A file both pieces need has one owner. The others call it and do not edit it.
+2. Launch those agents in one turn so they run together. Each prompt includes the spec, the owned paths, and the shared names (classes, commands, arguments).
+3. Tell every agent: do not `sm-claim`, `sm-finish`, `sm-accept`, or edit `specs/`. Stay inside the owned paths.
+
+When they return, you check the seam, run the tests that cross it, then you alone run `sm-finish` and `sm-accept`.
+
+If two pieces must edit the same file, one agent does both. Do not split that file.
 
 ## CLI
 

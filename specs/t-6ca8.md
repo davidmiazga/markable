@@ -4,20 +4,18 @@ Done means: the fast gate is green and the feature is visible in the profile dev
 Writes: src/, src-tauri/src/, index.html, flavors/, scripts/, src-tauri/tauri.conf.json, planning/
 Dev: cd . && npm run tauri dev
 
-Fill every heading below. Replace the HTML comments. Do not leave TODO/TBD.
-One-off questions can stay in chat. This file is for a software implementation.
 
 ## Problem
-Obsidian core plugin Tags view is on in this vault. Settings line: "Show a list of all tags and their number of occurrences." Markable can rename and merge tags inside File Properties. It does not have this occurrence list. Do not start until diary ticket t-4c2d is accepted.
+Obsidian core plugin Tags view is on in this vault. Settings line: "Show a list of all tags and their number of occurrences." Markable can rename and merge tags inside File Properties. It does not have this occurrence list. I think our 'Tag Wrangler' might cover this functionality. LMk if we need to consolidate this functionality for better UX.
 
 ## In scope
-<!-- Bullet the observable behavior this ticket will change. -->
+Any functions that work with our metadata, categories and tags especially.
 
 ## Out of scope
-<!-- What this ticket will not change. Prevents drive-by refactors. -->
+Do not work with any functions that do not edit metadata.
 
 ## UX / behavior
-<!-- What the user sees and does. Include empty and error states if they matter. -->
+We want seamless UX across categories and tags. 
 
 ## Tests
-<!-- What to assert so this ticket cannot regress. -->
+Run all the usual tests (ts, cargo, etc.)

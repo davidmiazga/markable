@@ -263,7 +263,7 @@ describe("Settings Panel — List Style dropdown", () => {
 
       // Collect all .settings-section elements in DOM order.
       const sections = Array.from(
-        document.querySelectorAll(".settings-body .settings-section"),
+        document.querySelectorAll(".settings-nav-pane .settings-section"),
       );
       const labels = sections.map(
         (s) => s.querySelector(".settings-label")?.textContent ?? "",

@@ -19,7 +19,7 @@ Four surfaces. Change them together.
 - `max_repairs` — default 2
 - `auto_advance` — default false. When true, accept does not pause; the agent claims the next ready task until idle or a red gate
 - `require_brief` — default false. When true, `task-add` creates `briefing` tasks (same as `task-brief`). `task-claim` / `task-next` refuse until `task-ready` validates the spec. `--force` does not skip the spec check. Briefing tasks are never ready.
-- `parallel` — max in-flight tasks (default 1). Overlapping `writes` always serialize.
+- `parallel` — max in-flight tasks (default 4). Two claims are refused when they name the same file. A directory write (trailing slash) does not lock the files inside it. An empty writes list still overlaps everything.
 
 `init` also stamps `.cursor/permissions.json` from `templates/permissions.json` (Cursor Auto-review allow/block for `just sm-*`, uv CLI, npm/cargo in the app folder). It does not turn Auto-review on; the engineer still picks Run / Auto-review in Cursor.
 

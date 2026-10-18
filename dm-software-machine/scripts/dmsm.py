@@ -1488,14 +1488,24 @@ def cmd_task_ready(args: argparse.Namespace) -> int:
 IN_FLIGHT = ("claimed", "active", "gated", "reviewed")
 
 
+def file_write_set(paths: list[str]) -> set[str]:
+    """Exact file locks. A trailing slash is scope (a directory, or a file the
+    project allows without locking it). Globs are scope too."""
+    found: set[str] = set()
+    for raw in paths:
+        rel = normalize_rel(str(raw))
+        if not rel or rel.endswith("/") or any(ch in rel for ch in "*?["):
+            continue
+        found.add(rel)
+    return found
+
+
 def writes_overlap(left: list[str], right: list[str]) -> bool:
+    """True when both sides name the same file. Directory writes do not overlap
+    each other or the files inside them. An empty list still overlaps everything."""
     if not left or not right:
         return True
-    for a in left:
-        for b in right:
-            if path_in_patterns(a, [b]) or path_in_patterns(b, [a]):
-                return True
-    return False
+    return bool(file_write_set(left) & file_write_set(right))
 
 
 def in_flight_tasks(state: dict) -> list[dict]:

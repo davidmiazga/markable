@@ -5,7 +5,7 @@ dev_command: [npm, run, tauri, dev]
 writes:
   - src/
   - src-tauri/src/
-  - index.html
+  - index.html/
 never_write:
   - node_modules
   - target

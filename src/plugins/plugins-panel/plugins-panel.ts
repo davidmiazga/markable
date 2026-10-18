@@ -1,11 +1,11 @@
 /**
  * Plugins Panel — pack sections from flavors/packs.json, then User Plugins.
  *
- * Each flavor shows the same packs; `enabledPacks` only changes order and
- * which sections start expanded. Core plugins show a version badge and may
- * show an "Overridden" badge when a user file shadows them. Pack headers
- * have an Off / Default / All preset. The User Plugins section has Reload,
- * not a preset.
+ * Each flavor shows the same packs. The sidebar jumps to a section while the
+ * rest stay on the page so the list can still scroll. Core
+ * plugins show a version badge and may show an "Overridden" badge when a
+ * user file shadows them. Pack headers have an Off / Default / All preset.
+ * The User Plugins section has Reload, not a preset.
  *
  * Public API (unchanged from step_03b):
  *   - createPluginsPanel(defs, states, toggle, reloadPlugins?)
@@ -23,16 +23,17 @@ import {
   getActiveFlavor,
   orderedPluginPackIds,
   pluginDefaultEnabled,
-  pluginSectionStartsCollapsed,
 } from "../../lib/flavor";
 import { getCurrentSettings } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
 import { attachModalKeyboard } from "../../lib/modal-keyboard";
+import { isSectionJumpLocked, scrollSectionIntoPane, sectionNearestPaneTop } from "../../lib/section-jump";
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
 /** The panel overlay element (null until createPluginsPanel is called). */
 let panelElement: HTMLElement | null = null;
+let navElement: HTMLElement | null = null;
 let bodyElement: HTMLElement | null = null;
 let titleElement: HTMLElement | null = null;
 let isOpen = false;
@@ -65,17 +66,17 @@ let onReload: (() => Promise<void>) | null = null;
 let keyboardDetach: (() => void) | null = null;
 
 /**
- * Per-section collapsed state (session-only, not persisted to settings).
- * Keys are pack ids plus `"user"`. A missing key means "use the first-run
- * default": first-run packs start open; other packs and User start collapsed.
+ * Sidebar section last chosen this session (pack id or `"user"`).
+ * Null until the user picks one; open then shows Base editing.
+ * Cleared when the panel is created, so a new panel starts on Base.
  */
-const sectionCollapsed: Record<string, boolean> = {};
+let selectedSectionId: string | null = null;
 
-function isSectionCollapsed(sectionId: string): boolean {
-  if (Object.prototype.hasOwnProperty.call(sectionCollapsed, sectionId)) {
-    return sectionCollapsed[sectionId];
+function resolveSelectedSection(sectionIds: string[]): string {
+  if (selectedSectionId !== null && sectionIds.includes(selectedSectionId)) {
+    return selectedSectionId;
   }
-  return pluginSectionStartsCollapsed(sectionId);
+  return "base";
 }
 
 function pluginFilenameStem(filename: string): string {
@@ -145,6 +146,7 @@ export function createPluginsPanel(
   currentStates = { ...states };
   onToggle = toggle;
   onReload = reloadPlugins ?? null;
+  selectedSectionId = null;
 
   const overlay = document.createElement("div");
   overlay.id = "plugins-overlay";
@@ -155,17 +157,21 @@ export function createPluginsPanel(
 
   overlay.innerHTML = `
     <div class="settings-backdrop"></div>
-    <div class="settings-panel" tabindex="-1">
+    <div class="settings-panel settings-panel--nav" tabindex="-1">
       <div class="settings-header">
         <h2 class="settings-title" id="plugins-title">Plugins</h2>
         <button class="settings-close-btn" aria-label="Close">&times;</button>
       </div>
-      <div class="settings-body" id="plugins-body"></div>
+      <div class="settings-nav-layout">
+        <nav class="settings-nav" role="tablist" aria-label="Plugin sections"></nav>
+        <div class="settings-nav-pane" id="plugins-body" role="tabpanel"></div>
+      </div>
     </div>
   `;
 
   document.body.appendChild(overlay);
   panelElement = overlay;
+  navElement = overlay.querySelector("nav.settings-nav");
   bodyElement = overlay.querySelector("#plugins-body");
   titleElement = overlay.querySelector("#plugins-title");
 
@@ -173,6 +179,7 @@ export function createPluginsPanel(
     ?.addEventListener("click", closePluginsPanel);
   overlay.querySelector(".settings-close-btn")
     ?.addEventListener("click", closePluginsPanel);
+  bodyElement?.addEventListener("scroll", syncPluginNavToScroll);
 
 }
 
@@ -188,6 +195,7 @@ export function openPluginsPanel(states: Record<string, boolean>): void {
   panelElement.classList.remove("hidden");
   panelElement.setAttribute("aria-hidden", "false");
   isOpen = true;
+  if (selectedSectionId) applySelectedSection(selectedSectionId);
   keyboardDetach = attachModalKeyboard({
     modal: panelElement,
     // In detail view, Escape steps back to the list before fully closing.
@@ -258,49 +266,41 @@ export function updateUserPluginDefs(
 
 // ── List View ─────────────────────────────────────────────────────────────────
 
+function manageVaultsOpener(): (() => void) | null {
+  const openVaultFn = (window as unknown as { __MARKABLE_OPEN_MANAGE_VAULTS__?: unknown }).__MARKABLE_OPEN_MANAGE_VAULTS__;
+  return typeof openVaultFn === "function" ? openVaultFn as () => void : null;
+}
+
 /**
- * Build a footer row containing the "Manage Vaults" button.
- *
- * The button delegates to the file-browser plugin via the window global
- * __MARKABLE_OPEN_MANAGE_VAULTS__ so plugins-panel.ts has no direct import
- * dependency on file-browser.plugin.ts. This follows the same decoupling
- * pattern used by __MARKABLE_COMMAND_BAR_OPEN__ and __MARKABLE_TEMPLATES__.
- *
- * EC-VUX-09: closePluginsPanel() is called first so the two panels do not
- * overlap. openManageVaultsModal() appends to document.body which is always
- * accessible regardless of panel state.
- *
- * This function is only called from showListView() when the global is present,
- * so the button is hidden automatically when the file-browser plugin is off.
+ * Small control on the File Browser row. It uses the same window global as
+ * the old full-width footer, and it is absent when File Browser is off.
  */
-function buildManageVaultsFooter(): HTMLElement {
-  const footer = document.createElement("div");
-  footer.className = "plugin-panel-footer";
-
+function buildManageVaultsButton(): HTMLButtonElement {
   const btn = document.createElement("button");
-  btn.className = "btn btn-tertiary plugin-panel-footer-btn";
+  btn.type = "button";
+  btn.className = "plugin-row-action";
   btn.textContent = "Manage Vaults";
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const openVaultFn = manageVaultsOpener();
     closePluginsPanel();
-    const openVaultFn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
-    if (typeof openVaultFn === "function") openVaultFn();
+    openVaultFn?.();
   });
-
-  footer.appendChild(btn);
-  return footer;
+  return btn;
 }
 
 /**
  * Render pack sections (flavor order) then User Plugins.
- * Each section is collapsible (session state in sectionCollapsed).
+ * The sidebar jumps to a section. Every section stays in the scrolling pane.
  *
  * Pack membership comes from packs.json. Unlisted core IIFEs append to Base
  * so they stay visible. User IIFEs always stay in User.
  */
 function showListView(): void {
-  if (!bodyElement || !titleElement) return;
+  if (!bodyElement || !titleElement || !navElement) return;
   currentView = "list";
   titleElement.textContent = "Plugins";
+  navElement.replaceChildren();
   bodyElement.innerHTML = "";
 
   const flavor = getActiveFlavor();
@@ -337,38 +337,86 @@ function showListView(): void {
     byPack.set("base", base);
   }
 
+  const entries: Array<{ id: string; label: string; defs: UnifiedPluginDef[] }> = [];
   for (const packId of packIds) {
     const pack = PACKS.packs[packId];
-    const label = pack?.displayName ?? packId;
-    bodyElement.appendChild(buildSection(packId, label, byPack.get(packId) ?? []));
+    entries.push({
+      id: packId,
+      label: pack?.displayName ?? packId,
+      defs: byPack.get(packId) ?? [],
+    });
   }
-
   const userDefs = definitions.filter((d) => d.kind === "user");
-  bodyElement.appendChild(buildSection("user", "User Plugins", userDefs));
+  entries.push({ id: "user", label: "User Plugins", defs: userDefs });
 
-  /*
-   * step_05: Append the "Manage Vaults" footer button only when the file-browser
-   * plugin is enabled (i.e. the global is registered). The panel re-renders each
-   * time it opens via showListView(), so the footer tracks the plugin's live state
-   * without explicit enable/disable hooks here.
-   */
-  const openFn = (window as any).__MARKABLE_OPEN_MANAGE_VAULTS__;
-  if (typeof openFn === "function") {
-    bodyElement.appendChild(buildManageVaultsFooter());
+  const activeId = resolveSelectedSection(entries.map((entry) => entry.id));
+  for (const entry of entries) {
+    navElement.appendChild(buildNavButton(entry.id, entry.label, entry.id === activeId));
+    bodyElement.appendChild(buildSection(entry.id, entry.label, entry.defs));
   }
+  applySelectedSection(activeId);
 }
 
 // ── Section builder ───────────────────────────────────────────────────────────
 
+function buildNavButton(
+  sectionId: string,
+  label: string,
+  selected: boolean,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "settings-nav-btn";
+  btn.setAttribute("role", "tab");
+  btn.dataset.section = sectionId;
+  btn.textContent = label;
+  btn.setAttribute("aria-selected", selected ? "true" : "false");
+  btn.addEventListener("click", () => {
+    selectedSectionId = sectionId;
+    if (currentView !== "list") {
+      showListView();
+      return;
+    }
+    applySelectedSection(sectionId);
+  });
+  return btn;
+}
+
+function markPluginNav(sectionId: string): void {
+  if (!navElement) return;
+  for (const btn of navElement.querySelectorAll<HTMLButtonElement>(".settings-nav-btn")) {
+    btn.setAttribute("aria-selected", btn.dataset.section === sectionId ? "true" : "false");
+  }
+}
+
+/** Highlight a pack and scroll it to the top. The other packs stay in the pane. */
+function applySelectedSection(sectionId: string): void {
+  if (!navElement || !bodyElement) return;
+  selectedSectionId = sectionId;
+  markPluginNav(sectionId);
+  const section = bodyElement.querySelector<HTMLElement>(`[data-section-id="${sectionId}"]`);
+  if (section) scrollSectionIntoPane(bodyElement, section);
+}
+
+function syncPluginNavToScroll(): void {
+  if (!bodyElement || currentView !== "list" || isSectionJumpLocked()) return;
+  const sections = Array.from(bodyElement.querySelectorAll<HTMLElement>(".plugin-section"));
+  const nearest = sectionNearestPaneTop(bodyElement, sections);
+  const sectionId = nearest?.dataset.sectionId;
+  if (!sectionId || sectionId === selectedSectionId) return;
+  selectedSectionId = sectionId;
+  markPluginNav(sectionId);
+}
+
 /**
- * Build a collapsible section for a pack id or `"user"`.
+ * Build a section for a pack id or `"user"`.
  *
  * Section layout:
- *   [header: chevron + label  |  (Off/Default/All if pack) (Reload if user)]
+ *   [header: label  |  (Off/Default/All if pack) (Reload if user)]
  *   [body: plugin rows or empty placeholder]
  *
- * The left portion of the header is clickable to toggle collapse.
- * The preset control and Reload stop propagation so they do not collapse.
+ * The sidebar scrolls this section into view. Preset and Reload clicks stay
+ * on the section and do not change the selected nav item.
  */
 function buildSection(
   sectionId: string,
@@ -376,7 +424,6 @@ function buildSection(
   defs: UnifiedPluginDef[],
 ): HTMLElement {
   const isUser = sectionId === "user";
-  const collapsed = isSectionCollapsed(sectionId);
   const section = document.createElement("div");
   section.className = "plugin-section";
   section.dataset.sectionId = sectionId;
@@ -387,15 +434,11 @@ function buildSection(
   const leftGroup = document.createElement("div");
   leftGroup.className = "plugin-section-header-left";
 
-  const chevron = document.createElement("span");
-  chevron.className = "plugin-section-chevron";
-  chevron.textContent = collapsed ? "\u25B6" : "\u25BC";
-
   const title = document.createElement("span");
   title.className = "plugin-section-title";
   title.textContent = label;
 
-  leftGroup.append(chevron, title);
+  leftGroup.append(title);
   header.appendChild(leftGroup);
 
   if (!isUser) {
@@ -427,16 +470,6 @@ function buildSection(
 
   const body = document.createElement("div");
   body.className = "plugin-section-body";
-  if (collapsed) {
-    body.classList.add("plugin-section-body--collapsed");
-  }
-
-  leftGroup.addEventListener("click", () => {
-    const next = !isSectionCollapsed(sectionId);
-    sectionCollapsed[sectionId] = next;
-    chevron.textContent = next ? "\u25B6" : "\u25BC";
-    body.classList.toggle("plugin-section-body--collapsed", next);
-  });
 
   if (defs.length === 0) {
     const placeholder = document.createElement("p");
@@ -460,8 +493,8 @@ function buildSection(
 }
 
 /**
- * Pack-section Off / Default / All control. Lives on the header right so it
- * does not steal the collapse click.
+ * Pack-section Off / Default / All control. Lives on the section header.
+ * Clicks stop at the group so they do not activate a sidebar tab.
  */
 function buildSectionPreset(label: string, defs: UnifiedPluginDef[]): HTMLElement {
   const group = document.createElement("div");
@@ -573,6 +606,9 @@ function buildPluginRow(
 
   nameEl.addEventListener("click", () => showDetailView(def));
 
+  const isFileBrowser = def.id === "file-browser" || pluginFilenameStem(def.filename) === "file-browser";
+  const manageVaults = isFileBrowser && manageVaultsOpener() ? buildManageVaultsButton() : null;
+
   const toggle = document.createElement("label");
   toggle.className = "plugin-toggle";
   toggle.innerHTML = `
@@ -586,7 +622,9 @@ function buildPluginRow(
     void commitPluginToggle(def.id, checkbox.checked).then(() => onToggled?.());
   });
 
-  row.append(nameEl, toggle);
+  row.append(nameEl);
+  if (manageVaults) row.append(manageVaults);
+  row.append(toggle);
   return row;
 }
 

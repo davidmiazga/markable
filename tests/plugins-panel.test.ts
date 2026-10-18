@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  closePluginsPanel,
   createPluginsPanel,
   openPluginsPanel,
   updatePluginStates,
@@ -111,8 +112,8 @@ describe("plugins-panel — updateUserPluginDefs guard", () => {
  * Cleanup: the panel overlay is removed from document.body after each test
  * to prevent cross-test DOM pollution.
  *
- * Default test flavor is Markable (`VITE_FLAVOR` unset): Base first and open,
- * other packs collapsed, then User.
+ * Default test flavor is Markable (`VITE_FLAVOR` unset). The sidebar lists
+ * packs in flavor order, then User Plugins, and opens on Base editing.
  */
 describe("plugins-panel — pack section rendering", () => {
   beforeEach(() => {
@@ -120,7 +121,7 @@ describe("plugins-panel — pack section rendering", () => {
     document.getElementById("plugins-overlay")?.remove();
   });
 
-  it("renders all pack section headings plus User Plugins", () => {
+  it("lists nav buttons in flavor pack order and shows Base editing", () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
       [makeCoreDef("focus-mode")],
@@ -129,9 +130,18 @@ describe("plugins-panel — pack section rendering", () => {
     );
     openPluginsPanel({ "focus-mode": false });
 
-    const headings = document.querySelectorAll(".plugin-section-title");
-    const labels = Array.from(headings).map((h) => h.textContent);
-    expect(labels).toEqual([
+    const nav = document.querySelector("nav.settings-nav");
+    expect(nav?.getAttribute("role")).toBe("tablist");
+    expect(nav?.getAttribute("aria-label")).toBe("Plugin sections");
+    expect(document.querySelector(".settings-panel")?.classList.contains("settings-panel--nav")).toBe(true);
+    const pane = document.querySelector("#plugins-body");
+    expect(pane?.classList.contains("settings-nav-pane")).toBe(true);
+    expect(pane?.getAttribute("role")).toBe("tabpanel");
+
+    const buttons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button.settings-nav-btn"),
+    );
+    expect(buttons.map((btn) => btn.textContent)).toEqual([
       "Base editing",
       "PKM",
       "Project",
@@ -140,6 +150,27 @@ describe("plugins-panel — pack section rendering", () => {
       "Book",
       "User Plugins",
     ]);
+    expect(buttons.map((btn) => btn.dataset.section)).toEqual([
+      "base",
+      "pkm",
+      "project",
+      "quicknote",
+      "diary",
+      "book",
+      "user",
+    ]);
+    for (const btn of buttons) {
+      expect(btn.type).toBe("button");
+      expect(btn.getAttribute("role")).toBe("tab");
+    }
+    expect(buttons[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(buttons.slice(1).every((btn) => btn.getAttribute("aria-selected") === "false")).toBe(true);
+
+    for (const id of ["base", "pkm", "project", "quicknote", "diary", "book", "user"]) {
+      expect(document.querySelector(`[data-section-id="${id}"]`)?.hasAttribute("hidden")).toBe(false);
+    }
+    expect(document.querySelector(".plugin-section-chevron")).toBeNull();
+    expect(document.querySelector(".plugin-section-body--collapsed")).toBeNull();
   });
 
   it("renders a 'User Plugins' section heading for user definitions", () => {
@@ -266,21 +297,59 @@ describe("plugins-panel — pack section rendering", () => {
     expect(badge.title).toContain("focus-mode.js");
   });
 
-  it("starts first-run pack sections open and others collapsed (Markable = Base)", () => {
+  it("jumps to Book when that nav button is clicked and keeps the other packs", () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
-      [makeCoreDef("markdown-toolbar"), makeCoreDef("focus-mode")],
-      { "markdown-toolbar": false, "focus-mode": false },
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("auto-toc")],
+      { "markdown-toolbar": false, "auto-toc": false },
       toggle,
     );
-    openPluginsPanel({ "markdown-toolbar": false, "focus-mode": false });
+    openPluginsPanel({ "markdown-toolbar": false, "auto-toc": false });
 
-    const baseBody = document.querySelector('[data-section-id="base"] .plugin-section-body');
-    const bookBody = document.querySelector('[data-section-id="book"] .plugin-section-body');
-    const userBody = document.querySelector('[data-section-id="user"] .plugin-section-body');
-    expect(baseBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
-    expect(bookBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
-    expect(userBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
+    const baseBtn = document.querySelector(
+      '.settings-nav-btn[data-section="base"]',
+    ) as HTMLButtonElement;
+    const bookBtn = document.querySelector(
+      '.settings-nav-btn[data-section="book"]',
+    ) as HTMLButtonElement;
+    expect(baseBtn.getAttribute("aria-selected")).toBe("true");
+    expect(bookBtn.textContent).toBe("Book");
+
+    const pane = document.querySelector("#plugins-body") as HTMLElement;
+    const scrollTo = vi.spyOn(pane, "scrollTo").mockImplementation(() => {});
+    bookBtn.click();
+
+    expect(bookBtn.getAttribute("aria-selected")).toBe("true");
+    expect(baseBtn.getAttribute("aria-selected")).toBe("false");
+    expect(baseBtn.disabled).toBe(false);
+    expect(document.querySelector('[data-section-id="base"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="book"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="user"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="book"] .plugin-row')?.textContent).toContain("auto-toc");
+    expect(scrollTo).toHaveBeenCalled();
+  });
+
+  it("remembers the selected section when the panel is reopened", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("markdown-toolbar"), makeCoreDef("auto-toc")],
+      { "markdown-toolbar": false, "auto-toc": false },
+      toggle,
+    );
+    openPluginsPanel({ "markdown-toolbar": false, "auto-toc": false });
+    (document.querySelector('.settings-nav-btn[data-section="book"]') as HTMLButtonElement).click();
+
+    closePluginsPanel();
+    openPluginsPanel({ "markdown-toolbar": false, "auto-toc": false });
+
+    expect(
+      document.querySelector('.settings-nav-btn[data-section="book"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      document.querySelector('.settings-nav-btn[data-section="base"]')?.getAttribute("aria-selected"),
+    ).toBe("false");
+    expect(document.querySelector('[data-section-id="book"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="base"]')?.hasAttribute("hidden")).toBe(false);
   });
 
   it("places File Browser under Base, not PKM", () => {
@@ -301,6 +370,45 @@ describe("plugins-panel — pack section rendering", () => {
     expect(baseRows.length).toBe(1);
     expect(baseRows[0].textContent).toContain("Plugin file-browser");
     expect(document.querySelectorAll('[data-section-id="pkm"] .plugin-row').length).toBe(0);
+  });
+
+  it("puts Manage Vaults on the File Browser row, before the toggle", () => {
+    const openVaults = vi.fn();
+    (window as unknown as { __MARKABLE_OPEN_MANAGE_VAULTS__?: () => void }).__MARKABLE_OPEN_MANAGE_VAULTS__ = openVaults;
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("file-browser"), makeCoreDef("markdown-toolbar")],
+      { "file-browser": true, "markdown-toolbar": true },
+      toggle,
+    );
+    openPluginsPanel({ "file-browser": true, "markdown-toolbar": true });
+
+    expect(document.querySelector(".plugin-panel-footer")).toBeNull();
+    const rows = Array.from(document.querySelectorAll('[data-section-id="base"] .plugin-row'));
+    const fileRow = rows.find((node) => node.textContent?.includes("file-browser")) as HTMLElement;
+    const other = rows.find((node) => node.textContent?.includes("markdown-toolbar")) as HTMLElement;
+    const action = fileRow.querySelector(".plugin-row-action") as HTMLButtonElement;
+    expect(action.textContent).toBe("Manage Vaults");
+    expect(other.querySelector(".plugin-row-action")).toBeNull();
+    expect(action.compareDocumentPosition(fileRow.querySelector(".plugin-toggle")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    action.click();
+    expect(openVaults).toHaveBeenCalledOnce();
+    expect(document.getElementById("plugins-overlay")?.classList.contains("hidden")).toBe(true);
+    (window as unknown as { __MARKABLE_OPEN_MANAGE_VAULTS__?: unknown }).__MARKABLE_OPEN_MANAGE_VAULTS__ = undefined;
+  });
+
+  it("omits Manage Vaults when File Browser has not registered an opener", () => {
+    (window as unknown as { __MARKABLE_OPEN_MANAGE_VAULTS__?: unknown }).__MARKABLE_OPEN_MANAGE_VAULTS__ = undefined;
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    createPluginsPanel(
+      [makeCoreDef("file-browser")],
+      { "file-browser": true },
+      toggle,
+    );
+    openPluginsPanel({ "file-browser": true });
+    expect(document.querySelector(".plugin-row-action")).toBeNull();
+    expect(document.querySelector(".plugin-panel-footer")).toBeNull();
   });
 
   it("lists File Browser second in Base, after Markdown Toolbar", () => {
@@ -531,7 +639,6 @@ describe("plugins-panel — pack section rendering", () => {
 
 describe("plugins-panel — Markable PKM flavor", () => {
   const originalOrder = flavor.orderedPluginPackIds;
-  const originalCollapsed = flavor.pluginSectionStartsCollapsed;
 
   beforeEach(() => {
     document.getElementById("plugins-overlay")?.remove();
@@ -539,16 +646,13 @@ describe("plugins-panel — Markable PKM flavor", () => {
     vi.spyOn(flavor, "orderedPluginPackIds").mockImplementation(() =>
       originalOrder(pkmManifest),
     );
-    vi.spyOn(flavor, "pluginSectionStartsCollapsed").mockImplementation((sectionId) =>
-      originalCollapsed(sectionId, pkmManifest),
-    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("keeps Base then PKM first, and opens both first-run packs", () => {
+  it("lists Base then PKM in the nav and still opens on Base", () => {
     const toggle = vi.fn().mockResolvedValue(undefined);
     createPluginsPanel(
       [makeCoreDef("markdown-toolbar"), makeCoreDef("file-browser")],
@@ -557,15 +661,17 @@ describe("plugins-panel — Markable PKM flavor", () => {
     );
     openPluginsPanel({ "markdown-toolbar": true, "file-browser": true });
 
-    const labels = Array.from(document.querySelectorAll(".plugin-section-title"))
-      .map((h) => h.textContent);
+    const labels = Array.from(document.querySelectorAll(".settings-nav-btn"))
+      .map((btn) => btn.textContent);
     expect(labels.slice(0, 2)).toEqual(["Base editing", "PKM"]);
+    expect(labels[labels.length - 1]).toBe("User Plugins");
 
-    const baseBody = document.querySelector('[data-section-id="base"] .plugin-section-body');
-    const pkmBody = document.querySelector('[data-section-id="pkm"] .plugin-section-body');
-    const bookBody = document.querySelector('[data-section-id="book"] .plugin-section-body');
-    expect(baseBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
-    expect(pkmBody?.classList.contains("plugin-section-body--collapsed")).toBe(false);
-    expect(bookBody?.classList.contains("plugin-section-body--collapsed")).toBe(true);
+    expect(
+      document.querySelector('.settings-nav-btn[data-section="base"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(document.querySelector('[data-section-id="base"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="pkm"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="book"]')?.hasAttribute("hidden")).toBe(false);
+    expect(document.querySelector('[data-section-id="user"]')?.hasAttribute("hidden")).toBe(false);
   });
 });

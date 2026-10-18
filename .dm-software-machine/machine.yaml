@@ -25,13 +25,17 @@ done_means: the fast gate is green and the feature is visible in the profile dev
 # Paths a task may change. Leave as SET_ME and it becomes the profile writes
 # (tauri: <app>/src/, <app>/src-tauri/src/, <app>/index.html;
 #  astro: <app>/src/, <app>/public/).
+# Directory paths (trailing slash) are scope: a task may edit inside them.
+# They do not block another claim. A path with no trailing slash is a file
+# lock: two in-flight tasks that both name that file are refused.
+# index.html and tauri.conf.json stay allowed, with a slash so they are not locks.
 writes:
   - src/
   - src-tauri/src/
-  - index.html
+  - index.html/
   - flavors/
   - scripts/
-  - src-tauri/tauri.conf.json
+  - src-tauri/tauri.conf.json/
   - planning/
   - tests/
 
@@ -59,7 +63,8 @@ auto_advance: true
 # When true, sm-add creates briefing tasks. Claim/next refuse until the spec is filled
 # and sm-ready succeeds. Pause after brief; do not invent In scope / UX / Tests.
 require_brief: true
-# Max in-flight tasks. Overlapping writes always serialize. Worktrees not in this slice.
-parallel: 1
+# Max in-flight tasks. Exact file writes serialize. Directory writes do not.
+# Worktrees not in this slice.
+parallel: 4
 artifact_dir: .dm-software-machine
 specs_dir: specs

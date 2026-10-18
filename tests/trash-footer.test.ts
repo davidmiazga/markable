@@ -139,7 +139,13 @@ describe("footer trash icon", () => {
     vi.mocked(invoke).mockClear();
     trashButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true }));
     expect(isSettingsPanelOpen()).toBe(true);
-    expect(document.querySelector("#settings-data-protection-mode")).toBeTruthy();
+    const mode = document.querySelector("#settings-data-protection-mode");
+    expect(mode).toBeTruthy();
+    const section = mode!.closest(".settings-section") as HTMLElement;
+    expect(section.hidden).toBe(false);
+    expect(
+      document.querySelector('.settings-nav-btn[data-section="data-protection"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
     expect(invoke).not.toHaveBeenCalledWith("reveal_recovered_notes");
   });
 });
