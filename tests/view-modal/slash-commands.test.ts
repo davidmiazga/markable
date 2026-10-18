@@ -260,3 +260,55 @@ describe("slash commands — EC-9 (slash trigger suppressed inside open code fen
     expect(popupOpen()).toBe(true);
   });
 });
+
+describe("slash commands — `/columns`", () => {
+  it("registers /columns and opens the column-count sub-picker", () => {
+    const view = makeView("", 0);
+    typeAt(view, "/columns", 0);
+    expect(popupOpen()).toBe(true);
+    expect(popupChipNames()).toContain("/columns");
+
+    pressEnter(view);
+    expect(popupOpen()).toBe(true);
+    expect(popupChipNames()).toEqual([
+      "2 columns",
+      "3 columns",
+      "4 columns",
+      "2 card columns",
+      "3 card columns",
+    ]);
+  });
+
+  it("inserts a 2-column fence with --- separators and the cursor in column 1", () => {
+    const view = makeView("", 0);
+    typeAt(view, "/columns", 0);
+    pressEnter(view);
+    pressEnter(view);
+    const doc = view.state.doc.toString();
+    expect(doc).toBe("```columns\n2\n\n---\n\n```");
+    expect(view.state.selection.main.head).toBe("```columns\n2\n".length);
+  });
+
+  it("inserts a 3-card-column fence from the last sub-option", () => {
+    const view = makeView("", 0);
+    typeAt(view, "/columns", 0);
+    pressEnter(view);
+    const chips = Array.from(document.querySelectorAll<HTMLElement>(".slash-cmd-chip"));
+    const card = chips.find((c) => c.querySelector("span")?.textContent === "3 card columns");
+    expect(card).toBeTruthy();
+    card!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(view.state.doc.toString()).toBe("```columns-card\n3\n\n---\n\n---\n\n```");
+    expect(view.state.selection.main.head).toBe("```columns-card\n3\n".length);
+  });
+
+  it("Escape while typing /columns removes the typed text and closes the menu", () => {
+    const view = makeView("", 0);
+    typeAt(view, "/columns", 0);
+    expect(popupOpen()).toBe(true);
+    pressEsc(view);
+    expect(popupOpen()).toBe(false);
+    expect(view.state.doc.toString()).toBe("");
+    expect(view.state.selection.main.head).toBe(0);
+    expect(__TEST_ONLY_ESC_REMOVES_TYPED_TEXT.has("columns")).toBe(true);
+  });
+});

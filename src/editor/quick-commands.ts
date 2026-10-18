@@ -16,6 +16,8 @@
  *                    tip, success, question, warning, failure, danger,
  *                    bug, example, quote) appear as chips inside the
  *                    same popup. Keeps the root menu uncluttered.
+ *   /columns       — opens a column-count sub-picker (2, 3, 4, or card
+ *                    columns) and inserts a columns fence.
  *   /divider       — insert a horizontal rule
  *   /quote         — insert a blockquote prefix
  *   /sidebar-left  — insert a left-floating sidebar block
@@ -74,6 +76,20 @@ const SIDEBAR_FENCE   = "```sidebar\n\n```";
 const GRID_FENCE      = "```grid\n\n```";
 
 /**
+ * Columns fence with a count line and one `---` between each column.
+ * The cursor offset lands on the blank line of column 1.
+ */
+export function columnsFenceTemplate(count: number, card = false): { text: string; cursorOffset: number } {
+  const lang = card ? "columns-card" : "columns";
+  const lines = ["```" + lang, String(count), ""];
+  for (let i = 1; i < count; i++) lines.push("---", "");
+  lines.push("```");
+  const text = lines.join("\n");
+  const cursorOffset = ("```" + lang + "\n" + String(count) + "\n").length;
+  return { text, cursorOffset };
+}
+
+/**
  * Names of slash commands that opt into the "Esc cancels and removes
  * the typed slash text" behaviour (view-modal EC-10, locked per user
  * directive 2026-06-08).
@@ -97,7 +113,7 @@ const GRID_FENCE      = "```grid\n\n```";
  * Lookup is O(1) inside the Esc handler.
  */
 const ESC_REMOVES_TYPED_TEXT: ReadonlySet<string> =
-  Object.freeze(new Set(["sidebar", "grid"])) as ReadonlySet<string>;
+  Object.freeze(new Set(["sidebar", "grid", "columns"])) as ReadonlySet<string>;
 
 /**
  * Test-only export of the EC-10 opt-in Set. Exposed solely so the
@@ -351,6 +367,29 @@ function makeCommands(deps: QuickCommandDeps): QuickCommand[] {
         });
         deps.enterPreviewMode();
       },
+    },
+    {
+      name: "columns",
+      description: "Insert a multi-column layout",
+      apply() { /* drilldown — subCommands inserts the fence */ },
+      subCommands: [
+        { count: 2, card: false, name: "2 columns", description: "Insert 2 columns" },
+        { count: 3, card: false, name: "3 columns", description: "Insert 3 columns" },
+        { count: 4, card: false, name: "4 columns", description: "Insert 4 columns" },
+        { count: 2, card: true, name: "2 card columns", description: "Insert 2 card columns" },
+        { count: 3, card: true, name: "3 card columns", description: "Insert 3 card columns" },
+      ].map(({ count, card, name, description }) => ({
+        name,
+        description,
+        apply(view: EditorView, from: number, to: number) {
+          const { text, cursorOffset } = columnsFenceTemplate(count, card);
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + cursorOffset },
+          });
+          deps.enterPreviewMode();
+        },
+      })),
     },
     {
       name: "link",

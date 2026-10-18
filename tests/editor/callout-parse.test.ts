@@ -14,7 +14,9 @@ import {
   parseCalloutTitle,
   CALLOUT_ALIASES,
   CALLOUT_TYPES,
+  CALLOUT_BG_COLORS,
   isPlainCallout,
+  resolveCalloutBg,
   stripBlockquotePrefix,
 } from "../../src/editor/callouts";
 
@@ -197,6 +199,50 @@ describe("parseCalloutTitle — heading marker detection", () => {
   });
   it("requires a space after the markers", () => {
     expect(parseCalloutTitle("##NoSpace")).toEqual({ level: 0, rest: "##NoSpace" });
+  });
+});
+
+describe("parseCalloutHeader — background override", () => {
+  it("parses |bg-<color> and keeps canonical type, fold, title, and depth", () => {
+    const h = parseCalloutHeader("> [!note|bg-blue]+ Title")!;
+    expect(h.canonical).toBe("note");
+    expect(h.fold).toBe("+");
+    expect(h.title).toBe("Title");
+    expect(h.depth).toBe(1);
+    expect(h.bg).toBe(CALLOUT_BG_COLORS.blue);
+    expect(h.written).toBe("Note");
+  });
+
+  it("parses a bare |<color> and strips a bg- prefix", () => {
+    const named = parseCalloutHeader("> [!tip|yellow] Hint")!;
+    expect(named.canonical).toBe("tip");
+    expect(named.title).toBe("Hint");
+    expect(named.bg).toBe("#e6a817");
+    expect(resolveCalloutBg("bg-red")).toBe("#da3633");
+    expect(resolveCalloutBg("BG-Purple")).toBe("#a371f7");
+  });
+
+  it("passes a |#hex override through and keeps a nested depth", () => {
+    const h = parseCalloutHeader("> > [!plain|#2ea043]- Hex title")!;
+    expect(h.canonical).toBe("plain");
+    expect(h.fold).toBe("-");
+    expect(h.title).toBe("Hex title");
+    expect(h.depth).toBe(2);
+    expect(h.bg).toBe("#2ea043");
+  });
+
+  it("resolves an alias independently of the color token", () => {
+    const h = parseCalloutHeader("> [!hint|bg-red] Watch")!;
+    expect(h.canonical).toBe("tip");
+    expect(h.written).toBe("Hint");
+    expect(h.bg).toBe("#da3633");
+    expect(h.title).toBe("Watch");
+  });
+
+  it("leaves bg empty when no pipe metadata is present", () => {
+    expect(parseCalloutHeader("> [!warning] Heads")!.bg).toBe("");
+    expect(parseCalloutHeader("> [!plain-green]")!.bg).toBe("");
+    expect(parseCalloutHeader("> [!plain-green]")!.canonical).toBe("plain-green");
   });
 });
 

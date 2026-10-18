@@ -22,7 +22,16 @@ vi.mock("../../src/lib/bridge", () => ({
   updateRecentFilesMenu: vi.fn(),
 }));
 
-import { markdownToHtml } from "../../src/lib/export";
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (p: string) => p,
+  invoke: vi.fn(),
+}));
+
+import { markdownToHtml, buildStandaloneHtml, buildPdfHtml, MINIMAL_CSS } from "../../src/lib/export";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { markdown } from "@codemirror/lang-markdown";
+import { fencedCodePreviewField, livePreviewExtension, viewModeField } from "../../src/editor/live-preview";
 
 describe("export — non-foldable callouts", () => {
   it("emits a <div> with class+data-callout for a basic tip", () => {
@@ -159,5 +168,142 @@ describe("export — nested callouts", () => {
     const innerStart = html.indexOf(`data-callout="warning"`);
     expect(outerStart).toBeGreaterThanOrEqual(0);
     expect(innerStart).toBeGreaterThan(outerStart);
+  });
+});
+
+describe("export — layout fences and tinted callouts", () => {
+  const columns = [
+    "```columns",
+    "2",
+    "> [!plain-blue] Hello",
+    "> left",
+    "---",
+    "> [!note|purple] Titled",
+    "> right",
+    "```",
+  ].join("\n");
+
+  it("renders columns, columns-card, grid, and grid-card as CSS grids", () => {
+    const columnsHtml = markdownToHtml(columns);
+    expect(columnsHtml).toContain("md-columns");
+    expect(columnsHtml).toContain("grid-template-columns:repeat(2, minmax(0, 1fr))");
+    expect(columnsHtml).not.toContain("language-columns");
+
+    const card = markdownToHtml("```columns-card\n3\nA\n---\nB\n---\nC\n```");
+    expect(card).toContain("md-layout-cell--card");
+    expect(card).toContain("grid-template-columns:repeat(3, minmax(0, 1fr))");
+    expect(card).not.toContain("language-columns-card");
+
+    const grid = markdownToHtml("```grid\nA\n---\nB\n```");
+    expect(grid).toContain("md-grid");
+    expect(grid).toContain("grid-template-columns:repeat(3, minmax(0, 1fr))");
+    expect(grid).not.toContain("language-grid");
+
+    const gridCard = markdownToHtml("```grid-card wide\n2x1\nA\n---\nB\n```");
+    expect(gridCard).toContain("md-layout-cell--card");
+    expect(gridCard).toContain("md-block-wide");
+    expect(gridCard).toContain("grid-template-columns:repeat(2, minmax(0, 1fr))");
+    expect(gridCard).not.toContain("<pre><code");
+  });
+
+  it("renders nested callouts and pipe background overrides inside cells", () => {
+    const html = markdownToHtml(columns);
+    expect(html).toContain(`data-callout="plain-blue"`);
+    expect(html).toContain(`data-callout="note"`);
+    expect(html).toContain(`style="--callout-color: #a371f7"`);
+    expect(html).toContain("Hello");
+    expect(html).toContain("Titled");
+
+    const tinted = markdownToHtml(
+      "> [!warning|red] Careful\n> body\n\n> [!plain-green]\n> ok\n\n> [!quote|#f0b429] Said\n> words",
+    );
+    expect(tinted).toContain(`data-callout="warning"`);
+    expect(tinted).toContain(`style="--callout-color: #da3633"`);
+    expect(tinted).toContain(`data-callout="plain-green"`);
+    expect(tinted).toContain(`style="--callout-color: #f0b429"`);
+  });
+
+  it("converts sidebar fences to aside HTML", () => {
+    const html = markdownToHtml("```sidebar\n> [!tip|yellow] Side\n> note\n```");
+    expect(html).toContain("md-sidebar-right");
+    expect(html).toContain(`data-callout="tip"`);
+    expect(html).toContain(`style="--callout-color: #e6a817"`);
+    expect(html).not.toContain("language-sidebar");
+    const left = markdownToHtml("```sidebar-left full\nHello\n```");
+    expect(left).toContain("md-sidebar-left");
+    expect(left).toContain("md-block-full");
+  });
+
+  it("embeds column grid styles and callout background rules in standalone HTML and PDF HTML", () => {
+    expect(MINIMAL_CSS).toContain(".md-layout");
+    expect(MINIMAL_CSS).toContain(".md-sidebar");
+    expect(MINIMAL_CSS).toContain("color-mix(in srgb, var(--callout-color)");
+    expect(MINIMAL_CSS).toContain(".callout[style*=\"--callout-color\"]");
+
+    const html = buildStandaloneHtml(columns, "Notes");
+    expect(html).toContain("grid-template-columns:repeat(2, minmax(0, 1fr))");
+    expect(html).toContain("--callout-color: #a371f7");
+    expect(html).toContain(".md-columns");
+    expect(html).not.toContain("language-columns");
+
+    const pdf = buildPdfHtml(columns, "Notes");
+    expect(pdf).toContain("@page { size: letter;");
+    expect(pdf).toContain("grid-template-columns:repeat(2, minmax(0, 1fr))");
+    expect(pdf).toContain("--callout-color: #a371f7");
+    expect(pdf).not.toContain("<pre><code class=\"language-columns\"");
+  });
+});
+
+describe("live preview — columns, grids, and tinted callouts", () => {
+  function preview(doc: string): HTMLElement {
+    const state = EditorState.create({
+      doc,
+      selection: { anchor: doc.length },
+      extensions: [markdown(), viewModeField, fencedCodePreviewField, livePreviewExtension],
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({ state, parent });
+    return view.dom;
+  }
+
+  it("renders columns and columns-card as multi-column grids with nested callouts", () => {
+    const dom = preview("```columns\n2\n> [!plain-blue] Hello\n> left\n---\n> [!note|purple] Titled\n> right\n```\n");
+    const grid = dom.querySelector<HTMLElement>(".cm-columns");
+    expect(grid).toBeTruthy();
+    expect(grid!.style.gridTemplateColumns).toContain("repeat(2");
+    expect(grid!.querySelectorAll(".cm-grid-cell").length).toBe(2);
+    expect(grid!.innerHTML).toContain(`data-callout="plain-blue"`);
+    expect(grid!.innerHTML).toContain(`data-callout="note"`);
+    expect(grid!.innerHTML).toContain("--callout-color: #a371f7");
+    expect(grid!.innerHTML).not.toContain("language-columns");
+
+    const card = preview("```columns-card wide\n3\nA\n---\nB\n---\nC\n```\n");
+    const cardGrid = card.querySelector<HTMLElement>(".cm-columns");
+    expect(cardGrid!.style.gridTemplateColumns).toContain("repeat(3");
+    expect(card.querySelectorAll(".cm-grid-cell--card").length).toBe(3);
+    expect(card.querySelector(".cm-block-width-wide")).toBeTruthy();
+  });
+
+  it("renders grid and grid-card, keeping a bare grid count square", () => {
+    const grid = preview("```grid\n4\nOnly\n```\n");
+    const el = grid.querySelector<HTMLElement>(".cm-grid");
+    expect(el!.style.gridTemplateColumns).toContain("repeat(4");
+    expect(grid.querySelectorAll(".cm-grid-cell").length).toBe(16);
+
+    const card = preview("```grid-card\n2x1\nA\n---\nB\n```\n");
+    expect(card.querySelector<HTMLElement>(".cm-grid")!.style.gridTemplateColumns).toContain("repeat(2");
+    expect(card.querySelectorAll(".cm-grid-cell--card").length).toBe(2);
+  });
+
+  it("applies --callout-color from a pipe override on the live-preview line", () => {
+    const dom = preview("> [!warning|red] Careful\n> body\n\n> [!plain-green]\n> ok\n\n> [!quote|#f0b429] Said\n> words\n");
+    const lines = Array.from(dom.querySelectorAll<HTMLElement>(".cm-live-callout-first"));
+    const warning = lines.find((el) => el.getAttribute("data-callout") === "warning");
+    const plain = lines.find((el) => el.getAttribute("data-callout") === "plain-green");
+    const quote = lines.find((el) => el.getAttribute("data-callout") === "quote");
+    expect(warning?.getAttribute("style")).toContain("--callout-color: #da3633");
+    expect(plain?.getAttribute("data-callout")).toBe("plain-green");
+    expect(quote?.getAttribute("style")).toContain("--callout-color: #f0b429");
   });
 });

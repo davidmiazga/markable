@@ -4298,7 +4298,7 @@ async function readFileContentForMenu(path: string): Promise<string | null> {
 
 /** True when the file contains a select/sidebar/grid fenced codeblock. */
 function detectCodeblock(content: string): boolean {
-  return /^```(?:select|sidebar(?:-left)?|grid(?:-card)?)\b/m.test(content);
+  return /^```(?:select|sidebar(?:-left)?|grid(?:-card)?|columns(?:-card)?)\b/m.test(content);
 }
 
 /** True when the file's YAML frontmatter has a `layout:` key with a value. */

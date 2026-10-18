@@ -15,6 +15,7 @@ import { evaluateTableFormulas, sortBodyRows } from "./table-formula";
 import type { EvaluatedTable } from "./table-formula";
 import { SelectWidget } from "./select-widget";
 import { parseCalloutHeader, parseCalloutTitle, isPlainCallout, type CalloutHeader } from "./callouts";
+import { convertCalloutsToHtml, splitLayoutCells } from "../lib/export";
 import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "./callout-icons";
 
 /**
@@ -704,10 +705,12 @@ function decorateCallout(
     // render on the visible row.
     if (ln === (collapsed ? startLineNo : lastLineNo)) classes.push("cm-live-callout-last");
     if (collapsed && ln > startLineNo) classes.push("cm-live-callout-collapsed-body");
+    const lineAttrs: Record<string, string> = { "data-callout": header.canonical };
+    if (header.bg) lineAttrs.style = `--callout-color: ${header.bg}`;
     decorations.push(
       Decoration.line({
         class: classes.join(" "),
-        attributes: { "data-callout": header.canonical },
+        attributes: lineAttrs,
       }).range(line.from),
     );
 
@@ -950,6 +953,21 @@ class FencedCodeWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
+/**
+ * Render markdown that lives inside a layout cell or sidebar.
+ * Callouts are converted before marked (and before the shared renderer)
+ * so tinted callout boxes survive inside columns, grids, and sidebars
+ * even when `__MARKABLE_RENDER_MD__` is a plain marked.parse wrapper.
+ */
+function renderWidgetMarkdown(src: string): string {
+  const converted = convertCalloutsToHtml(src);
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  if (renderMd) return renderMd(converted);
+  return marked.parse(converted) as string;
+}
+
 export type BlockWidth = "normal" | "wide" | "full";
 
 function widthClassFor(w: BlockWidth): string {
@@ -969,68 +987,44 @@ class SidebarWidget extends WidgetType {
     const wrap = document.createElement("aside");
     const base = this.side === "left" ? "cm-sidebar-left" : "cm-sidebar-preview";
     wrap.className = base + widthClassFor(this.width);
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-    wrap.innerHTML = renderMd ? renderMd(this.src) : `<pre>${this.src}</pre>`;
+    wrap.innerHTML = renderWidgetMarkdown(this.src);
     return wrap;
   }
   ignoreEvent(): boolean { return false; }
 }
 
 class GridWidget extends WidgetType {
-  constructor(private raw: string, private card = false, private width: BlockWidth = "normal") { super(); }
+  constructor(
+    private raw: string,
+    private card = false,
+    private width: BlockWidth = "normal",
+    /** `columns` treats a bare count as column count (1 row). `grid` treats it as square. */
+    private mode: "grid" | "columns" = "grid",
+  ) { super(); }
   eq(other: GridWidget): boolean {
-    return this.raw === other.raw && this.card === other.card && this.width === other.width;
+    return this.raw === other.raw && this.card === other.card
+      && this.width === other.width && this.mode === other.mode;
   }
 
   toDOM(): HTMLElement {
-    const lines = this.raw.split("\n");
-
-    // Optional first line sets dimensions: "3x3", "3x2", "4" (square), or omitted → 3x3
-    let cols = 3;
-    let rows = 3;
-    let contentStart = 0;
-    const dimMatch = lines[0]?.trim().match(/^(\d+)(?:x(\d+))?$/);
-    if (dimMatch) {
-      cols = Math.max(1, parseInt(dimMatch[1], 10));
-      rows = dimMatch[2] ? Math.max(1, parseInt(dimMatch[2], 10)) : cols;
-      contentStart = 1;
-    }
+    const { cols, rows, cells } = splitLayoutCells(this.raw, this.mode);
     const totalCells = cols * rows;
-
-    // Split remaining lines on bare "---" separators to get per-cell markdown
-    const bodyLines = lines.slice(contentStart);
-    const cellTexts: string[] = [];
-    let current: string[] = [];
-    for (const line of bodyLines) {
-      if (line.trim() === "---") {
-        cellTexts.push(current.join("\n").trim());
-        current = [];
-      } else {
-        current.push(line);
-      }
-    }
-    if (current.some(l => l.trim())) cellTexts.push(current.join("\n").trim());
-
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const renderMd = (window as any).__MARKABLE_RENDER_MD__ as ((md: string) => string) | undefined;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const wrapper = document.createElement("div");
     wrapper.className = "cm-grid-wrapper" + widthClassFor(this.width);
 
     const grid = document.createElement("div");
-    grid.className = "cm-grid";
-    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    grid.className = this.mode === "columns" ? "cm-grid cm-columns" : "cm-grid";
+    grid.style.display = "grid";
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
     wrapper.appendChild(grid);
 
     for (let i = 0; i < totalCells; i++) {
       const cell = document.createElement("div");
-      const text = cellTexts[i] ?? "";
+      const text = cells[i] ?? "";
       if (text) {
         cell.className = this.card ? "cm-grid-cell cm-grid-cell--card" : "cm-grid-cell";
-        cell.innerHTML = renderMd ? renderMd(text) : `<pre>${text}</pre>`;
+        cell.innerHTML = renderWidgetMarkdown(text);
       } else {
         cell.className = "cm-grid-cell cm-grid-cell--placeholder";
         cell.textContent = "Empty";
@@ -1119,7 +1113,7 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
 
       if (langName === "grid") {
         decorations.push(
-          Decoration.replace({ widget: new GridWidget(code, false, blockWidth), block: true })
+          Decoration.replace({ widget: new GridWidget(code, false, blockWidth, "grid"), block: true })
             .range(node.from, node.to)
         );
         return false;
@@ -1127,7 +1121,23 @@ function buildFencedCodeDecorations(state: EditorState): DecorationSet {
 
       if (langName === "grid-card") {
         decorations.push(
-          Decoration.replace({ widget: new GridWidget(code, true, blockWidth), block: true })
+          Decoration.replace({ widget: new GridWidget(code, true, blockWidth, "grid"), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (langName === "columns") {
+        decorations.push(
+          Decoration.replace({ widget: new GridWidget(code, false, blockWidth, "columns"), block: true })
+            .range(node.from, node.to)
+        );
+        return false;
+      }
+
+      if (langName === "columns-card") {
+        decorations.push(
+          Decoration.replace({ widget: new GridWidget(code, true, blockWidth, "columns"), block: true })
             .range(node.from, node.to)
         );
         return false;

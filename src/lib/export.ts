@@ -175,6 +175,45 @@ details.callout[open] > summary .callout-chevron { transform: rotate(90deg); }
 .callout[data-callout="plain-orange"] { --callout-color: #d29922; }
 .callout[data-callout="plain-red"]    { --callout-color: #da3633; }
 .callout[data-callout="plain-purple"] { --callout-color: #a371f7; }
+/* An inline style="--callout-color: …" on the callout element overrides the
+   per-type color above (inline wins). Background and border both read the
+   variable, so |red, |bg-blue, and |#hex tints follow the override. */
+.callout[style*="--callout-color"] {
+  border-left-color: var(--callout-color);
+  background: color-mix(in srgb, var(--callout-color) 8%, transparent);
+}
+/* Multi-column layouts converted from columns / grid / sidebar fences. */
+.md-layout,
+.md-columns,
+.md-grid {
+  display: grid;
+  gap: 12px;
+  margin: 1rem 0;
+  width: 100%;
+}
+.md-layout-cell { min-width: 0; }
+.md-layout-cell > *:first-child { margin-top: 0; }
+.md-layout-cell > *:last-child { margin-bottom: 0; }
+.md-layout-cell--card {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fafafa;
+}
+.md-sidebar {
+  width: 220px;
+  box-sizing: border-box;
+  border: 1px solid #e5e5e5;
+  background: #fafafa;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 1rem;
+  font-size: 0.92em;
+}
+.md-sidebar-right { float: right; margin-left: 1.25rem; }
+.md-sidebar-left { float: left; margin-right: 1.25rem; }
+.md-block-wide { width: min(100%, 960px); max-width: 960px; }
+.md-block-full { width: 100%; max-width: none; }
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -372,7 +411,7 @@ export function enforcePdfExtension(path: string): string {
  *   5. Emit `<details>` (foldable) or `<div>` (not), with `<summary>` /
  *      `<div class="callout-title">` containing the icon + title.
  */
-function convertCalloutsToHtml(md: string): string {
+export function convertCalloutsToHtml(md: string): string {
   const lines = md.split("\n");
   const out: string[] = [];
 
@@ -421,12 +460,13 @@ function convertCalloutsToHtml(md: string): string {
  * body HTML) to a single HTML block. Foldable callouts use semantic
  * `<details>` / `<summary>`; non-foldable use `<div>` + `<div class="callout-title">`.
  */
-function renderCalloutHtml(header: { canonical: string; written: string; fold: string; title: string }, innerBody: string): string {
+function renderCalloutHtml(header: { canonical: string; written: string; fold: string; title: string; bg?: string }, innerBody: string): string {
   // Plain (and every `plain-<color>` variant) opts out of the default-title
   // fallback. All other types fall back to the capitalized written word.
   const titleText = header.title || (isPlainCallout(header.canonical) ? "" : header.written);
   const icon = calloutIconSvg(header.canonical);
   const dataAttr = ` data-callout="${escapeHtml(header.canonical)}"`;
+  const styleAttr = header.bg ? ` style="--callout-color: ${escapeHtml(header.bg)}"` : "";
   const classAttr = `class="callout callout-${escapeHtml(header.canonical)}"`;
   const iconHtml = icon ? `<span class="callout-icon">${icon}</span>` : "";
   // Title supports a leading ATX heading marker (`# `..`###### `) and inline
@@ -441,7 +481,7 @@ function renderCalloutHtml(header: { canonical: string; written: string; fold: s
   if (header.fold === "+" || header.fold === "-") {
     const openAttr = header.fold === "+" ? " open" : "";
     return (
-      `<details ${classAttr}${dataAttr}${openAttr}>` +
+      `<details ${classAttr}${dataAttr}${styleAttr}${openAttr}>` +
       `<summary class="callout-title">` +
       `<span class="callout-chevron">${CALLOUT_CHEVRON_SVG}</span>` +
       iconHtml +
@@ -452,7 +492,7 @@ function renderCalloutHtml(header: { canonical: string; written: string; fold: s
     );
   }
   return (
-    `<div ${classAttr}${dataAttr}>` +
+    `<div ${classAttr}${dataAttr}${styleAttr}>` +
     `<div class="callout-title">` +
     iconHtml +
     titleHtml +
@@ -462,9 +502,86 @@ function renderCalloutHtml(header: { canonical: string; written: string; fold: s
   );
 }
 
+/**
+ * Split a columns/grid fence body into cells.
+ * `columns`: default 2×1; a bare count (`2`, `3`, `4`) is the column count
+ * and stays one row. `grid`: default 3×3; a bare count is a square.
+ * `NxM` sets both. A line that is only `---` starts the next cell.
+ */
+export function splitLayoutCells(
+  raw: string,
+  mode: "grid" | "columns",
+): { cols: number; rows: number; cells: string[] } {
+  const lines = raw.split("\n");
+  let cols = mode === "columns" ? 2 : 3;
+  let rows = mode === "columns" ? 1 : 3;
+  let contentStart = 0;
+  const dimMatch = lines[0]?.trim().match(/^(\d+)(?:x(\d+))?$/);
+  if (dimMatch) {
+    cols = Math.max(1, parseInt(dimMatch[1], 10));
+    if (dimMatch[2]) rows = Math.max(1, parseInt(dimMatch[2], 10));
+    else rows = mode === "columns" ? 1 : cols;
+    contentStart = 1;
+  }
+  const cells: string[] = [];
+  let current: string[] = [];
+  for (const line of lines.slice(contentStart)) {
+    if (line.trim() === "---") {
+      cells.push(current.join("\n").trim());
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.some((l) => l.trim())) cells.push(current.join("\n").trim());
+  return { cols, rows, cells };
+}
+
+function layoutWidthClass(width: string): string {
+  if (width === "wide") return " md-block-wide";
+  if (width === "full") return " md-block-full";
+  return "";
+}
+
+/**
+ * Replace columns / grid / sidebar fences with styled HTML before marked
+ * turns them into `<pre><code class="language-…">`. Cell markdown is
+ * rendered through markdownToHtml so nested callouts (and nested fences)
+ * convert too.
+ */
+function convertLayoutFencesToHtml(md: string): string {
+  const layoutFenceRe =
+    /^```(columns-card|columns|grid-card|grid|sidebar-left|sidebar)(?:[ \t]+(wide|full))?[ \t]*\r?\n([\s\S]*?)^```[ \t]*\r?$/gm;
+  return md.replace(layoutFenceRe, (_full, lang: string, width: string | undefined, body: string) => {
+    const widthClass = layoutWidthClass(width ?? "");
+    if (lang === "sidebar" || lang === "sidebar-left") {
+      const side = lang === "sidebar-left" ? "md-sidebar-left" : "md-sidebar-right";
+      const inner = markdownToHtml(body.trim());
+      return `<aside class="md-sidebar ${side}${widthClass}">\n${inner}\n</aside>\n`;
+    }
+    const card = lang === "columns-card" || lang === "grid-card";
+    const mode: "grid" | "columns" = lang === "columns" || lang === "columns-card" ? "columns" : "grid";
+    const kind = mode === "columns" ? "md-columns" : "md-grid";
+    const { cols, rows, cells } = splitLayoutCells(body, mode);
+    const total = cols * rows;
+    const cellClass = card ? "md-layout-cell md-layout-cell--card" : "md-layout-cell";
+    let html = `<div class="md-layout ${kind}${card ? " md-layout-card" : ""}${widthClass}" style="display:grid;grid-template-columns:repeat(${cols}, minmax(0, 1fr));gap:12px">\n`;
+    for (let i = 0; i < total; i++) {
+      const text = cells[i] ?? "";
+      const inner = text ? markdownToHtml(text) : "";
+      html += `<div class="${cellClass}">\n${inner}</div>\n`;
+    }
+    html += `</div>\n`;
+    return html;
+  });
+}
+
 export function markdownToHtml(markdown: string): string {
   // Strip Obsidian-style %%comments%% before conversion
   let cleaned = markdown.replace(/%%[\s\S]*?%%/g, "");
+
+  // Layout fences become grids/sidebars before marked wraps them in <pre>.
+  cleaned = convertLayoutFencesToHtml(cleaned);
 
   // Convert Obsidian-style callouts to HTML before marked processes them.
   // Supports:

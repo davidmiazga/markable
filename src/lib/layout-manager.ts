@@ -995,6 +995,8 @@ export function injectGridCSS(): void {
 /* Heading styling comes from the global h1..h6 rule in styles.css (theme tokens). */
 .cm-grid-cell h1,.cm-grid-cell h2,.cm-grid-cell h3,.cm-grid-cell h4,.cm-grid-cell h5,.cm-grid-cell h6{margin:0 0 6px}
 .cm-grid-cell p{color:var(--text-primary,#ccc);margin:0 0 6px}
+.cm-grid-cell .callout,.cm-sidebar-preview .callout,.cm-sidebar-left .callout{--callout-color:#388bfd;border-left:4px solid var(--callout-color);padding:12px 14px;margin:0.5rem 0;border-radius:0 12px 12px 0;background:color-mix(in srgb, var(--callout-color) 8%, transparent)}
+.cm-grid-cell .callout[style*="--callout-color"],.cm-sidebar-preview .callout[style*="--callout-color"],.cm-sidebar-left .callout[style*="--callout-color"]{background:color-mix(in srgb, var(--callout-color) 8%, transparent);border-color:var(--callout-color)}
 `;
   document.head.appendChild(style);
 }

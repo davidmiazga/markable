@@ -580,7 +580,7 @@ export function findSelectFenceAtCursor(
 export function findFirstCustomFence(
   view: EditorView,
 ): { from: number; to: number; body: string; lang: string } | null {
-  const known = new Set(["sidebar", "sidebar-left", "grid", "grid-card", "select"]);
+  const known = new Set(["sidebar", "sidebar-left", "grid", "grid-card", "columns", "columns-card", "select"]);
   const state = view.state;
   let found: { from: number; to: number; body: string; lang: string } | null = null;
   syntaxTree(state).iterate({
@@ -620,7 +620,7 @@ export function findFirstCustomFence(
 export function findCustomFenceAtCursor(
   view: EditorView,
 ): { from: number; to: number; body: string; lang: string } | null {
-  const known = new Set(["sidebar", "sidebar-left", "grid", "grid-card", "select"]);
+  const known = new Set(["sidebar", "sidebar-left", "grid", "grid-card", "columns", "columns-card", "select"]);
   const state = view.state;
   const cursor = state.selection.main.head;
   let found: { from: number; to: number; body: string; lang: string } | null = null;

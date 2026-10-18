@@ -1270,6 +1270,104 @@ input[type="checkbox"]:focus-visible {
 .cm-live-callout[data-callout="plain-red"]    { --callout-color: #da3633; }
 .cm-live-callout[data-callout="plain-purple"] { --callout-color: #a371f7; }
 
+/* Widget HTML (columns, grid, sidebar cells) emits class "callout", not
+   cm-live-callout. These rules tint that HTML the same way export CSS does.
+   An inline --callout-color from |bg / |#hex overrides the per-type color. */
+.cm-grid-cell .callout,
+.cm-sidebar-preview .callout,
+.cm-sidebar-left .callout {
+  --callout-color: #388bfd;
+  border-left: 4px solid var(--callout-color);
+  padding: 12px 14px;
+  margin: 0.5rem 0;
+  border-radius: 0 12px 12px 0;
+  background: color-mix(in srgb, var(--callout-color) 8%, transparent);
+}
+.cm-grid-cell .callout-title,
+.cm-sidebar-preview .callout-title,
+.cm-sidebar-left .callout-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--callout-color);
+  margin: 0;
+}
+.cm-grid-cell .callout[data-callout="note"],
+.cm-sidebar-preview .callout[data-callout="note"],
+.cm-sidebar-left .callout[data-callout="note"],
+.cm-grid-cell .callout[data-callout="info"],
+.cm-sidebar-preview .callout[data-callout="info"],
+.cm-sidebar-left .callout[data-callout="info"],
+.cm-grid-cell .callout[data-callout="todo"],
+.cm-sidebar-preview .callout[data-callout="todo"],
+.cm-sidebar-left .callout[data-callout="todo"] { --callout-color: var(--link-color); }
+.cm-grid-cell .callout[data-callout="abstract"],
+.cm-sidebar-preview .callout[data-callout="abstract"],
+.cm-sidebar-left .callout[data-callout="abstract"],
+.cm-grid-cell .callout[data-callout="plain-cyan"],
+.cm-sidebar-preview .callout[data-callout="plain-cyan"],
+.cm-sidebar-left .callout[data-callout="plain-cyan"] { --callout-color: #00b8d4; }
+.cm-grid-cell .callout[data-callout="tip"],
+.cm-sidebar-preview .callout[data-callout="tip"],
+.cm-sidebar-left .callout[data-callout="tip"],
+.cm-grid-cell .callout[data-callout="success"],
+.cm-sidebar-preview .callout[data-callout="success"],
+.cm-sidebar-left .callout[data-callout="success"],
+.cm-grid-cell .callout[data-callout="plain-green"],
+.cm-sidebar-preview .callout[data-callout="plain-green"],
+.cm-sidebar-left .callout[data-callout="plain-green"] { --callout-color: #2ea043; }
+.cm-grid-cell .callout[data-callout="question"],
+.cm-sidebar-preview .callout[data-callout="question"],
+.cm-sidebar-left .callout[data-callout="question"],
+.cm-grid-cell .callout[data-callout="plain-orange"],
+.cm-sidebar-preview .callout[data-callout="plain-orange"],
+.cm-sidebar-left .callout[data-callout="plain-orange"] { --callout-color: #d29922; }
+.cm-grid-cell .callout[data-callout="warning"],
+.cm-sidebar-preview .callout[data-callout="warning"],
+.cm-sidebar-left .callout[data-callout="warning"],
+.cm-grid-cell .callout[data-callout="plain-yellow"],
+.cm-sidebar-preview .callout[data-callout="plain-yellow"],
+.cm-sidebar-left .callout[data-callout="plain-yellow"] { --callout-color: #e6a817; }
+.cm-grid-cell .callout[data-callout="failure"],
+.cm-sidebar-preview .callout[data-callout="failure"],
+.cm-sidebar-left .callout[data-callout="failure"],
+.cm-grid-cell .callout[data-callout="danger"],
+.cm-sidebar-preview .callout[data-callout="danger"],
+.cm-sidebar-left .callout[data-callout="danger"],
+.cm-grid-cell .callout[data-callout="bug"],
+.cm-sidebar-preview .callout[data-callout="bug"],
+.cm-sidebar-left .callout[data-callout="bug"],
+.cm-grid-cell .callout[data-callout="plain-red"],
+.cm-sidebar-preview .callout[data-callout="plain-red"],
+.cm-sidebar-left .callout[data-callout="plain-red"] { --callout-color: #da3633; }
+.cm-grid-cell .callout[data-callout="example"],
+.cm-sidebar-preview .callout[data-callout="example"],
+.cm-sidebar-left .callout[data-callout="example"],
+.cm-grid-cell .callout[data-callout="plain-purple"],
+.cm-sidebar-preview .callout[data-callout="plain-purple"],
+.cm-sidebar-left .callout[data-callout="plain-purple"] { --callout-color: #a371f7; }
+.cm-grid-cell .callout[data-callout="quote"],
+.cm-sidebar-preview .callout[data-callout="quote"],
+.cm-sidebar-left .callout[data-callout="quote"] { --callout-color: var(--text-secondary); }
+.cm-grid-cell .callout[data-callout="plain"],
+.cm-sidebar-preview .callout[data-callout="plain"],
+.cm-sidebar-left .callout[data-callout="plain"] { --callout-color: var(--text-secondary); }
+.cm-grid-cell .callout[data-callout="plain-blue"],
+.cm-sidebar-preview .callout[data-callout="plain-blue"],
+.cm-sidebar-left .callout[data-callout="plain-blue"] { --callout-color: var(--link-color); }
+.cm-grid-cell .callout[data-callout^="plain"],
+.cm-sidebar-preview .callout[data-callout^="plain"],
+.cm-sidebar-left .callout[data-callout^="plain"] {
+  border-left: none;
+  border-radius: 12px;
+}
+.cm-grid-cell .callout[style*="--callout-color"],
+.cm-sidebar-preview .callout[style*="--callout-color"],
+.cm-sidebar-left .callout[style*="--callout-color"] {
+  background: color-mix(in srgb, var(--callout-color) 8%, transparent);
+  border-color: var(--callout-color);
+}
+
 /* ============================================================
    Live Preview -- Footnotes
    ============================================================ */

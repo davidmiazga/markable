@@ -104,7 +104,7 @@ import {
 // not re-exported from main.ts.
 import { tabManager } from "./tabs";
 import { createDragDropHandler } from "./tabs/drag-drop";
-import { openExportDialog, printDocument } from "./lib/export";
+import { openExportDialog, printDocument, convertCalloutsToHtml } from "./lib/export";
 // marked is already a project dependency (used by live-preview.ts).
 // The bundler deduplicates the import — no second copy is produced (D-02).
 import { marked } from "marked";
@@ -124,7 +124,7 @@ import {
   flavorShortName,
   getActiveFlavor,
 } from "./lib/flavor";
-import { buildQuickCommandExtension } from "./editor/quick-commands";
+import { buildQuickCommandExtension, columnsFenceTemplate } from "./editor/quick-commands";
 import {
   buildAutoRenderExtension,
   buildLayoutInlineExtension,
@@ -978,7 +978,14 @@ function handleAction(action: string): void {
     case "callout-bug":
     case "callout-example":
     case "callout-quote":
-    case "callout-plain": {
+    case "callout-plain":
+    case "callout-plain-blue":
+    case "callout-plain-cyan":
+    case "callout-plain-green":
+    case "callout-plain-yellow":
+    case "callout-plain-orange":
+    case "callout-plain-red":
+    case "callout-plain-purple": {
       if (!editor) break;
       const canonical = action.slice("callout-".length);
       const text = `> [!${canonical}]\n> `;
@@ -986,6 +993,19 @@ function handleAction(action: string): void {
       editor.dispatch({
         changes: { from: head, to: head, insert: text },
         selection: { anchor: head + text.length },
+        effects: setViewMode.of(true),
+      });
+      break;
+    }
+    case "format-columns-2":
+    case "format-columns-3": {
+      if (!editor) break;
+      const count = action === "format-columns-3" ? 3 : 2;
+      const { text, cursorOffset } = columnsFenceTemplate(count, false);
+      const head = editor.state.selection.main.head;
+      editor.dispatch({
+        changes: { from: head, to: head, insert: text },
+        selection: { anchor: head + cursorOffset },
         effects: setViewMode.of(true),
       });
       break;
@@ -1480,7 +1500,7 @@ async function initApp() {
   // the user expectation in a note-taking app (same default as Bear / Obsidian).
   marked.use({ breaks: true });
   (window as unknown as Record<string, unknown>)["__MARKABLE_RENDER_MD__"] =
-    (md: string) => marked.parse(md);
+    (md: string) => marked.parse(convertCalloutsToHtml(md)) as string;
 
   // ── Layouts system (core capability, not a plugin) ──────────────────────────
   // Fetch app data dir once; build deps object with lazy getters so layout

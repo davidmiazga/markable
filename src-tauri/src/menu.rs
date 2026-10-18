@@ -473,6 +473,20 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 true,
                 Some("CmdOrCtrl+Shift+R"),
             )?,
+            &MenuItem::with_id(
+                handle,
+                "format-columns-2",
+                "Columns: 2 Columns",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                handle,
+                "format-columns-3",
+                "Columns: 3 Columns",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(handle)?,
             &Submenu::with_id_and_items(
                 handle,

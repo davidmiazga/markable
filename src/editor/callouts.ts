@@ -97,6 +97,37 @@ export interface CalloutHeader {
   /** Nesting depth — 1 for a top-level callout, 2+ for nested
    * (`> > [!warning]` inside another callout's body). */
   depth: number;
+  /** Resolved CSS color from optional `|color` / `|bg-color` / `|#hex`
+   * metadata. Empty when the header has no background override. */
+  bg: string;
+}
+
+/**
+ * Named callout background colors. Shared by live preview and export so a
+ * `|blue` override and a `plain-blue` shorthand tint the same hex.
+ */
+export const CALLOUT_BG_COLORS: Record<string, string> = {
+  blue: "#388bfd",
+  cyan: "#00b8d4",
+  green: "#2ea043",
+  yellow: "#e6a817",
+  orange: "#d29922",
+  red: "#da3633",
+  purple: "#a371f7",
+};
+
+/**
+ * Resolve a callout background token to a CSS color.
+ * Strips a leading `bg-` prefix. Named colors map to the palette above.
+ * `#rgb`, `#rrggbb`, and `#rrggbbaa` pass through. Anything else is empty.
+ */
+export function resolveCalloutBg(token: string): string {
+  let t = token.trim().toLowerCase();
+  if (t.startsWith("bg-")) t = t.slice(3);
+  if (t.startsWith("#")) {
+    return /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(t) ? t : "";
+  }
+  return CALLOUT_BG_COLORS[t] ?? "";
 }
 
 /**
@@ -111,14 +142,20 @@ export interface CalloutHeader {
  *   `> [!hint]`
  *   `> [!note]+`
  *   `> > [!warning]- Hidden`
+ *   `> [!note|bg-blue] Title`
+ *   `> [!tip|yellow] Title`
+ *   `> [!plain|#2ea043] Title`
  */
 /**
  * Captures one or more `>` markers (each optionally followed by whitespace)
  * before the `[!type]` token. Obsidian writes nested callouts as `> > [!x]`
  * with spaces between the `>` chars, so the depth count comes from the
  * `>` chars inside the prefix — not from the prefix string's length.
+ *
+ * An optional `|token` after the type word is a background override
+ * (`bg-blue`, `yellow`, `#2ea043`). It is not part of the canonical type.
  */
-const HEADER_RE = /^((?:>\s*)+)\[!([\w-]+)\]([+-]?)\s*(.*)$/;
+const HEADER_RE = /^((?:>\s*)+)\[!([\w-]+)(?:\|([^\]\s]+))?\]([+-]?)\s*(.*)$/;
 
 /**
  * Parse a single line as a callout header. Returns null when the line
@@ -134,7 +171,7 @@ const HEADER_RE = /^((?:>\s*)+)\[!([\w-]+)\]([+-]?)\s*(.*)$/;
 export function parseCalloutHeader(line: string): CalloutHeader | null {
   const m = HEADER_RE.exec(line);
   if (!m) return null;
-  const [, prefix, rawType, fold, rest] = m;
+  const [, prefix, rawType, rawBg, fold, rest] = m;
   const writtenLower = rawType.toLowerCase();
   const canonical = CALLOUT_ALIASES[writtenLower] ?? writtenLower;
   return {
@@ -143,6 +180,7 @@ export function parseCalloutHeader(line: string): CalloutHeader | null {
     fold: (fold as "" | "+" | "-") ?? "",
     title: rest.trim(),
     depth: (prefix.match(/>/g) ?? []).length,
+    bg: rawBg ? resolveCalloutBg(rawBg) : "",
   };
 }
 
