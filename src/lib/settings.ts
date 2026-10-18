@@ -90,6 +90,8 @@ export interface PluginEnableRecord {
 
 // ── Sidebar settings ──────────────────────────────────────────────────────────
 
+export type DockSide = "left" | "right" | "top" | "bottom";
+
 /**
  * Per-panel accordion state for one registered panel.
  * Keyed by panelId in SidebarSlotState.panels.
@@ -101,12 +103,13 @@ export interface SidebarPanelState {
 }
 
 /**
- * Persisted state for one sidebar slot (left or right).
+ * Persisted state for one sidebar slot (left, right, top, or bottom).
  *
  * open           — whether the slot is currently visible.
  * activeTabId    — id of the panel whose content is shown; null if no panels
  *                  were registered when the settings were last written.
  * width          — slot width in pixels (clamped 150–600 at write time).
+ * height         — slot height in pixels for top/bottom docks (clamped 120–450, default 200).
  * panels         — per-panel accordion state map (key = panelId).
  * panelOrder     — user-defined stack order (top-to-bottom). Panels not in
  *                  this list fall back to registration order at the end.
@@ -115,8 +118,24 @@ export interface SidebarSlotState {
   open: boolean;
   activeTabId: string | null;
   width: number;
+  height?: number;
   panels: Record<string, SidebarPanelState>;
   panelOrder?: string[];
+}
+
+/**
+ * One saved Workspace Panel-Locations preset.
+ * Captures per-panel dock placement overrides and the state of all 4 dock slots.
+ */
+export interface SidebarPanelLocationPreset {
+  name: string;
+  panelSides: Record<string, DockSide>;
+  slots: {
+    left: SidebarSlotState;
+    right: SidebarSlotState;
+    top: SidebarSlotState;
+    bottom: SidebarSlotState;
+  };
 }
 
 /**
@@ -125,18 +144,30 @@ export interface SidebarSlotState {
  * touching Rust structs (same precedent as findWidget, keybindings, plugins).
  *
  * panelSides stores per-panel user overrides for which sidebar side the panel
- * should appear on. Keys are panel ids; values are "left" or "right". When a
- * key is absent the panel uses its descriptor.side default.
+ * should appear on. Keys are panel ids; values are "left", "right", "top", or
+ * "bottom". When a key is absent the panel uses its descriptor.side default.
  */
 export interface SidebarSettings {
   left: SidebarSlotState;
   right: SidebarSlotState;
+  top?: SidebarSlotState;
+  bottom?: SidebarSlotState;
   /**
-   * Per-panel side override map. Populated by movePanel() when the user
-   * reassigns a panel from its descriptor-declared default side to the other.
+   * Per-panel side override map. Populated by movePanel() / movePanelToSide()
+   * when the user reassigns a panel from its descriptor-declared default side.
    * Absent key = panel uses descriptor.side. Empty object = no overrides.
    */
-  panelSides?: Record<string, "left" | "right">;
+  panelSides?: Record<string, DockSide>;
+  /**
+   * When true, panel positions and dock sizes are locked against accidental
+   * drag-to-move/reorder, dock-move menu changes, and resize handle drags.
+   * Default: false.
+   */
+  locked?: boolean;
+  /**
+   * User-saved Workspace Panel-Locations presets.
+   */
+  savedPanelLocations?: SidebarPanelLocationPreset[];
 }
 
 /**
@@ -422,7 +453,11 @@ export const DEFAULT_SETTINGS: MarkableSettings = {
   sidebar: {
     left: { ...DEFAULT_SIDEBAR_SLOT },
     right: { ...DEFAULT_SIDEBAR_SLOT },
+    top: { ...DEFAULT_SIDEBAR_SLOT, height: 200 },
+    bottom: { ...DEFAULT_SIDEBAR_SLOT, height: 200 },
     panelSides: {},
+    locked: false,
+    savedPanelLocations: [],
   },
   // folder-icon-assignment step_06c — cross-vault custom SVG list. Empty by
   // default; populated only via the picker's "Add custom SVG…" flow.

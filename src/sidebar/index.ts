@@ -8,7 +8,11 @@
  * and in plugin code. For example:
  *   import { initSidebar, restoreSidebarFromSettings } from "./sidebar";
  */
-export type { SidebarPanelDescriptor } from "./sidebar-manager";
+export type {
+  SidebarPanelDescriptor,
+  DockSide,
+  SidebarPanelLocationPreset,
+} from "./sidebar-manager";
 export {
   init as initSidebar,
   register as registerSidebarPanel,
@@ -20,4 +24,13 @@ export {
   focusSidebarPanel,
   toggleSidebarPanel as toggleSidebarPanel,
   iconizeNonPinnedOrToggle,
+  isPanelPositionsLocked,
+  setPanelPositionsLocked,
+  togglePanelPositionsLock,
+  getPanelLocationPresets,
+  savePanelLocationPreset,
+  promptAndSavePanelLocationPreset,
+  applyPanelLocationPreset,
+  deletePanelLocationPreset,
+  resetPanelLocationsToDefault,
 } from "./sidebar-manager";

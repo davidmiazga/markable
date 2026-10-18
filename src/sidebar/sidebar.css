@@ -1,14 +1,15 @@
-/* ── Layout row ─────────────────────────────────────────────────────────────── */
+/* ── Layout grid (#app-row) ──────────────────────────────────────────────────── */
 
 #app-row {
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-/* ── Sidebar slots ───────────────────────────────────────────────────────────── */
+/* ── Sidebar & dock slots ────────────────────────────────────────────────────── */
 
 #sidebar-left,
 #sidebar-right {
@@ -22,11 +23,47 @@
 }
 
 #sidebar-left {
+  grid-column: 1;
+  grid-row: 1 / 4;
   border-right: none;
 }
 
 #sidebar-right {
+  grid-column: 5;
+  grid-row: 1 / 4;
   border-left: none;
+}
+
+#sidebar-top,
+#sidebar-bottom {
+  grid-column: 2 / 5;
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--bg-titlebar);
+  min-height: 120px;
+  max-height: 450px;
+}
+
+#sidebar-top {
+  grid-row: 1;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
+}
+
+#sidebar-bottom {
+  grid-row: 3;
+  border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
+}
+
+#tab-vertical-left {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+#tab-vertical-right {
+  grid-column: 4;
+  grid-row: 2;
 }
 
 /* ── Icon strip ───────────────────────────────────────────────────────────────── */
@@ -150,6 +187,15 @@
   overflow-y: auto;       /* Whole sidebar scrolls when stacked panels exceed height */
 }
 
+/* Horizontal side-by-side panel layout when multiple panels share top or bottom */
+#sidebar-top .sidebar-content-area,
+#sidebar-bottom .sidebar-content-area {
+  flex-direction: row;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* ── Panel wrapper ───────────────────────────────────────────────────────────── */
 
 /*
@@ -163,6 +209,21 @@
   flex-shrink: 0;
   background-color: hsla(0, 0%, 100%, 0.025);
   border-radius: 4px;
+}
+
+#sidebar-top .sidebar-panel-wrapper,
+#sidebar-bottom .sidebar-panel-wrapper {
+  flex: 1 1 0;
+  min-width: 180px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#sidebar-top .sidebar-panel-content,
+#sidebar-bottom .sidebar-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* ── Panel header (accordion row) ────────────────────────────────────────────── */
@@ -253,13 +314,8 @@
   text-overflow: ellipsis;
 }
 
-/* ── Drag-to-reorder feedback ────────────────────────────────────────────────── */
+/* ── Drag-to-reorder & cross-dock drop zones ─────────────────────────────────── */
 
-/*
- * Horizontal insertion line drawn at the gap where the dragged panel will land.
- * Position-fixed so the page-relative coords from getBoundingClientRect() apply
- * directly without container offsets.
- */
 .panel-insert-line {
   position: fixed;
   z-index: 9998;
@@ -268,6 +324,84 @@
   background: var(--accent, #0078d4);
   border-radius: 1px;
   box-shadow: 0 0 4px var(--accent, #0078d4);
+}
+
+.panel-dock-drop-zones {
+  position: fixed;
+  inset: 0;
+  z-index: 9997;
+  pointer-events: none;
+}
+
+.panel-dock-drop-zone {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6px;
+  font-family: var(--ui-font);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-secondary, #252526) 75%, transparent);
+  border: 1.5px dashed var(--border-color, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  opacity: 0.65;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.panel-dock-drop-zone-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.panel-dock-drop-zone.is-current-side {
+  opacity: 0.25;
+}
+
+.panel-dock-drop-zone.is-active {
+  opacity: 1;
+  color: var(--text-primary, #fff);
+  border-color: var(--accent, #0078d4);
+  background: color-mix(in srgb, var(--accent, #0078d4) 22%, transparent);
+}
+
+.panel-dock-drop-zone--left {
+  left: 8px;
+  top: 56px;
+  bottom: 56px;
+  width: 72px;
+}
+
+.panel-dock-drop-zone--right {
+  right: 8px;
+  top: 56px;
+  bottom: 56px;
+  width: 72px;
+}
+
+.panel-dock-drop-zone--top {
+  left: 88px;
+  right: 88px;
+  top: 8px;
+  height: 44px;
+}
+
+.panel-dock-drop-zone--bottom {
+  left: 88px;
+  right: 88px;
+  bottom: 8px;
+  height: 44px;
 }
 
 /* ── Accordion toggle button ─────────────────────────────────────────────────── */
@@ -312,13 +446,8 @@
   margin-top: 0;
 }
 
-/* ── Move-panel button ────────────────────────────────────────────────────────── */
+/* ── Dock position button & 4-way popover menu ───────────────────────────────── */
 
-/*
- * Appears in the panel accordion header between the title label and the
- * collapse chevron. Allows the user to reassign the panel to the opposite
- * sidebar side with a single click.
- */
 .sidebar-move-btn {
   flex-shrink: 0;
   display: flex;
@@ -334,12 +463,58 @@
   padding: 0;
   font-size: 13px;
   line-height: 1;
-  transition: background 0.1s;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-move-btn svg {
+  width: 13px;
+  height: 13px;
+  display: block;
 }
 
 .sidebar-move-btn:hover {
   background: var(--code-bg);
   color: var(--text-primary);
+}
+
+.sidebar-dock-menu {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  padding: 4px;
+  background: var(--bg-secondary, #252526);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  gap: 2px;
+}
+
+.sidebar-dock-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  color: var(--text-primary, #ccc);
+  text-align: left;
+}
+
+.sidebar-dock-menu-item:hover {
+  background: var(--code-bg, rgba(128, 128, 128, 0.12));
+}
+
+.sidebar-dock-menu-item.active {
+  color: var(--link-color, #0078d4);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--link-color, #0078d4) 14%, transparent);
 }
 
 .sidebar-header-action-btn {
@@ -372,9 +547,6 @@
 /* ── Panel content area ───────────────────────────────────────────────────────── */
 
 .sidebar-panel-content {
-  /* Stacked accordion: content sizes to its rendered output. The contentArea
-     above (`.sidebar-content-area`) is the single scroll container — individual
-     panels do not scroll internally. */
   overflow-x: hidden;
 }
 
@@ -403,7 +575,6 @@
   width: 4px;
   cursor: col-resize;
   z-index: 10;
-  /* Invisible by default; visible feedback provided by cursor change only */
 }
 
 /* Left sidebar: handle is on the right edge */
@@ -416,20 +587,59 @@
   left: 0;
 }
 
+/* Top & bottom docks: horizontal resize handle along the interior edge */
+#sidebar-top .sidebar-resize-handle,
+#sidebar-bottom .sidebar-resize-handle {
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 4px;
+  cursor: row-resize;
+}
+
+#sidebar-top .sidebar-resize-handle {
+  top: auto;
+  bottom: 0;
+}
+
+#sidebar-bottom .sidebar-resize-handle {
+  top: 0;
+  bottom: auto;
+}
+
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle:active {
   background: var(--link-color);
   opacity: 0.4;
 }
 
-/* ── Editor flex fill ─────────────────────────────────────────────────────────── */
+/* ── Locked panel positions (.is-panels-locked) ──────────────────────────────── */
 
-/*
- * #editor must fill the remaining space in #app-row.
- * The existing #editor styles may already set flex: 1; if not, ensure it here.
- * min-width: 0 prevents the flex item from overflowing the container.
- */
-#app-row > #editor {
+.is-panels-locked .sidebar-panel-drag-handle,
+.is-panels-locked .sidebar-panel-drag-handle:active {
+  cursor: default;
+}
+
+.is-panels-locked .sidebar-move-btn,
+.sidebar-move-btn:disabled,
+.sidebar-move-btn.is-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.is-panels-locked .sidebar-resize-handle {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Editor & custom tab host center cell ────────────────────────────────────── */
+
+#app-row > #editor,
+#app-row > #custom-tab-host {
+  grid-column: 3;
+  grid-row: 2;
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }

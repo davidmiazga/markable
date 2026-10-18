@@ -273,6 +273,14 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 true,
                 None::<&str>,
             )?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(
+                handle,
+                "sidebar.toggleLock",
+                "Lock Panel Positions",
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 

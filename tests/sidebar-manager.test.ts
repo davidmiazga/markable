@@ -59,6 +59,14 @@ import {
   movePanel,
   movePanelToSide,
   iconizeNonPinnedOrToggle,
+  isPanelPositionsLocked,
+  setPanelPositionsLocked,
+  togglePanelPositionsLock,
+  getPanelLocationPresets,
+  savePanelLocationPreset,
+  applyPanelLocationPreset,
+  deletePanelLocationPreset,
+  resetPanelLocationsToDefault,
   _resetForTests,
 } from "../src/sidebar/sidebar-manager";
 
@@ -162,20 +170,28 @@ describe("SidebarManager — init", () => {
     expect(appRowIdx).toBeLessThan(statusbarIdx);
   });
 
-  it("creates both #sidebar-left and #sidebar-right eagerly at init() time", () => {
-    // Eager-slot design: both slots are created before any panels are registered.
-    // They start hidden (display:none) and become visible when a plugin is enabled
-    // or the user toggles the sidebar.
+  it("creates #sidebar-left, #sidebar-right, #sidebar-top, and #sidebar-bottom eagerly at init() time", () => {
+    // Eager-slot design: all four slots are created before any panels are registered.
+    // They start hidden (display:none) and become visible when a plugin is enabled,
+    // moved into them, or the user toggles the slot.
     init();
 
     const leftEl = document.getElementById("sidebar-left") as HTMLElement;
     const rightEl = document.getElementById("sidebar-right") as HTMLElement;
+    const topEl = document.getElementById("sidebar-top") as HTMLElement;
+    const bottomEl = document.getElementById("sidebar-bottom") as HTMLElement;
 
     expect(leftEl).not.toBeNull();
     expect(rightEl).not.toBeNull();
-    // Both must start hidden.
+    expect(topEl).not.toBeNull();
+    expect(bottomEl).not.toBeNull();
+    // All four must start hidden; top/bottom default to 200px height.
     expect(leftEl.style.display).toBe("none");
     expect(rightEl.style.display).toBe("none");
+    expect(topEl.style.display).toBe("none");
+    expect(bottomEl.style.display).toBe("none");
+    expect(topEl.style.height).toBe("200px");
+    expect(bottomEl.style.height).toBe("200px");
   });
 
   it("places #sidebar-left before #editor and #editor before #sidebar-right in #app-row", () => {
@@ -184,10 +200,14 @@ describe("SidebarManager — init", () => {
     const appRow = document.getElementById("app-row")!;
     const children = Array.from(appRow.children).map((c) => c.id);
     const leftIdx  = children.indexOf("sidebar-left");
+    const topIdx   = children.indexOf("sidebar-top");
     const editorIdx = children.indexOf("editor");
+    const bottomIdx = children.indexOf("sidebar-bottom");
     const rightIdx = children.indexOf("sidebar-right");
 
     expect(leftIdx).toBeLessThan(editorIdx);
+    expect(topIdx).toBeLessThan(editorIdx);
+    expect(editorIdx).toBeLessThan(bottomIdx);
     expect(editorIdx).toBeLessThan(rightIdx);
   });
 });
@@ -920,17 +940,57 @@ describe("SidebarManager — movePanel", () => {
     expect(rightEl!.querySelector('.sidebar-panel-wrapper[data-panel-id="test-panel"]')).toBeNull();
   });
 
-  it("move button exists in panel header after registration", () => {
+  it("move button exists in panel header with inline SVG dock icon after registration", () => {
     init();
     register("plugin-a", makeDescriptor("panel-1", "right"));
 
     const wrapper = document.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]');
     expect(wrapper).not.toBeNull();
 
-    // The .sidebar-move-btn must be present inside the wrapper.
+    // The .sidebar-move-btn must be present inside the wrapper with an inline SVG icon.
     const moveBtn = wrapper!.querySelector(".sidebar-move-btn");
     expect(moveBtn).not.toBeNull();
-    expect((moveBtn as HTMLElement).textContent).toBe("⇄");
+    expect(moveBtn!.querySelector("svg")).not.toBeNull();
+  });
+
+  it("clicking .sidebar-move-btn opens 4-way dock picker and selecting Top or Bottom moves panel there", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const wrapper = document.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')!;
+    const moveBtn = wrapper.querySelector(".sidebar-move-btn") as HTMLButtonElement;
+
+    // Click to open the 4-way dock picker popover.
+    moveBtn.click();
+
+    const menu = document.querySelector(".sidebar-dock-menu");
+    expect(menu).not.toBeNull();
+
+    const items = Array.from(menu!.querySelectorAll<HTMLButtonElement>(".sidebar-dock-menu-item"));
+    expect(items.map((el) => el.textContent)).toEqual(["Left", "Right", "Top", "Bottom"]);
+
+    // Current side ("right") is highlighted.
+    const activeItem = menu!.querySelector(".sidebar-dock-menu-item.active");
+    expect(activeItem?.getAttribute("data-side")).toBe("right");
+
+    // Click "Top" option to move the panel to #sidebar-top.
+    const topItem = menu!.querySelector<HTMLButtonElement>('[data-side="top"]')!;
+    topItem.click();
+
+    expect(document.querySelector(".sidebar-dock-menu")).toBeNull();
+    const topEl = document.getElementById("sidebar-top")!;
+    expect(topEl.style.display).toBe("");
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+
+    // Open again and select "Bottom".
+    moveBtn.click();
+    const bottomItem = document.querySelector<HTMLButtonElement>('.sidebar-dock-menu [data-side="bottom"]')!;
+    bottomItem.click();
+
+    const bottomEl = document.getElementById("sidebar-bottom")!;
+    expect(bottomEl.style.display).toBe("");
+    expect(bottomEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(topEl.style.display).toBe("none");
   });
 
   it("is a no-op for unknown panelId — does not throw", () => {
@@ -1082,6 +1142,107 @@ describe("SidebarManager — movePanelToSide", () => {
       .map((result) => result.sidebar?.panelSides?.["panel-1"]);
 
     expect(panelSideValues).toContain("left");
+  });
+
+  it("moves panel to top and bottom docks, opens the target slot, and persists panelSides", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    mockUpdateSettings.mockClear();
+
+    movePanelToSide("panel-1", "top");
+
+    const topEl = document.getElementById("sidebar-top")!;
+    expect(topEl.style.display).toBe("");
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+
+    const topCalls = mockUpdateSettings.mock.calls as Array<
+      [(s: object) => { sidebar: { panelSides?: Record<string, string> } }]
+    >;
+    expect(
+      topCalls
+        .map(([u]) => u({ sidebar: { left: {}, right: {}, panelSides: {} } }))
+        .map((r) => r.sidebar?.panelSides?.["panel-1"])
+    ).toContain("top");
+
+    mockUpdateSettings.mockClear();
+    movePanelToSide("panel-1", "bottom");
+
+    const bottomEl = document.getElementById("sidebar-bottom")!;
+    expect(bottomEl.style.display).toBe("");
+    expect(bottomEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(topEl.style.display).toBe("none");
+  });
+
+  it("clamps vertical resize height on top and bottom docks to [120, 450]", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    movePanelToSide("panel-1", "top");
+
+    const topEl = document.getElementById("sidebar-top") as HTMLElement;
+    const topHandle = topEl.querySelector(".sidebar-resize-handle") as HTMLElement;
+    topEl.style.height = "200px";
+
+    // Shrink past minimum (startY=300, clientY=100 → delta=-200 → 0 → clamped to 120).
+    topHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { pointerId: 1, clientY: 300, bubbles: true })
+    );
+    topHandle.setPointerCapture(1);
+    topHandle.dispatchEvent(
+      new PointerEvent("pointermove", { pointerId: 1, clientY: 100, bubbles: true })
+    );
+    expect(topEl.style.height).toBe("120px");
+    topHandle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true }));
+
+    // Grow past maximum (startY=100, clientY=600 → delta=+500 → 620 → clamped to 450).
+    topHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { pointerId: 2, clientY: 100, bubbles: true })
+    );
+    topHandle.setPointerCapture(2);
+    topHandle.dispatchEvent(
+      new PointerEvent("pointermove", { pointerId: 2, clientY: 600, bubbles: true })
+    );
+    expect(topEl.style.height).toBe("450px");
+    topHandle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, bubbles: true }));
+  });
+
+  it("supports cross-dock drag-and-drop from panel header to Top or Bottom dock edge", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+
+    const dragHandle = document.querySelector(
+      '.sidebar-panel-wrapper[data-panel-id="panel-1"] .sidebar-panel-drag-handle'
+    ) as HTMLElement;
+    expect(dragHandle).not.toBeNull();
+
+    // Start dragging from center-right (x=500, y=300) and move to the top edge (x=500, y=10).
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { pointerId: 1, button: 0, clientX: 500, clientY: 300, bubbles: true })
+    );
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointermove", { pointerId: 1, clientX: 500, clientY: 10, bubbles: true })
+    );
+
+    // All 4 drop zones should be rendered while dragging, with top highlighted
+    // and each drop zone wrapping its label in `.panel-dock-drop-zone-label`.
+    const dropZones = document.querySelectorAll(".panel-dock-drop-zone");
+    expect(dropZones.length).toBe(4);
+    for (const zone of dropZones) {
+      const label = zone.querySelector(".panel-dock-drop-zone-label");
+      expect(label).not.toBeNull();
+      expect(label?.textContent).toMatch(/^(Left|Right|Top|Bottom) Dock$/);
+    }
+    const topZone = document.querySelector('.panel-dock-drop-zone[data-dock-side="top"]');
+    expect(topZone?.classList.contains("is-active")).toBe(true);
+
+    // Drop on the top edge → panel moves to #sidebar-top and opens it.
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointerup", { pointerId: 1, clientX: 500, clientY: 10, bubbles: true })
+    );
+
+    const topEl = document.getElementById("sidebar-top")!;
+    expect(topEl.style.display).toBe("");
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(document.querySelector(".panel-dock-drop-zones")).toBeNull();
   });
 });
 
@@ -1400,5 +1561,215 @@ describe("SidebarManager — icon strip", () => {
     // Panel wrapper must be inside .sidebar-content-area.
     const contentArea = sidebarEl.querySelector(".sidebar-content-area")!;
     expect(contentArea.querySelector(".sidebar-panel-wrapper")).not.toBeNull();
+  });
+});
+
+// ── describe: Lock Panel Positions & Workspace Panel-Locations (t-684a) ──────
+
+describe("SidebarManager — Lock Panel Positions & Workspace Panel-Locations (t-684a)", () => {
+  it("when sidebar.locked is true, pointer drag on .sidebar-panel-drag-handle, .sidebar-move-btn, and .sidebar-resize-handle are inert, while .sidebar-accordion-toggle still expands/collapses", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    register("plugin-b", makeDescriptor("panel-2", "right"));
+
+    const rightEl = document.getElementById("sidebar-right") as HTMLElement;
+    rightEl.style.width = "260px";
+
+    setPanelPositionsLocked(true);
+    expect(isPanelPositionsLocked()).toBe(true);
+    expect(document.getElementById("app-row")?.classList.contains("is-panels-locked")).toBe(true);
+
+    // 1. Pointer drag on .sidebar-panel-drag-handle is inert (no ghost/drop-zones, does not move to top dock).
+    const dragHandle = document.querySelector(
+      '.sidebar-panel-wrapper[data-panel-id="panel-1"] .sidebar-panel-drag-handle'
+    ) as HTMLElement;
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { pointerId: 1, button: 0, clientX: 500, clientY: 300, bubbles: true })
+    );
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointermove", { pointerId: 1, clientX: 500, clientY: 10, bubbles: true })
+    );
+    expect(document.querySelector(".panel-dock-drop-zones")).toBeNull();
+    expect(document.querySelector(".panel-drag-ghost")).toBeNull();
+    dragHandle.dispatchEvent(
+      new PointerEvent("pointerup", { pointerId: 1, clientX: 500, clientY: 10, bubbles: true })
+    );
+    expect(rightEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(document.getElementById("sidebar-top")!.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).toBeNull();
+
+    // 2. Clicking .sidebar-move-btn is inert and disabled.
+    const moveBtn = document.querySelector(
+      '.sidebar-panel-wrapper[data-panel-id="panel-1"] .sidebar-move-btn'
+    ) as HTMLButtonElement;
+    expect(moveBtn.disabled).toBe(true);
+    moveBtn.click();
+    expect(document.querySelector(".sidebar-dock-menu")).toBeNull();
+
+    // 3. Pointer drag on .sidebar-resize-handle is inert.
+    mockUpdateSettingsInMemory.mockClear();
+    const resizeHandle = rightEl.querySelector(".sidebar-resize-handle") as HTMLElement;
+    resizeHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { pointerId: 2, clientX: 400, bubbles: true })
+    );
+    resizeHandle.setPointerCapture(2);
+    resizeHandle.dispatchEvent(
+      new PointerEvent("pointermove", { pointerId: 2, clientX: 250, bubbles: true })
+    );
+    resizeHandle.dispatchEvent(
+      new PointerEvent("pointerup", { pointerId: 2, bubbles: true })
+    );
+    expect(rightEl.style.width).toBe("260px");
+    expect(mockUpdateSettingsInMemory).not.toHaveBeenCalled();
+
+    // 4. .sidebar-accordion-toggle still expands and collapses while locked.
+    const toggleBtn = document.querySelector(
+      '.sidebar-panel-wrapper[data-panel-id="panel-1"] .sidebar-accordion-toggle'
+    ) as HTMLButtonElement;
+    const contentEl = document.querySelector(
+      '.sidebar-panel-wrapper[data-panel-id="panel-1"] .sidebar-panel-content'
+    ) as HTMLElement;
+    expect(contentEl.style.display).not.toBe("none");
+    toggleBtn.click();
+    expect(contentEl.style.display).toBe("none");
+    toggleBtn.click();
+    expect(contentEl.style.display).toBe("");
+
+    // 5. Unlocking restores drag/move/resize behavior.
+    togglePanelPositionsLock();
+    expect(isPanelPositionsLocked()).toBe(false);
+    expect(moveBtn.disabled).toBe(false);
+    moveBtn.click();
+    expect(document.querySelector(".sidebar-dock-menu")).not.toBeNull();
+  });
+
+  it("saving a Workspace Panel-Locations preset captures panelSides and all four slot states; applying that preset after moving panels restores their dock sides, order, open states, and dimensions", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "left"));
+    register("plugin-b", makeDescriptor("panel-2", "right"));
+    register("plugin-c", makeDescriptor("panel-3", "right"));
+
+    // Arrange custom layout: move panel-3 to top dock, set custom dimensions.
+    movePanelToSide("panel-3", "top");
+    const leftEl = document.getElementById("sidebar-left") as HTMLElement;
+    const rightEl = document.getElementById("sidebar-right") as HTMLElement;
+    const topEl = document.getElementById("sidebar-top") as HTMLElement;
+    const bottomEl = document.getElementById("sidebar-bottom") as HTMLElement;
+    leftEl.style.width = "280px";
+    rightEl.style.width = "310px";
+    topEl.style.height = "180px";
+
+    const saved = savePanelLocationPreset("Writing Focus");
+    expect(saved).not.toBeNull();
+    expect(saved!.name).toBe("Writing Focus");
+    expect(saved!.panelSides).toEqual({
+      "panel-1": "left",
+      "panel-2": "right",
+      "panel-3": "top",
+    });
+    expect(saved!.slots.left.open).toBe(true);
+    expect(saved!.slots.left.width).toBe(280);
+    expect(saved!.slots.right.open).toBe(true);
+    expect(saved!.slots.right.width).toBe(310);
+    expect(saved!.slots.top.open).toBe(true);
+    expect(saved!.slots.top.height).toBe(180);
+    expect(saved!.slots.bottom.open).toBe(false);
+
+    // Scramble layout: move panels around, resize docks, close left dock.
+    movePanelToSide("panel-1", "bottom");
+    movePanelToSide("panel-3", "right");
+    leftEl.style.width = "160px";
+    rightEl.style.width = "420px";
+    topEl.style.height = "300px";
+    expect(bottomEl.style.display).toBe("");
+    expect(topEl.style.display).toBe("none");
+
+    // Apply the saved preset and verify everything is restored.
+    const applied = applyPanelLocationPreset("Writing Focus");
+    expect(applied).toBe(true);
+
+    expect(leftEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(rightEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-2"]')).not.toBeNull();
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-3"]')).not.toBeNull();
+    expect(bottomEl.querySelectorAll(".sidebar-panel-wrapper").length).toBe(0);
+
+    expect(leftEl.style.display).toBe("");
+    expect(rightEl.style.display).toBe("");
+    expect(topEl.style.display).toBe("");
+    expect(bottomEl.style.display).toBe("none");
+
+    expect(leftEl.style.width).toBe("280px");
+    expect(rightEl.style.width).toBe("310px");
+    expect(topEl.style.height).toBe("180px");
+  });
+
+  it("resetting to default clears panelSides overrides, returns panels to Left/Right, and hides Top and Bottom docks", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-left", "left", { defaultWidth: 240 }));
+    register("plugin-b", makeDescriptor("panel-right", "right", { defaultWidth: 260 }));
+
+    // Move panels into Top and Bottom docks and alter sizes.
+    movePanelToSide("panel-left", "top");
+    movePanelToSide("panel-right", "bottom");
+
+    const leftEl = document.getElementById("sidebar-left") as HTMLElement;
+    const rightEl = document.getElementById("sidebar-right") as HTMLElement;
+    const topEl = document.getElementById("sidebar-top") as HTMLElement;
+    const bottomEl = document.getElementById("sidebar-bottom") as HTMLElement;
+
+    expect(topEl.style.display).toBe("");
+    expect(bottomEl.style.display).toBe("");
+
+    mockUpdateSettings.mockClear();
+    resetPanelLocationsToDefault();
+
+    // Panels are back on their default Left/Right sides.
+    expect(leftEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-left"]')).not.toBeNull();
+    expect(rightEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-right"]')).not.toBeNull();
+    expect(topEl.querySelectorAll(".sidebar-panel-wrapper").length).toBe(0);
+    expect(bottomEl.querySelectorAll(".sidebar-panel-wrapper").length).toBe(0);
+
+    // Top and Bottom docks are hidden; Left and Right are visible with default widths.
+    expect(topEl.style.display).toBe("none");
+    expect(bottomEl.style.display).toBe("none");
+    expect(leftEl.style.display).toBe("");
+    expect(rightEl.style.display).toBe("");
+    expect(leftEl.style.width).toBe("240px");
+    expect(rightEl.style.width).toBe("260px");
+
+    // Settings persisted with empty panelSides and closed top/bottom.
+    expect(mockUpdateSettings).toHaveBeenCalled();
+    const updater = mockUpdateSettings.mock.calls[mockUpdateSettings.mock.calls.length - 1][0] as (s: object) => {
+      sidebar: {
+        panelSides: Record<string, string>;
+        top: { open: boolean };
+        bottom: { open: boolean };
+      };
+    };
+    const result = updater({ sidebar: { panelSides: { "panel-left": "top" } } });
+    expect(result.sidebar.panelSides).toEqual({});
+    expect(result.sidebar.top.open).toBe(false);
+    expect(result.sidebar.bottom.open).toBe(false);
+  });
+
+  it("deleting a saved Workspace Panel-Locations preset removes it from settings without affecting the active layout", () => {
+    init();
+    register("plugin-a", makeDescriptor("panel-1", "right"));
+    movePanelToSide("panel-1", "top");
+
+    savePanelLocationPreset("Top Layout");
+    savePanelLocationPreset("Secondary Layout");
+    expect(getPanelLocationPresets().map((p) => p.name)).toEqual(["Top Layout", "Secondary Layout"]);
+
+    const topEl = document.getElementById("sidebar-top") as HTMLElement;
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(topEl.style.display).toBe("");
+
+    const deleted = deletePanelLocationPreset("Top Layout");
+    expect(deleted).toBe(true);
+    expect(getPanelLocationPresets().map((p) => p.name)).toEqual(["Secondary Layout"]);
+
+    // Active layout is unaffected: panel-1 remains in #sidebar-top and visible.
+    expect(topEl.querySelector('.sidebar-panel-wrapper[data-panel-id="panel-1"]')).not.toBeNull();
+    expect(topEl.style.display).toBe("");
   });
 });

@@ -675,3 +675,43 @@ describe("plugins-panel — Markable PKM flavor", () => {
     expect(document.querySelector('[data-section-id="user"]')?.hasAttribute("hidden")).toBe(false);
   });
 });
+
+describe("plugins-panel — detail view 4-way dock selector", () => {
+  beforeEach(() => {
+    document.getElementById("plugins-overlay")?.remove();
+  });
+
+  it("renders Left, Right, Top, and Bottom buttons and updates the active button when clicked", () => {
+    const toggle = vi.fn().mockResolvedValue(undefined);
+    const def: UnifiedPluginDef = {
+      ...makeCoreDef("auto-toc"),
+      sidebarPanelId: "auto-toc",
+    };
+
+    createPluginsPanel([def], { "auto-toc": true }, toggle);
+    openPluginsPanel({ "auto-toc": true });
+
+    // Click the plugin name to open the detail view.
+    const nameEl = document.querySelector(".plugin-name-clickable") as HTMLElement;
+    expect(nameEl).not.toBeNull();
+    nameEl.click();
+
+    const sideBtns = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".plugin-detail-sidebar-btn")
+    );
+    expect(sideBtns.map((b) => b.textContent)).toEqual(["Left", "Right", "Top", "Bottom"]);
+    expect(sideBtns.find((b) => b.classList.contains("active"))?.textContent).toBe("Right");
+
+    // Click Top → Top becomes active.
+    const topBtn = sideBtns.find((b) => b.textContent === "Top")!;
+    topBtn.click();
+    expect(topBtn.classList.contains("active")).toBe(true);
+    expect(sideBtns.filter((b) => b.classList.contains("active")).length).toBe(1);
+
+    // Click Bottom → Bottom becomes active.
+    const bottomBtn = sideBtns.find((b) => b.textContent === "Bottom")!;
+    bottomBtn.click();
+    expect(bottomBtn.classList.contains("active")).toBe(true);
+    expect(topBtn.classList.contains("active")).toBe(false);
+  });
+});

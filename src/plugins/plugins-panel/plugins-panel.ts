@@ -25,6 +25,7 @@ import {
   pluginDefaultEnabled,
 } from "../../lib/flavor";
 import { getCurrentSettings } from "../../lib/settings";
+import type { DockSide } from "../../lib/settings";
 import { movePanelToSide } from "../../sidebar";
 import { attachModalKeyboard } from "../../lib/modal-keyboard";
 import { isSectionJumpLocked, scrollSectionIntoPane, sectionNearestPaneTop } from "../../lib/section-jump";
@@ -821,51 +822,45 @@ function showDetailView(def: UnifiedPluginDef): void {
     // for the rest of the detail-view session, silently ignoring moves back
     // to the original side because the guard `activeSide !== side` would
     // always evaluate to false after the first successful click.
-    let activeSide: "left" | "right" =
+    let activeSide: DockSide =
       getCurrentSettings().sidebar?.panelSides?.[panelId] ?? "right";
 
-    // Container row: label on the left, two toggle buttons on the right.
+    // Container row: label on the left, four toggle buttons on the right.
     const sideSection = document.createElement("div");
     sideSection.className = "plugin-detail-sidebar-section";
 
     const label = document.createElement("span");
     label.className = "plugin-detail-sidebar-label";
     label.textContent = "Sidebar";
-
-    const btnLeft = document.createElement("button");
-    btnLeft.className =
-      "plugin-detail-sidebar-btn" + (activeSide === "left" ? " active" : "");
-    btnLeft.textContent = "Left";
-
-    const btnRight = document.createElement("button");
-    btnRight.className =
-      "plugin-detail-sidebar-btn" + (activeSide === "right" ? " active" : "");
-    btnRight.textContent = "Right";
-
-    // Clicking a button moves the panel to the selected side, updates
-    // activeSide so subsequent clicks resolve the correct direction, and
-    // reflects the new active state on both buttons immediately.
-    btnLeft.addEventListener("click", () => {
-      if (activeSide !== "left") {
-        movePanelToSide(panelId, "left");
-        activeSide = "left";
-        btnLeft.classList.add("active");
-        btnRight.classList.remove("active");
-      }
-    });
-
-    btnRight.addEventListener("click", () => {
-      if (activeSide !== "right") {
-        movePanelToSide(panelId, "right");
-        activeSide = "right";
-        btnRight.classList.add("active");
-        btnLeft.classList.remove("active");
-      }
-    });
-
     sideSection.appendChild(label);
-    sideSection.appendChild(btnLeft);
-    sideSection.appendChild(btnRight);
+
+    const sideOptions: Array<{ side: DockSide; label: string }> = [
+      { side: "left", label: "Left" },
+      { side: "right", label: "Right" },
+      { side: "top", label: "Top" },
+      { side: "bottom", label: "Bottom" },
+    ];
+
+    const buttons = new Map<DockSide, HTMLButtonElement>();
+    for (const opt of sideOptions) {
+      const btn = document.createElement("button");
+      btn.className =
+        "plugin-detail-sidebar-btn" + (activeSide === opt.side ? " active" : "");
+      btn.dataset.side = opt.side;
+      btn.textContent = opt.label;
+      btn.addEventListener("click", () => {
+        if (activeSide !== opt.side) {
+          movePanelToSide(panelId, opt.side);
+          activeSide = opt.side;
+          for (const [s, b] of buttons) {
+            b.classList.toggle("active", s === activeSide);
+          }
+        }
+      });
+      buttons.set(opt.side, btn);
+      sideSection.appendChild(btn);
+    }
+
     bodyElement.appendChild(sideSection);
   }
 

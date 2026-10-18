@@ -1,9 +1,10 @@
 /**
  * SidebarManager — core module for the Sidebar Panel System.
  *
- * Owns all DOM lifecycle: creating and destroying sidebar slots, tab bars,
- * accordion headers, panel content containers, and resize handles. Persists
- * all sidebar state (open/closed, active tab, accordion, width) via the
+ * Owns all DOM lifecycle: creating and destroying sidebar/dock slots
+ * (left, right, top, bottom), accordion headers, panel content containers,
+ * dock position picker popovers, and resize handles. Persists all sidebar state
+ * (open/closed, active tab, accordion, width/height, panelSides) via the
  * settings module's raw-JSON pass-through layer.
  *
  * Plugins interact exclusively through the two API methods exposed in
@@ -19,13 +20,47 @@ import {
   saveSettingsDebounced,
   DEFAULT_SIDEBAR_SLOT,
 } from "../lib/settings";
-import type { SidebarSettings, SidebarSlotState } from "../lib/settings";
+import type {
+  DockSide,
+  SidebarPanelLocationPreset,
+  SidebarSettings,
+  SidebarSlotState,
+} from "../lib/settings";
 import { attachPanelReorderDrag } from "./panel-reorder-drag";
 import { PANEL_ICONS } from "./panel-icons";
 
-// ── Material icon SVGs ────────────────────────────────────────────────────────
-// Inline SVG paths sourced from the Material Symbols / Material Icons library
-// (Apache-2.0 licensed). Using inline SVG avoids a font dependency.
+export type { DockSide, SidebarPanelLocationPreset };
+
+// ── Inline SVG icons ──────────────────────────────────────────────────────────
+
+/** 4-way dock selector icon rendered inside `.sidebar-move-btn`. */
+const DOCK_POSITION_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="2" y="2" width="12" height="12" rx="2"/>' +
+  '<line x1="5.5" y1="2" x2="5.5" y2="14"/>' +
+  '<line x1="10.5" y1="2" x2="10.5" y2="14"/>' +
+  '<line x1="5.5" y1="5.5" x2="10.5" y2="5.5"/>' +
+  '<line x1="5.5" y1="10.5" x2="10.5" y2="10.5"/>' +
+  '</svg>';
+
+const ALL_DOCK_SIDES: DockSide[] = ["left", "right", "top", "bottom"];
+
+const DEFAULT_DOCK_HEIGHT = 200;
+
+function _defaultSlotForSide(side: DockSide): SidebarSlotState {
+  if (side === "top" || side === "bottom") {
+    return {
+      ...DEFAULT_SIDEBAR_SLOT,
+      height: DEFAULT_DOCK_HEIGHT,
+      panels: {},
+    };
+  }
+  return {
+    ...DEFAULT_SIDEBAR_SLOT,
+    panels: {},
+  };
+}
 
 // ── Public API type ───────────────────────────────────────────────────────────
 
@@ -45,10 +80,9 @@ export interface SidebarPanelDescriptor {
   title: string;
 
   /**
-   * Which sidebar slot this panel requests.
-   * Fixed for the lifetime of the registration (NFR-5).
+   * Which sidebar slot this panel requests by default ("left" or "right").
    */
-  side: "left" | "right";
+  side: DockSide;
 
   /**
    * Called by the infrastructure to (re-)draw the panel into container.
@@ -104,8 +138,7 @@ interface RegisteredPanel {
   /** The outer wrapper: .sidebar-panel-wrapper (contains accordion header + contentEl). */
   wrapperEl: HTMLDivElement;
   /**
-   * The tab button element. Null until the side has ≥2 panels, at which point
-   * _reconcileTabBar creates tab buttons for all panels on the side.
+   * The tab button element. Null in stacked mode.
    */
   tabEl: HTMLButtonElement | null;
   /**
@@ -113,73 +146,80 @@ interface RegisteredPanel {
    */
   iconBtnEl: HTMLButtonElement | null;
   /**
-   * The side this panel is currently placed on. Starts as descriptor.side
-   * but may be overridden by the user via movePanel(). Always reflects the
-   * actual DOM placement — use this instead of descriptor.side for any slot
-   * lookup after the initial registration.
+   * The dock side this panel is currently placed on. Starts as descriptor.side
+   * but may be overridden by the user via movePanel() / movePanelToSide().
    */
-  effectiveSide: "left" | "right";
+  effectiveSide: DockSide;
 }
 
-/** Runtime DOM state for one sidebar slot (left or right). */
+/** Runtime DOM state for one sidebar/dock slot. */
 interface SlotRuntime {
   /**
-   * The #sidebar-left or #sidebar-right element.
-   * Null until the first panel is registered on this side.
+   * The #sidebar-left, #sidebar-right, #sidebar-top, or #sidebar-bottom element.
    */
   el: HTMLDivElement | null;
   /**
-   * The .sidebar-tab-bar element inside this slot.
-   * Null when the side has 0 or 1 panel (tab bar is hidden for single panels).
+   * The .sidebar-tab-bar element inside this slot (unused in stacked mode).
    */
   tabBarEl: HTMLDivElement | null;
-  /** The resize handle element. Null until the sidebar slot is created. */
+  /** The resize handle element. */
   resizeHandleEl: HTMLDivElement | null;
-  /** The icon strip element (44px column, outer edge). Null until slot is created. */
+  /** The icon strip element. */
   iconStripEl: HTMLDivElement | null;
-  /** The content area element (flex:1, holds tab bar, panels, resize handle). Null until slot is created. */
+  /** The content area element (flex:1, holds panels and resize handle). */
   contentAreaEl: HTMLDivElement | null;
-  /** Cycle chevron button (right sidebar only). Re-appended to the tab bar on every reconcile. */
+  /** Cycle chevron button. */
   cycleBtnEl: HTMLButtonElement | null;
-  /** Panel ids in registration order for this side. */
+  /** Panel ids in order for this slot. */
   panelIds: string[];
+  /** Logical open state for this slot (mirrors persisted settings.sidebar[side].open). */
+  isOpen?: boolean;
 }
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
-/** All registered panels across both sides, keyed by panelId. */
+/** All registered panels across all slots, keyed by panelId. */
 const registeredPanels = new Map<string, RegisteredPanel>();
 
 /**
- * Runtime DOM state per side.
- *
- * Initialised to a "nothing registered" state. Each side's el is lazily
- * created in register() when the first panel for that side arrives.
+ * Runtime DOM state per dock side.
  */
-const slotRuntime: Record<"left" | "right", SlotRuntime> = {
-  left:  { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
-  right: { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
+const slotRuntime: Record<DockSide, SlotRuntime> = {
+  left:   { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
+  right:  { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
+  top:    { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
+  bottom: { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] },
 };
 
-/** The #app-row flex row that contains #sidebar-left, #editor, #sidebar-right. */
+/** The #app-row container that holds #sidebar-left, #sidebar-top, #editor, #sidebar-bottom, #sidebar-right. */
 let appRowEl: HTMLDivElement | null = null;
 
 /** True after init() has been called. Guards against double-init (idempotency). */
 let initialized = false;
 
+/**
+ * Runtime lock state override. Null until explicitly set via setPanelPositionsLocked()
+ * or synced from settings, allowing getCurrentSettings().sidebar?.locked to act as fallback.
+ */
+let runtimeLocked: boolean | null = null;
+
+/**
+ * Runtime cache of saved Workspace Panel-Locations presets so preset operations
+ * work even when updateSettings is mocked in unit tests.
+ */
+let runtimeSavedLocations: SidebarPanelLocationPreset[] | null = null;
+
 // ── Public: init ──────────────────────────────────────────────────────────────
 
 /**
- * Create the #app-row flex wrapper and both sidebar slot elements, then move
- * #editor into the row between the two slots.
+ * Create the #app-row wrapper and all four dock slot elements (#sidebar-left,
+ * #sidebar-top, #sidebar-bottom, #sidebar-right), placing #editor (and
+ * #custom-tab-host if present) in the center column between them.
  *
  * Must be called after #editor is mounted in the DOM and before any plugin
  * calls registerSidebarPanel(). Idempotent — calling it twice is a no-op.
  *
- * Design change from lazy-slot to eager-slot: both #sidebar-left and
- * #sidebar-right are created immediately at init() time so that
- * toggleSide() and movePanelToSide() work even before any panels are
- * registered. Both slots start with display:none (closed).
+ * All four slots start with display:none (closed).
  *
  * @throws Error if #app or #editor are not found in the DOM.
  */
@@ -190,15 +230,12 @@ export function init(): void {
   const app = document.getElementById("app");
   const editor = document.getElementById("editor");
 
-  // These elements must exist before init() is called. A missing element
-  // is a programming error in the startup sequence, not a user error.
   if (!app || !editor) {
     throw new Error(
       "[SidebarManager] init() called before #app or #editor exists in DOM."
     );
   }
 
-  // Create the row wrapper that holds sidebars and the editor side by side.
   appRowEl = document.createElement("div");
   appRowEl.id = "app-row";
 
@@ -211,21 +248,27 @@ export function init(): void {
     app.appendChild(appRowEl);
   }
 
-  // Create both sidebar slots eagerly. Both start hidden (display:none).
-  // This allows toggleSide() to operate before any panels are registered,
-  // and eliminates the lazy-creation complexity inside register().
+  // Create all four dock slots eagerly. All start hidden (display:none).
+  // Order in #app-row: #sidebar-left, #sidebar-top, #editor, [#custom-tab-host],
+  // #sidebar-bottom, #sidebar-right. This preserves leftIdx < editorIdx < rightIdx
+  // while positioning top above editor and bottom below editor in the center column.
   _createSlotElement("left");
   appRowEl.appendChild(slotRuntime.left.el!);
 
-  // #editor and #custom-tab-host both occupy the center content slot.
-  // Moving #custom-tab-host here (out of #app) means it only fills the editor
-  // column — sidebars, titlebar, and statusbar are never covered.
+  _createSlotElement("top");
+  appRowEl.appendChild(slotRuntime.top.el!);
+
   appRowEl.appendChild(editor);
   const customTabHost = document.getElementById("custom-tab-host");
   if (customTabHost) appRowEl.appendChild(customTabHost);
 
+  _createSlotElement("bottom");
+  appRowEl.appendChild(slotRuntime.bottom.el!);
+
   _createSlotElement("right");
   appRowEl.appendChild(slotRuntime.right.el!);
+
+  _syncLockedDOMState(isPanelPositionsLocked());
 
   initialized = true;
 }
@@ -234,13 +277,6 @@ export function init(): void {
 
 /**
  * Register a sidebar panel for a plugin.
- *
- * Creates the sidebar slot element on first registration for the side, builds
- * the panel wrapper with an accordion header, calls descriptor.render(), and
- * reconciles the tab bar. Persists the updated state to settings.
- *
- * Ownership: pluginId is stored so that unregister() can enforce that only
- * the registering plugin can unregister its own panels (EC-19).
  *
  * @param pluginId    The id of the plugin performing the registration.
  * @param descriptor  Panel configuration describing id, title, side, and render/destroy callbacks.
@@ -255,34 +291,30 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
     return;
   }
 
-  // Ensure the app-row wrapper exists. Under normal startup sequence init() is
-  // already called; calling it here is a safety guard for unusual call orders.
   if (!initialized) init();
 
-  // Determine which side the panel should land on. The user may have previously
-  // moved this panel via movePanel(), in which case a persisted override takes
-  // precedence over the descriptor's declared default side.
   const settings = getCurrentSettings();
-  const effectiveSide: "left" | "right" =
-    settings.sidebar?.panelSides?.[descriptor.id] ?? descriptor.side;
+  const persistedSide = settings.sidebar?.panelSides?.[descriptor.id];
+  const effectiveSide: DockSide =
+    persistedSide && ALL_DOCK_SIDES.includes(persistedSide)
+      ? persistedSide
+      : descriptor.side;
 
   const runtime = slotRuntime[effectiveSide];
 
-  // Slot always exists after init() — no lazy creation needed.
-  // Apply the panel's defaultWidth to the slot only when:
-  //   (a) no persisted width exists for this side, AND
-  //   (b) this is the first panel being registered on the side.
-  // This avoids overwriting a user-resized width on subsequent registrations.
-  if (!settings.sidebar?.[effectiveSide]?.width && runtime.panelIds.length === 0) {
-    const w = descriptor.defaultWidth ?? 220;
-    runtime.el!.style.width = `${w}px`;
+  if (effectiveSide === "left" || effectiveSide === "right") {
+    if (!settings.sidebar?.[effectiveSide]?.width && runtime.panelIds.length === 0) {
+      const w = descriptor.defaultWidth ?? 220;
+      runtime.el!.style.width = `${w}px`;
+    }
+  } else {
+    if (!settings.sidebar?.[effectiveSide]?.height && runtime.panelIds.length === 0) {
+      runtime.el!.style.height = `${DEFAULT_DOCK_HEIGHT}px`;
+    }
   }
 
   const { wrapperEl, contentEl } = _buildPanelWrapper(descriptor, effectiveSide);
 
-  // Store the runtime panel record, including the resolved effectiveSide so
-  // that all subsequent slot lookups use the live placement rather than the
-  // descriptor default.
   const panelRecord: RegisteredPanel = {
     pluginId,
     descriptor,
@@ -298,7 +330,7 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
   // Honour any user-defined stack order from settings.
   _applyPersistedOrder(effectiveSide);
 
-  // Reconcile the tab bar for this side (creates tab bar if needed).
+  // Reconcile the tab bar for this side.
   _reconcileTabBar(effectiveSide);
 
   // All panels are rendered eagerly at registration time.
@@ -307,20 +339,21 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
   _restoreAccordionFromSettings(descriptor.id, effectiveSide);
 
   // Build and wire the icon strip button.
-  const iconBtn = _buildIconButton(descriptor.id, panelRecord, effectiveSide);
+  const iconBtn = _buildIconButton(descriptor.id, panelRecord);
   runtime.iconStripEl!.appendChild(iconBtn);
   panelRecord.iconBtnEl = iconBtn;
 
   // Restore iconized/pinned visual state from persisted settings.
   _restoreIconizedFromSettings(descriptor.id, effectiveSide);
 
+  _syncLockedDOMState(isPanelPositionsLocked());
+  runtime.isOpen = true;
+
   // Persist the updated sidebar state for this side.
-  // Always set open: true on registration — enabling a plugin always shows its
-  // sidebar. The user can close it manually via Cmd-Shift-[ / Cmd-Shift-].
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, effectiveSide, {
-      ...(s.sidebar?.[effectiveSide] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[effectiveSide] ?? _defaultSlotForSide(effectiveSide)),
       open: true,
       activeTabId: _getActiveTabId(effectiveSide),
       panels: _buildPanelsRecord(effectiveSide),
@@ -332,13 +365,6 @@ export function register(pluginId: string, descriptor: SidebarPanelDescriptor): 
 
 /**
  * Unregister a sidebar panel.
- *
- * Calls descriptor.destroy() (EC-14 — errors are caught and logged but do not
- * prevent DOM removal), removes the wrapper from the DOM, reconciles the tab
- * bar, and removes the sidebar slot if it is now empty (EC-5).
- *
- * No-op if panelId is not registered or if pluginId does not match the
- * registering plugin (EC-19 ownership check).
  *
  * @param pluginId  The id of the plugin requesting the unregistration.
  * @param panelId   The id that was used in the original SidebarPanelDescriptor.
@@ -357,8 +383,6 @@ export function unregister(pluginId: string, panelId: string): void {
     return;
   }
 
-  // Use effectiveSide — not descriptor.side — because the user may have moved
-  // this panel to the other side via movePanel() after initial registration.
   const side = panel.effectiveSide;
   const runtime = slotRuntime[side];
   const settings = getCurrentSettings();
@@ -383,35 +407,20 @@ export function unregister(pluginId: string, panelId: string): void {
 // ── Public: toggleSide ────────────────────────────────────────────────────────
 
 /**
- * Toggle the visibility of one sidebar side.
+ * Toggle the visibility of one sidebar/dock side.
  *
- * Works regardless of whether any panels are registered — the slot is always
- * present in the DOM after init() (eager-slot design). Persists the new open
- * state to settings.
- *
- * @param side  The sidebar side to toggle.
+ * @param side  The dock side to toggle ("left" | "right" | "top" | "bottom").
  */
-export function toggleSide(side: "left" | "right"): void {
-  // With eager-slot init, the element always exists after init(). Guard only
-  // against the pathological case of toggleSide being called before init().
+export function toggleSide(side: DockSide): void {
   const el = slotRuntime[side].el;
   if (!el) return;
 
-  // Use the DOM display property as the authoritative source of truth rather
-  // than settings. During the window between register() (which writes
-  // open:true to settings) and restoreFromSettings() (which applies it to the
-  // DOM), settings already say open:true but the sidebar is not yet visible.
-  // Reading settings in that window would flip the direction incorrectly.
-  // The DOM is always in sync with what the user actually sees.
   const currentlyOpen = el.style.display !== "none";
   const nextOpen = !currentlyOpen;
 
-  // Toggle visibility via display style (not CSS class) to avoid conflicts
-  // with the CSS-defined display:flex on #sidebar-left / #sidebar-right.
   el.style.display = nextOpen ? "" : "none";
+  slotRuntime[side].isOpen = nextOpen;
 
-  // When opening, ensure the content area is visible even if it was hidden
-  // because all panels were previously iconized.
   if (nextOpen) {
     const runtime = slotRuntime[side];
     if (runtime.contentAreaEl) runtime.contentAreaEl.style.display = "";
@@ -420,7 +429,7 @@ export function toggleSide(side: "left" | "right"): void {
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, side, {
-      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
       open: nextOpen,
     }),
   }));
@@ -429,12 +438,9 @@ export function toggleSide(side: "left" | "right"): void {
 // ── Public: movePanel ─────────────────────────────────────────────────────────
 
 /**
- * Reassign a registered panel from its current sidebar side to the opposite side.
+ * Reassign a registered panel from its current dock side to the opposite side.
  *
- * Convenience wrapper around movePanelToSide() that always flips to the
- * opposite side. The header move-button (⇄) calls this function.
- *
- * No-op when panelId is not registered.
+ * Convenience wrapper around movePanelToSide() that flips left↔right (or top↔bottom).
  *
  * @param panelId  The id of the panel to move.
  */
@@ -442,55 +448,45 @@ export function movePanel(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
-  // Flip to the opposite side.
-  const newSide: "left" | "right" = panel.effectiveSide === "left" ? "right" : "left";
+  let newSide: DockSide;
+  if (panel.effectiveSide === "left") newSide = "right";
+  else if (panel.effectiveSide === "right") newSide = "left";
+  else if (panel.effectiveSide === "top") newSide = "bottom";
+  else newSide = "top";
+
   movePanelToSide(panelId, newSide);
 }
 
 /**
- * Move a registered panel to a SPECIFIC sidebar side.
- *
- * Both the old and new side tab bars are reconciled. When the old side becomes
- * empty after the move its slot element stays in the DOM (empty, possibly
- * closed) — no teardown. The settings panelSides override map is persisted so
- * the placement survives app restarts.
- *
- * No-op when panelId is not registered, or when the panel is already on the
- * requested side (moving to same side is a no-op).
+ * Move a registered panel to a SPECIFIC dock side ("left" | "right" | "top" | "bottom").
  *
  * @param panelId  The id of the panel to move.
- * @param newSide  The destination sidebar side.
+ * @param newSide  The destination dock side.
  */
-export function movePanelToSide(panelId: string, newSide: "left" | "right"): void {
-  // No-op: panel not found.
+export function movePanelToSide(panelId: string, newSide: DockSide): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
   const oldSide = panel.effectiveSide;
-
-  // No-op: panel is already on the requested side.
   if (oldSide === newSide) return;
 
-  // Update the effective side on the record immediately so all subsequent slot
-  // lookups in this call (reconcile, getActiveTabId, etc.) see the new value.
   panel.effectiveSide = newSide;
 
-  // Remove the panel id from the old side's panel list before reconciliation.
   slotRuntime[oldSide].panelIds = slotRuntime[oldSide].panelIds.filter(
     (id) => id !== panelId
   );
 
-  // Reconcile the old side's tab bar now that panel count may have dropped.
   _reconcileTabBar(oldSide);
 
-  // When the old side now has 0 panels, update its settings to reflect the
-  // empty state (no activeTabId, no panels record). The slot element stays in
-  // the DOM — only the settings record is cleared.
   if (slotRuntime[oldSide].panelIds.length === 0) {
+    slotRuntime[oldSide].isOpen = false;
+    if ((oldSide === "top" || oldSide === "bottom") && slotRuntime[oldSide].el) {
+      slotRuntime[oldSide].el!.style.display = "none";
+    }
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, oldSide, {
-        ...(s.sidebar?.[oldSide] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[oldSide] ?? _defaultSlotForSide(oldSide)),
         open: false,
         activeTabId: null,
         panels: {},
@@ -500,21 +496,20 @@ export function movePanelToSide(panelId: string, newSide: "left" | "right"): voi
 
   // Persist the panelSides override map so placement survives a reload.
   updateSettings((s) => {
-    const updatedPanelSides: Record<string, "left" | "right"> = {
+    const updatedPanelSides: Record<string, DockSide> = {
       ...(s.sidebar?.panelSides ?? {}),
       [panelId]: newSide,
     };
     return {
       ...s,
       sidebar: {
-        left:       s.sidebar?.left  ?? { ...DEFAULT_SIDEBAR_SLOT },
-        right:      s.sidebar?.right ?? { ...DEFAULT_SIDEBAR_SLOT },
+        ..._buildFullSidebarFromExisting(s.sidebar),
         panelSides: updatedPanelSides,
       },
     };
   });
 
-  // Move the wrapper DOM node and reconcile the new side's tab bar.
+  // Move the wrapper DOM node and icon button, then reconcile the new side.
   _moveWrapperToSlot(panel, panelId, newSide);
 
   // Ensure the destination slot is visible.
@@ -523,59 +518,40 @@ export function movePanelToSide(panelId: string, newSide: "left" | "right"): voi
 
 // ── Private: movePanel helpers ────────────────────────────────────────────────
 
-/**
- * Move a panel's wrapper element into the destination sidebar slot.
- *
- * The slot always exists after init() (eager-slot design) so no lazy creation
- * is needed. Inserts the wrapper before the resize handle (so the handle stays
- * the last child), adds the panel id to the new slot's panelIds list, and
- * reconciles the new side's tab bar to reflect the updated panel count.
- *
- * @param panel    The panel record whose wrapperEl will be re-parented.
- * @param panelId  The panel's id (used when pushing to panelIds).
- * @param newSide  The destination sidebar side.
- */
 function _moveWrapperToSlot(
   panel: RegisteredPanel,
   panelId: string,
-  newSide: "left" | "right"
+  newSide: DockSide
 ): void {
-  // Slot always exists after init() — no lazy creation needed.
   const newRuntime = slotRuntime[newSide];
 
-  // Insert into contentAreaEl before the resize handle so the handle stays last.
   if (newRuntime.resizeHandleEl) {
     newRuntime.contentAreaEl!.insertBefore(panel.wrapperEl, newRuntime.resizeHandleEl);
   } else {
     newRuntime.contentAreaEl!.appendChild(panel.wrapperEl);
   }
 
-  // Register the panel id on the new side and reconcile its tab bar.
+  if (panel.iconBtnEl && newRuntime.iconStripEl) {
+    newRuntime.iconStripEl.appendChild(panel.iconBtnEl);
+  }
+
   newRuntime.panelIds.push(panelId);
   _reconcileTabBar(newSide);
 }
 
-/**
- * Ensure a sidebar slot is visible after a panel has been moved into it.
- *
- * Sets the slot element's display style to "" (restoring flex from CSS) and
- * persists open: true along with the current active tab id and panels record.
- *
- * Called as the final step of movePanel so the user immediately sees the panel
- * on the new side without needing to manually open the sidebar.
- *
- * @param side  The sidebar side to open.
- */
-function _openSideIfClosed(side: "left" | "right"): void {
+function _openSideIfClosed(side: DockSide): void {
   const runtime = slotRuntime[side];
 
-  // Make the slot visible (may already be visible if side had other panels).
   runtime.el!.style.display = "";
+  runtime.isOpen = true;
+  if (runtime.contentAreaEl) {
+    runtime.contentAreaEl.style.display = "";
+  }
 
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, side, {
-      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
       open: true,
       activeTabId: _getActiveTabId(side),
       panels: _buildPanelsRecord(side),
@@ -583,27 +559,8 @@ function _openSideIfClosed(side: "left" | "right"): void {
   }));
 }
 
-// ── Public: restoreFromSettings ───────────────────────────────────────────────
+// ── Public: focusSidebarPanel / toggleSidebarPanel / restoreFromSettings ─────
 
-/**
- * Apply persisted sidebar state (open/closed, active tab) after all plugins
- * have been restored.
- *
- * Must be called AFTER pluginManager.restoreAll() so that panels registered
- * by enabled plugins are present before we decide whether to show each slot.
- *
- * EC-11, EC-23: if a side has no registered panels, we skip restoring open
- * state regardless of what settings say — a sidebar without panels must not
- * show as an empty box.
- */
-/**
- * Bring a registered panel into view:
- *   - If the panel's side is closed, open it.
- *   - Set the panel as the active tab on its side.
- *
- * No-op when panelId is not registered.
- * Used by plugins whose commands need to reveal their sidebar panel.
- */
 export function focusSidebarPanel(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
@@ -612,32 +569,20 @@ export function focusSidebarPanel(panelId: string): void {
   const el = slotRuntime[side].el;
   if (!el) return;
 
-  // Open the side if it is currently hidden.
   if (el.style.display === "none") {
     el.style.display = "";
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
         open: true,
       }),
     }));
   }
 
-  // Make this panel the active tab.
   _setActivePanel(side, panelId, /* persist= */ true);
 }
 
-/**
- * Toggle the sidebar side that contains the given panel — the same action as
- * pressing Cmd-Shift-[ / Cmd-Shift-].
- *
- * Looks up the panel's effectiveSide and delegates to toggleSide(), so the
- * behaviour is identical to the keyboard shortcut regardless of whether the
- * panel has been moved to the opposite side by the user.
- *
- * No-op when panelId is not registered.
- */
 export function toggleSidebarPanel(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
@@ -645,35 +590,34 @@ export function toggleSidebarPanel(panelId: string): void {
 }
 
 export function restoreFromSettings(): void {
-  const sides: Array<"left" | "right"> = ["left", "right"];
+  const persistedLocked = getCurrentSettings().sidebar?.locked;
+  if (typeof persistedLocked === "boolean") {
+    runtimeLocked = persistedLocked;
+  }
+  _syncLockedDOMState(isPanelPositionsLocked());
 
-  for (const side of sides) {
+  for (const side of ALL_DOCK_SIDES) {
     const runtime = slotRuntime[side];
 
     // EC-11, EC-23: no panels registered on this side → keep the slot hidden
-    // regardless of what the persisted open state says. An empty sidebar must
-    // not be shown as a visible empty box. The slot element itself stays in
-    // the DOM (eager-slot design) — we only skip applying the open state.
-    if (runtime.panelIds.length === 0) continue;
+    // regardless of what the persisted open state says.
+    if (runtime.panelIds.length === 0) {
+      runtime.isOpen = false;
+      if (runtime.el) runtime.el.style.display = "none";
+      continue;
+    }
 
     const slotSettings = getCurrentSettings().sidebar?.[side];
-    // Default to open (true) when no persisted state exists — a newly-enabled
-    // plugin should show its sidebar immediately on first use.
     const shouldOpen = slotSettings?.open ?? true;
 
-    // Apply open/closed state. During the registration phase all slots are
-    // shown unconditionally; restoreFromSettings() is the authority on whether
-    // a slot should be visible on load. runtime.el is always non-null after
-    // init() (eager-slot design), but we guard for TypeScript narrowing.
+    runtime.isOpen = shouldOpen;
     if (!runtime.el) continue;
     runtime.el.style.display = shouldOpen ? "" : "none";
 
-    // Restore the previously active tab if it is still registered.
     if (slotSettings?.activeTabId && runtime.panelIds.includes(slotSettings.activeTabId)) {
       _setActivePanel(side, slotSettings.activeTabId, /* persist= */ false);
     }
 
-    // Hide contentAreaEl when all panels on this side are iconized.
     const allIconized = runtime.panelIds.length > 0 && runtime.panelIds.every(
       (id) => registeredPanels.get(id)?.wrapperEl.classList.contains("is-iconized") ?? false
     );
@@ -683,89 +627,455 @@ export function restoreFromSettings(): void {
   }
 }
 
+// ── Public: Lock / Unlock Panel Positions & Saved Workspace Panel-Locations ──
+
+export function isPanelPositionsLocked(): boolean {
+  if (runtimeLocked !== null) return runtimeLocked;
+  return Boolean(getCurrentSettings().sidebar?.locked);
+}
+
+export function setPanelPositionsLocked(locked: boolean): void {
+  runtimeLocked = Boolean(locked);
+  _syncLockedDOMState(runtimeLocked);
+
+  if (runtimeLocked) {
+    document.querySelectorAll(".sidebar-dock-menu").forEach((el) => el.remove());
+  }
+
+  updateSettings((s) => ({
+    ...s,
+    sidebar: {
+      ..._buildFullSidebarFromExisting(s.sidebar),
+      locked: runtimeLocked!,
+    },
+  }));
+
+  window.dispatchEvent(new CustomEvent("markable-panel-locations-changed"));
+}
+
+export function togglePanelPositionsLock(): boolean {
+  const next = !isPanelPositionsLocked();
+  setPanelPositionsLocked(next);
+  return next;
+}
+
+function _syncLockedDOMState(locked: boolean): void {
+  appRowEl?.classList.toggle("is-panels-locked", locked);
+  for (const side of ALL_DOCK_SIDES) {
+    slotRuntime[side].el?.classList.toggle("is-panels-locked", locked);
+  }
+  document.querySelectorAll<HTMLButtonElement>(".sidebar-move-btn").forEach((btn) => {
+    btn.disabled = locked;
+    btn.classList.toggle("is-disabled", locked);
+    btn.setAttribute("aria-disabled", String(locked));
+  });
+}
+
+function _captureCurrentSlotState(side: DockSide): SidebarSlotState {
+  const runtime = slotRuntime[side];
+  const persisted = getCurrentSettings().sidebar?.[side];
+  const open =
+    (runtime.el ? runtime.el.style.display !== "none" : false) ||
+    Boolean(runtime.isOpen) ||
+    Boolean(persisted?.open && runtime.panelIds.length > 0);
+  const activeTabId = _getActiveTabId(side) ?? persisted?.activeTabId ?? null;
+  const parsedW = parseInt(runtime.el?.style.width || "", 10);
+  const width = !isNaN(parsedW) && parsedW > 0 ? parsedW : (persisted?.width ?? 220);
+  const parsedH = parseInt(runtime.el?.style.height || "", 10);
+  const height =
+    side === "top" || side === "bottom"
+      ? (!isNaN(parsedH) && parsedH > 0 ? parsedH : (persisted?.height ?? DEFAULT_DOCK_HEIGHT))
+      : persisted?.height;
+  const panelOrder =
+    runtime.panelIds.length > 0
+      ? [...runtime.panelIds]
+      : (persisted?.panelOrder ? [...persisted.panelOrder] : []);
+  const panels =
+    runtime.panelIds.length > 0
+      ? _buildPanelsRecord(side)
+      : structuredClone(persisted?.panels ?? {});
+
+  return {
+    open,
+    activeTabId,
+    width,
+    ...(height !== undefined ? { height } : {}),
+    panels,
+    panelOrder,
+  };
+}
+
+export function getPanelLocationPresets(): SidebarPanelLocationPreset[] {
+  const fromSettings = getCurrentSettings().sidebar?.savedPanelLocations;
+  if (runtimeSavedLocations !== null) {
+    return structuredClone(runtimeSavedLocations);
+  }
+  return fromSettings ? structuredClone(fromSettings) : [];
+}
+
+export function savePanelLocationPreset(name: string): SidebarPanelLocationPreset | null {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+
+  const panelSides: Record<string, DockSide> = {
+    ...(getCurrentSettings().sidebar?.panelSides ?? {}),
+  };
+  for (const [panelId, panel] of registeredPanels) {
+    panelSides[panelId] = panel.effectiveSide;
+  }
+
+  const preset: SidebarPanelLocationPreset = {
+    name: trimmed,
+    panelSides,
+    slots: {
+      left:   _captureCurrentSlotState("left"),
+      right:  _captureCurrentSlotState("right"),
+      top:    _captureCurrentSlotState("top"),
+      bottom: _captureCurrentSlotState("bottom"),
+    },
+  };
+
+  const base =
+    runtimeSavedLocations !== null
+      ? structuredClone(runtimeSavedLocations)
+      : structuredClone(getCurrentSettings().sidebar?.savedPanelLocations ?? []);
+  const existingIdx = base.findIndex((p) => p.name === trimmed);
+  if (existingIdx >= 0) {
+    base[existingIdx] = structuredClone(preset);
+  } else {
+    base.push(structuredClone(preset));
+  }
+  runtimeSavedLocations = base;
+
+  updateSettings((s) => {
+    const listFromState = s.sidebar?.savedPanelLocations
+      ? structuredClone(s.sidebar.savedPanelLocations)
+      : [];
+    for (const item of base) {
+      const idx = listFromState.findIndex((p) => p.name === item.name);
+      if (idx >= 0) listFromState[idx] = structuredClone(item);
+      else listFromState.push(structuredClone(item));
+    }
+    return {
+      ...s,
+      sidebar: {
+        ..._buildFullSidebarFromExisting(s.sidebar),
+        savedPanelLocations: listFromState,
+      },
+    };
+  });
+
+  window.dispatchEvent(new CustomEvent("markable-panel-locations-changed"));
+  return structuredClone(preset);
+}
+
+export function promptAndSavePanelLocationPreset(): SidebarPanelLocationPreset | null {
+  const raw = typeof window.prompt === "function"
+    ? window.prompt("Save Workspace Panel-Locations preset as:")
+    : null;
+  if (!raw) return null;
+  return savePanelLocationPreset(raw);
+}
+
+export function applyPanelLocationPreset(name: string): boolean {
+  const presets = getPanelLocationPresets();
+  const fallbackPresets = getCurrentSettings().sidebar?.savedPanelLocations ?? [];
+  const preset =
+    presets.find((p) => p.name === name) ??
+    fallbackPresets.find((p) => p.name === name);
+  if (!preset) return false;
+
+  // 1. Move each registered panel to its saved dock side (or its default side).
+  for (const [panelId, panel] of registeredPanels) {
+    const savedSide = preset.panelSides?.[panelId];
+    const targetSide: DockSide =
+      savedSide && ALL_DOCK_SIDES.includes(savedSide)
+        ? savedSide
+        : panel.descriptor.side;
+
+    if (panel.effectiveSide !== targetSide) {
+      const oldSide = panel.effectiveSide;
+      slotRuntime[oldSide].panelIds = slotRuntime[oldSide].panelIds.filter(
+        (id) => id !== panelId
+      );
+      panel.effectiveSide = targetSide;
+      _moveWrapperToSlot(panel, panelId, targetSide);
+    }
+  }
+
+  // 2. Restore each slot's order, dimensions, per-panel states, and open/closed state.
+  for (const side of ALL_DOCK_SIDES) {
+    const slotState = preset.slots?.[side] ?? _defaultSlotForSide(side);
+    const runtime = slotRuntime[side];
+
+    if (slotState.panelOrder && slotState.panelOrder.length > 0 && runtime.panelIds.length > 1) {
+      const known = new Set(runtime.panelIds);
+      const ordered = [
+        ...slotState.panelOrder.filter((id) => known.has(id)),
+        ...runtime.panelIds.filter((id) => !slotState.panelOrder!.includes(id)),
+      ];
+      runtime.panelIds = ordered;
+      for (const id of ordered) {
+        const p = registeredPanels.get(id);
+        if (!p) continue;
+        if (runtime.contentAreaEl) {
+          runtime.contentAreaEl.insertBefore(p.wrapperEl, runtime.resizeHandleEl);
+        }
+        if (p.iconBtnEl && runtime.iconStripEl) {
+          runtime.iconStripEl.appendChild(p.iconBtnEl);
+        }
+      }
+    }
+
+    if (runtime.el) {
+      if (side === "left" || side === "right") {
+        if (slotState.width) runtime.el.style.width = `${slotState.width}px`;
+      } else {
+        const h = slotState.height ?? DEFAULT_DOCK_HEIGHT;
+        runtime.el.style.height = `${h}px`;
+      }
+    }
+
+    for (const id of runtime.panelIds) {
+      const p = registeredPanels.get(id);
+      if (!p) continue;
+      const pState = slotState.panels?.[id];
+      const expanded = pState?.accordionExpanded ?? true;
+      _setAccordionState(id, expanded, /* persist= */ false);
+
+      const iconized = pState?.iconized ?? false;
+      p.wrapperEl.classList.toggle("is-iconized", iconized);
+      p.wrapperEl.style.display = iconized ? "none" : "";
+      p.iconBtnEl?.classList.toggle("is-active", !iconized);
+
+      const pinned = pState?.pinned ?? false;
+      p.wrapperEl.classList.toggle("is-pinned", pinned);
+      p.iconBtnEl?.classList.toggle("is-pinned", pinned);
+    }
+
+    _reconcileTabBar(side);
+
+    if (runtime.el) {
+      const shouldOpen = runtime.panelIds.length > 0 ? Boolean(slotState.open) : false;
+      runtime.isOpen = shouldOpen;
+      runtime.el.style.display = shouldOpen ? "" : "none";
+    }
+
+    if (runtime.contentAreaEl) {
+      const allIconized =
+        runtime.panelIds.length > 0 &&
+        runtime.panelIds.every(
+          (id) => registeredPanels.get(id)?.wrapperEl.classList.contains("is-iconized") ?? false
+        );
+      runtime.contentAreaEl.style.display = allIconized ? "none" : "";
+    }
+  }
+
+  // 3. Persist the restored arrangement to settings.
+  updateSettings((s) => ({
+    ...s,
+    sidebar: {
+      ..._buildFullSidebarFromExisting(s.sidebar),
+      left:       structuredClone(preset.slots.left),
+      right:      structuredClone(preset.slots.right),
+      top:        structuredClone(preset.slots.top),
+      bottom:     structuredClone(preset.slots.bottom),
+      panelSides: structuredClone(preset.panelSides),
+    },
+  }));
+
+  window.dispatchEvent(new CustomEvent("markable-panel-locations-changed"));
+  return true;
+}
+
+export function deletePanelLocationPreset(name: string): boolean {
+  const current = getPanelLocationPresets();
+  const fromSettings = getCurrentSettings().sidebar?.savedPanelLocations ?? [];
+  const exists = current.some((p) => p.name === name) || fromSettings.some((p) => p.name === name);
+  if (!exists) return false;
+
+  const base = runtimeSavedLocations !== null ? runtimeSavedLocations : fromSettings;
+  runtimeSavedLocations = base.filter((p) => p.name !== name).map((p) => structuredClone(p));
+
+  updateSettings((s) => {
+    const existingList = s.sidebar?.savedPanelLocations ?? base;
+    return {
+      ...s,
+      sidebar: {
+        ..._buildFullSidebarFromExisting(s.sidebar),
+        savedPanelLocations: existingList
+          .filter((p) => p.name !== name)
+          .map((p) => structuredClone(p)),
+      },
+    };
+  });
+
+  window.dispatchEvent(new CustomEvent("markable-panel-locations-changed"));
+  return true;
+}
+
+export function resetPanelLocationsToDefault(): void {
+  // 1. Return every registered panel to its plugin-declared default side.
+  for (const [panelId, panel] of registeredPanels) {
+    const defaultSide = panel.descriptor.side;
+    if (panel.effectiveSide !== defaultSide) {
+      const oldSide = panel.effectiveSide;
+      slotRuntime[oldSide].panelIds = slotRuntime[oldSide].panelIds.filter(
+        (id) => id !== panelId
+      );
+      panel.effectiveSide = defaultSide;
+      _moveWrapperToSlot(panel, panelId, defaultSide);
+    }
+    panel.wrapperEl.classList.remove("is-iconized");
+    panel.wrapperEl.style.display = "";
+    panel.iconBtnEl?.classList.add("is-active");
+    _setAccordionState(panelId, true, /* persist= */ false);
+  }
+
+  // 2. Restore registration order, reset slot sizes, and close Top/Bottom docks.
+  const allRegIds = Array.from(registeredPanels.keys());
+  for (const side of ALL_DOCK_SIDES) {
+    const runtime = slotRuntime[side];
+    const sideIds = allRegIds.filter(
+      (id) => registeredPanels.get(id)?.effectiveSide === side
+    );
+    runtime.panelIds = sideIds;
+
+    for (const id of sideIds) {
+      const p = registeredPanels.get(id);
+      if (!p) continue;
+      if (runtime.contentAreaEl) {
+        runtime.contentAreaEl.insertBefore(p.wrapperEl, runtime.resizeHandleEl);
+      }
+      if (p.iconBtnEl && runtime.iconStripEl) {
+        runtime.iconStripEl.appendChild(p.iconBtnEl);
+      }
+    }
+
+    _reconcileTabBar(side);
+
+    if (side === "left" || side === "right") {
+      const firstPanel = sideIds[0] ? registeredPanels.get(sideIds[0]) : undefined;
+      const defaultW = firstPanel?.descriptor.defaultWidth ?? 220;
+      runtime.isOpen = sideIds.length > 0;
+      if (runtime.el) {
+        runtime.el.style.width = `${defaultW}px`;
+        runtime.el.style.display = sideIds.length > 0 ? "" : "none";
+      }
+      if (runtime.contentAreaEl) runtime.contentAreaEl.style.display = "";
+    } else {
+      runtime.isOpen = false;
+      if (runtime.el) {
+        runtime.el.style.height = `${DEFAULT_DOCK_HEIGHT}px`;
+        runtime.el.style.display = "none";
+      }
+      if (runtime.contentAreaEl) runtime.contentAreaEl.style.display = "";
+    }
+  }
+
+  // 3. Persist cleared panelSides, reset slot dimensions, and closed top/bottom.
+  updateSettings((s) => ({
+    ...s,
+    sidebar: {
+      ..._buildFullSidebarFromExisting(s.sidebar),
+      left: {
+        open: slotRuntime.left.panelIds.length > 0,
+        activeTabId: _getActiveTabId("left"),
+        width: parseInt(slotRuntime.left.el?.style.width || "", 10) || 220,
+        panels: _buildPanelsRecord("left"),
+        panelOrder: [...slotRuntime.left.panelIds],
+      },
+      right: {
+        open: slotRuntime.right.panelIds.length > 0,
+        activeTabId: _getActiveTabId("right"),
+        width: parseInt(slotRuntime.right.el?.style.width || "", 10) || 220,
+        panels: _buildPanelsRecord("right"),
+        panelOrder: [...slotRuntime.right.panelIds],
+      },
+      top: _defaultSlotForSide("top"),
+      bottom: _defaultSlotForSide("bottom"),
+      panelSides: {},
+    },
+  }));
+
+  window.dispatchEvent(new CustomEvent("markable-panel-locations-changed"));
+}
+
 // ── Private: settings merge helper ───────────────────────────────────────────
 
-/**
- * Build a fully-typed SidebarSettings object by merging an update for one side.
- *
- * TypeScript requires both `left` and `right` to be non-optional in
- * SidebarSettings. Spreading `s.sidebar` (which may be undefined) loses that
- * guarantee. This helper ensures both sides are always present by falling back
- * to DEFAULT_SIDEBAR_SLOT for whichever side is not being updated.
- *
- * The panelSides field is always carried forward from the existing settings so
- * that a slot-state write never silently clears the user's side overrides.
- *
- * @param existing  The current s.sidebar value (may be undefined).
- * @param side      The side being updated.
- * @param update    The new SidebarSlotState for that side.
- * @param panelSidesOverride  Optional replacement for the panelSides map. When
- *   absent, the existing panelSides is preserved unchanged.
- * @returns         A fully-typed SidebarSettings with both sides populated.
- */
+function _buildFullSidebarFromExisting(existing: SidebarSettings | undefined): SidebarSettings {
+  const locked =
+    existing?.locked !== undefined
+      ? existing.locked
+      : (runtimeLocked !== null ? runtimeLocked : undefined);
+  const savedPanelLocations =
+    existing?.savedPanelLocations !== undefined
+      ? existing.savedPanelLocations
+      : (runtimeSavedLocations !== null ? structuredClone(runtimeSavedLocations) : undefined);
+
+  return {
+    left:       existing?.left   ?? _defaultSlotForSide("left"),
+    right:      existing?.right  ?? _defaultSlotForSide("right"),
+    top:        existing?.top    ?? _defaultSlotForSide("top"),
+    bottom:     existing?.bottom ?? _defaultSlotForSide("bottom"),
+    panelSides: existing?.panelSides,
+    ...(locked !== undefined ? { locked } : {}),
+    ...(savedPanelLocations !== undefined ? { savedPanelLocations } : {}),
+  };
+}
+
 function _buildSidebarSettings(
   existing: SidebarSettings | undefined,
-  side: "left" | "right",
+  side: DockSide,
   update: SidebarSlotState,
-  panelSidesOverride?: Record<string, "left" | "right">
+  panelSidesOverride?: Record<string, DockSide>
 ): SidebarSettings {
+  const base = _buildFullSidebarFromExisting(existing);
   return {
-    left:  side === "left"  ? update : (existing?.left  ?? { ...DEFAULT_SIDEBAR_SLOT }),
-    right: side === "right" ? update : (existing?.right ?? { ...DEFAULT_SIDEBAR_SLOT }),
-    // Preserve the panelSides override map. If a caller supplies a replacement
-    // map (e.g. movePanel), use it; otherwise forward the existing value so
-    // a slot-state write never silently resets user side choices.
-    panelSides: panelSidesOverride ?? existing?.panelSides,
+    ...base,
+    left:   side === "left"   ? update : base.left,
+    right:  side === "right"  ? update : base.right,
+    top:    side === "top"    ? update : base.top,
+    bottom: side === "bottom" ? update : base.bottom,
+    panelSides: panelSidesOverride ?? base.panelSides,
   };
 }
 
 // ── Test-only reset ───────────────────────────────────────────────────────────
 
-/**
- * @internal Test-only reset. Do not call in production code.
- *
- * Resets all module-level state to its initial values so that each test can
- * start from a clean slate without needing to reimport the module.
- */
 export function _resetForTests(): void {
+  document.querySelectorAll(".sidebar-dock-menu, .sidebar-panel-ctx-menu, .panel-dock-drop-zones").forEach((el) => el.remove());
   registeredPanels.clear();
-  slotRuntime.left  = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
-  slotRuntime.right = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
+  slotRuntime.left   = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
+  slotRuntime.right  = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
+  slotRuntime.top    = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
+  slotRuntime.bottom = { el: null, tabBarEl: null, resizeHandleEl: null, iconStripEl: null, contentAreaEl: null, cycleBtnEl: null, panelIds: [] };
   appRowEl = null;
   initialized = false;
+  runtimeLocked = null;
+  runtimeSavedLocations = null;
 }
 
-// ── Private helpers: register decomposition ───────────────────────────────────
+// ── Private helpers: slot & panel creation ────────────────────────────────────
 
-/**
- * Create the sidebar slot element (#sidebar-left or #sidebar-right) and
- * attach the resize handle. Called once per side from init().
- *
- * Width is set from persisted settings (if available) or falls back to the
- * 220 px default. The slot starts hidden (display:none) — it becomes visible
- * when a panel is registered on the side or when the user calls toggleSide().
- *
- * The created element is NOT appended to #app-row here — init() handles the
- * insertion order so the left slot always precedes #editor and #editor
- * always precedes the right slot.
- *
- * @param side  The sidebar side being initialised.
- */
-function _createSlotElement(side: "left" | "right"): void {
+function _createSlotElement(side: DockSide): void {
   const runtime = slotRuntime[side];
 
   const slotEl = document.createElement("div");
-  slotEl.id = side === "left" ? "sidebar-left" : "sidebar-right";
+  slotEl.id = `sidebar-${side}`;
 
   const settings = getCurrentSettings();
-  const persistedWidth = settings.sidebar?.[side]?.width;
-  const width = persistedWidth ?? 220;
-  slotEl.style.width = `${width}px`;
+  if (side === "left" || side === "right") {
+    const persistedWidth = settings.sidebar?.[side]?.width;
+    const width = persistedWidth ?? 220;
+    slotEl.style.width = `${width}px`;
+  } else {
+    const persistedHeight = settings.sidebar?.[side]?.height;
+    const height = persistedHeight ?? DEFAULT_DOCK_HEIGHT;
+    slotEl.style.height = `${height}px`;
+  }
   slotEl.style.display = "none";
 
-  // Icon strip — fixed-width column on the outer edge.
-  // Default: ghost (opacity 0, 25px). Hover: 30% opacity hint.
-  // Click on the strip → expand to full width. Click on background → collapse.
   const iconStripEl = document.createElement("div");
   iconStripEl.className = "sidebar-icon-strip";
   iconStripEl.addEventListener("click", (e) => {
@@ -778,12 +1088,10 @@ function _createSlotElement(side: "left" | "right"): void {
   });
   slotEl.appendChild(iconStripEl);
 
-  // Content area — holds the tab bar, panel wrappers, and resize handle.
   const contentAreaEl = document.createElement("div");
   contentAreaEl.className = "sidebar-content-area";
   slotEl.appendChild(contentAreaEl);
 
-  // Attach resize handle inside contentAreaEl so it positions relative to it.
   const handle = _attachResizeHandle(side, slotEl, contentAreaEl);
 
   runtime.el = slotEl;
@@ -793,37 +1101,19 @@ function _createSlotElement(side: "left" | "right"): void {
   runtime.resizeHandleEl = handle;
 }
 
-/**
- * Build the .sidebar-panel-wrapper DOM subtree for one panel registration.
- *
- * Creates the accordion header (title label + move button + chevron toggle
- * button), the content container div, wires the toggle click handler, and
- * inserts the wrapper into the sidebar slot before the resize handle so the
- * handle stays the last child.
- *
- * The `side` parameter is the resolved effectiveSide — it may differ from
- * descriptor.side when the user has previously moved the panel via movePanel().
- *
- * @param descriptor  The panel descriptor providing id, title, render/destroy.
- * @param side        The sidebar side into which the wrapper should be inserted.
- * @returns           The created wrapperEl and contentEl.
- */
 function _buildPanelWrapper(
   descriptor: SidebarPanelDescriptor,
-  side: "left" | "right"
+  side: DockSide
 ): { wrapperEl: HTMLDivElement; contentEl: HTMLDivElement } {
   const runtime = slotRuntime[side];
 
-  // Outer wrapper carries data-panel-id so tests and CSS can address it.
   const wrapperEl = document.createElement("div");
   wrapperEl.className = "sidebar-panel-wrapper";
   wrapperEl.dataset.panelId = descriptor.id;
 
-  // Accordion header row: drag-handle (icon + title) + chevron toggle button.
   const headerEl = document.createElement("div");
   headerEl.className = "sidebar-panel-header";
 
-  // Single drag handle wrapping both icon and title — grabbing either grabs both.
   const dragHandleEl = document.createElement("span");
   dragHandleEl.className = "sidebar-panel-drag-handle";
 
@@ -841,25 +1131,24 @@ function _buildPanelWrapper(
   titleEl.textContent = descriptor.title;
   dragHandleEl.appendChild(titleEl);
 
-  // Move button — reassigns the panel to the opposite sidebar side when clicked.
-  // Positioned between the title label and the accordion chevron so it is easy
-  // to discover without interfering with the collapse action.
+  // 4-way dock position button: inline SVG icon that opens the 4-way dock menu.
   const moveBtn = document.createElement("button");
   moveBtn.className = "sidebar-move-btn";
-  moveBtn.setAttribute("aria-label", "Move panel to other sidebar");
-  moveBtn.textContent = "⇄";
-  moveBtn.addEventListener("click", () => movePanel(descriptor.id));
+  moveBtn.setAttribute("aria-label", "Dock panel position");
+  moveBtn.setAttribute("aria-haspopup", "menu");
+  moveBtn.innerHTML = DOCK_POSITION_SVG;
+  moveBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    _toggleDockMenu(descriptor.id, moveBtn);
+  });
 
   const toggleBtn = document.createElement("button");
   toggleBtn.className = "sidebar-accordion-toggle";
   toggleBtn.setAttribute("aria-label", "Toggle panel");
-  // Start expanded; aria-expanded drives the CSS chevron rotation (step_03).
   toggleBtn.setAttribute("aria-expanded", "true");
 
   headerEl.appendChild(dragHandleEl);
 
-  // Optional header action buttons (e.g. "+" on the Properties panel).
-  // Rendered after the title, before the move/toggle buttons.
   if (descriptor.headerActions) {
     for (const action of descriptor.headerActions) {
       const actionBtn = document.createElement("button");
@@ -873,73 +1162,142 @@ function _buildPanelWrapper(
       actionBtn.title = action.title;
       actionBtn.setAttribute("aria-label", action.title);
       actionBtn.addEventListener("click", (e) => {
-        e.stopPropagation(); // prevent accordion toggle
+        e.stopPropagation();
         action.onClick();
       });
       headerEl.appendChild(actionBtn);
     }
   }
 
-  headerEl.appendChild(moveBtn);   // between title and accordion chevron
+  headerEl.appendChild(moveBtn);
   headerEl.appendChild(toggleBtn);
   wrapperEl.appendChild(headerEl);
 
-  // The content container is the div passed to render() / destroy().
   const contentEl = document.createElement("div");
   contentEl.className = "sidebar-panel-content";
   wrapperEl.appendChild(contentEl);
 
-  // Insert into contentAreaEl before the resize handle so the handle stays last.
   if (runtime.resizeHandleEl) {
     runtime.contentAreaEl!.insertBefore(wrapperEl, runtime.resizeHandleEl);
   } else {
     runtime.contentAreaEl!.appendChild(wrapperEl);
   }
 
-  // Wire accordion toggle click → _handleAccordionToggle.
   toggleBtn.addEventListener("click", () => _handleAccordionToggle(descriptor.id));
 
-  // Right-click on panel header → pin/unpin context menu.
   headerEl.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     _showPanelContextMenu(descriptor.id, e.clientX, e.clientY);
   });
 
-  // Drag the icon-or-title (the whole drag handle) to reorder this panel.
   attachPanelReorderDrag(
     dragHandleEl,
     descriptor.id,
-    `#sidebar-${side} .sidebar-panel-wrapper[data-panel-id]`,
-    (fromId, insertBeforeId) => _reorderPanel(side, fromId, insertBeforeId),
+    () => {
+      const currentSide = registeredPanels.get(descriptor.id)?.effectiveSide ?? side;
+      return `#sidebar-${currentSide} .sidebar-panel-wrapper[data-panel-id]`;
+    },
+    (fromId, insertBeforeId) => {
+      const currentSide = registeredPanels.get(fromId)?.effectiveSide ?? side;
+      _reorderPanel(currentSide, fromId, insertBeforeId);
+    },
+    {
+      getCurrentSide: () => registeredPanels.get(descriptor.id)?.effectiveSide ?? side,
+      onDockMove: (fromId, targetSide) => movePanelToSide(fromId, targetSide),
+      isLocked: () => isPanelPositionsLocked(),
+    },
   );
 
   return { wrapperEl, contentEl };
 }
 
 /**
- * Restore the accordion open/closed state from persisted settings for a panel
- * that was just registered. Defaults to expanded when no persisted state exists.
- *
- * @param panelId  The panel whose accordion state should be restored.
- * @param side     The sidebar side the panel was registered on.
+ * Open or close the compact 4-way dock selector popover menu anchored to `anchorBtn`.
  */
-function _restoreAccordionFromSettings(panelId: string, side: "left" | "right"): void {
+function _toggleDockMenu(panelId: string, anchorBtn: HTMLElement): void {
+  if (isPanelPositionsLocked()) {
+    document.querySelectorAll(".sidebar-dock-menu").forEach((el) => el.remove());
+    return;
+  }
+
+  const existing = document.querySelector<HTMLElement>(".sidebar-dock-menu");
+  if (existing) {
+    const wasSamePanel = existing.dataset.panelId === panelId;
+    existing.remove();
+    if (wasSamePanel) return;
+  }
+
+  const panel = registeredPanels.get(panelId);
+  if (!panel) return;
+
+  const currentSide = panel.effectiveSide;
+  const rect = anchorBtn.getBoundingClientRect();
+
+  const menu = document.createElement("div");
+  menu.className = "sidebar-dock-menu";
+  menu.setAttribute("role", "menu");
+  menu.dataset.panelId = panelId;
+  menu.style.left = `${rect.left}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+
+  const options: Array<{ side: DockSide; label: string }> = [
+    { side: "left", label: "Left" },
+    { side: "right", label: "Right" },
+    { side: "top", label: "Top" },
+    { side: "bottom", label: "Bottom" },
+  ];
+
+  const closeMenu = (): void => {
+    menu.remove();
+    document.removeEventListener("mousedown", onOutsideMouseDown);
+    document.removeEventListener("keydown", onEscapeKey);
+  };
+
+  function onOutsideMouseDown(e: MouseEvent): void {
+    const target = e.target as Node | null;
+    if (target && !menu.contains(target) && !anchorBtn.contains(target)) {
+      closeMenu();
+    }
+  }
+
+  function onEscapeKey(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      closeMenu();
+    }
+  }
+
+  for (const opt of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const isCurrent = opt.side === currentSide;
+    btn.className = "sidebar-dock-menu-item" + (isCurrent ? " active is-active" : "");
+    btn.setAttribute("role", "menuitemradio");
+    btn.setAttribute("aria-checked", String(isCurrent));
+    btn.dataset.side = opt.side;
+    btn.dataset.dockSide = opt.side;
+    btn.textContent = opt.label;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeMenu();
+      movePanelToSide(panelId, opt.side);
+    });
+    menu.appendChild(btn);
+  }
+
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    document.addEventListener("mousedown", onOutsideMouseDown);
+    document.addEventListener("keydown", onEscapeKey);
+  }, 0);
+}
+
+function _restoreAccordionFromSettings(panelId: string, side: DockSide): void {
   const settings = getCurrentSettings();
   const panelState = settings.sidebar?.[side]?.panels?.[panelId];
-  // Default to expanded (true) for panels with no persisted state.
   const expanded = panelState?.accordionExpanded ?? true;
   _setAccordionState(panelId, expanded, /* persist= */ false);
 }
 
-/**
- * Invoke the panel's destroy() callback and remove the wrapper from the DOM.
- *
- * EC-14: destroy() is called inside try/catch — errors are logged but do not
- * prevent the DOM removal from proceeding.
- *
- * @param panel    The registered panel record.
- * @param panelId  The panel id (used in error messages).
- */
 function _destroyPanelDOM(panel: RegisteredPanel, panelId: string): void {
   try {
     panel.descriptor.destroy(panel.contentEl);
@@ -947,37 +1305,24 @@ function _destroyPanelDOM(panel: RegisteredPanel, panelId: string): void {
     console.error(`[SidebarManager] destroy() threw for panel "${panelId}":`, err);
   }
 
-  // Remove the wrapper element and its children from the DOM.
   panel.wrapperEl.remove();
 }
 
-/**
- * Persist sidebar state after a panel has been unregistered.
- *
- * If no panels remain on the side the slot settings are cleared (EC-5).
- * If panels remain and the removed panel was the active one, switch to the
- * first remaining panel first (EC-4).
- *
- * @param side      The sidebar side.
- * @param runtime   The slot runtime (already updated: panelIds has the removed panel filtered out).
- * @param wasActive True if the removed panel was the currently-active tab.
- */
 function _persistAfterUnregister(
-  side: "left" | "right",
+  side: DockSide,
   runtime: SlotRuntime,
   wasActive: boolean
 ): void {
   if (runtime.panelIds.length === 0) {
-    // Last panel removed from this side. With the eager-slot design the DOM
-    // element stays in the DOM (empty, hidden). Only the tab bar is removed
-    // (already handled by _reconcileTabBar above). Update settings to reflect
-    // the empty, closed state without touching runtime.el or resizeHandleEl.
-    runtime.tabBarEl = null; // _reconcileTabBar already removed it from DOM
+    runtime.tabBarEl = null;
+    if ((side === "top" || side === "bottom") && runtime.el) {
+      runtime.el.style.display = "none";
+    }
 
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
         open: false,
         activeTabId: null,
         panels: {},
@@ -985,14 +1330,13 @@ function _persistAfterUnregister(
     }));
   } else {
     if (wasActive) {
-      // EC-4: removed panel was active — switch to the first remaining panel.
       _setActivePanel(side, runtime.panelIds[0], /* persist= */ true);
     }
 
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
         activeTabId: _getActiveTabId(side),
         panels: _buildPanelsRecord(side),
       }),
@@ -1000,28 +1344,10 @@ function _persistAfterUnregister(
   }
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────────
+// ── Private helpers: resize handle ────────────────────────────────────────────
 
-/**
- * Build and attach the drag-to-resize handle for a sidebar slot.
- *
- * The handle is a thin absolutely-positioned div on the interior edge of the
- * slot. CSS (sidebar.css) positions it at right:0 for #sidebar-left and
- * left:0 for #sidebar-right.
- *
- * Clamping: new width is clamped to [MIN_WIDTH, MAX_WIDTH] on every
- * pointermove event (EC-15, EC-16).
- *
- * Persistence: width is written to memory (updateSettingsInMemory) during
- * the drag for performance (NFR-4), then durably saved with
- * saveSettingsDebounced() on pointerup.
- *
- * @param side    Which sidebar side this handle belongs to.
- * @param slotEl  The sidebar slot div to which the handle is appended.
- * @returns       The created handle element.
- */
 function _attachResizeHandle(
-  side: "left" | "right",
+  side: DockSide,
   slotEl: HTMLDivElement,
   contentAreaEl: HTMLDivElement
 ): HTMLDivElement {
@@ -1030,54 +1356,69 @@ function _attachResizeHandle(
   handle.dataset.side = side;
   contentAreaEl.appendChild(handle);
 
-  let startX = 0;
-  let startWidth = 0;
+  const isHorizontalSide = side === "left" || side === "right";
+  let startCoord = 0;
+  let startSize = 0;
+  let isResizing = false;
   const MIN_WIDTH = 150;
   const MAX_WIDTH = 600;
+  const MIN_HEIGHT = 120;
+  const MAX_HEIGHT = 450;
 
-  /**
-   * Capture the drag start position and initial sidebar width so that
-   * subsequent pointermove events can compute a delta relative to drag origin.
-   */
   function onPointerDown(e: PointerEvent): void {
+    if (isPanelPositionsLocked()) return;
     e.preventDefault();
+    isResizing = true;
     handle.setPointerCapture(e.pointerId);
-    startX = e.clientX;
-    // offsetWidth reflects the rendered pixel width at drag start.
-    startWidth = slotEl.offsetWidth;
+    if (isHorizontalSide) {
+      startCoord = e.clientX;
+      startSize = slotEl.offsetWidth;
+    } else {
+      startCoord = e.clientY;
+      startSize = slotEl.offsetHeight || parseInt(slotEl.style.height, 10) || DEFAULT_DOCK_HEIGHT;
+    }
   }
 
-  /**
-   * Compute the new clamped width and apply it to the sidebar on each move.
-   *
-   * Left sidebar grows rightward (+delta); right sidebar grows leftward
-   * (-delta), so the sign is flipped for the right side. Width is clamped
-   * to [MIN_WIDTH, MAX_WIDTH] on every event (EC-15, EC-16).
-   */
   function onPointerMove(e: PointerEvent): void {
-    if (!handle.hasPointerCapture(e.pointerId)) return;
-    const delta = side === "left" ? e.clientX - startX : startX - e.clientX;
-    const newWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta));
-    slotEl.style.width = `${newWidth}px`;
+    if (isPanelPositionsLocked() || !isResizing || !handle.hasPointerCapture(e.pointerId)) return;
 
-    // Update in memory only during drag (NFR-4 — debounce for high-frequency).
-    updateSettingsInMemory((s) => ({
-      ...s,
-      sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
-        width: newWidth,
-      }),
-    }));
+    if (isHorizontalSide) {
+      const delta = side === "left" ? e.clientX - startCoord : startCoord - e.clientX;
+      const newWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startSize + delta));
+      slotEl.style.width = `${newWidth}px`;
+
+      updateSettingsInMemory((s) => ({
+        ...s,
+        sidebar: _buildSidebarSettings(s.sidebar, side, {
+          ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
+          width: newWidth,
+        }),
+      }));
+    } else {
+      const delta = side === "top" ? e.clientY - startCoord : startCoord - e.clientY;
+      const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startSize + delta));
+      slotEl.style.height = `${newHeight}px`;
+
+      updateSettingsInMemory((s) => ({
+        ...s,
+        sidebar: _buildSidebarSettings(s.sidebar, side, {
+          ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
+          height: newHeight,
+        }),
+      }));
+    }
   }
 
-  /**
-   * Release pointer capture and durably persist the final width on drag end.
-   */
   function onPointerUp(e: PointerEvent): void {
-    if (!handle.hasPointerCapture(e.pointerId)) return;
+    if (!isResizing || !handle.hasPointerCapture(e.pointerId)) {
+      isResizing = false;
+      return;
+    }
+    isResizing = false;
     handle.releasePointerCapture(e.pointerId);
-    // Persist on drag end using debounced save (NFR-4).
-    saveSettingsDebounced();
+    if (!isPanelPositionsLocked()) {
+      saveSettingsDebounced();
+    }
   }
 
   handle.addEventListener("pointerdown", onPointerDown);
@@ -1087,30 +1428,18 @@ function _attachResizeHandle(
   return handle;
 }
 
-/**
- * Reconcile panel display for a side after registration / unregistration.
- *
- * Stacked mode: no tab bar exists. All non-iconized panels are shown vertically.
- * Each panel has its own accordion header (panel title + collapse chevron).
- * Iconized panels are hidden — only their icon strip button remains.
- *
- * @param side  The sidebar side to reconcile.
- */
-function _reconcileTabBar(side: "left" | "right"): void {
+function _reconcileTabBar(side: DockSide): void {
   const runtime = slotRuntime[side];
 
-  // Strip any leftover tab bar (this build no longer uses one).
   runtime.tabBarEl?.remove();
   runtime.tabBarEl = null;
   runtime.contentAreaEl?.classList.remove("has-tab-bar");
 
-  // Null out stale tabEl refs so _setActivePanel never touches a detached node.
   runtime.panelIds.forEach((id) => {
     const p = registeredPanels.get(id);
     if (p) p.tabEl = null;
   });
 
-  // Show all non-iconized panels.
   runtime.panelIds.forEach((id) => {
     const panel = registeredPanels.get(id);
     if (!panel) return;
@@ -1119,17 +1448,8 @@ function _reconcileTabBar(side: "left" | "right"): void {
   });
 }
 
-/**
- * Reorder a panel within its side's stack. Updates `panelIds`, reorders DOM
- * children of `contentAreaEl`, and persists the new order to settings.
- *
- * @param side            Sidebar side.
- * @param fromId          Panel being moved.
- * @param insertBeforeId  Panel id the moved panel should be inserted before;
- *                        null means drop at the end of the stack.
- */
 function _reorderPanel(
-  side: "left" | "right",
+  side: DockSide,
   fromId: string,
   insertBeforeId: string | null,
 ): void {
@@ -1137,10 +1457,9 @@ function _reorderPanel(
   const fromIdx = runtime.panelIds.indexOf(fromId);
   if (fromIdx < 0) return;
 
-  // Compute new index in the panelIds array.
   let toIdx: number;
   if (insertBeforeId === null) {
-    toIdx = runtime.panelIds.length - 1; // end of list (after removal)
+    toIdx = runtime.panelIds.length - 1;
   } else {
     const beforeIdx = runtime.panelIds.indexOf(insertBeforeId);
     if (beforeIdx < 0) return;
@@ -1148,11 +1467,9 @@ function _reorderPanel(
   }
   if (toIdx === fromIdx) return;
 
-  // Reorder panelIds: remove and re-insert.
   runtime.panelIds.splice(fromIdx, 1);
   runtime.panelIds.splice(toIdx, 0, fromId);
 
-  // Reorder DOM to match — both the stacked wrappers AND the icon strip buttons.
   const movedPanel = registeredPanels.get(fromId);
   if (movedPanel && runtime.contentAreaEl) {
     const beforeEl = insertBeforeId
@@ -1167,21 +1484,16 @@ function _reorderPanel(
     runtime.iconStripEl.insertBefore(movedPanel.iconBtnEl, beforeBtn);
   }
 
-  // Persist the new order.
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, side, {
-      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
       panelOrder: [...runtime.panelIds],
     }),
   }));
 }
 
-/**
- * Apply the persisted panelOrder for a side to both `panelIds` and the DOM.
- * Panels not in the persisted list keep their relative order at the end.
- */
-function _applyPersistedOrder(side: "left" | "right"): void {
+function _applyPersistedOrder(side: DockSide): void {
   const runtime = slotRuntime[side];
   const persisted = getCurrentSettings().sidebar?.[side]?.panelOrder;
   if (!persisted || persisted.length === 0) return;
@@ -1195,7 +1507,6 @@ function _applyPersistedOrder(side: "left" | "right"): void {
 
   runtime.panelIds = ordered;
 
-  // Reorder DOM — both the stacked panel wrappers and the icon-strip buttons.
   for (const id of ordered) {
     const panel = registeredPanels.get(id);
     if (!panel) continue;
@@ -1208,18 +1519,8 @@ function _applyPersistedOrder(side: "left" | "right"): void {
   }
 }
 
-/**
- * Update display of all panels on the side. In stacked mode every non-iconized
- * panel is visible — `panelId` is no longer used to choose a single visible
- * panel, but it is still persisted as `activeTabId` so other code paths that
- * read it (e.g. focus restoration) keep working.
- *
- * @param side      The sidebar side.
- * @param panelId   The panel id to record as "active" in settings.
- * @param persist   If true, write activeTabId to settings immediately.
- */
 function _setActivePanel(
-  side: "left" | "right",
+  side: DockSide,
   panelId: string,
   persist: boolean
 ): void {
@@ -1236,42 +1537,21 @@ function _setActivePanel(
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
         activeTabId: panelId,
       }),
     }));
   }
 }
 
-/**
- * Handle a click on the accordion toggle chevron button.
- *
- * Reads the current collapsed/expanded state from contentEl.style.display
- * and flips it. Persists the new state to settings.
- *
- * @param panelId  The panel whose chevron was clicked.
- */
 function _handleAccordionToggle(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
-  // If display is "none" the panel is currently collapsed — expand it.
-  // Otherwise it is expanded — collapse it.
   const expanded = panel.contentEl.style.display === "none";
   _setAccordionState(panelId, expanded, /* persist= */ true);
 }
 
-/**
- * Apply accordion state (expanded / collapsed) to a panel.
- *
- * The chevron direction is driven entirely by the aria-expanded attribute
- * on the toggle button — no JavaScript-driven class toggling needed (step_03
- * CSS uses the attribute selector).
- *
- * @param panelId   The panel to update.
- * @param expanded  True = content visible; false = content hidden.
- * @param persist   If true, write accordionExpanded to settings immediately.
- */
 function _setAccordionState(
   panelId: string,
   expanded: boolean,
@@ -1280,24 +1560,18 @@ function _setAccordionState(
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
-  // Show or hide the content area.
   panel.contentEl.style.display = expanded ? "" : "none";
 
-  // Rotate the chevron via aria-expanded (CSS transform in sidebar.css).
   panel.wrapperEl
     .querySelector(".sidebar-accordion-toggle")
     ?.setAttribute("aria-expanded", String(expanded));
 
   if (persist) {
-    // Use effectiveSide — not descriptor.side — because the user may have
-    // moved this panel via movePanel() after initial registration. Writing to
-    // descriptor.side after a move would save the state to the old (wrong) side
-    // slot, causing the accordion state to be lost on next restart.
     const side = panel.effectiveSide;
     updateSettings((s) => ({
       ...s,
       sidebar: _buildSidebarSettings(s.sidebar, side, {
-        ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+        ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
         panels: {
           ...(s.sidebar?.[side]?.panels ?? {}),
           [panelId]: { accordionExpanded: expanded },
@@ -1307,15 +1581,6 @@ function _setAccordionState(
   }
 }
 
-/**
- * Call the panel's render() callback inside a try/catch.
- *
- * If render() throws, an error placeholder div (.sidebar-panel-error) is
- * shown inside the content container so the user sees something informative
- * rather than a blank area (EC-13).
- *
- * @param panelId  The panel to render.
- */
 function _renderPanel(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
@@ -1332,36 +1597,20 @@ function _renderPanel(panelId: string): void {
   }
 }
 
-/**
- * Return the currently-active panel id for a side, or null if no panels exist.
- *
- * Used when building the settings object to persist after registration or
- * tab switching.
- *
- * @param side  The sidebar side to query.
- * @returns     The active panelId, or null if the side has no panels.
- */
-function _getActiveTabId(side: "left" | "right"): string | null {
+function _getActiveTabId(side: DockSide): string | null {
   const runtime = slotRuntime[side];
   if (runtime.panelIds.length === 0) return null;
 
-  // Find the first panel whose wrapperEl is not hidden (display !== "none").
   const activeId = runtime.panelIds.find((id) => {
     const p = registeredPanels.get(id);
     return p && p.wrapperEl.style.display !== "none";
   });
 
-  // Fall back to the first panel if no visible wrapper found.
   return activeId ?? runtime.panelIds[0];
 }
 
 // ── Private helpers: icon strip ───────────────────────────────────────────────
 
-/**
- * Show a minimal right-click context menu on a panel header.
- * Currently offers only Pin / Unpin — the one action not reachable from the
- * panel chrome without the now-removed pin button.
- */
 function _showPanelContextMenu(panelId: string, x: number, y: number): void {
   document.querySelector(".sidebar-panel-ctx-menu")?.remove();
 
@@ -1369,53 +1618,122 @@ function _showPanelContextMenu(panelId: string, x: number, y: number): void {
   if (!panel) return;
 
   const side = panel.effectiveSide;
-  const isPinned = getCurrentSettings().sidebar?.[side]?.panels?.[panelId]?.pinned ?? false;
+  const isPinned =
+    getCurrentSettings().sidebar?.[side]?.panels?.[panelId]?.pinned ??
+    panel.wrapperEl.classList.contains("is-pinned");
+  const isLocked = isPanelPositionsLocked();
+  const presets = getPanelLocationPresets();
 
   const menu = document.createElement("ul");
   menu.className = "sidebar-panel-ctx-menu";
   menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:9999;` +
     `background:var(--bg-secondary,#252526);border:1px solid var(--border-color,rgba(128,128,128,.2));` +
-    `border-radius:6px;padding:4px 0;list-style:none;margin:0;min-width:130px;` +
+    `border-radius:6px;padding:4px 0;list-style:none;margin:0;min-width:180px;` +
     `box-shadow:0 4px 12px rgba(0,0,0,.35);`;
 
-  const item = document.createElement("li");
-  item.style.cssText = `padding:6px 14px;cursor:pointer;font-family:var(--ui-font);` +
-    `font-size:12px;color:var(--text-primary,#ccc);user-select:none;`;
-  item.textContent = isPinned ? "Unpin panel" : "Pin panel";
-  item.addEventListener("mouseenter", () => { item.style.background = "var(--code-bg,rgba(128,128,128,.1))"; });
-  item.addEventListener("mouseleave", () => { item.style.background = ""; });
-  item.addEventListener("mousedown", (e) => {
-    e.stopPropagation();
-    _handlePinToggle(panelId);
+  function closeMenu(): void {
     menu.remove();
     document.removeEventListener("mousedown", outside);
+  }
+
+  function addItem(label: string, action: string, onSelect: () => void, datasetExtra?: Record<string, string>): HTMLLIElement {
+    const li = document.createElement("li");
+    li.dataset.action = action;
+    if (datasetExtra) {
+      for (const [k, v] of Object.entries(datasetExtra)) {
+        li.dataset[k] = v;
+      }
+    }
+    li.style.cssText = `padding:6px 14px;cursor:pointer;font-family:var(--ui-font);` +
+      `font-size:12px;color:var(--text-primary,#ccc);user-select:none;display:flex;align-items:center;justify-content:space-between;gap:8px;`;
+    li.textContent = label;
+    li.addEventListener("mouseenter", () => { li.style.background = "var(--code-bg,rgba(128,128,128,.1))"; });
+    li.addEventListener("mouseleave", () => { li.style.background = ""; });
+    let fired = false;
+    const handleSelect = (e: Event) => {
+      if (fired) return;
+      fired = true;
+      e.stopPropagation();
+      onSelect();
+      closeMenu();
+    };
+    li.addEventListener("mousedown", handleSelect);
+    li.addEventListener("click", handleSelect);
+    menu.appendChild(li);
+    return li;
+  }
+
+  // First <li> must remain Pin/Unpin panel for backwards compatibility.
+  addItem(isPinned ? "Unpin panel" : "Pin panel", "toggle-pin", () => {
+    _handlePinToggle(panelId);
   });
-  menu.appendChild(item);
+
+  addItem(
+    isLocked ? "Unlock Panel Positions" : "Lock Panel Positions",
+    "toggle-lock",
+    () => {
+      togglePanelPositionsLock();
+    }
+  );
+
+  addItem("Panel Locations: Save Current…", "save-panel-locations", () => {
+    promptAndSavePanelLocationPreset();
+  });
+
+  for (const preset of presets) {
+    const row = addItem(
+      `Apply: ${preset.name}`,
+      "apply-panel-locations",
+      () => {
+        applyPanelLocationPreset(preset.name);
+      },
+      { presetName: preset.name }
+    );
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "sidebar-ctx-preset-delete";
+    delBtn.dataset.action = "delete-panel-locations";
+    delBtn.dataset.presetName = preset.name;
+    delBtn.title = `Delete preset "${preset.name}"`;
+    delBtn.setAttribute("aria-label", `Delete preset ${preset.name}`);
+    delBtn.textContent = "×";
+    delBtn.style.cssText =
+      "background:none;border:none;color:var(--text-secondary,#888);cursor:pointer;padding:0 4px;font-size:13px;line-height:1;";
+    let delFired = false;
+    const onDelete = (e: Event) => {
+      if (delFired) return;
+      delFired = true;
+      e.stopPropagation();
+      deletePanelLocationPreset(preset.name);
+      closeMenu();
+    };
+    delBtn.addEventListener("mousedown", onDelete);
+    delBtn.addEventListener("click", onDelete);
+    row.appendChild(delBtn);
+  }
+
+  addItem("Reset to Default Panel Locations", "reset-panel-locations", () => {
+    resetPanelLocationsToDefault();
+  });
+
   document.body.appendChild(menu);
 
   function outside(e: MouseEvent): void {
     if (!menu.contains(e.target as Node)) {
-      menu.remove();
-      document.removeEventListener("mousedown", outside);
+      closeMenu();
     }
   }
   setTimeout(() => document.addEventListener("mousedown", outside), 0);
 }
 
-/**
- * Build a single icon strip button for a panel.
- */
 function _buildIconButton(
   panelId: string,
-  panel: RegisteredPanel,
-  side: "left" | "right"
+  panel: RegisteredPanel
 ): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = "sidebar-icon-btn";
   btn.dataset.panelId = panelId;
 
-  // Icon priority: shared PANEL_ICONS map → descriptor.icon (legacy emoji/SVG/letter)
-  // → first letter of title. PANEL_ICONS keeps the strip and panel header in sync.
   const sharedSvg = PANEL_ICONS[panelId];
   const icon = panel.descriptor.icon;
   if (sharedSvg) {
@@ -1428,18 +1746,14 @@ function _buildIconButton(
     btn.textContent = panel.descriptor.title.charAt(0).toUpperCase();
   }
   btn.title = panel.descriptor.title;
-  btn.addEventListener("click", () => _handleIconBtnClick(side, panelId));
+  btn.addEventListener("click", () => {
+    const currentSide = registeredPanels.get(panelId)?.effectiveSide ?? panel.effectiveSide;
+    _handleIconBtnClick(currentSide, panelId);
+  });
   return btn;
 }
 
-/**
- * Handle a click on an icon strip button.
- *
- * If the panel is iconized → un-iconize and activate it.
- * If the panel is expanded and not pinned → iconize it.
- * If the panel is expanded and pinned → no-op.
- */
-function _handleIconBtnClick(side: "left" | "right", panelId: string): void {
+function _handleIconBtnClick(side: DockSide, panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
@@ -1455,13 +1769,7 @@ function _handleIconBtnClick(side: "left" | "right", panelId: string): void {
   }
 }
 
-/**
- * Set the iconized state of a panel, updating DOM and persisting to settings.
- *
- * When all panels on a side become iconized, the contentAreaEl is hidden so
- * only the icon strip remains visible.
- */
-function _setIconized(side: "left" | "right", panelId: string, iconized: boolean): void {
+function _setIconized(side: DockSide, panelId: string, iconized: boolean): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
@@ -1469,7 +1777,6 @@ function _setIconized(side: "left" | "right", panelId: string, iconized: boolean
   panel.wrapperEl.style.display = iconized ? "none" : "";
   panel.iconBtnEl?.classList.toggle("is-active", !iconized);
 
-  // Hide contentAreaEl when all panels on this side are now iconized.
   const runtime = slotRuntime[side];
   const allIconized = runtime.panelIds.every((id) => {
     if (id === panelId) return iconized;
@@ -1482,7 +1789,7 @@ function _setIconized(side: "left" | "right", panelId: string, iconized: boolean
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, side, {
-      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
       panels: {
         ...(s.sidebar?.[side]?.panels ?? {}),
         [panelId]: {
@@ -1494,12 +1801,6 @@ function _setIconized(side: "left" | "right", panelId: string, iconized: boolean
   }));
 }
 
-/**
- * Toggle the pinned state of a panel.
- *
- * A pinned panel cannot be iconized via the icon strip button. Pinned state is
- * shown via an accent dot on the icon button and by the pin button in the header.
- */
 function _handlePinToggle(panelId: string): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
@@ -1515,7 +1816,7 @@ function _handlePinToggle(panelId: string): void {
   updateSettings((s) => ({
     ...s,
     sidebar: _buildSidebarSettings(s.sidebar, side, {
-      ...(s.sidebar?.[side] ?? { ...DEFAULT_SIDEBAR_SLOT }),
+      ...(s.sidebar?.[side] ?? _defaultSlotForSide(side)),
       panels: {
         ...(s.sidebar?.[side]?.panels ?? {}),
         [panelId]: {
@@ -1527,12 +1828,7 @@ function _handlePinToggle(panelId: string): void {
   }));
 }
 
-/**
- * Restore iconized and pinned visual state from persisted settings for a panel.
- *
- * Called from register() after the icon button is created.
- */
-function _restoreIconizedFromSettings(panelId: string, side: "left" | "right"): void {
+function _restoreIconizedFromSettings(panelId: string, side: DockSide): void {
   const panel = registeredPanels.get(panelId);
   if (!panel) return;
 
@@ -1556,16 +1852,7 @@ function _restoreIconizedFromSettings(panelId: string, side: "left" | "right"): 
 
 // ── Public: iconizeNonPinnedOrToggle ──────────────────────────────────────────
 
-/**
- * Iconize all non-pinned panels on the given side.
- *
- * If all panels on the side are pinned, falls back to a full toggleSide().
- * Called by the Cmd-Shift-[ / Cmd-Shift-] keyboard shortcuts in main.ts so that
- * pinned panels remain visible when the user collapses the sidebar.
- *
- * @param side  The sidebar side to act on.
- */
-export function iconizeNonPinnedOrToggle(side: "left" | "right"): void {
+export function iconizeNonPinnedOrToggle(side: DockSide): void {
   const runtime = slotRuntime[side];
 
   if (!runtime.el || runtime.panelIds.length === 0) {
@@ -1592,18 +1879,8 @@ export function iconizeNonPinnedOrToggle(side: "left" | "right"): void {
   }
 }
 
-/**
- * Build the panels Record<string, SidebarPanelState> for persisting one side.
- *
- * Reads the current accordion state from each registered panel on the side.
- * An expanded panel (contentEl.style.display !== "none") maps to
- * accordionExpanded: true.
- *
- * @param side  The sidebar side to inspect.
- * @returns     A record suitable for SidebarSlotState.panels.
- */
 function _buildPanelsRecord(
-  side: "left" | "right"
+  side: DockSide
 ): Record<string, { accordionExpanded: boolean; iconized?: boolean; pinned?: boolean }> {
   const record: Record<string, { accordionExpanded: boolean; iconized?: boolean; pinned?: boolean }> = {};
   const runtime = slotRuntime[side];
@@ -1616,7 +1893,7 @@ function _buildPanelsRecord(
     record[id] = {
       accordionExpanded: p.contentEl.style.display !== "none",
       iconized: p.wrapperEl.classList.contains("is-iconized"),
-      pinned: existing?.pinned ?? false,
+      pinned: p.wrapperEl.classList.contains("is-pinned") || (existing?.pinned ?? false),
     };
   });
 

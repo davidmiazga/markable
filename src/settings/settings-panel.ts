@@ -19,6 +19,15 @@ import { updateRecentFilesMenu } from "../lib/bridge";
 // singleton from the tabs facade — settings-panel.ts is not a plugin so it is
 // permitted to import from the tabs module directly.
 import { tabManager } from "../tabs";
+import {
+  isPanelPositionsLocked,
+  setPanelPositionsLocked,
+  getPanelLocationPresets,
+  applyPanelLocationPreset,
+  deletePanelLocationPreset,
+  resetPanelLocationsToDefault,
+  promptAndSavePanelLocationPreset,
+} from "../sidebar";
 import { attachModalKeyboard } from "../lib/modal-keyboard";
 import { isSectionJumpLocked, scrollSectionIntoPane, sectionNearestPaneTop } from "../lib/section-jump";
 import "./settings-panel.css";
@@ -186,6 +195,22 @@ export function createSettingsPanel(): void {
           </div>
 
           <p class="settings-description">Preset sizes apply immediately and center the window. Manual remembers your last size &amp; position. Maximize overrides all.</p>
+
+          <div class="settings-sub-label" style="margin-top: 16px;">Workspace Panel-Locations</div>
+          <div class="settings-maximize-row">
+            <label class="settings-checkbox-label">
+              <input type="checkbox" id="settings-lock-panels" />
+              <span>Lock Panel Positions</span>
+            </label>
+          </div>
+          <div class="settings-row" style="margin-top: 8px; gap: 8px; flex-wrap: wrap;">
+            <select class="settings-select" id="settings-panel-locations-select" aria-label="Saved Workspace Panel-Locations">
+              <option value="">Select saved panel locations…</option>
+            </select>
+            <button type="button" class="btn btn-tertiary settings-btn-inline" id="settings-panel-locations-save">Save Current…</button>
+            <button type="button" class="btn btn-tertiary settings-btn-inline" id="settings-panel-locations-delete" disabled>Delete</button>
+            <button type="button" class="btn btn-tertiary settings-btn-inline" id="settings-panel-locations-reset">Reset to Default</button>
+          </div>
         </div>
 
         <div class="settings-section" data-section="appearance">
@@ -478,6 +503,47 @@ function wireEvents(): void {
     await updateSettings((s) => ({ ...s, editor: { ...s.editor, fullWidthPct: pct } }));
   });
 
+  // Workspace Panel-Locations controls
+  const lockPanelsCheck = panelElement.querySelector("#settings-lock-panels") as HTMLInputElement | null;
+  lockPanelsCheck?.addEventListener("change", () => {
+    setPanelPositionsLocked(lockPanelsCheck.checked);
+  });
+
+  const panelLocationsSelect = panelElement.querySelector("#settings-panel-locations-select") as HTMLSelectElement | null;
+  const panelLocationsDeleteBtn = panelElement.querySelector("#settings-panel-locations-delete") as HTMLButtonElement | null;
+  panelLocationsSelect?.addEventListener("change", () => {
+    const selected = panelLocationsSelect.value;
+    if (panelLocationsDeleteBtn) panelLocationsDeleteBtn.disabled = !selected;
+    if (selected) {
+      applyPanelLocationPreset(selected);
+    }
+  });
+
+  panelElement.querySelector("#settings-panel-locations-save")
+    ?.addEventListener("click", () => {
+      const saved = promptAndSavePanelLocationPreset();
+      if (saved) {
+        syncPanelLocationsControls(saved.name);
+      }
+    });
+
+  panelLocationsDeleteBtn?.addEventListener("click", () => {
+    const selected = panelLocationsSelect?.value;
+    if (!selected) return;
+    deletePanelLocationPreset(selected);
+    syncPanelLocationsControls("");
+  });
+
+  panelElement.querySelector("#settings-panel-locations-reset")
+    ?.addEventListener("click", () => {
+      resetPanelLocationsToDefault();
+      syncPanelLocationsControls("");
+    });
+
+  window.addEventListener("markable-panel-locations-changed", () => {
+    syncPanelLocationsControls(panelLocationsSelect?.value);
+  });
+
   // Clear recent files
   panelElement.querySelector("#settings-clear-recent")
     ?.addEventListener("click", async () => {
@@ -663,8 +729,36 @@ function syncPanelToSettings(): void {
   if (qcFallbackPath) qcFallbackPath.value = settings.quickCapture?.fallbackPath ?? "~/Documents/Markable Inbox";
 
   syncDataProtection(resolveDataProtection(settings.dataProtection));
+  syncPanelLocationsControls();
   void refreshRecoveryList();
   window.dispatchEvent(new CustomEvent("markable-data-protection"));
+}
+
+function syncPanelLocationsControls(selectedPresetName?: string): void {
+  const lockCheck = document.querySelector("#settings-lock-panels") as HTMLInputElement | null;
+  if (lockCheck) {
+    lockCheck.checked = isPanelPositionsLocked();
+  }
+
+  const select = document.querySelector("#settings-panel-locations-select") as HTMLSelectElement | null;
+  const deleteBtn = document.querySelector("#settings-panel-locations-delete") as HTMLButtonElement | null;
+  if (!select) return;
+
+  const currentSelection = selectedPresetName !== undefined ? selectedPresetName : select.value;
+  const presets = getPanelLocationPresets();
+  select.innerHTML = `<option value="">Select saved panel locations…</option>`;
+  for (const preset of presets) {
+    const opt = document.createElement("option");
+    opt.value = preset.name;
+    opt.textContent = preset.name;
+    if (preset.name === currentSelection) opt.selected = true;
+    select.appendChild(opt);
+  }
+  const hasValidSelection = presets.some((p) => p.name === currentSelection);
+  select.value = hasValidSelection ? currentSelection : "";
+  if (deleteBtn) {
+    deleteBtn.disabled = !hasValidSelection;
+  }
 }
 
 function dataProtectionFromPanel(): DataProtectionSettings {

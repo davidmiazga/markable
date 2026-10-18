@@ -98,6 +98,9 @@ import {
   initSidebar,
   restoreSidebarFromSettings,
   toggleSidebarSide,
+  togglePanelPositionsLock,
+  promptAndSavePanelLocationPreset,
+  resetPanelLocationsToDefault,
 } from "./sidebar";
 // tabManager is imported here so TabManager.init() can be called after the
 // editor and sidebar are both ready. The singleton is used directly; it is
@@ -924,6 +927,21 @@ function handleAction(action: string): void {
       break;
     case "sidebar.toggleRight":
       toggleSidebarSide("right");
+      break;
+    case "sidebar.toggleTop":
+      toggleSidebarSide("top");
+      break;
+    case "sidebar.toggleBottom":
+      toggleSidebarSide("bottom");
+      break;
+    case "sidebar.toggleLock":
+      togglePanelPositionsLock();
+      break;
+    case "sidebar.savePanelLocations":
+      promptAndSavePanelLocationPreset();
+      break;
+    case "sidebar.resetPanelLocations":
+      resetPanelLocationsToDefault();
       break;
     // vault-ux step_05: open Manage Vaults modal via window global.
     // EC-VUX-08: double-open guard lives inside openManageVaultsModal itself.

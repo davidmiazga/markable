@@ -92,8 +92,13 @@ export const COMMANDS: CommandDef[] = [
   { id: "view-toggle-focus",      label: "Focus Mode",      defaultKey: "",       section: "View" },
   { id: "view-toggle-typewriter", label: "Typewriter Mode", defaultKey: "",       section: "View" },
   { id: "view-toggle-diagrams",   label: "Diagrams",        defaultKey: "",       section: "View" },
-  { id: "sidebar.toggleLeft",  label: "Toggle Left Sidebar",  defaultKey: "Cmd-Shift-[", section: "View" },
-  { id: "sidebar.toggleRight", label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
+  { id: "sidebar.toggleLeft",   label: "Toggle Left Sidebar",  defaultKey: "Cmd-Shift-[", section: "View" },
+  { id: "sidebar.toggleRight",  label: "Toggle Right Sidebar", defaultKey: "Cmd-Shift-]", section: "View" },
+  { id: "sidebar.toggleTop",    label: "Toggle Top Dock",      defaultKey: "",            section: "View" },
+  { id: "sidebar.toggleBottom", label: "Toggle Bottom Dock",   defaultKey: "",            section: "View" },
+  { id: "sidebar.toggleLock",         label: "Lock Panel Positions",             defaultKey: "", section: "View" },
+  { id: "sidebar.savePanelLocations", label: "Panel Locations: Save Current…",   defaultKey: "", section: "View" },
+  { id: "sidebar.resetPanelLocations", label: "Panel Locations: Reset to Default", defaultKey: "", section: "View" },
   // PKM Step 02a: File Browser panel toggle — no default key yet; remap via Keyboard Shortcuts.
   { id: "file-browser-toggle", label: "File Browser: Toggle Panel", defaultKey: "", section: "View" },
   // vault-ux step_05: Manage Vaults entry point — no default key; user binds via Keyboard Shortcuts.
