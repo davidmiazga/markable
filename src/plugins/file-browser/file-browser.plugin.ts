@@ -2099,7 +2099,7 @@ function buildTreeUl(
       badge.className = "tree-node-fv-badge";
       badge.setAttribute("aria-hidden", "true");
       badge.innerHTML = wrapSvg(ICON_VISIBILITY, 16);
-      badge.title = "Open folder view";
+      badge.title = "Open dashboard";
       badge.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
         // Folder badge → open the folder view (same as clicking the row).
@@ -2142,7 +2142,7 @@ function buildTreeUl(
       viewBadge.className = "tree-node-fv-badge";
       viewBadge.setAttribute("aria-hidden", "true");
       viewBadge.innerHTML = wrapSvg(ICON_VISIBILITY, 16);
-      viewBadge.title = "Open folder view";
+      viewBadge.title = "Open dashboard";
       viewBadge.addEventListener("click", (e: MouseEvent) => {
         e.stopPropagation();
         const sep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -3752,13 +3752,13 @@ function buildDirContextMenuItems(
     // the file (deleteFile shows a confirm prompt).
     hasFolderView
       ? {
-          label: "Remove Folder View",
+          label: "Remove Dashboard",
           handler: () => {
             void deleteFile(folderMdPath, container ?? document.createElement("div"));
           },
         }
       : {
-          label: "Folder View",
+          label: "Dashboard",
           // step_05 (view-modal): replaces the four-template picker with
           // the Unified View Modal (six layout tabs, single config row).
           // The legacy `openFolderViewPicker` is deleted in step_08 once
@@ -3815,7 +3815,7 @@ function buildDirContextMenuItems(
       handler: () => _pinnedPaths.has(path) ? unpinPath(path, vaultId) : pinPath(path, vaultId),
     },
     {
-      label: "Folder dashboard",
+      label: "Browse folder",
       handler: () => openFileDashboard(path),
     },
     { separator: true, label: "", handler: null },
@@ -3851,6 +3851,20 @@ function buildDirContextMenuItems(
 }
 
 // ── Unified View Modal helpers (step_05) ─────────────────────────────────────
+
+/** Open an existing dashboard, or the layout dialog when the folder has none. */
+function openDashboard(folderPath: string): void {
+  const folder = folderPath.replace(/[\\/]+$/, "");
+  if (!folder) return;
+  const folderMdPath = `${folder}/_folder.md`;
+  const entries = (window as any).__MARKABLE_VAULT_MANAGER__?.getVaultIndex?.()?.entries ?? [];
+  const indexed = entries.some((entry: { path?: string }) => entry.path === folderMdPath);
+  if (indexed || _lastFolderViewSet.has(folder)) {
+    openFolderViewTab(folder);
+    return;
+  }
+  void openUnifiedViewModalForFolder(folder);
+}
 
 /**
  * Open the Unified View Modal targeting `folderPath` (step_05).
@@ -5114,7 +5128,7 @@ function makePanelDescriptor(): SidebarPanelDescriptor {
         id: "file-browser-folder-dashboard",
         icon: "",
         iconHTML: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>`,
-        title: "Folder dashboard",
+        title: "Browse folder",
         onClick: () => openFileDashboard(),
       },
       {
@@ -5195,6 +5209,7 @@ const plugin = {
     // call openFolderViewTab without a direct import (circular dep guard AD-10).
     // Accepts optional second argument: viewFilePath for non-_folder.md view files.
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = openFolderViewTab;
+    (window as any).__MARKABLE_OPEN_DASHBOARD__ = openDashboard;
 
     setupVaultSubscriptions((window as any).__MARKABLE_VAULT_MANAGER__);
 
@@ -5331,6 +5346,7 @@ const plugin = {
     // EC-15: null out the global so renderer card handlers become no-ops after
     // disable. The registry no longer exists (deleted in tab.ts refactor).
     (window as any).__MARKABLE_OPEN_FOLDER_VIEW_TAB__ = null;
+    (window as any).__MARKABLE_OPEN_DASHBOARD__ = null;
     /* _selectedFolderPath is already cleared above (after nulling the global). */
   },
 };

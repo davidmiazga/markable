@@ -262,7 +262,7 @@ describe("file browser menus", () => {
     const dir = document.createElement("div");
     const dirItems = _testing.buildDirContextMenuItems(dir, "/vault/A", "vault-1", false);
     const labels = dirItems.map((item) => item.label);
-    expect(labels).toContain("Folder dashboard");
+    expect(labels).toContain("Browse folder");
     expect(labels.indexOf("Pin")).toBe(labels.indexOf("Delete") + 1);
     const visible = dirItems.filter((item) => !item.separator);
     expect(visible[visible.length - 1]?.label).toBe("Reveal in Finder");

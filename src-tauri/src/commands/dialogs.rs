@@ -234,3 +234,31 @@ pub async fn open_folder_dialog(
         format!("Folder dialog failed: {}", e)
     })
 }
+
+/// Save file dialog for exporting the open note as PDF.
+///
+/// Same channel pattern as `save_html_dialog`, with a PDF filter.
+#[tauri::command]
+pub async fn save_pdf_dialog(
+    app: tauri::AppHandle,
+    suggested_filename: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = mpsc::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .add_filter("All Files", &["*"])
+        .set_file_name(&suggested_filename)
+        .save_file(move |path| {
+            let path_string = path.map(|p| p.to_string());
+            let _ = tx.send(path_string);
+        });
+
+    rx.recv().map_err(|e| {
+        eprintln!("save_pdf_dialog error: {}", e);
+        format!("File dialog failed: {}", e)
+    })
+}

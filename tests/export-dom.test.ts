@@ -19,7 +19,7 @@
  * holds a direct module-scope reference. We therefore verify observable DOM
  * side-effects instead:
  *   - HTML path: saveHtmlDialog (bridge) is called (mocked at the top of this file).
- *   - PDF path: window.print() is called (stubbed via vi.stubGlobal).
+ *   - PDF path: savePdfDialog is called. window.print() is not.
  *   - Cancel path: neither is called.
  */
 
@@ -34,6 +34,9 @@ import { printDocument, openExportDialog } from "../src/lib/export";
 // ---------------------------------------------------------------------------
 vi.mock("../src/lib/bridge", () => ({
   saveHtmlDialog: vi.fn().mockResolvedValue({ cancelled: true }),
+  savePdfDialog: vi.fn().mockResolvedValue({ cancelled: true }),
+  renderHtmlPdf: vi.fn(),
+  writeBinaryFile: vi.fn(),
   writeFile: vi.fn(),
   readFile: vi.fn(),
   openFileDialog: vi.fn(),
@@ -45,7 +48,7 @@ vi.mock("../src/lib/bridge", () => ({
 }));
 
 // Import the mocked saveHtmlDialog so tests can assert on it.
-import { saveHtmlDialog } from "../src/lib/bridge";
+import { saveHtmlDialog, savePdfDialog, writeBinaryFile } from "../src/lib/bridge";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -100,9 +103,11 @@ describe("printDocument", () => {
   });
 
   // Happy path: window.print() must be called exactly once
-  it("calls window.print() with a non-null editor", () => {
+  it("calls window.print() with a non-null editor and does not write a PDF", () => {
     printDocument(makeEditor("# Hello"));
     expect(window.print).toHaveBeenCalledOnce();
+    expect(savePdfDialog).not.toHaveBeenCalled();
+    expect(writeBinaryFile).not.toHaveBeenCalled();
   });
 
   // EC-15: finally block must remove both DOM elements after successful print
@@ -155,10 +160,8 @@ describe("openExportDialog", () => {
    *   We assert that saveHtmlDialog was called — this is the observable side-effect
    *   that proves exportAsHtml was invoked.
    *
-   *   PDF path: The sheet resolves "pdf" → openExportDialog calls printDocument
-   *   internally. We stub window.print (happy-dom doesn't define it) and assert
-   *   it was called — this is the observable side-effect that proves printDocument
-   *   ran.
+   *   PDF path: The sheet resolves "pdf" → openExportDialog calls exportAsPdf.
+   *   We assert savePdfDialog was called and window.print was not.
    *
    *   Cancel path: Neither saveHtmlDialog nor window.print is called.
    */
@@ -236,12 +239,10 @@ describe("openExportDialog", () => {
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  // PDF format: select PDF radio then click Export → printDocument
-  // Observable side-effect: window.print() is called.
-  it("PDF format → calls printDocument (window.print is called)", async () => {
+  // PDF format: select PDF radio then click Export → save dialog, not print.
+  it("PDF format → asks for a save path and does not call window.print", async () => {
     const promise = openExportDialog(makeEditor("hello"), "/tmp/file.md");
 
-    // Switch to PDF radio before clicking Export.
     const pdfRadio = document.querySelector<HTMLInputElement>(
       "input[type='radio'][value='pdf']"
     );
@@ -252,7 +253,8 @@ describe("openExportDialog", () => {
     exportBtn.click();
     await promise;
 
-    expect(window.print).toHaveBeenCalledOnce();
+    expect(savePdfDialog).toHaveBeenCalledWith("file.pdf");
+    expect(window.print).not.toHaveBeenCalled();
     expect(saveHtmlDialog).not.toHaveBeenCalled();
   });
 

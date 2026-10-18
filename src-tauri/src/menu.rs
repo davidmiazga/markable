@@ -227,6 +227,7 @@ pub fn build_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "View",
         true,
         &[
+            &MenuItem::with_id(handle, "view-dashboard", "Dashboard", true, None::<&str>)?,
             &MenuItem::with_id(
                 handle,
                 "view-toggle-preview",

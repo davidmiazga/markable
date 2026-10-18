@@ -27,12 +27,20 @@ import {
   markdownToHtml,
   buildStandaloneHtml,
   exportAsHtml,
+  exportAsPdf,
+  derivePdfFilename,
+  enforcePdfExtension,
+  stripFrontMatter,
+  buildPdfHtml,
 } from "../src/lib/export";
-import { saveHtmlDialog, writeFile } from "../src/lib/bridge";
+import { renderHtmlPdf, saveHtmlDialog, savePdfDialog, writeBinaryFile, writeFile } from "../src/lib/bridge";
 
 // Mock the entire bridge module so no Tauri invoke calls are made during tests.
 vi.mock("../src/lib/bridge", () => ({
   saveHtmlDialog: vi.fn(),
+  savePdfDialog: vi.fn(),
+  renderHtmlPdf: vi.fn(),
+  writeBinaryFile: vi.fn(),
   writeFile: vi.fn(),
   readFile: vi.fn(),
   openFileDialog: vi.fn(),
@@ -441,5 +449,181 @@ describe("exportAsHtml", () => {
     const content = vi.mocked(writeFile).mock.calls[0][1];
     expect(content).toContain('<div class="content">');
     expect(content).toContain("<title>Untitled</title>");
+  });
+
+  it("still includes the YAML block", async () => {
+    vi.mocked(saveHtmlDialog).mockResolvedValue({
+      cancelled: false,
+      path: "/out/file.html",
+    });
+    vi.mocked(writeFile).mockResolvedValue({ ok: true, value: undefined });
+    await exportAsHtml(
+      makeEditor("---\ntitle: Secret Title\n---\n\n# Hello\n\nBody"),
+      "/notes/hello.md"
+    );
+    const content = vi.mocked(writeFile).mock.calls[0][1];
+    expect(content).toContain("Secret Title");
+    expect(content).toContain("Body");
+  });
+});
+
+describe("stripFrontMatter", () => {
+  it("removes a leading YAML block and keeps the note text", () => {
+    const markdown = "---\ntitle: Secret Title\ntags: [draft]\n---\n\n# Hello\n\nBody text";
+    expect(stripFrontMatter(markdown)).toBe("# Hello\n\nBody text");
+  });
+
+  it("leaves a note with no YAML unchanged", () => {
+    expect(stripFrontMatter("# Hello\n\nBody")).toBe("# Hello\n\nBody");
+  });
+
+  it("does not treat a later rule as front matter", () => {
+    const markdown = "# Hello\n\n---\n\nBody";
+    expect(stripFrontMatter(markdown)).toBe(markdown);
+  });
+});
+
+describe("buildPdfHtml", () => {
+  it("asks for letter pages and omits the YAML block", () => {
+    const markdown = "---\ntitle: Secret Title\nstatus: draft\n---\n\n# Hello\n\nBody text";
+    const html = buildPdfHtml(markdown, "Hello");
+    expect(html).toContain("size: letter");
+    expect(html).toContain("0.75in");
+    expect(html).toContain("Body text");
+    expect(html).toContain("Hello");
+    expect(html).not.toContain("Secret Title");
+    expect(html).not.toContain("status: draft");
+  });
+
+  it("still exports the text of a note that has no YAML", () => {
+    const html = buildPdfHtml("# Hello\n\nBody text", "Hello");
+    expect(html).toContain("size: letter");
+    expect(html).toContain("Body text");
+  });
+});
+
+describe("derivePdfFilename", () => {
+  it("uses the note title and a .pdf extension", () => {
+    expect(derivePdfFilename("# Quarterly Review", "/notes/q.md")).toBe(
+      "Quarterly Review.pdf"
+    );
+  });
+
+  it("suggests Untitled.pdf when the note has no title", () => {
+    expect(derivePdfFilename("just a paragraph", null)).toBe("Untitled.pdf");
+  });
+
+  it("filters characters that are illegal in a filename", () => {
+    expect(derivePdfFilename("# Notes / draft: <a>", null)).toBe("Notes draft a.pdf");
+  });
+
+  it("falls back to Untitled.pdf when the title is only special characters", () => {
+    expect(derivePdfFilename("# /:*?", null)).toBe("Untitled.pdf");
+  });
+});
+
+describe("enforcePdfExtension", () => {
+  it("appends .pdf when the dialog path has another extension", () => {
+    expect(enforcePdfExtension("/out/note")).toBe("/out/note.pdf");
+  });
+
+  it("leaves a path that already ends in .pdf", () => {
+    expect(enforcePdfExtension("/out/note.PDF")).toBe("/out/note.PDF");
+  });
+});
+
+describe("exportAsPdf", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("alert", vi.fn());
+    vi.stubGlobal("print", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks for a .pdf path and writes the rendered bytes", async () => {
+    vi.mocked(savePdfDialog).mockResolvedValue({
+      cancelled: false,
+      path: "/out/Quarterly Review.pdf",
+    });
+    vi.mocked(renderHtmlPdf).mockResolvedValue({ ok: true, value: [37, 80, 68, 70] });
+    vi.mocked(writeBinaryFile).mockResolvedValue({ ok: true, value: undefined });
+
+    const callerPath = "/notes/q.md";
+    await exportAsPdf(makeEditor("# Quarterly Review\n\nBody"), callerPath);
+
+    expect(savePdfDialog).toHaveBeenCalledWith("Quarterly Review.pdf");
+    expect(renderHtmlPdf).toHaveBeenCalledOnce();
+    const html = vi.mocked(renderHtmlPdf).mock.calls[0][0];
+    expect(html).toContain("<title>Quarterly Review</title>");
+    expect(html).toContain("Body");
+    expect(html).toContain("size: letter");
+    expect(writeBinaryFile).toHaveBeenCalledWith(
+      "/out/Quarterly Review.pdf",
+      [37, 80, 68, 70]
+    );
+    expect(window.print).not.toHaveBeenCalled();
+    expect(window.alert).not.toHaveBeenCalled();
+    expect(callerPath).toBe("/notes/q.md");
+  });
+
+  it("omits leading YAML and still sends the note text", async () => {
+    vi.mocked(savePdfDialog).mockResolvedValue({
+      cancelled: false,
+      path: "/out/Hello.pdf",
+    });
+    vi.mocked(renderHtmlPdf).mockResolvedValue({ ok: true, value: [37, 80, 68, 70] });
+    vi.mocked(writeBinaryFile).mockResolvedValue({ ok: true, value: undefined });
+    await exportAsPdf(
+      makeEditor("---\ntitle: Secret Title\nstatus: draft\n---\n\n# Hello\n\nBody text"),
+      "/notes/hello.md"
+    );
+    const html = vi.mocked(renderHtmlPdf).mock.calls[0][0];
+    expect(html).toContain("size: letter");
+    expect(html).toContain("Body text");
+    expect(html).not.toContain("Secret Title");
+    expect(html).not.toContain("status: draft");
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when the save dialog is cancelled", async () => {
+    vi.mocked(savePdfDialog).mockResolvedValue({ cancelled: true });
+    await exportAsPdf(makeEditor("# Hello"), null);
+    expect(renderHtmlPdf).not.toHaveBeenCalled();
+    expect(writeBinaryFile).not.toHaveBeenCalled();
+    expect(window.alert).not.toHaveBeenCalled();
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it("alerts on a failed write and leaves the open note path unchanged", async () => {
+    vi.mocked(savePdfDialog).mockResolvedValue({
+      cancelled: false,
+      path: "/out/note.pdf",
+    });
+    vi.mocked(renderHtmlPdf).mockResolvedValue({ ok: true, value: [1] });
+    vi.mocked(writeBinaryFile).mockResolvedValue({
+      ok: false,
+      error: { message: "disk full", command: "write_binary_file", path: "/out/note.pdf" },
+    });
+    const callerPath = "/notes/note.md";
+    await exportAsPdf(makeEditor("# Note"), callerPath);
+    expect(window.alert).toHaveBeenCalledWith("Export failed: disk full");
+    expect(callerPath).toBe("/notes/note.md");
+  });
+
+  it("alerts when rendering fails and does not write a file", async () => {
+    vi.mocked(savePdfDialog).mockResolvedValue({
+      cancelled: false,
+      path: "/out/note.pdf",
+    });
+    vi.mocked(renderHtmlPdf).mockResolvedValue({
+      ok: false,
+      error: { message: "PDF render timed out", command: "render_html_pdf" },
+    });
+    await exportAsPdf(makeEditor("# Note"), "/notes/note.md");
+    expect(writeBinaryFile).not.toHaveBeenCalled();
+    expect(window.alert).toHaveBeenCalledWith("Export failed: PDF render timed out");
   });
 });

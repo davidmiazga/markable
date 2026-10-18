@@ -12,7 +12,7 @@ import type { FileResult, DialogResult, TauriCommandError } from "./errors";
 import type { MarkableSettings } from "./settings";
 
 // Re-export dialog functions from dialogs.ts
-export { openAssetDialog, openFileDialog, openFolderDialog, saveFileDialog, saveHtmlDialog, saveImageDialog } from "./dialogs";
+export { openAssetDialog, openFileDialog, openFolderDialog, saveFileDialog, saveHtmlDialog, saveImageDialog, savePdfDialog } from "./dialogs";
 export type { DialogResult };
 
 /**
@@ -122,6 +122,26 @@ export async function writeFile(
  * }
  * ```
  */
+/**
+ * Render standalone HTML to PDF bytes via a hidden WebKit view.
+ * The bytes are a real PDF (`%PDF` header). Failure is a FileResult error.
+ */
+export async function renderHtmlPdf(html: string): Promise<FileResult<number[]>> {
+  try {
+    const bytes = await invoke<number[]>("render_html_pdf", { html });
+    return { ok: true, value: bytes };
+  } catch (error) {
+    const message = typeof error === "string" ? error : String(error);
+    return {
+      ok: false,
+      error: {
+        message,
+        command: "render_html_pdf",
+      } satisfies TauriCommandError,
+    };
+  }
+}
+
 export async function writeBinaryFile(
   path: string,
   data: number[]

@@ -18,7 +18,7 @@ import markedFootnote from "marked-footnote";
 import { parseCalloutHeader, parseCalloutTitle, isPlainCallout } from "../editor/callouts";
 import { calloutIconSvg, CALLOUT_CHEVRON_SVG } from "../editor/callout-icons";
 import { EditorView } from "@codemirror/view";
-import { saveHtmlDialog, writeFile } from "./bridge";
+import { renderHtmlPdf, saveHtmlDialog, savePdfDialog, writeBinaryFile, writeFile } from "./bridge";
 
 // Register the footnote extension globally so all marked.parse() calls support [^1] syntax.
 marked.use(markedFootnote());
@@ -293,6 +293,44 @@ export function enforceHtmlExtension(path: string): string {
 }
 
 /**
+ * Plain title for a PDF filename. Same order as extractTitle (first ATX H1,
+ * then the filename stem, then "Untitled") without HTML escaping.
+ */
+export function plainNoteTitle(markdown: string, filePath: string | null): string {
+  const h1Line = markdown.split("\n").find((line) => /^# /.test(line));
+  if (h1Line) {
+    const text = h1Line.replace(/^# /, "").trim();
+    if (text) return text;
+  }
+  if (filePath) {
+    const filename = filePath.split(/[/\\]/).pop() ?? filePath;
+    const dotIndex = filename.lastIndexOf(".");
+    const stem = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+    if (stem) return stem;
+  }
+  return "Untitled";
+}
+
+/**
+ * Suggested PDF save name. Special characters that are illegal in a filename
+ * are removed. An empty result, or an untitled note, is `Untitled.pdf`.
+ */
+export function derivePdfFilename(markdown: string, filePath: string | null): string {
+  const filtered = plainNoteTitle(markdown, filePath)
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+$/, "");
+  return `${filtered || "Untitled"}.pdf`;
+}
+
+/** Append `.pdf` when the save dialog did not keep the extension. */
+export function enforcePdfExtension(path: string): string {
+  if (path.toLowerCase().endsWith(".pdf")) return path;
+  return path + ".pdf";
+}
+
+/**
  * Converts a raw Markdown string to an HTML fragment using marked.
  *
  * FR-3.2: marked is used for conversion. GFM is enabled by default in marked v5+,
@@ -472,6 +510,33 @@ export function markdownToHtml(markdown: string): string {
  * @param title - Already HTML-escaped title string (from extractTitle)
  * @returns Complete standalone UTF-8 HTML document string with no BOM
  */
+/**
+ * Drop a leading YAML front-matter block. A later `---` stays in the note.
+ * Returns the original string when the document does not open with a closed block.
+ */
+export function stripFrontMatter(markdown: string): string {
+  const match = markdown.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+  if (!match) return markdown;
+  return markdown.slice(match[0].length).replace(/^\r?\n/, "");
+}
+
+/** Letter page rules for PDF export. HTML export does not use this. */
+const PDF_PAGE_CSS = `
+@page { size: letter; margin: 0.75in; }
+html, body { background: #fff; }
+body { margin: 0; padding: 0; }
+.content { max-width: none; margin: 0; }
+`;
+
+/**
+ * Standalone HTML for PDF export: YAML front matter removed, US Letter pages.
+ * `title` is the HTML-escaped document title, same as buildStandaloneHtml.
+ */
+export function buildPdfHtml(markdown: string, title: string): string {
+  const html = buildStandaloneHtml(stripFrontMatter(markdown), title);
+  return html.replace("</head>", `<style>${PDF_PAGE_CSS}</style>\n</head>`);
+}
+
 export function buildStandaloneHtml(markdown: string, title: string): string {
   const bodyFragment = markdownToHtml(markdown);
 
@@ -560,6 +625,37 @@ export async function exportAsHtml(
   // FR-8.3: Silent on success — no notification, no modal
   // FR-8.4 / AC-20: currentFilePath is intentionally NOT updated here.
   //                  This export does not change the currently open document.
+}
+
+/**
+ * Save the open note as a PDF file. Letter pages of the note text, without
+ * the leading YAML block. Does not call window.print and does not change
+ * the open note.
+ */
+export async function exportAsPdf(
+  editor: EditorView | null,
+  currentFilePath: string | null
+): Promise<void> {
+  if (!editor) return;
+
+  const markdown = editor.state.doc.toString();
+  const suggestedFilename = derivePdfFilename(markdown, currentFilePath);
+  const dialogResult = await savePdfDialog(suggestedFilename);
+  if (dialogResult.cancelled) return;
+
+  const savePath = enforcePdfExtension(dialogResult.path);
+  const title = extractTitle(markdown, currentFilePath);
+  const html = buildPdfHtml(markdown, title);
+  const rendered = await renderHtmlPdf(html);
+  if (!rendered.ok) {
+    alert("Export failed: " + rendered.error.message);
+    return;
+  }
+
+  const result = await writeBinaryFile(savePath, rendered.value);
+  if (!result.ok) {
+    alert("Export failed: " + result.error.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -860,8 +956,8 @@ export function printDocument(editor: EditorView | null): void {
  * "file-export" menu event (Cmd-Alt-E).
  *
  * Presents the createExportSheet format-selection dialog, then routes to
- * exportAsHtml or printDocument based on the user's choice. Cancellation
- * is silent — no error is surfaced.
+ * exportAsHtml or exportAsPdf based on the user's choice. Cancellation
+ * is silent — no error is surfaced. Print stays on printDocument.
  *
  * EC-01: Returns immediately if editor is null.
  * EC-14: Returns immediately if the export sheet is already open, preventing
@@ -889,14 +985,11 @@ export async function openExportDialog(
       // FR-06.3 (HTML path): delegate to the existing exportAsHtml orchestrator
       await exportAsHtml(editor, currentFilePath);
     } else {
-      // FR-06.3 (PDF path): invoke the system print dialog via printDocument.
-      // A try/catch here surfaces any synchronous failure from printDocument
-      // (e.g. window.print() throwing in a restricted environment) so the user
-      // is not left with a silently swallowed error.
+      // PDF writes a file. Print (Cmd-P) is the only path that calls window.print.
       try {
-        printDocument(editor);
+        await exportAsPdf(editor, currentFilePath);
       } catch (err) {
-        alert("Print failed: " + (err instanceof Error ? err.message : String(err)));
+        alert("Export failed: " + (err instanceof Error ? err.message : String(err)));
       }
     }
   } finally {

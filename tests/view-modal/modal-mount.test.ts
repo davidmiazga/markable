@@ -72,7 +72,7 @@ describe("openViewModal — mount and default state (step_04)", () => {
 
   it("title bar text reflects the mode (Q-1)", () => {
     openViewModal("create", { folderPath: "/v/Foo" });
-    expect(panel().querySelector(".cbm-title")?.textContent).toBe("New Folder View");
+    expect(panel().querySelector(".cbm-title")?.textContent).toBe("New Dashboard");
     closeModalIfOpen();
 
     openViewModal("insert", {});
@@ -80,7 +80,7 @@ describe("openViewModal — mount and default state (step_04)", () => {
     closeModalIfOpen();
 
     openViewModal("edit", { folderPath: "/v/Foo", initial: {} });
-    expect(panel().querySelector(".cbm-title")?.textContent).toBe("Edit Folder View");
+    expect(panel().querySelector(".cbm-title")?.textContent).toBe("Edit Dashboard");
     closeModalIfOpen();
 
     openViewModal("edit", { initial: {} });

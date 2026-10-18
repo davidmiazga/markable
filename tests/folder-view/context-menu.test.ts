@@ -42,16 +42,16 @@ describe("buildDirContextMenuItems — unified menu structure", () => {
 
   // ── Folder View / Remove Folder View first-item toggle ────────────────────
 
-  it("hasFolderView=true → first item is 'Remove Folder View'", () => {
+  it("hasFolderView=true → first item is 'Remove Dashboard'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", true);
-    expect(items[0].label).toBe("Remove Folder View");
+    expect(items[0].label).toBe("Remove Dashboard");
   });
 
-  it("hasFolderView=false → first item is 'Folder View'", () => {
+  it("hasFolderView=false → first item is 'Dashboard'", () => {
     const el = makeDirNode("/vault/A");
     const items = _testing.buildDirContextMenuItems(el, "/vault/A", "vault-1", false);
-    expect(items[0].label).toBe("Folder View");
+    expect(items[0].label).toBe("Dashboard");
   });
 
   // ── CodeBlock + Layout items only present when _folder.md exists ──────────

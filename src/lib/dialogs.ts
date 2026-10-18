@@ -154,6 +154,23 @@ export async function saveImageDialog(
   }
 }
 
+export async function savePdfDialog(suggestedFilename: string): Promise<DialogResult> {
+  try {
+    const path = await invoke<string | null>("save_pdf_dialog", {
+      suggestedFilename,
+    });
+
+    if (path) {
+      return { cancelled: false, path };
+    } else {
+      return { cancelled: true };
+    }
+  } catch (error) {
+    console.error("savePdfDialog error:", error);
+    return { cancelled: true };
+  }
+}
+
 export async function saveHtmlDialog(suggestedFilename: string): Promise<DialogResult> {
   try {
     // Tauri v2 maps camelCase JS keys to snake_case Rust params automatically.

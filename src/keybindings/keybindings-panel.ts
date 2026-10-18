@@ -83,6 +83,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "app-settings",        label: "Settings",             defaultKey: "Cmd-,",           section: "View" },
   { id: "app-keybindings",     label: "Keyboard Shortcuts",   defaultKey: "Cmd-Alt-Shift-K", section: "View" },
   { id: "app-plugins",         label: "Plugins Panel",        defaultKey: "Cmd-Alt-P",       section: "View" },
+  { id: "view-dashboard",      label: "Dashboard",      defaultKey: "",       section: "View" },
   { id: "view-toggle-preview", label: "Toggle Preview", defaultKey: "Cmd-E",  section: "View" },
   { id: "view-zoom-in",        label: "Zoom In",        defaultKey: "Cmd-=",  section: "View" },
   { id: "view-zoom-out",       label: "Zoom Out",       defaultKey: "Cmd--",  section: "View" },

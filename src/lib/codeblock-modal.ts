@@ -5,7 +5,7 @@
  * Table, Collection, Timeline, Kanban, Bookshelf) and producing a
  * `select` codefence. Triggered from two contexts:
  *
- *   - Right-click → "Folder View" on a folder in the file browser.
+ *   - Right-click → "Dashboard" on a folder in the file browser.
  *     `openViewModal("create" | "edit", { folderPath, ... })`.
  *   - In-doc "Insert CodeBlock" command on an `.md` editor.
  *     `openViewModal("insert" | "edit", { editor, ... })`.
@@ -313,15 +313,15 @@ function injectViewModalStyles(): void {
 
 /**
  * Build the title bar text for a (mode, ctx) pair per Q-1.
- *   - create → "New Folder View"
+ *   - create → "New Dashboard"
  *   - insert → "Insert Codeblock"
- *   - edit + folderPath → "Edit Folder View"
+ *   - edit + folderPath → "Edit Dashboard"
  *   - edit + editor → "Edit Codeblock"
  */
 function titleForMode(mode: ViewModalMode, ctx: ViewModalContext): string {
-  if (mode === "create") return "New Folder View";
+  if (mode === "create") return "New Dashboard";
   if (mode === "insert") return "Insert Codeblock";
-  return ctx.folderPath != null ? "Edit Folder View" : "Edit Codeblock";
+  return ctx.folderPath != null ? "Edit Dashboard" : "Edit Codeblock";
 }
 
 /**

@@ -47,6 +47,7 @@ import {
   deleteLine,
 } from "./editor/format";
 import { switchListStyle, listStyleIndicator, createListStyleIndicator } from "./editor/list-style-switch";
+import { folderOfNote } from "./lib/note-folder";
 import { ensureStatusBar, getStatusBarVisible, setStatusBarVisible } from "./plugins/status-bar/status-bar";
 import {
   readFile,
@@ -870,6 +871,11 @@ function handleAction(action: string): void {
     case "file-export":     void openExportDialog(editor, tabManager.getActiveFilePath()); break;
     // file-print bypasses the sheet and goes directly to the system print dialog.
     case "file-print":      printDocument(editor); break;
+    case "view-dashboard": {
+      const folder = folderOfNote(tabManager.getActiveFilePath());
+      if (folder) (window as any).__MARKABLE_OPEN_DASHBOARD__?.(folder);
+      break;
+    }
     case "view-toggle-preview": {
       if (tabManager.isActiveTabInLayoutView()) {
         // Layout view → code view: exit layout, ensure code view not live-preview.
