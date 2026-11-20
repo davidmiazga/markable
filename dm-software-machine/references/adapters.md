@@ -6,22 +6,12 @@ The required path is the CLI + envelopes. Nothing below is needed to run a test.
 
 Pi/OpenRouter (or any other host) may claim a task and return envelopes. Enable per task or role when a different model is useful. Do not make provider keys a setup prerequisite.
 
-## Beads
+## Built-in store + board
 
-Asked at first run: "Is this a large complex project that would benefit from a project tracker?"
-
-- **no** (default) — `tracker: none`. `Use sm to …` is the inbox.
-- **yes** — `tracker: beads`. Init/configure installs `bd` (`brew install beads`, else `npm install -g @beads/bd`) and runs `bd init --quiet --role maintainer` if `.beads/` is missing.
-
-A bead may point at a machine `run_id` and task id. Beads does not store gate logs, envelopes, or phase state. Non-interactive: `init --tracker beads` or `configure --tracker beads`.
-
-When `tracker: beads`:
-
-- `task-add` / `task-brief` / `task-ticket` runs `bd create` with `--external-ref sm:<task-id>` and stores `bead_id` on the task
-- `task-ticket` reuses an open spec when the title or id matches; `--new` always creates
-- `task-ready` updates the bead description from the spec (failure does not un-queue the sm task)
-- `accept` runs `bd close <bead-id>` after sm acceptance
-- Create failure refuses the add. Close failure does not un-accept the sm task.
+Always on. Durable tasks live in `.dm-software-machine/project-tasks.json`.
+`sm-export` / `sm-board` write the JSON snapshot and HTML board. That is the
+tracker. The machine may call `bd` only to convert existing Beads issues
+into that store. It does not init Beads, and it does not keep `tracker: beads`.
 
 ## Parallel work
 
@@ -30,6 +20,14 @@ When `tracker: beads`:
 `task-next` / `task-claim` refuse a second task when:
 
 - in-flight count is already `parallel`, or
-- declared file `writes` overlap an in-flight task (directory writes do not; missing writes count as overlap)
+- declared `writes` overlap an in-flight task (missing writes count as overlap)
 
-`--force` overrides both. Isolated worktrees are still deferred: two claimed tasks share the same tree, so only raise `parallel` when you really have disjoint paths and two agents.
+`--force` overrides both. With `worktrees: true`, each claim gets its own git
+worktree so agents do not share a dirty tree. Still only raise `parallel`
+when write paths are disjoint — overlap remains serialized.
+
+Claim leases (`claim_lease_hours`, default 24) release abandoned `claimed` tasks on `task-claim` / `task-next` / `reclaim`. Over-repair sets status `failed` with a reason; `task-claim --force` requeues it.
+
+`sm-accept` merges the task worktree into main, then re-runs the fast gate on
+main when an app tree is present. A red post-merge gate refuses accept (merge
+may already be on main); fix on main, then `sm-gate` + `sm-accept`.

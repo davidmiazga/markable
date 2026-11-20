@@ -88,3 +88,56 @@ icons:
 # Local unsigned .app for one flavor: just bundle markable
 bundle FLAVOR:
     node scripts/tauri-flavor.mjs {{FLAVOR}} build --bundles app
+
+sm-export *ARGS:
+    {{sm}} export "$@"
+
+sm-board *ARGS:
+    {{sm}} board "$@"
+
+[positional-arguments]
+sm-board-serve *ARGS:
+    {{sm}} board --serve "$@"
+
+sm-overrides-import *ARGS:
+    {{sm}} overrides-import "$@"
+sm-overrides-export *ARGS:
+    {{sm}} overrides-export "$@"
+
+[positional-arguments]
+sm-prime *ARGS:
+    {{sm}} prime "$@"
+[positional-arguments]
+sm-note TASK +TEXT:
+    {{sm}} task-note {{TASK}} "${@:2}"
+
+sm-rebase TASK:
+    {{sm}} rebase --task {{TASK}}
+sm-doctor:
+    {{sm}} doctor
+
+sm-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    scripts="$root/dm-software-machine/scripts"
+    for t in test_export.py test_brief.py test_worktrees.py test_unattended.py; do
+      echo "=== $t ==="
+      uv run "$scripts/$t"
+    done
+    echo "unit suite ok (astro live: uv run dm-software-machine/scripts/test_astro.py)"
+
+[positional-arguments]
+sm-update *ARGS:
+    {{sm}} task-update "$@"
+
+[positional-arguments]
+sm-milestone-add *ARGS:
+    {{sm}} milestone-add "$@"
+
+sm-milestone-list:
+    {{sm}} milestone-list
+
+[positional-arguments]
+sm-reclaim *ARGS:
+    {{sm}} reclaim "$@"

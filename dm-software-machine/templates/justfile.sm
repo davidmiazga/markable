@@ -1,9 +1,13 @@
 # ── dm-software-machine ─────────────────────────────────────────────────────
+# Each recipe sets [positional-arguments] so these work when appended to an
+# existing justfile that does not have a global `set positional-arguments`.
 sm := "uv run dm-software-machine/scripts/dmsm.py"
 
+[positional-arguments]
 sm-init *ARGS:
     {{sm}} init "$@"
 
+[positional-arguments]
 sm-configure *ARGS:
     {{sm}} configure "$@"
 
@@ -16,27 +20,76 @@ sm-scope:
 sm-status:
     {{sm}} status
 
+[positional-arguments]
+sm-export *ARGS:
+    {{sm}} export "$@"
+
+[positional-arguments]
+sm-board *ARGS:
+    {{sm}} board "$@"
+
+[positional-arguments]
+sm-board-serve *ARGS:
+    {{sm}} board --serve "$@"
+
+[positional-arguments]
+sm-overrides-import *ARGS:
+    {{sm}} overrides-import "$@"
+
+[positional-arguments]
+sm-overrides-export *ARGS:
+    {{sm}} overrides-export "$@"
+
 sm-watch:
     {{sm}} watch
 
+[positional-arguments]
 sm-tail *ARGS:
     {{sm}} tail "$@"
 
+[positional-arguments]
 sm-add *ARGS:
     {{sm}} task-add --title "$@"
 
-sm-brief *ARGS:
-    {{sm}} task-brief --title "$@"
-
+[positional-arguments]
 sm-ticket *ARGS:
     {{sm}} task-ticket --title "$@"
+
+[positional-arguments]
+sm-brief *ARGS:
+    {{sm}} task-brief --title "$@"
 
 sm-ready TASK:
     {{sm}} task-ready {{TASK}}
 
+[positional-arguments]
+sm-prime *ARGS:
+    {{sm}} prime "$@"
+
+# TASK is $1; note text is the remaining args.
+[positional-arguments]
+sm-note TASK +TEXT:
+    {{sm}} task-note {{TASK}} "${@:2}"
+
+[positional-arguments]
+sm-update *ARGS:
+    {{sm}} task-update "$@"
+
+[positional-arguments]
+sm-milestone-add *ARGS:
+    {{sm}} milestone-add "$@"
+
+sm-milestone-list:
+    {{sm}} milestone-list
+
 sm-claim TASK:
     {{sm}} task-claim {{TASK}}
 
+[positional-arguments]
+sm-reclaim *ARGS:
+    {{sm}} reclaim "$@"
+
+[positional-arguments]
 sm-next *ARGS:
     {{sm}} task-next "$@"
 
@@ -48,6 +101,23 @@ sm-finish TASK KIND="fast":
 
 sm-accept TASK:
     {{sm}} accept --task {{TASK}}
+
+sm-rebase TASK:
+    {{sm}} rebase --task {{TASK}}
+
+sm-doctor:
+    {{sm}} doctor
+
+sm-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    scripts="$root/dm-software-machine/scripts"
+    for t in test_export.py test_brief.py test_worktrees.py test_unattended.py; do
+      echo "=== $t ==="
+      uv run "$scripts/$t"
+    done
+    echo "unit suite ok (astro live: uv run dm-software-machine/scripts/test_astro.py)"
 
 sm-gate TASK KIND="fast":
     {{sm}} gate --task {{TASK}} --kind {{KIND}}

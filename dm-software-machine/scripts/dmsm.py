@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import fnmatch
 import hashlib
 import json
@@ -19,9 +20,10 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -39,7 +41,61 @@ TASK_STATUSES = (
     "reviewed",
     "accepted",
     "blocked",
+    "failed",
 )
+GITIGNORE_ENTRIES = [
+    ".dm-software-machine/runs/",
+    ".dm-software-machine/current-run",
+    ".dm-software-machine/project-tasks.json",
+    ".dm-software-machine/export.json",
+    ".dm-software-machine/board.html",
+    ".dm-software-machine/board-overrides.json",
+    ".dm-software-machine/worktrees/",
+    ".dm-software-machine/install-manifest.json",
+    "node_modules/",
+    "**/node_modules/",
+    "target/",
+    "**/target/",
+    "dist/",
+    "**/.astro/",
+    ".env",
+    ".DS_Store",
+    "__pycache__/",
+    "*.pyc",
+]
+PROJECT_STORE_SCHEMA = "0.5-smdm"
+EXPORT_SCHEMA = "0.5-smdm"
+OVERRIDES_SCHEMA = "0.5-smdm-overrides"
+DEFAULT_CLAIM_LEASE_HOURS = 24
+PRIORITIES = ("P1", "P2", "P3")
+TASK_KINDS = ("task", "subtask", "subcard")
+BOARD_STATUS = {
+    "briefing": "ready",
+    "queued": "ready",
+    "claimed": "claimed",
+    "active": "running",
+    "gated": "review",
+    "reviewed": "review",
+    "accepted": "done",
+    "blocked": "blocked",
+    "failed": "failed",
+}
+BOARD_STATE_TO_STATUS = {
+    "ready": "queued",
+    "claimed": "claimed",
+    "running": "active",
+    "review": "gated",
+    "blocked": "blocked",
+    "failed": "failed",
+    # "done" / accepted: not importable from the board — use sm-accept
+}
+MACHINE_OWNED_PREFIXES = (
+    "specs/",
+    ".dm-software-machine/",
+)
+NEVER_WRITE_DIRS = ("node_modules", "target", "dist", ".astro")
+PLACEHOLDER_TEST = re.compile(r"no test specified", re.I)
+
 SPEC_HEADINGS = (
     "Problem",
     "In scope",
@@ -49,20 +105,6 @@ SPEC_HEADINGS = (
 )
 SPEC_PLACEHOLDER = re.compile(r"\b(TODO|TBD|fill me)\b", re.I)
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-GITIGNORE_ENTRIES = [
-    ".dm-software-machine/runs/",
-    ".dm-software-machine/install-manifest.json",
-    ".env",
-    ".DS_Store",
-    "__pycache__/",
-    "*.pyc",
-]
-MACHINE_OWNED_PREFIXES = (
-    "specs/",
-    ".dm-software-machine/",
-)
-NEVER_WRITE_DIRS = ("node_modules", "target", "dist", ".astro")
-PLACEHOLDER_TEST = re.compile(r"no test specified", re.I)
 DEFAULT_PROBLEM_HINT = (
     "<!-- What is wrong or missing. Quote the user if they wrote it. Do not invent. -->"
 )
@@ -72,6 +114,7 @@ TICKET_STOPWORDS = frozenset(
     "just use sm ticket spec".split()
 )
 WORD_RE = re.compile(r"[a-z0-9]+")
+
 
 
 def spec_sections(text: str) -> dict[str, str]:
@@ -140,7 +183,7 @@ def render_spec_template(
     )
 
 
-def require_brief(store: Store) -> bool:
+def require_brief(store: "Store") -> bool:
     return bool(store.cfg.get("require_brief", False))
 
 
@@ -195,7 +238,7 @@ def resolve_ticket(query: str, tasks: list[dict]) -> dict | list[dict] | None:
     return None
 
 
-def print_ticket_ask(store: Store, task: dict, *, action: str) -> None:
+def print_ticket_ask(store: "Store", task: dict, *, action: str) -> None:
     spec_rel = task.get("spec_path") or f"specs/{task['id']}.md"
     spec_path = store.root / spec_rel
     ok, missing = spec_complete(spec_path)
@@ -203,8 +246,6 @@ def print_ticket_ask(store: Store, task: dict, *, action: str) -> None:
     print(task["id"])
     print(task["status"])
     print(f"spec {spec_rel}")
-    if task.get("bead_id"):
-        print(f"bead {task['bead_id']}")
     if ok:
         if task["status"] == "briefing":
             print(f"Spec is complete. Then: just sm-ready {task['id']}")
@@ -238,12 +279,141 @@ def print_ticket_ask(store: Store, task: dict, *, action: str) -> None:
     print("Do not implement until then.")
 
 
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    text = str(ts).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def claim_lease_hours(store: "Store") -> float:
+    return float(store.cfg.get("claim_lease_hours") or DEFAULT_CLAIM_LEASE_HOURS)
+
+
+def claim_is_stale(
+    task: dict, *, hours: float, now: datetime | None = None
+) -> bool:
+    if task.get("status") != "claimed":
+        return False
+    lease = parse_iso(task.get("claim_lease"))
+    if lease is None:
+        return True
+    current = now or datetime.now(timezone.utc)
+    return current - lease > timedelta(hours=hours)
+
+
+def release_claim(
+    task: dict,
+    reason: str,
+    *,
+    store: "Store | None" = None,
+    force_remove: bool = False,
+) -> None:
+    if store is not None:
+        if force_remove and task.get("worktree_path"):
+            dest = store.root / str(task["worktree_path"])
+            precious = worktree_has_precious_work(store, task, dest) if dest.exists() else []
+            if precious:
+                print(
+                    f"warning: force-removing worktree with {'; '.join(precious)}"
+                )
+        remove_task_worktree(store, task, force=force_remove)
+    task["status"] = "queued"
+    task["claimed_by"] = None
+    task["claim_lease"] = None
+    task["phase"] = "reclaimed"
+    task["reason"] = reason
+
+
+def refresh_claim_lease(task: dict) -> None:
+    """Keep an in-flight claim from expiring during long gates / progress."""
+    if task.get("status") in ("claimed", "active", "gated", "reviewed"):
+        task["claim_lease"] = now_iso()
+
+
+def release_stale_claims(store: "Store", state: dict) -> list[str]:
+    hours = claim_lease_hours(store)
+    released: list[str] = []
+    for task in state.get("tasks", {}).values():
+        if claim_is_stale(task, hours=hours):
+            holder = task.get("claimed_by") or "unknown"
+            release_claim(
+                task,
+                f"Stale claim lease released (was {holder}).",
+                store=store,
+            )
+            released.append(task["id"])
+    return released
+
+
+def mark_over_repair_failed(task: dict, *, kind: str) -> None:
+    task["status"] = "failed"
+    task["reason"] = (
+        f"{kind} red after {task.get('repair_count', 0)} repairs "
+        f"(max {task.get('max_repairs', 2)}); stopped for review."
+    )
+    task["claimed_by"] = None
+    task["claim_lease"] = None
+
+
 def repo_root() -> Path:
-    return Path.cwd().resolve()
+    """Resolve the main project root even when cwd is a task worktree."""
+    cwd = Path.cwd().resolve()
+    parts = cwd.parts
+    marker = (MACHINE_DIR, "worktrees")
+    for index in range(len(parts) - 1):
+        if parts[index : index + 2] == marker:
+            root = Path(*parts[:index]) if parts[:index] else Path("/")
+            return root.resolve()
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if common.returncode == 0:
+        git_dir = Path(common.stdout.strip())
+        main = git_dir.parent if git_dir.name == ".git" else git_dir
+        if (main / MACHINE_DIR / "machine.yaml").exists():
+            return main.resolve()
+        listed = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=str(main),
+            capture_output=True,
+            text=True,
+        )
+        if listed.returncode == 0:
+            for line in listed.stdout.splitlines():
+                if line.startswith("worktree "):
+                    candidate = Path(line.split(" ", 1)[1]).resolve()
+                    if (candidate / MACHINE_DIR / "machine.yaml").exists():
+                        return candidate
+                    return candidate
+    top = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if top.returncode == 0:
+        return Path(top.stdout.strip()).resolve()
+    for parent in (cwd, *cwd.parents):
+        if (parent / MACHINE_DIR / "machine.yaml").exists():
+            return parent
+    return cwd
 
 
 def machine_path(root: Path | None = None) -> Path:
@@ -411,19 +581,44 @@ def rewrite_pm_argv(argv: list[str], app: Path) -> list[str]:
     return out
 
 
-def select_checks(store: "Store", kind: str) -> tuple[list[dict], list[str]]:
+def _rewrite_profile_cwd(raw_cwd: str, profile_app: str, app_folder: str) -> str:
+    """Map profile-hardcoded app paths onto the configured app_folder."""
+    cwd = normalize_rel(str(raw_cwd or "."))
+    prof = normalize_rel(str(profile_app or "")).rstrip("/")
+    app = normalize_rel(str(app_folder or "")).rstrip("/")
+    if not prof or not app or prof == app:
+        return cwd
+    if cwd == prof:
+        return app
+    if cwd.startswith(f"{prof}/"):
+        return f"{app}/{cwd[len(prof) + 1:]}"
+    return cwd
+
+
+def select_checks(
+    store: "Store",
+    kind: str,
+    *,
+    checkout: Path | None = None,
+) -> tuple[list[dict], list[str]]:
     raw = (store.profile.get("checks") or {}).get(kind) or []
-    app = store.root / str(store.profile.get("app_dir") or store.cfg.get("app_folder") or ".")
+    root = checkout or store.root
+    defaults = resolve_defaults(store)
+    app_folder = str(defaults.get("app_folder") or store.cfg.get("app_folder") or ".")
+    profile_app = str(store.profile.get("app_dir") or app_folder)
+    app = root / app_folder
     selected: list[dict] = []
     skipped: list[str] = []
     for spec in raw:
         name = str(spec.get("name") or "check")
-        cwd = store.root / spec.get("cwd", ".")
+        rel_cwd = _rewrite_profile_cwd(spec.get("cwd", "."), profile_app, app_folder)
+        cwd = root / rel_cwd
         target = cwd if cwd.exists() else app
         if not should_run_check(spec, target):
             skipped.append(name)
             continue
         item = dict(spec)
+        item["cwd"] = rel_cwd
         item["argv"] = rewrite_pm_argv(list(spec["argv"]), target)
         selected.append(item)
     return selected, skipped
@@ -473,7 +668,9 @@ def resolve_defaults(store: "Store") -> dict[str, Any]:
     done = cfg.get("done_means")
     if _is_unset(done):
         done = DEFAULT_DONE
-    dev_cwd = profile.get("dev_cwd") or app_folder
+    profile_app = str(profile.get("app_dir") or app_folder or "")
+    raw_dev_cwd = profile.get("dev_cwd") or app_folder
+    dev_cwd = _rewrite_profile_cwd(str(raw_dev_cwd), profile_app, app_folder)
     dev_command = profile.get("dev_command") or ["npm", "run", "dev"]
     if isinstance(dev_command, str):
         dev_line = dev_command
@@ -489,7 +686,11 @@ def resolve_defaults(store: "Store") -> dict[str, Any]:
         "tracker": cfg.get("tracker") or "none",
         "parallel": int(cfg.get("parallel") or 1),
         "auto_advance": bool(cfg.get("auto_advance", False)),
+        "claim_lease_hours": float(
+            cfg.get("claim_lease_hours") or DEFAULT_CLAIM_LEASE_HOURS
+        ),
         "require_brief": bool(cfg.get("require_brief", False)),
+        "worktrees": worktrees_enabled(store),
     }
 
 
@@ -541,14 +742,410 @@ def file_digest(root: Path, rel: str) -> str | None:
     return file_hash(path)
 
 
-def classify_changes(store: "Store", writes: list[str]) -> dict[str, list[str]]:
+def scoped_paths(checkout: Path, writes: list[str]) -> list[str]:
+    """Tracked + dirty files under write scopes (for gate fingerprints)."""
+    found: set[str] = set()
+    for raw in writes:
+        rel = normalize_rel(str(raw))
+        if not rel:
+            continue
+        path = checkout / rel.rstrip("/")
+        if path.is_file():
+            found.add(normalize_rel(rel.rstrip("/")))
+            continue
+        if path.is_dir():
+            for child in path.rglob("*"):
+                if not child.is_file():
+                    continue
+                if any(part in NEVER_WRITE_DIRS for part in child.parts):
+                    continue
+                found.add(normalize_rel(str(child.relative_to(checkout))))
+    for rel in git_changed_files(checkout):
+        if path_in_patterns(rel, writes):
+            found.add(rel)
+    return sorted(found)
+
+
+def scoped_tree_digest(checkout: Path, writes: list[str]) -> str:
+    digest = hashlib.sha256()
+    for rel in scoped_paths(checkout, writes):
+        body = file_digest(checkout, rel) or "missing"
+        digest.update(f"{rel}:{body}\n".encode())
+    return digest.hexdigest()
+
+
+def worktrees_enabled(store: "Store") -> bool:
+    raw = store.cfg.get("worktrees")
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
+
+
+def run_git(
+    root: Path,
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env=env or os.environ.copy(),
+    )
+    if check and completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise SystemExit(
+            f"git {' '.join(args)} failed ({completed.returncode})"
+            + (f"\n{detail}" if detail else "")
+        )
+    return completed
+
+
+def task_branch_name(task_id: str) -> str:
+    return f"sm/{task_id}"
+
+
+def worktree_relpath(task_id: str) -> str:
+    return f".dm-software-machine/worktrees/{task_id}"
+
+
+def task_checkout_root(store: "Store", task: dict | None) -> Path:
+    if not task:
+        return store.root
+    rel = (task.get("worktree_path") or "").strip()
+    if not rel:
+        return store.root
+    path = Path(rel)
+    if not path.is_absolute():
+        path = store.root / path
+    return path if path.is_dir() else store.root
+
+
+def _symlink_share(src: Path, dest: Path) -> None:
+    if dest.exists() or dest.is_symlink():
+        return
+    # Create the shared dir on main so the first worktree cold-build fills it
+    # for later tasks (node_modules / target / dist / .astro).
+    if not src.exists():
+        try:
+            src.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.symlink_to(src, target_is_directory=src.is_dir() or not src.exists())
+    except OSError:
+        pass
+
+
+def _worktree_copy_ignore(directory: str, names: list[str]) -> set[str]:
+    skip = {"node_modules", "target", "dist", ".astro", ".git", "__pycache__"}
+    return {name for name in names if name in skip or name.endswith(".pyc")}
+
+
+def materialize_app_into_worktree(store: "Store", worktree: Path) -> None:
+    """If the app exists on main but not in the worktree (scaffold-after-commit), copy it.
+
+    Heavy build dirs are skipped here and re-linked by share_worktree_build_artifacts.
+    """
+    defaults = resolve_defaults(store)
+    app = str(defaults.get("app_folder") or store.profile.get("app_dir") or "").rstrip("/")
+    if not app or _is_unset(app):
+        return
+    main_app = store.root / app
+    wt_app = worktree / app
+    if not main_app.is_dir():
+        return
+    marker = "package.json"
+    if (wt_app / marker).is_file() or (wt_app / "src-tauri" / "Cargo.toml").is_file():
+        return
+    if not (main_app / marker).is_file() and not (main_app / "src-tauri" / "Cargo.toml").is_file():
+        return
+    if wt_app.exists():
+        shutil.rmtree(wt_app)
+    shutil.copytree(main_app, wt_app, ignore=_worktree_copy_ignore)
+
+
+def share_worktree_build_artifacts(store: "Store", worktree: Path) -> None:
+    """Reuse main-tree node_modules / target so gates don't reinstall from scratch."""
+    defaults = resolve_defaults(store)
+    app = str(defaults.get("app_folder") or store.profile.get("app_dir") or "").rstrip("/")
+    if not app or _is_unset(app):
+        return
+    materialize_app_into_worktree(store, worktree)
+    pairs = [
+        (f"{app}/node_modules", f"{app}/node_modules"),
+        (f"{app}/dist", f"{app}/dist"),
+        (f"{app}/.astro", f"{app}/.astro"),
+        (f"{app}/src-tauri/target", f"{app}/src-tauri/target"),
+    ]
+    for main_rel, wt_rel in pairs:
+        _symlink_share(store.root / main_rel, worktree / wt_rel)
+
+
+def worktree_has_precious_work(store: "Store", task: dict, dest: Path) -> list[str]:
+    """Return reasons this worktree should not be force-deleted."""
+    reasons: list[str] = []
+    if not dest.exists():
+        return reasons
+    try:
+        dirty = git_changed_files(dest)
+    except SystemExit:
+        dirty = []
+    if dirty:
+        reasons.append(f"dirty files: {', '.join(dirty[:8])}")
+    base = (task.get("worktree_base") or "").strip()
+    if base:
+        ahead = run_git(
+            dest, "rev-list", "--count", f"{base}..HEAD", check=False
+        )
+        if ahead.returncode == 0:
+            try:
+                count = int((ahead.stdout or "0").strip() or "0")
+            except ValueError:
+                count = 0
+            if count > 0:
+                reasons.append(f"{count} commit(s) ahead of claim base")
+    return reasons
+
+
+def archive_task_worktree(store: "Store", task: dict, dest: Path) -> str:
+    """Move a precious worktree aside instead of deleting it."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_rel = (
+        f".dm-software-machine/worktrees/archived-{task['id']}-{stamp}"
+    )
+    archive = store.root / archive_rel
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    # Detach from git worktree registry, keep files.
+    run_git(store.root, "worktree", "remove", "--force", str(dest), check=False)
+    if dest.exists():
+        if archive.exists():
+            shutil.rmtree(archive, ignore_errors=True)
+        dest.rename(archive)
+    run_git(store.root, "worktree", "prune", check=False)
+    return archive_rel
+
+
+def remove_task_worktree(
+    store: "Store", task: dict, *, force: bool = False
+) -> None:
+    rel = (task.get("worktree_path") or "").strip()
+    branch = (task.get("worktree_branch") or "").strip()
+    if rel:
+        dest = store.root / rel
+        if dest.exists() and not force:
+            precious = worktree_has_precious_work(store, task, dest)
+            if precious:
+                archive_rel = archive_task_worktree(store, task, dest)
+                task["worktree_archived"] = archive_rel
+                task["reason"] = (
+                    (task.get("reason") or "")
+                    + f" · worktree archived at {archive_rel} ({'; '.join(precious)})"
+                ).strip(" ·")
+                # Keep the branch so archived commits remain reachable.
+                task.pop("worktree_path", None)
+                # worktree_branch kept for recovery hints
+                return
+        listed = run_git(store.root, "worktree", "list", "--porcelain", check=False)
+        if dest.exists() or rel in (listed.stdout or ""):
+            run_git(
+                store.root,
+                "worktree",
+                "remove",
+                "--force",
+                str(dest),
+                check=False,
+            )
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        run_git(store.root, "worktree", "prune", check=False)
+    if branch and force:
+        # Delete task branch only after a successful accept (force).
+        run_git(store.root, "branch", "-D", branch, check=False)
+    elif branch and not task.get("worktree_archived"):
+        run_git(store.root, "branch", "-D", branch, check=False)
+    task.pop("worktree_path", None)
+    task.pop("worktree_branch", None)
+    task.pop("worktree_base", None)
+
+
+def ensure_task_worktree(store: "Store", task: dict) -> dict:
+    """Create (or reuse) an isolated worktree for a claimed task."""
+    if not (store.root / ".git").exists() and not (store.root / ".git").is_file():
+        raise SystemExit("worktrees require a git repository")
+    head = run_git(store.root, "rev-parse", "HEAD", check=False)
+    if head.returncode != 0:
+        raise SystemExit(
+            "worktrees need at least one commit "
+            "(init usually creates one; otherwise: git commit)"
+        )
+    task_id = task["id"]
+    rel = worktree_relpath(task_id)
+    dest = store.root / rel
+    branch = task_branch_name(task_id)
+    if dest.is_dir() and (
+        (dest / ".git").exists() or (dest / ".git").is_file()
+    ):
+        task["worktree_path"] = rel
+        task["worktree_branch"] = branch
+        task.setdefault("worktree_base", head.stdout.strip())
+        share_worktree_build_artifacts(store, dest)
+        return {
+            "path": rel,
+            "branch": branch,
+            "base": task.get("worktree_base") or head.stdout.strip(),
+            "reused": True,
+        }
+    # Clean stale path / branch from a prior crash.
+    if dest.exists():
+        run_git(store.root, "worktree", "remove", "--force", str(dest), check=False)
+        shutil.rmtree(dest, ignore_errors=True)
+    run_git(store.root, "worktree", "prune", check=False)
+    run_git(store.root, "branch", "-D", branch, check=False)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    run_git(store.root, "worktree", "add", "-b", branch, str(dest), "HEAD")
+    share_worktree_build_artifacts(store, dest)
+    base = head.stdout.strip()
+    task["worktree_path"] = rel
+    task["worktree_branch"] = branch
+    task["worktree_base"] = base
+    return {"path": rel, "branch": branch, "base": base, "reused": False}
+
+
+def commit_task_worktree(store: "Store", task: dict) -> list[str]:
+    """Stage write-scoped dirty files in the worktree and commit if needed."""
+    checkout = task_checkout_root(store, task)
+    if checkout == store.root:
+        return []
+    writes = task.get("writes") or resolve_defaults(store)["writes"]
+    dirty = git_changed_files(checkout)
+    inside = [path for path in dirty if path_in_patterns(path, writes)]
+    if not inside and not dirty:
+        # Already clean — ensure branch has a commit tip for merge.
+        return []
+    if not inside:
+        raise SystemExit(
+            "accept refused: worktree has dirty files outside writes\n"
+            + "\n".join(f"  {path}" for path in dirty)
+        )
+    run_git(checkout, "add", "--", *inside)
+    staged = run_git(checkout, "diff", "--cached", "--name-only")
+    files = [line.strip() for line in staged.stdout.splitlines() if line.strip()]
+    if not files:
+        return []
+    title = (task.get("title") or task["id"]).replace('"', "'")
+    env = os.environ.copy()
+    env.setdefault("GIT_AUTHOR_NAME", "dm-software-machine")
+    env.setdefault("GIT_AUTHOR_EMAIL", "sm@local")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    run_git(
+        checkout,
+        "-c",
+        "user.name=dm-software-machine",
+        "-c",
+        "user.email=sm@local",
+        "commit",
+        "-m",
+        f"sm: {task['id']} {title}",
+        env=env,
+    )
+    return files
+
+
+def current_checkout_branch(root: Path) -> str:
+    completed = run_git(root, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    name = (completed.stdout or "").strip()
+    if completed.returncode != 0 or not name or name == "HEAD":
+        raise SystemExit(
+            "accept refused: main checkout is detached HEAD; "
+            "check out a branch first"
+        )
+    return name
+
+
+def classify_merge_failure(detail: str, *, branch: str, task_id: str) -> str:
+    text = detail.lower()
+    if "local changes would be overwritten" in text:
+        return (
+            f"accept refused: main checkout has local changes that overlap {branch}\n"
+            "Commit or stash them on main, then sm-accept again.\n"
+            f"{detail}"
+        )
+    if "untracked working tree files would be overwritten" in text:
+        return (
+            f"accept refused: untracked files on main would be overwritten by {branch}\n"
+            "Move or commit those files, then sm-accept again.\n"
+            f"{detail}"
+        )
+    if "user.name" in text or "user.email" in text or "please tell me who you are" in text:
+        return (
+            "accept refused: git identity is not configured for the merge commit\n"
+            "Set user.name / user.email, or retry (sm sets a local fallback on task commits).\n"
+            f"{detail}"
+        )
+    return (
+        f"accept refused: merge conflict integrating {branch}\n"
+        f"In the task worktree: just sm-rebase {task_id}  # merges main into the task branch\n"
+        "Resolve conflicts there, then just sm-finish && just sm-accept again.\n"
+        "Do not reclaim --force unless you intend to drop the branch work.\n"
+        f"{detail}"
+    )
+
+
+def merge_task_branch(store: "Store", task: dict) -> None:
+    branch = (task.get("worktree_branch") or "").strip()
+    if not branch:
+        return
+    target = current_checkout_branch(store.root)
+    # Refuse if main checkout is mid-merge.
+    git_dir = store.root / ".git"
+    merge_head = (
+        git_dir / "MERGE_HEAD"
+        if git_dir.is_dir()
+        else None
+    )
+    if merge_head and merge_head.exists():
+        raise SystemExit("accept refused: repository already has a merge in progress")
+    env = os.environ.copy()
+    env.setdefault("GIT_AUTHOR_NAME", "dm-software-machine")
+    env.setdefault("GIT_AUTHOR_EMAIL", "sm@local")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    completed = run_git(
+        store.root,
+        "-c",
+        "user.name=dm-software-machine",
+        "-c",
+        "user.email=sm@local",
+        "merge",
+        "--no-ff",
+        "-m",
+        f"sm accept {task['id']} into {target}",
+        branch,
+        check=False,
+        env=env,
+    )
+    if completed.returncode != 0:
+        run_git(store.root, "merge", "--abort", check=False)
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise SystemExit(classify_merge_failure(detail, branch=branch, task_id=task["id"]))
+
+
+def classify_changes(store: "Store", writes: list[str], *, checkout: Path | None = None) -> dict[str, list[str]]:
     protected = list(store.cfg.get("protected_paths") or [])
     ignore = list(MACHINE_OWNED_PREFIXES)
     ignore.extend(protected)
     ignore.extend(store.cfg.get("ignore_dirty") or [])
     never = list(store.cfg.get("never_write") or [])
     never.extend(store.profile.get("never_write") or [])
-    dirty = git_changed_files(store.root)
+    root = checkout or store.root
+    dirty = git_changed_files(root)
     inside, protected_hits, ignored, unscoped = [], [], [], []
     for path in dirty:
         if is_never_write(path, never):
@@ -569,21 +1166,34 @@ def classify_changes(store: "Store", writes: list[str]) -> dict[str, list[str]]:
     }
 
 
-def scope_snapshot(store: "Store", writes: list[str]) -> dict[str, str | None]:
-    scope = classify_changes(store, writes)
+def scope_snapshot(
+    store: "Store",
+    writes: list[str],
+    *,
+    checkout: Path | None = None,
+) -> dict[str, str | None]:
+    root = checkout or store.root
+    scope = classify_changes(store, writes, checkout=root)
     snap: dict[str, str | None] = {}
     for path in scope["unscoped"] + scope["protected"] + scope["ignored"]:
-        snap[path] = file_digest(store.root, path)
+        snap[path] = file_digest(root, path)
     return snap
 
 
-def unscoped_violations(store: "Store", writes: list[str], baseline: dict | None) -> list[str]:
-    scope = classify_changes(store, writes)
+def unscoped_violations(
+    store: "Store",
+    writes: list[str],
+    baseline: dict | None,
+    *,
+    checkout: Path | None = None,
+) -> list[str]:
+    root = checkout or store.root
+    scope = classify_changes(store, writes, checkout=root)
     if not baseline:
         return [f"{path} (outside writes)" for path in scope["unscoped"]]
     violations = []
     for path in scope["unscoped"]:
-        now = file_digest(store.root, path)
+        now = file_digest(root, path)
         if path not in baseline:
             violations.append(f"{path} (new outside writes)")
         elif baseline.get(path) != now:
@@ -623,9 +1233,12 @@ def apply_work_envelope(store: Store, task_id: str, envelope: Envelope) -> Path:
 
 def work_from_git(store: Store, task: dict) -> Envelope:
     writes = task.get("writes") or resolve_defaults(store)["writes"]
-    scope = classify_changes(store, writes)
+    checkout = task_checkout_root(store, task)
+    scope = classify_changes(store, writes, checkout=checkout)
     print_scope(scope)
-    violations = unscoped_violations(store, writes, task.get("scope_baseline"))
+    violations = unscoped_violations(
+        store, writes, task.get("scope_baseline"), checkout=checkout
+    )
     if violations:
         raise SystemExit(
             "finish refused: dirty files outside writes\n"
@@ -658,7 +1271,11 @@ def apply_review_envelope(store: Store, task_id: str, envelope: Envelope) -> Pat
     if envelope.approved is False:
         task["repair_count"] = int(task.get("repair_count", 0)) + 1
         if task["repair_count"] > task["max_repairs"]:
-            task["status"] = "blocked"
+            mark_over_repair_failed(task, kind="Review")
+        else:
+            task["reason"] = "Review rejected; repair and finish again."
+    elif envelope.approved:
+        task["reason"] = ""
     store.save_state(state)
     store.emit("review", {"approved": envelope.approved, "path": str(dest)}, task_id)
     return dest
@@ -666,9 +1283,12 @@ def apply_review_envelope(store: Store, task_id: str, envelope: Envelope) -> Pat
 
 def review_from_diff(store: Store, task: dict) -> Envelope:
     writes = task.get("writes") or resolve_defaults(store)["writes"]
-    scope = classify_changes(store, writes)
+    checkout = task_checkout_root(store, task)
+    scope = classify_changes(store, writes, checkout=checkout)
     blocking = []
-    violations = unscoped_violations(store, writes, task.get("scope_baseline"))
+    violations = unscoped_violations(
+        store, writes, task.get("scope_baseline"), checkout=checkout
+    )
     if violations:
         blocking.append("dirty files outside writes: " + ", ".join(violations))
     changed = task.get("changed_files") or scope["inside"]
@@ -779,7 +1399,25 @@ class Store:
 
     def save_state(self, state: dict) -> None:
         path = self.state_path(state["run_id"])
-        path.write_text(json.dumps(state, indent=2) + "\n")
+        atomic_write_json(path, state)
+        sync_project_from_state(self, state)
+
+    def state_lock_path(self, run_id: str | None = None) -> Path:
+        return self.run_dir(run_id) / "state.lock"
+
+    @contextmanager
+    def locked_state(self, run_id: str | None = None) -> Iterator[dict]:
+        """Exclusive lock around a load→mutate→save cycle for one run."""
+        lock_path = self.state_lock_path(run_id)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self.load_state(run_id)
+                yield state
+                self.save_state(state)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def emit(self, event_type: str, payload: dict | None = None, task_id: str = "",
              run_id: str | None = None) -> None:
@@ -845,26 +1483,40 @@ def stamp_file(src: Path, dest: Path, force: bool, manifest: dict) -> str:
     return "stamped"
 
 
-VENDOR_NAMES = ("SKILL.md", "VERSION", "scripts", "profiles", "templates", "references")
+VENDOR_NAMES = (
+    "SKILL.md",
+    "VERSION",
+    "scripts",
+    "profiles",
+    "templates",
+    "references",
+    "board",
+)
 
 
-def vendor_skill(root: Path) -> str:
+def vendor_skill(root: Path, *, upgrade: bool = False) -> str:
     dest = root / "dm-software-machine"
     if SKILL_ROOT.resolve() == dest.resolve():
         return "vendor skipped (already in-repo)"
-    if dest.exists():
+    if dest.exists() and not upgrade:
         return "vendor skipped (dm-software-machine/ exists)"
-    dest.mkdir(parents=True)
+    dest.mkdir(parents=True, exist_ok=True)
     for name in VENDOR_NAMES:
         src = SKILL_ROOT / name
         if not src.exists():
             continue
         target = dest / name
         if src.is_dir():
-            shutil.copytree(src, target)
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(
+                src,
+                target,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
         else:
             shutil.copy2(src, target)
-    return "vendored dm-software-machine/"
+    return "vendor upgraded" if upgrade else "vendored dm-software-machine/"
 
 
 def _yes(reply: str, default: bool = False) -> bool:
@@ -874,104 +1526,20 @@ def _yes(reply: str, default: bool = False) -> bool:
     return text in ("y", "yes")
 
 
-def ensure_bd_binary() -> str:
-    if shutil.which("bd"):
-        return "bd already on PATH"
-    if shutil.which("brew"):
-        _run_live(["brew", "install", "beads"], Path.cwd())
-        if shutil.which("bd"):
-            return "brew install beads"
-    if shutil.which("npm"):
-        _run_live(["npm", "install", "-g", "@beads/bd"], Path.cwd())
-        if shutil.which("bd"):
-            return "npm install -g @beads/bd"
-    raise SystemExit(
-        "tracker=beads but bd is not on PATH. Install it, then re-run "
-        "configure --tracker beads\n"
-        "  brew install beads\n"
-        "  npm install -g @beads/bd"
-    )
-
-
-def ensure_beads(root: Path) -> str:
-    notes = [ensure_bd_binary()]
-    if (root / ".beads").exists():
-        notes.append("beads repo already initialized")
-        return "; ".join(notes)
-    argv = ["bd", "init", "--quiet", "--role", "maintainer"]
-    print(f"$ {' '.join(argv)}  (cwd {root})")
-    completed = subprocess.run(argv, cwd=root)
-    if completed.returncode != 0:
-        raise SystemExit(f"bd init failed ({completed.returncode})")
-    notes.append("bd init")
-    return "; ".join(notes)
-
-
 def apply_tracker(root: Path, tracker: str) -> str:
+    """Force tracker to none. Built-in store + board only."""
     tracker = (tracker or "none").strip().lower()
-    if tracker not in ("none", "beads"):
-        raise SystemExit("tracker must be none or beads")
+    if tracker and tracker not in ("none",):
+        raise SystemExit(
+            f"tracker={tracker!r} is not supported. "
+            "Use tracker: none (built-in store + board)."
+        )
     machine_yaml = machine_path(root) / "machine.yaml"
     if machine_yaml.exists():
-        machine_yaml.write_text(set_yaml_scalar(machine_yaml.read_text(), "tracker", tracker))
-    if tracker == "beads":
-        return f"tracker=beads ({ensure_beads(root)})"
-    return "tracker=none"
-
-
-def tracker_is_beads(store: Store) -> bool:
-    return str(store.cfg.get("tracker") or "none").strip().lower() == "beads"
-
-
-def _bd_json(argv: list[str], root: Path) -> Any:
-    completed = subprocess.run(argv, cwd=root, capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"{' '.join(argv)} failed ({completed.returncode})\n"
-            f"{(completed.stderr or completed.stdout).strip()}"
+        machine_yaml.write_text(
+            set_yaml_scalar(machine_yaml.read_text(), "tracker", "none")
         )
-    text = (completed.stdout or "").strip()
-    if not text:
-        return {}
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {"raw": text}
-
-
-def beads_create(root: Path, *, title: str, task_id: str, run_id: str, spec_path: str) -> str:
-    if not shutil.which("bd"):
-        raise SystemExit("tracker=beads but bd is not on PATH. Run: configure --tracker beads")
-    if not (root / ".beads").exists():
-        raise SystemExit("tracker=beads but .beads/ is missing. Run: configure --tracker beads")
-    desc = f"sm task {task_id} (run {run_id})\nSpec: {spec_path}"
-    payload = _bd_json(
-        [
-            "bd", "create", title,
-            "--type", "task",
-            "--external-ref", f"sm:{task_id}",
-            "--description", desc,
-            "--json",
-        ],
-        root,
-    )
-    if isinstance(payload, list) and payload:
-        payload = payload[0]
-    bead_id = (payload or {}).get("id") if isinstance(payload, dict) else None
-    if not bead_id:
-        raise SystemExit(f"bd create returned no id: {payload}")
-    return str(bead_id)
-
-
-def beads_close(root: Path, bead_id: str, reason: str) -> None:
-    _bd_json(["bd", "close", bead_id, "--reason", reason, "--json"], root)
-
-
-def beads_update_description(root: Path, bead_id: str, description: str) -> None:
-    _bd_json(
-        ["bd", "update", bead_id, "--description", description, "--json"],
-        root,
-    )
+    return "tracker=none"
 
 
 def ensure_justfile(root: Path) -> str:
@@ -984,23 +1552,64 @@ def ensure_justfile(root: Path) -> str:
     if "sm-finish" not in text:
         justfile.write_text(text.rstrip() + "\n\n" + snippet)
         return "justfile +sm recipes"
+    additions = []
     if "sm-auto" not in text:
-        justfile.write_text(text.rstrip() + "\n\nsm-auto MODE:\n    {{sm}} auto {{MODE}}\n")
-        return "justfile +sm-auto"
-    if "sm-brief" not in text:
-        justfile.write_text(
-            text.rstrip()
-            + "\n\nsm-brief *ARGS:\n    {{sm}} task-brief --title \"$@\"\n"
-            + "\nsm-ready TASK:\n    {{sm}} task-ready {{TASK}}\n"
-            + "\nsm-ticket *ARGS:\n    {{sm}} task-ticket --title \"$@\"\n"
+        additions.append("sm-auto MODE:\n    {{sm}} auto {{MODE}}\n")
+    if "sm-export" not in text:
+        additions.append("sm-export *ARGS:\n    {{sm}} export \"$@\"\n")
+    if "sm-board" not in text:
+        additions.append("sm-board *ARGS:\n    {{sm}} board \"$@\"\n")
+    if "sm-board-serve" not in text:
+        additions.append(
+            "sm-board-serve *ARGS:\n    {{sm}} board --serve \"$@\"\n"
         )
-        return "justfile +sm-brief"
+    if "sm-overrides-import" not in text:
+        additions.append(
+            "sm-overrides-import *ARGS:\n    {{sm}} overrides-import \"$@\"\n"
+            "sm-overrides-export *ARGS:\n    {{sm}} overrides-export \"$@\"\n"
+        )
     if "sm-ticket" not in text:
-        justfile.write_text(
-            text.rstrip()
-            + "\n\nsm-ticket *ARGS:\n    {{sm}} task-ticket --title \"$@\"\n"
+        additions.append(
+            "sm-ticket *ARGS:\n    {{sm}} task-ticket --title \"$@\"\n"
+            "sm-brief *ARGS:\n    {{sm}} task-brief --title \"$@\"\n"
+            "sm-ready TASK:\n    {{sm}} task-ready {{TASK}}\n"
         )
-        return "justfile +sm-ticket"
+    if "sm-prime" not in text:
+        additions.append(
+            "[positional-arguments]\n"
+            "sm-prime *ARGS:\n    {{sm}} prime \"$@\"\n"
+            "[positional-arguments]\n"
+            "sm-note TASK +TEXT:\n    {{sm}} task-note {{TASK}} \"${@:2}\"\n"
+        )
+    elif "sm-note TASK *ARGS" in text:
+        text = text.replace(
+            "sm-note TASK *ARGS:\n    {{sm}} task-note {{TASK}} \"$@\"\n",
+            "[positional-arguments]\n"
+            "sm-note TASK +TEXT:\n    {{sm}} task-note {{TASK}} \"${@:2}\"\n",
+        )
+        justfile.write_text(text)
+        return "justfile sm-note fixed"
+    if "sm-doctor" not in text:
+        additions.append(
+            "sm-rebase TASK:\n    {{sm}} rebase --task {{TASK}}\n"
+            "sm-doctor:\n    {{sm}} doctor\n"
+        )
+    if "sm-test" not in text:
+        additions.append(
+            "sm-test:\n"
+            "    #!/usr/bin/env bash\n"
+            "    set -euo pipefail\n"
+            "    root=\"$(pwd)\"\n"
+            "    scripts=\"$root/dm-software-machine/scripts\"\n"
+            "    for t in test_export.py test_brief.py test_worktrees.py test_unattended.py; do\n"
+            "      echo \"=== $t ===\"\n"
+            "      uv run \"$scripts/$t\"\n"
+            "    done\n"
+            "    echo \"unit suite ok (astro live: uv run dm-software-machine/scripts/test_astro.py)\"\n"
+        )
+    if additions:
+        justfile.write_text(text.rstrip() + "\n\n" + "\n".join(additions))
+        return "justfile +sm recipes"
     return "justfile unchanged"
 
 
@@ -1019,17 +1628,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         "version": VERSION, "files": {}
     }
     actions: list[str] = []
+    upgrade = bool(getattr(args, "upgrade", False))
+    force = bool(args.force or upgrade)
 
     stamps = [
-        (SKILL_ROOT / "templates" / "machine.yaml", dest_dir / "machine.yaml"),
-        (profile_src, dest_dir / "profile.yaml"),
-        (SKILL_ROOT / "templates" / "PROJECT.md", dest_dir / "PROJECT.md"),
-        (SKILL_ROOT / "SKILL.md", dest_dir / "SKILL.md"),
-        (SKILL_ROOT / "references" / "contracts.md", dest_dir / "contracts.md"),
-        (SKILL_ROOT / "templates" / "permissions.json", root / ".cursor" / "permissions.json"),
+        (SKILL_ROOT / "templates" / "machine.yaml", dest_dir / "machine.yaml", bool(args.force)),
+        (profile_src, dest_dir / "profile.yaml", bool(args.force)),
+        (SKILL_ROOT / "templates" / "PROJECT.md", dest_dir / "PROJECT.md", force),
+        (SKILL_ROOT / "SKILL.md", dest_dir / "SKILL.md", force),
+        (SKILL_ROOT / "references" / "contracts.md", dest_dir / "contracts.md", force),
+        (SKILL_ROOT / "templates" / "permissions.json", root / ".cursor" / "permissions.json", force),
     ]
-    for src, dest in stamps:
-        action = stamp_file(src, dest, args.force, manifest)
+    for src, dest, stamp_force in stamps:
+        action = stamp_file(src, dest, stamp_force, manifest)
         rel = str(dest.relative_to(root))
         actions.append(f"{action} {rel}")
         if action != "skipped-local":
@@ -1037,7 +1648,9 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     machine_yaml = dest_dir / "machine.yaml"
     text = machine_yaml.read_text()
-    text = set_yaml_scalar(text, "profile", profile_id)
+    # Preserve configured profile on upgrade unless --force restamped machine.yaml.
+    if not upgrade or args.force:
+        text = set_yaml_scalar(text, "profile", profile_id)
     text = set_yaml_scalar(text, "version", VERSION)
     machine_yaml.write_text(text)
 
@@ -1057,20 +1670,21 @@ def cmd_init(args: argparse.Namespace) -> int:
             auto_advance=False,
         )
         actions.append(f"configured defaults app_folder={app_folder}")
-        if (tracker or "none") == "beads":
-            actions.append(apply_tracker(root, "beads"))
+        actions.append(apply_tracker(root, tracker or "none"))
     elif args.ask:
         rc = run_configure(store, ask=True, tracker=tracker)
         if rc != 0:
             return rc
         actions.append("configured via questions")
-    elif tracker == "beads":
-        actions.append(apply_tracker(root, "beads"))
+    elif tracker:
+        actions.append(apply_tracker(root, tracker))
     elif not layout_is_configured(store.cfg, root):
         print(CONFIGURE_HINT)
 
-    actions.append(vendor_skill(root))
+    actions.append(vendor_skill(root, upgrade=upgrade))
     actions.append(ensure_justfile(root))
+    if upgrade:
+        actions.append(f"upgraded to {VERSION}")
 
     ignored = ensure_gitignore(root)
     if ignored:
@@ -1086,8 +1700,20 @@ def cmd_init(args: argparse.Namespace) -> int:
     ).returncode == 0
     if not has_commit:
         subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-        subprocess.run(["git", "commit", "-m", "init dm-software-machine fixture"],
-                       cwd=root, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=dm-software-machine",
+                "-c",
+                "user.email=sm@local",
+                "commit",
+                "-m",
+                "chore: initial commit for dm-software-machine",
+            ],
+            cwd=root,
+            check=True,
+        )
         actions.append("initial commit")
         # Prefer a narrow add if this is a later re-init; first commit still
         # needs a repo HEAD so later task commits can run.
@@ -1107,6 +1733,27 @@ def cmd_init(args: argparse.Namespace) -> int:
             if after_argv:
                 _run_live(after_argv, install_cwd)
             actions.append(f"scaffolded {dest.name}")
+            # Commit only the scaffold tree so worktrees/gates see the app
+            # without sweeping unrelated dirty files into the commit.
+            if (root / ".git").exists():
+                subprocess.run(["git", "add", "--", str(dest)], cwd=root, check=False)
+                commit = subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=dm-software-machine",
+                        "-c",
+                        "user.email=sm@local",
+                        "commit",
+                        "-m",
+                        f"chore: scaffold {dest.name}",
+                    ],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                )
+                if commit.returncode == 0:
+                    actions.append(f"committed scaffold {dest.name}")
 
     missing = _prereq_report(profile)
     if missing:
@@ -1151,20 +1798,377 @@ def _prereq_report(profile: dict) -> list[str]:
 def ensure_run(store: Store) -> dict:
     pointer = store.machine_dir / "current-run"
     if pointer.exists():
-        return store.load_state()
+        rid = pointer.read_text().strip()
+        path = store.runs_dir() / rid / "state.json"
+        if path.exists():
+            return store.load_state()
+        # Pointer survived a wiped runs/ tree — start a fresh run seeded from
+        # the durable project store when present.
     run_id = uuid.uuid4().hex[:8]
+    tasks: dict = {}
+    project_path = project_store_path(store)
+    if project_path.exists():
+        try:
+            project = json.loads(project_path.read_text())
+            for tid, task in (project.get("tasks") or {}).items():
+                row = dict(task)
+                # In-flight work cannot resume without run envelopes; park it.
+                if row.get("status") in ("claimed", "active", "gated", "reviewed"):
+                    row["status"] = "queued"
+                    row["claimed_by"] = None
+                    row["claim_lease"] = None
+                    row["worktree_path"] = None
+                    row["worktree_branch"] = None
+                    row["phase"] = "requeued"
+                    row["reason"] = (
+                        (row.get("reason") or "")
+                        + " · requeued after missing run state"
+                    ).strip(" ·")
+                tasks[tid] = row
+        except (json.JSONDecodeError, OSError):
+            tasks = {}
     state = {
         "run_id": run_id,
         "profile": store.cfg.get("profile"),
         "created_at": now_iso(),
         "paused": not bool(store.cfg.get("auto_advance", False)),
         "auto_advance": bool(store.cfg.get("auto_advance", False)),
-        "tasks": {},
+        "tasks": tasks,
     }
     store.set_current_run(run_id)
     store.save_state(state)
     store.emit("run_started", {"profile": state["profile"]}, run_id=run_id)
     return state
+
+
+def atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def project_store_path(store: Store) -> Path:
+    return store.machine_dir / "project-tasks.json"
+
+
+def empty_project_store() -> dict:
+    return {
+        "schema_version": PROJECT_STORE_SCHEMA,
+        "updated_at": now_iso(),
+        "milestones": {},
+        "tasks": {},
+    }
+
+
+def load_project_store(store: Store) -> dict:
+    path = project_store_path(store)
+    if not path.exists():
+        return empty_project_store()
+    project = json.loads(path.read_text())
+    project.setdefault("milestones", {})
+    project.setdefault("tasks", {})
+    return project
+
+
+def save_project_store(store: Store, project: dict) -> None:
+    project = dict(project)
+    project["schema_version"] = PROJECT_STORE_SCHEMA
+    project["updated_at"] = now_iso()
+    project.setdefault("milestones", {})
+    project.setdefault("tasks", {})
+    atomic_write_json(project_store_path(store), project)
+
+
+def normalize_priority(value: str | None, *, default: str = "P2") -> str:
+    text = (value or default).strip().upper()
+    if text not in PRIORITIES:
+        raise SystemExit(f"priority must be one of {', '.join(PRIORITIES)}")
+    return text
+
+
+def normalize_kind(value: str | None, *, default: str = "task") -> str:
+    text = (value or default).strip().lower()
+    if text not in TASK_KINDS:
+        raise SystemExit(f"kind must be one of {', '.join(TASK_KINDS)}")
+    return text
+
+
+
+def normalize_labels(values) -> list[str]:
+    """Deduped labels; preserve first-seen casing, match case-insensitively."""
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [part.strip() for part in values.split(",")]
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        label = str(raw).strip()
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
+def ensure_task_labels_notes(task: dict) -> None:
+    task["labels"] = normalize_labels(task.get("labels"))
+    notes = task.get("notes")
+    if not isinstance(notes, list):
+        task["notes"] = []
+    else:
+        cleaned = []
+        for item in notes:
+            if isinstance(item, dict) and str(item.get("text") or "").strip():
+                cleaned.append(
+                    {
+                        "at": item.get("at") or now_iso(),
+                        "by": str(item.get("by") or "agent"),
+                        "text": str(item.get("text")).strip(),
+                    }
+                )
+            elif isinstance(item, str) and item.strip():
+                cleaned.append({"at": now_iso(), "by": "agent", "text": item.strip()})
+        task["notes"] = cleaned
+
+
+def append_task_note(task: dict, text: str, *, by: str = "") -> dict:
+    ensure_task_labels_notes(task)
+    note = {
+        "at": now_iso(),
+        "by": (by or os.environ.get("USER") or "agent").strip() or "agent",
+        "text": text.strip(),
+    }
+    if not note["text"]:
+        raise SystemExit("note text required")
+    task["notes"].append(note)
+    return note
+
+
+def tasks_index(tasks: dict) -> dict[str, dict]:
+    return {tid: task for tid, task in (tasks or {}).items()}
+
+
+def unmet_depends(task: dict, by_id: dict[str, dict]) -> list[str]:
+    accepted = {
+        tid for tid, other in by_id.items() if other.get("status") == "accepted"
+    }
+    return [dep for dep in (task.get("depends_on") or []) if dep not in accepted]
+
+
+def blockers_of(task_id: str, by_id: dict[str, dict]) -> list[str]:
+    """Tasks that list task_id in depends_on and are not yet accepted."""
+    out = []
+    for tid, other in by_id.items():
+        if tid == task_id:
+            continue
+        if other.get("status") == "accepted":
+            continue
+        if task_id in (other.get("depends_on") or []):
+            out.append(tid)
+    return sorted(out)
+
+
+def collect_all_tasks(store: Store) -> dict[str, dict]:
+    """Prefer current-run tasks, overlay durable project store for completeness."""
+    project = ensure_project_seeded(store)
+    merged = dict(project.get("tasks") or {})
+    pointer = store.machine_dir / "current-run"
+    if pointer.exists():
+        state = store.load_state()
+        merged.update(state.get("tasks") or {})
+    for task in merged.values():
+        ensure_task_labels_notes(task)
+    return merged
+
+
+def project_task_record(task: dict, run_id: str, previous: dict | None = None) -> dict:
+    record = {key: value for key, value in task.items() if key != "scope_baseline"}
+    record["run_id"] = run_id
+    if record.get("bead_id") and not record.get("external_ref"):
+        record["external_ref"] = record["bead_id"]
+    record.setdefault("external_ref", record.get("bead_id"))
+    record.setdefault("reason", "")
+    prev = previous or {}
+    if not record.get("priority"):
+        record["priority"] = prev.get("priority") or "P2"
+    else:
+        record["priority"] = normalize_priority(str(record["priority"]))
+    if record.get("milestone") in (None, ""):
+        record["milestone"] = prev.get("milestone") or ""
+    if not record.get("owner"):
+        record["owner"] = prev.get("owner") or "unassigned"
+    if record.get("description") in (None, ""):
+        record["description"] = prev.get("description") or ""
+    if not record.get("kind"):
+        record["kind"] = prev.get("kind") or "task"
+    else:
+        record["kind"] = normalize_kind(str(record["kind"]))
+    if "parent" not in record or record.get("parent") in ("",):
+        record["parent"] = prev.get("parent")
+    if record.get("parent") == "":
+        record["parent"] = None
+    ensure_task_labels_notes(record)
+    if not record.get("labels") and prev.get("labels"):
+        record["labels"] = normalize_labels(prev.get("labels"))
+    if not record.get("notes") and prev.get("notes"):
+        ensure_task_labels_notes(prev)
+        record["notes"] = list(prev.get("notes") or [])
+    ensure_task_labels_notes(record)
+    return record
+
+
+def sync_project_from_state(store: Store, state: dict) -> None:
+    """Upsert current-run tasks into the durable project store (never wipe other runs)."""
+    project = load_project_store(store)
+    tasks = project.setdefault("tasks", {})
+    run_id = state["run_id"]
+    for task in state.get("tasks", {}).values():
+        tasks[task["id"]] = project_task_record(
+            task, run_id, previous=tasks.get(task["id"])
+        )
+    save_project_store(store, project)
+
+
+def ensure_project_seeded(store: Store) -> dict:
+    """Create/seed project-tasks.json from the current run when missing or empty."""
+    path = project_store_path(store)
+    if path.exists():
+        project = load_project_store(store)
+        if project.get("tasks"):
+            return project
+    pointer = store.machine_dir / "current-run"
+    if not pointer.exists():
+        project = empty_project_store()
+        save_project_store(store, project)
+        return project
+    state = store.load_state()
+    project = empty_project_store()
+    for task in state.get("tasks", {}).values():
+        project["tasks"][task["id"]] = project_task_record(task, state["run_id"])
+    save_project_store(store, project)
+    return project
+
+
+def export_milestones(project: dict) -> list[dict]:
+    milestones = project.get("milestones") or {}
+    rows = []
+    for item in milestones.values():
+        rows.append({"id": item["id"], "name": item.get("name") or item["id"]})
+    rows.sort(key=lambda row: row["id"])
+    return rows
+
+
+def require_milestone(project: dict, milestone_id: str) -> None:
+    if not milestone_id:
+        return
+    if milestone_id not in (project.get("milestones") or {}):
+        raise SystemExit(
+            f"unknown milestone {milestone_id}; "
+            f"add it with: milestone-add --id {milestone_id} --name '...'"
+        )
+
+
+def evidence_from_task(task: dict) -> dict:
+    gate = task.get("last_gate") or {}
+    review = task.get("last_review") or {}
+    if gate.get("passed") is True:
+        gate_v = "pass"
+    elif gate.get("passed") is False:
+        gate_v = "fail"
+    else:
+        gate_v = "none"
+    if review.get("approved") is True:
+        review_v = "pass"
+    elif review.get("approved") is False:
+        review_v = "fail"
+    else:
+        review_v = "none"
+    acceptance = "accepted" if task.get("status") == "accepted" else "none"
+    return {"gate": gate_v, "review": review_v, "acceptance": acceptance}
+
+
+def latest_envelope_ref(store: Store, task: dict) -> dict | None:
+    task_id = task["id"]
+    run_id = task.get("run_id")
+    try:
+        if run_id:
+            env_dir = store.run_dir(run_id) / "tasks" / task_id / "envelopes"
+        else:
+            env_dir = store.task_dir(task_id) / "envelopes"
+    except SystemExit:
+        return None
+    if not env_dir.exists():
+        return None
+    files = sorted(env_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not files:
+        return None
+    latest = files[-1]
+    try:
+        rel = str(latest.relative_to(store.root))
+    except ValueError:
+        rel = str(latest)
+    return {"kind": latest.stem, "path": rel}
+
+
+def export_task_row(store: Store, task: dict, *, by_id: dict[str, dict] | None = None) -> dict:
+    ensure_task_labels_notes(task)
+    holder = task.get("claimed_by")
+    claim = None
+    if holder:
+        claim = {"holder": holder, "lease": task.get("claim_lease")}
+    status = task.get("status")
+    depends = list(task.get("depends_on") or [])
+    repairs = int(task.get("repair_count") or 0)
+    max_repairs = int(task.get("max_repairs") or 2)
+    envelope = latest_envelope_ref(store, task)
+    index = by_id or {task["id"]: task}
+    waiting = unmet_depends(task, index)
+    return {
+        "id": task["id"],
+        "title": task.get("title", ""),
+        "description": task.get("description") or "",
+        "kind": task.get("kind") or "task",
+        "parent": task.get("parent"),
+        "status": status,
+        # Board display aliases (prototype columns). Canonical field is status.
+        "state": BOARD_STATUS.get(str(status), str(status or "")),
+        "priority": normalize_priority(str(task.get("priority") or "P2")),
+        "milestone": task.get("milestone") or "",
+        "owner": task.get("owner") or "unassigned",
+        "labels": list(task.get("labels") or []),
+        "notes": list(task.get("notes") or []),
+        "depends_on": depends,
+        "deps": depends,
+        "waiting_on": waiting,
+        "blocks": blockers_of(task["id"], index),
+        "writes": list(task.get("writes") or []),
+        "spec_path": task.get("spec_path"),
+        "claimed_by": holder,
+        "claim": claim,
+        "worktree_path": task.get("worktree_path"),
+        "worktree_branch": task.get("worktree_branch"),
+        "repair_count": repairs,
+        "retries": repairs,
+        "max_repairs": max_repairs,
+        "phase": task.get("phase"),
+        "reason": task.get("reason") or "",
+        "run_id": task.get("run_id"),
+        "external_ref": task.get("external_ref") or task.get("bead_id"),
+        "last_gate": task.get("last_gate"),
+        "last_review": task.get("last_review"),
+        "created_at": task.get("created_at"),
+        "board_overrides_at": task.get("board_overrides_at"),
+        "evidence": evidence_from_task(task),
+        "latest_envelope": envelope,
+        # Convenience for board cards / drawer links
+        "envelope_path": (envelope or {}).get("path"),
+    }
+
 
 
 def _prompt(label: str, default: str) -> str:
@@ -1213,12 +2217,8 @@ def run_configure(
         default_writes = ", ".join(writes or writes_for_app(app_folder, store.profile))
         writes_line = _prompt("Writes (comma-separated)", default_writes)
         writes = [part.strip() for part in writes_line.split(",") if part.strip()]
-        if not tracker:
-            tracker_reply = _prompt(
-                "Is this a large complex project that would benefit from a project tracker?",
-                "n",
-            )
-            tracker = "beads" if _yes(tracker_reply, default=False) else "none"
+        # Built-in store + board only. Do not offer Beads at first run.
+        tracker = tracker or "none"
         if auto_advance is None:
             auto_reply = _prompt(
                 "Keep going through queued tasks until idle or a red gate (no pause after accept)?",
@@ -1299,8 +2299,10 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     print(f"dev         (cd {defaults['dev_cwd']} && {defaults['dev_command']})")
     print(f"tracker     {defaults['tracker']}")
     print(f"parallel    {defaults['parallel']}")
+    print(f"claim_lease_hours {defaults['claim_lease_hours']}")
     print(f"auto_advance {defaults['auto_advance']}")
     print(f"require_brief {defaults['require_brief']}")
+    print(f"worktrees    {defaults.get('worktrees')}")
     return 0
 
 
@@ -1322,8 +2324,6 @@ def _print_new_task(task: dict) -> None:
         print("briefing")
         print(f"spec {task['spec_path']}")
         print(f"Fill the spec, then: just sm-ready {task['id']}")
-    if task.get("bead_id"):
-        print(f"bead {task['bead_id']}")
 
 
 def create_task(
@@ -1335,54 +2335,91 @@ def create_task(
 ) -> dict:
     state = ensure_run(store)
     defaults = resolve_defaults(store)
-    task_id = "t-" + uuid.uuid4().hex[:4]
+    project = ensure_project_seeded(store)
+    known = set(state.get("tasks") or {}) | set((project.get("tasks") or {}))
+    task_id = "t-" + uuid.uuid4().hex[:6]
+    while task_id in known:
+        task_id = "t-" + uuid.uuid4().hex[:6]
     writes = args.writes or defaults["writes"]
     done = args.done or defaults["done_means"]
+    priority = normalize_priority(getattr(args, "priority", None) or "P2")
+    milestone = (getattr(args, "milestone", None) or "").strip()
+    require_milestone(project, milestone)
+    owner = (getattr(args, "owner", None) or os.environ.get("USER") or "unassigned").strip()
+    kind = normalize_kind(getattr(args, "kind", None) or "task")
+    parent = (getattr(args, "parent", None) or "").strip() or None
+    description = (getattr(args, "description", None) or "").strip()
+    if parent and parent not in (project.get("tasks") or {}) and parent not in state.get(
+        "tasks", {}
+    ):
+        raise SystemExit(f"unknown parent task {parent}")
+    if kind != "task" and not parent:
+        raise SystemExit(f"{kind} requires --parent")
     spec_rel = Path(store.cfg.get("specs_dir", "specs")) / f"{task_id}.md"
     spec_path = store.root / spec_rel
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     if not spec_path.exists():
         if spec_mode == "template":
-            spec_path.write_text(
-                render_spec_template(
-                    title=args.title,
-                    done=done,
-                    writes=writes,
-                    defaults=defaults,
-                    problem=getattr(args, "problem", "") or "",
-                )
+            body = render_spec_template(
+                title=args.title,
+                done=done,
+                writes=writes,
+                defaults=defaults,
+                problem=getattr(args, "problem", "") or "",
             )
+            # Append PM metadata for board/export visibility
+            body += (
+                f"\nPriority: {priority}\n"
+                f"Milestone: {milestone or '-'}\n"
+                f"Owner: {owner}\n"
+                f"Kind: {kind}\n"
+                f"Parent: {parent or '-'}\n"
+            )
+            if description:
+                body = body.replace(
+                    f"# {args.title}\n",
+                    f"# {args.title}\n\n{description}\n",
+                    1,
+                )
+            spec_path.write_text(body)
         else:
+            body = description + "\n\n" if description else ""
             spec_path.write_text(
-                f"# {args.title}\n\nDone means: {done}\n"
+                f"# {args.title}\n\n{body}Done means: {done}\n"
                 f"Writes: {', '.join(writes)}\n"
                 f"Dev: cd {defaults['dev_cwd']} && {defaults['dev_command']}\n"
+                f"Priority: {priority}\n"
+                f"Milestone: {milestone or '-'}\n"
+                f"Owner: {owner}\n"
+                f"Kind: {kind}\n"
+                f"Parent: {parent or '-'}\n"
             )
     spec_stored = str(spec_rel).replace("\\", "/")
     task = {
         "id": task_id,
         "title": args.title,
+        "description": description,
+        "kind": kind,
+        "parent": parent,
         "status": status,
         "depends_on": args.depends or [],
         "writes": writes,
         "spec_path": spec_stored,
         "claimed_by": None,
+        "claim_lease": None,
         "repair_count": 0,
         "max_repairs": int(store.cfg.get("max_repairs", 2)),
         "phase": None,
+        "reason": "",
+        "priority": priority,
+        "milestone": milestone,
+        "owner": owner,
+        "labels": normalize_labels(getattr(args, "labels", None) or []),
+        "notes": [],
         "last_gate": None,
         "last_review": None,
         "created_at": now_iso(),
-        "bead_id": None,
     }
-    if tracker_is_beads(store):
-        task["bead_id"] = beads_create(
-            store.root,
-            title=args.title,
-            task_id=task_id,
-            run_id=state["run_id"],
-            spec_path=spec_stored,
-        )
     state["tasks"][task_id] = task
     store.save_state(state)
     store.emit(
@@ -1390,7 +2427,9 @@ def create_task(
         {
             "title": args.title,
             "writes": writes,
-            "bead_id": task.get("bead_id"),
+            "priority": priority,
+            "milestone": milestone,
+            "owner": owner,
             "status": status,
         },
         task_id,
@@ -1441,7 +2480,10 @@ def cmd_task_ticket(args: argparse.Namespace) -> int:
             for task in match:
                 print(f"  {task['id']}  {task['status']:<10}  {task.get('title')}")
             print(f"Pick one: just sm-ticket {match[0]['id']}")
-            print(f"Or create new: uv run dm-software-machine/scripts/dmsm.py task-ticket --new --title {query!r}")
+            print(
+                "Or create new: uv run dm-software-machine/scripts/dmsm.py "
+                f"task-ticket --new --title {query!r}"
+            )
             return 2
         if match is not None:
             print_ticket_ask(store, match, action="found")
@@ -1469,28 +2511,18 @@ def cmd_task_ready(args: argparse.Namespace) -> int:
     task["phase"] = None
     store.save_state(state)
     store.emit("task_ready", {"spec_path": spec_rel}, args.task_id)
-    if tracker_is_beads(store) and task.get("bead_id"):
-        try:
-            description = (
-                f"sm task {args.task_id} (run {state['run_id']})\n"
-                f"Spec: {spec_rel}\n\n"
-                + spec_path.read_text()
-            )
-            beads_update_description(store.root, task["bead_id"], description)
-        except SystemExit as error:
-            print(f"bead update failed (sm already queued): {error}")
     print(args.task_id)
     print("queued")
     print(f"spec {spec_rel}")
     return 0
 
 
+
 IN_FLIGHT = ("claimed", "active", "gated", "reviewed")
 
 
 def file_write_set(paths: list[str]) -> set[str]:
-    """Exact file locks. A trailing slash is scope (a directory, or a file the
-    project allows without locking it). Globs are scope too."""
+    """Exact file locks (paths without a trailing slash, non-glob)."""
     found: set[str] = set()
     for raw in paths:
         rel = normalize_rel(str(raw))
@@ -1500,12 +2532,61 @@ def file_write_set(paths: list[str]) -> set[str]:
     return found
 
 
+def dir_write_prefixes(paths: list[str]) -> list[str]:
+    """Directory scopes (trailing slash) and glob roots used for overlap."""
+    found: list[str] = []
+    for raw in paths:
+        rel = normalize_rel(str(raw))
+        if not rel:
+            continue
+        if rel.endswith("/"):
+            found.append(rel)
+            continue
+        if any(ch in rel for ch in "*?["):
+            # Treat the directory before the first glob as a scope prefix.
+            cut = min(
+                (i for i, ch in enumerate(rel) if ch in "*?["),
+                default=len(rel),
+            )
+            prefix = rel[:cut].rsplit("/", 1)[0]
+            found.append((prefix + "/") if prefix else "")
+    return [item for item in found if item]
+
+
+def _path_under_dir(path: str, directory: str) -> bool:
+    rel = normalize_rel(path)
+    folder = normalize_rel(directory)
+    if not folder.endswith("/"):
+        folder += "/"
+    return rel == folder[:-1] or rel.startswith(folder)
+
+
 def writes_overlap(left: list[str], right: list[str]) -> bool:
-    """True when both sides name the same file. Directory writes do not overlap
-    each other or the files inside them. An empty list still overlaps everything."""
+    """True when write scopes collide.
+
+    Exact files overlap the same file. Directory scopes overlap each other and
+    any file under them. An empty list still overlaps everything.
+    """
     if not left or not right:
         return True
-    return bool(file_write_set(left) & file_write_set(right))
+    left_files = file_write_set(left)
+    right_files = file_write_set(right)
+    if left_files & right_files:
+        return True
+    left_dirs = dir_write_prefixes(left)
+    right_dirs = dir_write_prefixes(right)
+    for folder in left_dirs:
+        for other in right_dirs:
+            if _path_under_dir(other[:-1], folder) or _path_under_dir(folder[:-1], other):
+                return True
+        for path in right_files:
+            if _path_under_dir(path, folder):
+                return True
+    for folder in right_dirs:
+        for path in left_files:
+            if _path_under_dir(path, folder):
+                return True
+    return False
 
 
 def in_flight_tasks(state: dict) -> list[dict]:
@@ -1544,6 +2625,11 @@ def cmd_task_next(args: argparse.Namespace) -> int:
     store = Store(repo_root())
     store.require_installed()
     state = store.load_state()
+    released = release_stale_claims(store, state)
+    if released:
+        store.save_state(state)
+        for tid in released:
+            store.emit("claim_reclaimed", {"via": "task-next"}, tid)
     flying = in_flight_tasks(state)
     parallel = int(store.cfg.get("parallel") or 1)
     if len(flying) >= parallel and not args.force:
@@ -1568,9 +2654,20 @@ def cmd_task_claim(args: argparse.Namespace) -> int:
 
 
 def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = False) -> int:
+    released = release_stale_claims(store, state)
+    if released:
+        for tid in released:
+            store.emit("claim_reclaimed", {"via": "task-claim"}, tid)
     task = state["tasks"].get(task_id)
     if not task:
         raise SystemExit(f"unknown task {task_id}")
+    if task["status"] in ("failed", "blocked") and force:
+        task["status"] = "queued"
+        task["claimed_by"] = None
+        task["claim_lease"] = None
+        task["repair_count"] = 0
+        task["reason"] = ""
+        task["phase"] = "requeued"
     accepted = {tid for tid, item in state["tasks"].items() if item["status"] == "accepted"}
     unmet = [dep for dep in task.get("depends_on") or [] if dep not in accepted]
     if unmet:
@@ -1580,13 +2677,21 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
         raise SystemExit(
             f"{task_id} is briefing — fill {spec_rel} then: just sm-ready {task_id}"
         )
-    if task["status"] not in ("queued", "claimed"):
-        raise SystemExit(f"{task_id} is {task['status']}")
     if require_brief(store):
         spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
         ok, missing = spec_complete(store.root / spec_rel)
         if not ok:
             raise SystemExit(spec_refuse_message(task_id, missing, spec_rel))
+    holder = task.get("claimed_by")
+    if (
+        task["status"] == "claimed"
+        and holder
+        and holder != agent
+        and not force
+    ):
+        raise SystemExit(f"{task_id} already claimed by {holder}")
+    if task["status"] not in ("queued", "claimed"):
+        raise SystemExit(f"{task_id} is {task['status']}")
     if task["status"] == "queued" and not force:
         flying = in_flight_tasks(state)
         hits = overlapping_inflight(task, flying)
@@ -1599,12 +2704,93 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
             )
     task["status"] = "claimed"
     task["claimed_by"] = agent
+    task["claim_lease"] = now_iso()
+    task["reason"] = ""
     task["phase"] = "claimed"
     writes = task.get("writes") or resolve_defaults(store)["writes"]
-    task["scope_baseline"] = scope_snapshot(store, writes)
+    wt_meta = None
+    if worktrees_enabled(store):
+        dirty_main = [
+            path
+            for path in git_changed_files(store.root)
+            if path_in_patterns(path, writes)
+        ]
+        if dirty_main and not force:
+            raise SystemExit(
+                f"{task_id} refused: main checkout has dirty files inside writes\n"
+                "Commit, stash, or finish that work before claiming a worktree.\n"
+                + "\n".join(f"  {path}" for path in dirty_main[:20])
+            )
+        defaults = resolve_defaults(store)
+        app = str(defaults.get("app_folder") or "").rstrip("/")
+        if app and not force:
+            marker = store.root / app / "package.json"
+            tracked = run_git(
+                store.root, "ls-files", "--", f"{app}/package.json", check=False
+            )
+            if marker.is_file() and not (tracked.stdout or "").strip():
+                raise SystemExit(
+                    f"{task_id} refused: {app}/ is untracked on main\n"
+                    "Commit the app (or pass --force) before claiming a worktree, "
+                    "or accept will fail when merging."
+                )
+        wt_meta = ensure_task_worktree(store, task)
+    checkout = task_checkout_root(store, task)
+    task["scope_baseline"] = scope_snapshot(store, writes, checkout=checkout)
     store.save_state(state)
-    store.emit("task_claimed", {"agent": agent}, task_id)
+    store.emit(
+        "task_claimed",
+        {
+            "agent": agent,
+            "lease": task["claim_lease"],
+            "reclaimed": released,
+            "worktree": (wt_meta or {}).get("path"),
+            "branch": (wt_meta or {}).get("branch"),
+        },
+        task_id,
+    )
     print(task_id)
+    if wt_meta:
+        print(f"worktree {wt_meta['path']}")
+        print(f"branch {wt_meta['branch']}")
+        print(f"Work only inside the worktree. Then: just sm-finish {task_id}")
+    return 0
+
+
+def cmd_reclaim(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_installed()
+    state = store.load_state()
+    if args.task:
+        task = state["tasks"].get(args.task)
+        if not task:
+            raise SystemExit(f"unknown task {args.task}")
+        if task["status"] != "claimed":
+            print(f"{args.task} not claimed ({task['status']})")
+            return 1
+        if not args.force and not claim_is_stale(task, hours=claim_lease_hours(store)):
+            raise SystemExit(
+                f"{args.task} lease still fresh; pass --force to release"
+            )
+        holder = task.get("claimed_by") or "unknown"
+        release_claim(
+            task,
+            f"Claim released (was {holder}).",
+            store=store,
+            force_remove=bool(args.force),
+        )
+        store.save_state(state)
+        store.emit("claim_reclaimed", {"holder": holder, "forced": args.force}, args.task)
+        print(args.task)
+        return 0
+    released = release_stale_claims(store, state)
+    if released:
+        store.save_state(state)
+        for tid in released:
+            store.emit("claim_reclaimed", {"via": "reclaim"}, tid)
+    print(f"reclaimed {len(released)}")
+    for tid in released:
+        print(tid)
     return 0
 
 
@@ -1652,6 +2838,11 @@ def cmd_handoff(args: argparse.Namespace) -> int:
 def cmd_progress(args: argparse.Namespace) -> int:
     store = Store(repo_root())
     store.require_installed()
+    state = store.load_state()
+    task = state["tasks"].get(args.task)
+    if task:
+        refresh_claim_lease(task)
+        store.save_state(state)
     payload = {"message": args.message, "estimate": args.estimate, "estimated": args.estimate is not None}
     store.emit("checkpoint", payload, args.task)
     print("checkpoint recorded")
@@ -1661,18 +2852,28 @@ def cmd_progress(args: argparse.Namespace) -> int:
 def cmd_gate(args: argparse.Namespace) -> int:
     store = Store(repo_root())
     store.require_installed()
-    state = store.load_state()
-    task = state["tasks"].get(args.task)
-    if not task:
-        raise SystemExit(f"unknown task {args.task}")
-    checks, skipped = select_checks(store, args.kind)
+    # Lease bump under lock, then release for the long-running checks.
+    with store.locked_state() as state:
+        task = state["tasks"].get(args.task)
+        if not task:
+            raise SystemExit(f"unknown task {args.task}")
+        if task.get("status") == "failed":
+            raise SystemExit(
+                f"{args.task} is failed — requeue with "
+                f"just sm-reclaim --task {args.task} --force "
+                f"then just sm-claim {args.task}"
+            )
+        refresh_claim_lease(task)
+        checkout = task_checkout_root(store, task)
+        writes = task.get("writes") or resolve_defaults(store)["writes"]
+    checks, skipped = select_checks(store, args.kind, checkout=checkout)
     if not checks:
         raise SystemExit(f"profile has no checks for {args.kind}")
     store.emit("phase_start", {"phase": f"gate:{args.kind}"}, args.task)
     results = []
     logs = []
     for spec in checks:
-        result = _run_check(store, args.task, spec)
+        result = _run_check(store, args.task, spec, checkout=checkout)
         results.append(result)
         logs.append(result["log"])
         if not result["passed"] and args.fail_fast:
@@ -1693,19 +2894,36 @@ def cmd_gate(args: argparse.Namespace) -> int:
         artifacts=logs,
     )
     dest = store.write_envelope(envelope)
-    task["last_gate"] = {"kind": args.kind, "passed": passed, "at": now_iso()}
-    if passed:
-        task["status"] = "gated"
-        task["phase"] = f"gate:{args.kind}"
-        task["repair_count"] = task.get("repair_count", 0)
-    else:
-        task["repair_count"] = int(task.get("repair_count", 0)) + 1
-        if task["repair_count"] > task["max_repairs"]:
-            task["status"] = "blocked"
+    gate_digest = scoped_tree_digest(checkout, writes) if passed else None
+    # Reload under lock so a concurrent accept/claim cannot be clobbered.
+    with store.locked_state() as state:
+        task = state["tasks"].get(args.task)
+        if not task:
+            raise SystemExit(f"unknown task {args.task}")
+        task["last_gate"] = {
+            "kind": args.kind,
+            "passed": passed,
+            "at": now_iso(),
+            "digest": gate_digest,
+        }
+        if passed:
+            task["gate_digest"] = gate_digest
+            task["status"] = "gated"
+            task["phase"] = f"gate:{args.kind}"
+            task["repair_count"] = task.get("repair_count", 0)
+            task["reason"] = ""
         else:
-            task["status"] = "active"
-        task["phase"] = f"gate:{args.kind}:fail"
-    store.save_state(state)
+            task.pop("gate_digest", None)
+            task["repair_count"] = int(task.get("repair_count", 0)) + 1
+            if task["repair_count"] > task["max_repairs"]:
+                mark_over_repair_failed(task, kind="Quality gate")
+            else:
+                task["status"] = "active"
+                task["reason"] = (
+                    failures[0][:240] if failures else f"{args.kind} gate failed"
+                )
+            task["phase"] = f"gate:{args.kind}:fail"
+        refresh_claim_lease(task)
     store.emit("gate", {"kind": args.kind, "passed": passed, "envelope": str(dest)}, args.task)
     store.emit("phase_end", {"phase": f"gate:{args.kind}", "passed": passed}, args.task)
     print(f"{args.kind}: {'pass' if passed else 'fail'}")
@@ -1719,9 +2937,16 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
-def _run_check(store: Store, task_id: str, spec: dict) -> dict:
+def _run_check(
+    store: Store,
+    task_id: str,
+    spec: dict,
+    *,
+    checkout: Path | None = None,
+) -> dict:
     argv = list(spec["argv"])
-    cwd = repo_root() / spec["cwd"]
+    root = checkout or store.root
+    cwd = root / spec["cwd"]
     timeout = int(spec.get("timeout_seconds") or 120)
     log_path = store.task_dir(task_id) / "logs" / f"{spec['name']}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1781,6 +3006,33 @@ def _run_check(store: Store, task_id: str, spec: dict) -> dict:
     }
 
 
+def run_profile_gate_checks(
+    store: Store,
+    task_id: str,
+    kind: str,
+    *,
+    checkout: Path,
+    fail_fast: bool = False,
+) -> tuple[bool, list[dict], list[str], list[str]]:
+    """Run profile checks without mutating task state. Returns pass, results, skipped, failures."""
+    checks, skipped = select_checks(store, kind, checkout=checkout)
+    if not checks:
+        raise SystemExit(f"profile has no checks for {kind}")
+    results: list[dict] = []
+    for spec in checks:
+        result = _run_check(store, task_id, spec, checkout=checkout)
+        results.append(result)
+        if not result["passed"] and fail_fast:
+            break
+    passed = all(item["passed"] for item in results)
+    failures = [
+        f"{item['name']}: `{item['command']}` exited {item['returncode']}\n{item['tail']}"
+        for item in results
+        if not item["passed"]
+    ]
+    return passed, results, skipped, failures
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     store = Store(repo_root())
     store.require_installed()
@@ -1811,6 +3063,8 @@ def cmd_finish(args: argparse.Namespace) -> int:
         raise SystemExit(f"unknown task {args.task}")
     if task["status"] == "accepted":
         raise SystemExit(f"{args.task} is already accepted")
+    refresh_claim_lease(task)
+    store.save_state(state)
     store.emit("checkpoint", {"message": "finish: work from git"}, args.task)
     envelope = work_from_git(store, task)
     dest = apply_work_envelope(store, args.task, envelope)
@@ -1831,46 +3085,284 @@ def cmd_finish(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_accept(args: argparse.Namespace) -> int:
+def cmd_rebase(args: argparse.Namespace) -> int:
+    """Merge the main checkout branch into the task worktree (conflict recovery)."""
     store = Store(repo_root())
     store.require_installed()
     state = store.load_state()
     task = state["tasks"].get(args.task)
     if not task:
         raise SystemExit(f"unknown task {args.task}")
-    gate = task.get("last_gate") or {}
-    review = task.get("last_review") or {}
-    if not gate.get("passed"):
-        raise SystemExit("accept refused: last gate did not pass")
-    if not review.get("approved"):
-        raise SystemExit("accept refused: review is not approved")
-    writes = task.get("writes") or []
-    if writes:
-        violations = unscoped_violations(store, writes, task.get("scope_baseline"))
-        if violations:
-            raise SystemExit(
-                "accept refused: dirty files outside writes\n"
-                + "\n".join(f"  {path}" for path in violations)
-            )
-    task["status"] = "accepted"
-    task["phase"] = "accepted"
-    state["paused"] = not state.get("auto_advance")
-    envelope = Envelope(
-        status="success", kind="acceptance", task_id=args.task,
-        summary=f"accepted {args.task}", accepted=True,
+    checkout = task_checkout_root(store, task)
+    if checkout == store.root:
+        raise SystemExit(f"{args.task} has no worktree; nothing to rebase")
+    main_branch = current_checkout_branch(store.root)
+    # Use the object name from main HEAD so we don't require the branch tip
+    # inside the worktree remote setup.
+    main_tip = run_git(store.root, "rev-parse", "HEAD").stdout.strip()
+    completed = run_git(
+        checkout,
+        "-c",
+        "user.name=dm-software-machine",
+        "-c",
+        "user.email=sm@local",
+        "merge",
+        "-m",
+        f"sm rebase: merge {main_branch} into task",
+        main_tip,
+        check=False,
     )
-    dest = store.write_envelope(envelope)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise SystemExit(
+            f"rebase conflict in worktree for {args.task}\n"
+            f"Resolve files under {task.get('worktree_path')}, then:\n"
+            f"  git -C {task.get('worktree_path')} add -A && "
+            f"git -C {task.get('worktree_path')} commit --no-edit\n"
+            f"Then: just sm-finish {args.task}\n{detail}"
+        )
+    task.pop("gate_digest", None)
+    if task.get("last_gate"):
+        task["last_gate"]["passed"] = False
+    task["status"] = "active"
+    task["phase"] = "rebased"
+    task["reason"] = f"Merged {main_branch} into worktree; re-run finish."
     store.save_state(state)
-    store.emit("accepted", {"envelope": str(dest), "paused": state["paused"]}, args.task)
-    if tracker_is_beads(store) and task.get("bead_id"):
-        try:
-            beads_close(store.root, task["bead_id"], f"accepted {args.task}")
-            store.emit("bead_closed", {"bead_id": task["bead_id"]}, args.task)
-            print(f"bead {task['bead_id']} closed")
-        except SystemExit as error:
-            print(f"bead close failed (sm already accepted): {error}")
+    store.emit("task_rebased", {"main": main_branch, "tip": main_tip}, args.task)
+    print(args.task)
+    print(f"merged {main_branch} ({main_tip[:8]}) into worktree")
+    print(f"next: just sm-finish {args.task}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Report install/config health for general-use readiness."""
+    store = Store(repo_root())
+    issues: list[str] = []
+    notes: list[str] = []
+    print(f"dm-software-machine doctor {VERSION}")
+    print(f"root {store.root}")
+    if not (store.machine_dir / "machine.yaml").exists():
+        print("FAIL: not installed (.dm-software-machine/machine.yaml missing)")
+        return 1
+    machine_ver = str(store.cfg.get("version") or "")
+    if machine_ver and machine_ver != VERSION:
+        issues.append(
+            f"machine.yaml version {machine_ver} != package {VERSION} "
+            "(run: just sm-init --upgrade --profile <tauri|astro>)"
+        )
+    else:
+        notes.append(f"version {VERSION}")
+    vendor = store.root / "dm-software-machine" / "VERSION"
+    if vendor.is_file():
+        vend = vendor.read_text().strip()
+        if vend != VERSION:
+            issues.append(f"vendored VERSION {vend} != running CLI {VERSION}")
+        else:
+            notes.append("vendor package matches CLI")
+    else:
+        notes.append("running from skill path (no in-repo vendor VERSION)")
+    if not layout_is_configured(store.cfg, store.root):
+        issues.append("not configured (app_folder SET_ME or configured:false)")
+    else:
+        app = resolve_defaults(store)["app_folder"]
+        notes.append(f"app_folder {app}")
+        if not (store.root / app).is_dir():
+            issues.append(f"app_folder missing on disk: {app}")
+    if shutil.which("just") is None:
+        issues.append("just not on PATH")
+    else:
+        notes.append("just on PATH")
+    justfile = store.root / "justfile"
+    if justfile.exists():
+        text = justfile.read_text()
+        if "sm-finish" not in text:
+            issues.append("justfile missing sm-* recipes")
+        elif "sm-note TASK *ARGS" in text:
+            issues.append("justfile has broken sm-note recipe (upgrade recipes)")
+        else:
+            notes.append("justfile has sm recipes")
+    else:
+        issues.append("justfile missing")
+    if not (store.root / ".git").exists() and not (store.root / ".git").is_file():
+        issues.append("not a git repo (worktrees/accept need git)")
+    else:
+        notes.append("git repo ok")
+        if worktrees_enabled(store):
+            notes.append("worktrees enabled")
+        pointer = store.machine_dir / "current-run"
+        if pointer.exists():
+            rid = pointer.read_text().strip()
+            if not (store.runs_dir() / rid / "state.json").exists():
+                issues.append(
+                    f"current-run {rid} has no state.json "
+                    "(run any command that calls ensure_run to recover)"
+                )
+            else:
+                notes.append(f"run {rid} present")
+    for line in notes:
+        print(f"ok  {line}")
+    for line in issues:
+        print(f"FIX {line}")
+    if issues:
+        print(f"{len(issues)} issue(s)")
+        return 1
+    print("healthy")
+    return 0
+
+
+def cmd_accept(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_installed()
+    with store.locked_state() as state:
+        task = state["tasks"].get(args.task)
+        if not task:
+            raise SystemExit(f"unknown task {args.task}")
+        gate = task.get("last_gate") or {}
+        review = task.get("last_review") or {}
+        if not gate.get("passed"):
+            raise SystemExit("accept refused: last gate did not pass")
+        if not review.get("approved"):
+            raise SystemExit("accept refused: review is not approved")
+        writes = task.get("writes") or []
+        checkout = task_checkout_root(store, task)
+        expected = task.get("gate_digest") or gate.get("digest")
+        if expected:
+            current = scoped_tree_digest(checkout, writes)
+            if current != expected:
+                raise SystemExit(
+                    "accept refused: working tree changed since the last green gate\n"
+                    f"Re-run: just sm-finish {args.task}"
+                )
+        if writes:
+            violations = unscoped_violations(
+                store, writes, task.get("scope_baseline"), checkout=checkout
+            )
+            if violations:
+                raise SystemExit(
+                    "accept refused: dirty files outside writes\n"
+                    + "\n".join(f"  {path}" for path in violations)
+                )
+        # Drop the lock before git merge / post-merge gate.
+        worktree_path = task.get("worktree_path")
+
+    committed: list[str] = []
+    if worktree_path:
+        # Re-load task fields needed for merge without holding the lock.
+        state = store.load_state()
+        task = state["tasks"][args.task]
+        committed = commit_task_worktree(store, task)
+        merge_task_branch(store, task)
+        remove_task_worktree(store, task, force=True)
+        # Persist cleared worktree fields before the final accept lock reloads.
+        store.save_state(state)
+        if committed:
+            store.emit(
+                "worktree_merged",
+                {"files": committed, "branch": task_branch_name(args.task)},
+                args.task,
+            )
+
+    # Re-run the fast gate on main after the merge lands (when an app tree exists).
+    defaults = resolve_defaults(store)
+    app = str(defaults.get("app_folder") or "").rstrip("/")
+    app_path = store.root / app if app and not _is_unset(app) else None
+    has_app = bool(
+        app_path
+        and (
+            (app_path / "package.json").is_file()
+            or (app_path / "src-tauri" / "Cargo.toml").is_file()
+        )
+    )
+    if not has_app:
+        print("post-merge fast: skip (no app tree on main)")
+        post_passed = True
+        post_results = []
+        post_skipped = []
+        post_failures = []
+    else:
+        store.emit("phase_start", {"phase": "gate:fast:post-merge"}, args.task)
+        post_passed, post_results, post_skipped, post_failures = run_profile_gate_checks(
+            store, args.task, "fast", checkout=store.root
+        )
+        store.emit(
+            "gate",
+            {
+                "kind": "fast:post-merge",
+                "passed": post_passed,
+                "merged": bool(worktree_path),
+            },
+            args.task,
+        )
+        store.emit(
+            "phase_end",
+            {"phase": "gate:fast:post-merge", "passed": post_passed},
+            args.task,
+        )
+        print("post-merge fast: " + ("pass" if post_passed else "fail"))
+        for name in post_skipped:
+            print(f"  skip {name} (not configured)")
+        for item in post_results:
+            mark = "ok" if item["passed"] else "FAIL"
+            print(f"  {mark} {item['name']} ({item['duration_s']:.1f}s)")
+    if not post_passed:
+        reason = (
+            post_failures[0][:240]
+            if post_failures
+            else "post-merge fast gate failed on main"
+        )
+        with store.locked_state() as state:
+            task = state["tasks"].get(args.task)
+            if not task:
+                raise SystemExit(f"unknown task {args.task}")
+            task["last_gate"] = {
+                "kind": "fast:post-merge",
+                "passed": False,
+                "at": now_iso(),
+                "digest": None,
+            }
+            task.pop("gate_digest", None)
+            task["status"] = "reviewed"
+            task["phase"] = "gate:fast:post-merge:fail"
+            task["reason"] = (
+                "Merge landed on main but post-merge gate failed. "
+                f"Fix on main, then: just sm-gate {args.task} && just sm-accept {args.task}. "
+                f"Detail: {reason}"
+            )
+        print("accept refused: post-merge gate failed (merge already on main)")
+        if post_failures:
+            print(post_failures[0][:1200])
+        return 1
+
+    with store.locked_state() as state:
+        task = state["tasks"].get(args.task)
+        if not task:
+            raise SystemExit(f"unknown task {args.task}")
+        task["last_gate"] = {
+            "kind": "fast:post-merge",
+            "passed": True,
+            "at": now_iso(),
+            "digest": scoped_tree_digest(
+                store.root, task.get("writes") or resolve_defaults(store)["writes"]
+            ),
+        }
+        task["status"] = "accepted"
+        task["phase"] = "accepted"
+        task.pop("gate_digest", None)
+        task.pop("worktree_path", None)
+        task.pop("worktree_branch", None)
+        task.pop("worktree_base", None)
+        task["reason"] = ""
+        state["paused"] = not bool(state.get("auto_advance"))
+        envelope = Envelope(
+            status="success", kind="acceptance", task_id=args.task,
+            summary=f"accepted {args.task}", accepted=True,
+        )
+        dest = store.write_envelope(envelope)
+        paused = state["paused"]
+    store.emit("accepted", {"envelope": str(dest), "paused": paused}, args.task)
     print(f"accepted {args.task}")
-    if state["paused"]:
+    if paused:
         print("paused — run task next to continue")
     else:
         print("auto_advance on — claim the next ready task")
@@ -1892,21 +3384,815 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("installed, no run yet")
         return 0
     state = store.load_state()
-    tasks = list(state["tasks"].values())
+    by_id = tasks_index(state.get("tasks") or {})
+    for task in by_id.values():
+        ensure_task_labels_notes(task)
+    tasks = list(by_id.values())
     accepted = sum(1 for task in tasks if task["status"] == "accepted")
-    print(f"run {state['run_id']}  profile={state.get('profile')}  "
-          f"paused={state.get('paused')}  auto_advance={state.get('auto_advance')}")
+    print(
+        f"run {state['run_id']}  profile={state.get('profile')}  "
+        f"paused={state.get('paused')}  auto_advance={state.get('auto_advance')}"
+    )
     print(f"tasks {bar(accepted, len(tasks))}")
     for task in tasks:
         gate = (task.get("last_gate") or {}).get("passed")
         review = (task.get("last_review") or {}).get("approved")
-        print(f"  {task['id']}  {task['status']:<10}  phase={task.get('phase') or '-':<16}  "
-              f"gate={_yn(gate)} review={_yn(review)}  {task['title']}")
+        waiting = unmet_depends(task, by_id)
+        labels = ",".join(task.get("labels") or []) or "-"
+        wait = f"  waiting={','.join(waiting)}" if waiting else ""
+        print(
+            f"  {task['id']}  {task['status']:<9}  "
+            f"phase={task.get('phase') or '-':<16}  "
+            f"gate={_yn(gate)} review={_yn(review)}  "
+            f"P={task.get('priority') or 'P2'}  labels={labels}  "
+            f"{task['title']}{wait}"
+        )
+        if task.get("status") in ("blocked", "failed") and task.get("reason"):
+            print(f"           reason: {task['reason']}")
+    waiting_rows = [
+        task
+        for task in tasks
+        if task["status"] != "accepted" and unmet_depends(task, by_id)
+    ]
+    if waiting_rows:
+        print("deps")
+        for task in waiting_rows:
+            bits = []
+            for dep in unmet_depends(task, by_id):
+                other = by_id.get(dep)
+                st = other.get("status") if other else "missing"
+                bits.append(f"{dep}({st})")
+            print(f"  {task['id']} waits on {', '.join(bits)}")
+    stuck = [t for t in tasks if t.get("status") in ("blocked", "failed")]
+    if stuck:
+        print("stuck")
+        for task in stuck:
+            print(f"  {task['id']}  {task['status']}  {task.get('reason') or '-'}")
     events = _read_events(store, limit=1)
     if events:
         last = events[-1]
         print(f"last {last['ts']} {last['type']} {last.get('task_id', '')}")
     return 0
+
+
+def cmd_prime(args: argparse.Namespace) -> int:
+    """Agent resume dump: layout, queue, claims, deps, stuck, recent events."""
+    store = Store(repo_root())
+    store.require_configured()
+    defaults = resolve_defaults(store)
+    by_id = collect_all_tasks(store)
+    pointer = store.machine_dir / "current-run"
+    run_id = None
+    auto = defaults.get("auto_advance")
+    if pointer.exists():
+        state = store.load_state()
+        run_id = state.get("run_id")
+        auto = state.get("auto_advance", auto)
+    lines: list[str] = []
+    lines.append("# sm prime — reload this after compaction / new agent")
+    lines.append(f"project: {store.root.name}")
+    lines.append(f"package: {VERSION}")
+    lines.append(f"run: {run_id or '(none)'}")
+    lines.append(f"profile: {defaults.get('profile')}")
+    lines.append(f"app_folder: {defaults.get('app_folder')}")
+    lines.append(f"writes: {', '.join(defaults.get('writes') or [])}")
+    lines.append(f"tracker: {defaults.get('tracker')}")
+    lines.append(f"require_brief: {defaults.get('require_brief')}")
+    lines.append(f"auto_advance: {auto}")
+    lines.append(f"parallel: {defaults.get('parallel')}")
+    lines.append(f"worktrees: {defaults.get('worktrees')}")
+    lines.append("")
+
+    ready = ready_tasks({"tasks": by_id}, store)
+    in_flight = [t for t in by_id.values() if t.get("status") in IN_FLIGHT]
+    queued = [t for t in by_id.values() if t.get("status") == "queued"]
+    briefing = [t for t in by_id.values() if t.get("status") == "briefing"]
+    stuck = [t for t in by_id.values() if t.get("status") in ("blocked", "failed")]
+    accepted = [t for t in by_id.values() if t.get("status") == "accepted"]
+
+    def _fmt(task: dict) -> list[str]:
+        labels = ",".join(task.get("labels") or []) or "-"
+        waiting = unmet_depends(task, by_id)
+        wait = f" waiting_on={','.join(waiting)}" if waiting else ""
+        claim = f" claim={task['claimed_by']}" if task.get("claimed_by") else ""
+        out = [
+            f"- {task['id']} [{task.get('status')}] "
+            f"P={task.get('priority') or 'P2'} labels={labels} "
+            f"{task.get('title')}{claim}{wait}"
+        ]
+        if task.get("worktree_path"):
+            out.append(
+                f"  worktree: {task.get('worktree_path')} "
+                f"({task.get('worktree_branch') or 'branch?'})"
+            )
+        if task.get("spec_path"):
+            out.append(f"  spec: {task.get('spec_path')}")
+        if task.get("reason"):
+            out.append(f"  reason: {task.get('reason')}")
+        notes = task.get("notes") or []
+        if notes:
+            last = notes[-1]
+            out.append(
+                f"  note: ({last.get('at')} {last.get('by')}) {last.get('text')}"
+            )
+        return out
+
+    def _section(title: str, items: list[dict]) -> None:
+        lines.append(f"## {title} ({len(items)})")
+        if not items:
+            lines.append("- (none)")
+        else:
+            for task in sorted(items, key=lambda t: t["id"]):
+                lines.extend(_fmt(task))
+        lines.append("")
+
+    _section("in flight", in_flight)
+    _section("ready to claim", ready)
+    _section("queued / waiting", queued)
+    _section("briefing", briefing)
+    _section("stuck blocked/failed", stuck)
+
+    lines.append("## dependency edges (unmet)")
+    edges = []
+    for task in sorted(by_id.values(), key=lambda t: t["id"]):
+        for dep in unmet_depends(task, by_id):
+            other = by_id.get(dep)
+            st = other.get("status") if other else "missing"
+            edges.append(f"- {task['id']} -> {dep} ({st})")
+    lines.extend(edges or ["- (none)"])
+    lines.append("")
+    lines.append(f"## accepted ({len(accepted)})")
+    lines.append(", ".join(sorted(t["id"] for t in accepted)) or "(none)")
+    lines.append("")
+    lines.append("## next steps")
+    if in_flight:
+        tid = sorted(in_flight, key=lambda t: t["id"])[0]["id"]
+        lines.append(f"- continue claimed work: just sm-handoff {tid}")
+        lines.append(f"- when done: just sm-finish {tid} && just sm-accept {tid}")
+    elif ready:
+        tid = sorted(ready, key=lambda t: t["id"])[0]["id"]
+        lines.append(f"- claim next: just sm-claim {tid}")
+        lines.append("- or: just sm-next")
+    elif briefing:
+        tid = sorted(briefing, key=lambda t: t["id"])[0]["id"]
+        lines.append(f"- fill spec then: just sm-ready {tid}")
+    elif stuck:
+        lines.append(
+            "- inspect stuck tasks; requeue with: just sm-reclaim --task <id> --force"
+        )
+    else:
+        lines.append('- queue idle; just sm-add "…" or just sm-ticket "…"')
+    lines.append("")
+    lines.append("## recent events")
+    if pointer.exists():
+        for event in _read_events(store, limit=int(getattr(args, "events", 12) or 12)):
+            lines.append(
+                f"- {event.get('ts')} {event.get('type')} {event.get('task_id') or ''}"
+            )
+    else:
+        lines.append("- (none)")
+
+    body = "\n".join(lines) + "\n"
+    print(body, end="")
+    out = (getattr(args, "output", "") or "").strip()
+    if out:
+        dest = Path(out)
+        if not dest.is_absolute():
+            dest = store.root / dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(body)
+        print(f"wrote {dest}", file=__import__("sys").stderr)
+    return 0
+
+
+def cmd_task_note(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    project, task, state, in_run = _load_task_for_edit(store, args.task)
+    note = append_task_note(task, args.text, by=args.by or "")
+    _save_task_edit(store, project, task, state, in_run=in_run)
+    store.emit("task_note", {"by": note["by"]}, args.task)
+    print(args.task)
+    print(f"{note['at']} {note['by']}: {note['text']}")
+    return 0
+
+
+
+def cmd_milestone_add(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    project = ensure_project_seeded(store)
+    milestone_id = args.id.strip()
+    if not milestone_id:
+        raise SystemExit("milestone id required")
+    name = (args.name or milestone_id).strip()
+    project.setdefault("milestones", {})[milestone_id] = {
+        "id": milestone_id,
+        "name": name,
+    }
+    save_project_store(store, project)
+    store.emit("milestone_added", {"id": milestone_id, "name": name})
+    print(milestone_id)
+    return 0
+
+
+def cmd_milestone_list(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    project = ensure_project_seeded(store)
+    rows = export_milestones(project)
+    if not rows:
+        print("no milestones")
+        return 0
+    for row in rows:
+        print(f"{row['id']}\t{row['name']}")
+    return 0
+
+
+def _load_task_for_edit(
+    store: Store, task_id: str
+) -> tuple[dict, dict, dict | None, bool]:
+    project = ensure_project_seeded(store)
+    pointer = store.machine_dir / "current-run"
+    state = store.load_state() if pointer.exists() else None
+    task = (state or {}).get("tasks", {}).get(task_id) if state else None
+    if task is None:
+        task = (project.get("tasks") or {}).get(task_id)
+        if task is None:
+            raise SystemExit(f"unknown task {task_id}")
+        return project, task, state, False
+    return project, task, state, True
+
+
+def _save_task_edit(
+    store: Store,
+    project: dict,
+    task: dict,
+    state: dict | None,
+    *,
+    in_run: bool,
+) -> None:
+    task_id = task["id"]
+    if in_run and state is not None:
+        state["tasks"][task_id] = task
+        store.save_state(state)
+    else:
+        project["tasks"][task_id] = project_task_record(
+            task, task.get("run_id") or "", previous=task
+        )
+        save_project_store(store, project)
+
+
+def write_task_spec(store: Store, task: dict, text: str) -> str | None:
+    """Write a task spec. Returns an error note, or None when the file is written."""
+    rel = str(task.get("spec_path") or "").replace("\\", "/").strip()
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return f"{task['id']}: spec path refused"
+    if not rel.startswith("specs/") or not rel.endswith(".md"):
+        return f"{task['id']}: spec path must stay under specs/"
+    path = (store.root / rel).resolve()
+    specs = (store.root / "specs").resolve()
+    try:
+        path.relative_to(specs)
+    except ValueError:
+        return f"{task['id']}: spec path refused"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return None
+
+
+def apply_board_override_to_task(
+    store: Store,
+    project: dict,
+    task: dict,
+    patch: dict,
+    *,
+    allow_status: bool,
+) -> list[str]:
+    """Merge one board override patch into a task. Returns notes/warnings."""
+    notes: list[str] = []
+    if "title" in patch and patch["title"] is not None:
+        title = str(patch["title"]).strip()
+        if title:
+            task["title"] = title
+    if "description" in patch and patch["description"] is not None:
+        task["description"] = str(patch["description"])
+    if patch.get("priority"):
+        task["priority"] = normalize_priority(str(patch["priority"]))
+    if "milestone" in patch and patch["milestone"] is not None:
+        milestone = str(patch["milestone"]).strip()
+        require_milestone(project, milestone)
+        task["milestone"] = milestone
+    if patch.get("owner"):
+        task["owner"] = str(patch["owner"]).strip()
+    if "reason" in patch and patch["reason"] is not None:
+        task["reason"] = str(patch["reason"])
+    if patch.get("kind"):
+        task["kind"] = normalize_kind(str(patch["kind"]))
+    if "parent" in patch:
+        parent = patch["parent"]
+        task["parent"] = None if parent in (None, "") else str(parent)
+    if "deps" in patch or "depends_on" in patch:
+        deps = patch.get("depends_on", patch.get("deps")) or []
+        if not isinstance(deps, list):
+            raise SystemExit(f"{task['id']}: deps must be a list")
+        task["depends_on"] = [str(item) for item in deps]
+    if "labels" in patch and patch["labels"] is not None:
+        task["labels"] = normalize_labels(patch["labels"])
+    add_note = patch.get("note") or patch.get("add_note")
+    if add_note:
+        append_task_note(
+            task,
+            str(add_note),
+            by=str(patch.get("note_by") or patch.get("by") or "board"),
+        )
+    if "retries" in patch and patch["retries"] is not None:
+        task["repair_count"] = max(0, int(patch["retries"]))
+    if "repair_count" in patch and patch["repair_count"] is not None:
+        task["repair_count"] = max(0, int(patch["repair_count"]))
+    claim = patch.get("claim")
+    if isinstance(claim, dict):
+        holder = (claim.get("holder") or "").strip()
+        task["claimed_by"] = holder or None
+        task["claim_lease"] = claim.get("lease") if holder else None
+    elif "claimHolder" in patch or "claimLease" in patch:
+        holder = str(patch.get("claimHolder") or "").strip()
+        task["claimed_by"] = holder or None
+        task["claim_lease"] = patch.get("claimLease") if holder else None
+    # Status / board state — never accept/done from the board, and never
+    # demote accepted / in-flight machine statuses via import.
+    raw_state = patch.get("status") or patch.get("state")
+    protected = {"accepted", "claimed", "active", "gated", "reviewed"}
+    if raw_state and allow_status:
+        text = str(raw_state).strip().lower()
+        current = task.get("status")
+        if current in protected:
+            notes.append(
+                f"{task['id']}: ignored state={text} "
+                f"(status {current} stays with sm-claim/finish/accept)"
+            )
+        elif text in ("done", "accepted"):
+            notes.append(
+                f"{task['id']}: ignored state={text} "
+                "(acceptance stays with sm-accept)"
+            )
+        elif text in BOARD_STATE_TO_STATUS:
+            task["status"] = BOARD_STATE_TO_STATUS[text]
+            if text == "claimed" and not task.get("claimed_by"):
+                task["claimed_by"] = "board-override"
+                task["claim_lease"] = task.get("claim_lease") or now_iso()
+        elif text in TASK_STATUSES:
+            if text == "accepted":
+                notes.append(f"{task['id']}: ignored status=accepted")
+            else:
+                task["status"] = text
+        else:
+            notes.append(f"{task['id']}: unknown state {text}")
+    # Evidence from the board is advisory only (reason already covered).
+    evidence = patch.get("evidence")
+    if isinstance(evidence, dict):
+        bits = [
+            f"{key}={evidence[key]}"
+            for key in ("gate", "review", "acceptance")
+            if evidence.get(key) and str(evidence.get(key)).strip().lower() not in ("", "none")
+        ]
+        if bits:
+            note = "board evidence note: " + ", ".join(bits)
+            existing = task.get("reason") or ""
+            if note not in existing:
+                task["reason"] = (existing + " · " + note).strip(" ·") if existing else note
+            notes.append(f"{task['id']}: evidence not applied to gates ({note})")
+    if "spec" in patch and isinstance(patch.get("spec"), str):
+        spec_note = write_task_spec(store, task, patch["spec"])
+        if spec_note:
+            notes.append(spec_note)
+        else:
+            notes.append(f"{task['id']}: wrote {task.get('spec_path')}")
+    task["board_overrides_at"] = now_iso()
+    return notes
+
+
+def cmd_task_update(args: argparse.Namespace) -> int:
+    store = Store(repo_root())
+    store.require_configured()
+    project, task, state, in_run = _load_task_for_edit(store, args.task)
+    if args.title:
+        task["title"] = args.title
+    if getattr(args, "description", None) is not None:
+        task["description"] = args.description
+    if args.priority:
+        task["priority"] = normalize_priority(args.priority)
+    if args.milestone is not None:
+        require_milestone(project, args.milestone)
+        task["milestone"] = args.milestone.strip()
+    if args.owner:
+        task["owner"] = args.owner.strip()
+    if args.reason is not None:
+        task["reason"] = args.reason
+    if getattr(args, "kind", None):
+        task["kind"] = normalize_kind(args.kind)
+    if getattr(args, "parent", None) is not None:
+        parent = args.parent.strip()
+        task["parent"] = parent or None
+    if getattr(args, "depends", None) is not None:
+        task["depends_on"] = [d for d in args.depends if d]
+    ensure_task_labels_notes(task)
+    if getattr(args, "labels", None) is not None:
+        task["labels"] = normalize_labels(args.labels)
+    for label in getattr(args, "add_label", None) or []:
+        task["labels"] = normalize_labels(list(task.get("labels") or []) + [label])
+    for label in getattr(args, "remove_label", None) or []:
+        drop = {str(label).strip().lower()}
+        task["labels"] = [
+            item for item in (task.get("labels") or [])
+            if item.lower() not in drop
+        ]
+    _save_task_edit(store, project, task, state, in_run=in_run)
+    store.emit(
+        "task_updated",
+        {
+            "priority": task.get("priority"),
+            "milestone": task.get("milestone"),
+            "owner": task.get("owner"),
+            "kind": task.get("kind"),
+            "parent": task.get("parent"),
+        },
+        args.task,
+    )
+    print(args.task)
+    return 0
+
+
+def apply_board_settings(store: Store, settings: dict) -> list[str]:
+    """Apply board machine settings into machine.yaml (comments preserved)."""
+    if not isinstance(settings, dict) or not settings:
+        return []
+    notes: list[str] = []
+    path = store.machine_dir / "machine.yaml"
+    text = path.read_text()
+    changed = False
+    worktrees_value = None
+    if "worktrees" in settings and settings["worktrees"] is not None:
+        raw = settings["worktrees"]
+        if isinstance(raw, str):
+            worktrees_value = raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            worktrees_value = bool(raw)
+        text = set_yaml_scalar(text, "worktrees", worktrees_value)
+        notes.append(f"settings.worktrees={worktrees_value}")
+        changed = True
+    if "parallel" in settings and settings["parallel"] is not None:
+        try:
+            parallel = int(settings["parallel"])
+        except (TypeError, ValueError) as error:
+            raise SystemExit(f"settings.parallel must be an int: {error}") from error
+        if parallel < 1:
+            raise SystemExit("settings.parallel must be >= 1")
+        enabled = (
+            worktrees_value
+            if worktrees_value is not None
+            else worktrees_enabled(store)
+        )
+        if not enabled and parallel > 1:
+            notes.append(
+                f"settings.parallel clamped {parallel}->1 (worktrees disabled)"
+            )
+            parallel = 1
+        text = set_yaml_scalar(text, "parallel", parallel)
+        notes.append(f"settings.parallel={parallel}")
+        changed = True
+    if changed:
+        path.write_text(text)
+        store.emit("board_settings_applied", {"keys": sorted(settings.keys())})
+    return notes
+
+
+def cmd_overrides_import(args: argparse.Namespace) -> int:
+    """Apply board override JSON into the durable project store / current run."""
+    store = Store(repo_root())
+    store.require_configured()
+    ensure_gitignore(store.root)
+    path = Path(args.file)
+    if not path.is_absolute():
+        path = store.root / path
+    payload = json.loads(path.read_text())
+    overrides = payload.get("overrides")
+    settings = payload.get("settings")
+    if settings:
+        # Settings-only downloads are valid.
+        pass
+    elif not isinstance(overrides, dict) or not overrides:
+        raise SystemExit(
+            "overrides file needs a non-empty overrides object and/or settings"
+        )
+    notes: list[str] = []
+    if settings:
+        notes.extend(apply_board_settings(store, settings))
+    if not isinstance(overrides, dict):
+        overrides = {}
+    project = ensure_project_seeded(store)
+    pointer = store.machine_dir / "current-run"
+    state = store.load_state() if pointer.exists() else None
+    applied = 0
+    touched_run = False
+    project_only: dict[str, dict] = {}
+    for task_id, patch in overrides.items():
+        if not isinstance(patch, dict):
+            raise SystemExit(f"override for {task_id} must be an object")
+        task = None
+        in_run = False
+        if state and task_id in state.get("tasks", {}):
+            task = state["tasks"][task_id]
+            in_run = True
+            touched_run = True
+        elif task_id in (project.get("tasks") or {}):
+            task = project["tasks"][task_id]
+        if task is None:
+            raise SystemExit(f"unknown task {task_id}")
+        notes.extend(
+            apply_board_override_to_task(
+                store,
+                project,
+                task,
+                patch,
+                allow_status=not args.pm_only,
+            )
+        )
+        if in_run and state is not None:
+            state["tasks"][task_id] = task
+        else:
+            project_only[task_id] = project_task_record(
+                task, task.get("run_id") or "", previous=task
+            )
+        applied += 1
+        store.emit("board_override_applied", {"keys": sorted(patch.keys())}, task_id)
+    if touched_run and state is not None:
+        store.save_state(state)
+        project = load_project_store(store)
+    for task_id, record in project_only.items():
+        project["tasks"][task_id] = record
+    if project_only or not touched_run:
+        save_project_store(store, project)
+    audit = {
+        "schema_version": OVERRIDES_SCHEMA,
+        "imported_at": now_iso(),
+        "source": str(path),
+        "overrides": overrides,
+    }
+    atomic_write_json(store.machine_dir / "board-overrides.json", audit)
+    if applied:
+        print(f"applied {applied}")
+    elif settings:
+        print("applied settings")
+    for note in notes:
+        print(f"note: {note}")
+    return 0
+
+
+def cmd_overrides_export(args: argparse.Namespace) -> int:
+    """Write current PM/detail fields as a board-overrides JSON skeleton."""
+    store = Store(repo_root())
+    store.require_configured()
+    project = ensure_project_seeded(store)
+    pointer = store.machine_dir / "current-run"
+    if pointer.exists():
+        sync_project_from_state(store, store.load_state())
+        project = load_project_store(store)
+    overrides = {}
+    for task in project.get("tasks", {}).values():
+        overrides[task["id"]] = {
+            "title": task.get("title", ""),
+            "description": task.get("description") or "",
+            "kind": task.get("kind") or "task",
+            "parent": task.get("parent"),
+            "state": BOARD_STATUS.get(str(task.get("status")), task.get("status")),
+            "priority": task.get("priority") or "P2",
+            "milestone": task.get("milestone") or "",
+            "owner": task.get("owner") or "unassigned",
+            "labels": list(task.get("labels") or []),
+            "deps": list(task.get("depends_on") or []),
+            "retries": int(task.get("repair_count") or 0),
+            "reason": task.get("reason") or "",
+            "claim": (
+                {
+                    "holder": task.get("claimed_by"),
+                    "lease": task.get("claim_lease"),
+                }
+                if task.get("claimed_by")
+                else None
+            ),
+        }
+    defaults = resolve_defaults(store)
+    payload = {
+        "schema_version": OVERRIDES_SCHEMA,
+        "project": store.root.name,
+        "exported_at": now_iso(),
+        "settings": {
+            "worktrees": bool(defaults.get("worktrees")),
+            "parallel": int(defaults.get("parallel") or 1),
+        },
+        "overrides": overrides,
+    }
+    dest = (
+        Path(args.output)
+        if args.output
+        else store.machine_dir / "board-overrides.json"
+    )
+    if not dest.is_absolute():
+        dest = store.root / dest
+    atomic_write_json(dest, payload)
+    print(dest)
+    print(f"overrides {len(overrides)} schema {OVERRIDES_SCHEMA}")
+    return 0
+
+
+def write_export_payload(store: Store, dest: Path | None = None) -> tuple[Path, dict]:
+    ensure_gitignore(store.root)
+    project = ensure_project_seeded(store)
+    run_id = None
+    pointer = store.machine_dir / "current-run"
+    if pointer.exists():
+        state = store.load_state()
+        run_id = state["run_id"]
+        sync_project_from_state(store, state)
+        project = load_project_store(store)
+    by_id = dict(project.get("tasks") or {})
+    rows = [
+        export_task_row(store, task, by_id=by_id)
+        for task in by_id.values()
+    ]
+    rows.sort(key=lambda row: row["id"])
+    for row in rows:
+        if row["evidence"]["acceptance"] == "accepted" and row["status"] != "accepted":
+            raise SystemExit(
+                f"export refused: {row['id']} evidence.acceptance=accepted "
+                f"but status={row['status']}"
+            )
+    milestones = export_milestones(project)
+    defaults = resolve_defaults(store)
+    payload = {
+        "schema_version": EXPORT_SCHEMA,
+        "project": store.root.name,
+        "exported_at": now_iso(),
+        "now": now_iso(),
+        "run_id": run_id,
+        "task_count": len(rows),
+        "milestones": milestones,
+        "tasks": rows,
+        "settings": {
+            "worktrees": bool(defaults.get("worktrees")),
+            "parallel": int(defaults.get("parallel") or 1),
+        },
+    }
+    out = dest or (store.machine_dir / "export.json")
+    if not out.is_absolute():
+        out = store.root / out
+    atomic_write_json(out, payload)
+    return out, payload
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Write a JSON snapshot of the durable project task store."""
+    store = Store(repo_root())
+    store.require_configured()
+    dest = Path(args.output) if args.output else None
+    path, payload = write_export_payload(store, dest)
+    print(path)
+    print(
+        f"tasks {payload['task_count']} milestones {len(payload['milestones'])} "
+        f"schema {EXPORT_SCHEMA}"
+    )
+    return 0
+
+
+def cmd_board(args: argparse.Namespace) -> int:
+    """Export tasks and build the project board HTML into the machine dir."""
+    store = Store(repo_root())
+    store.require_configured()
+    export_path, _payload = write_export_payload(store)
+    builder = SKILL_ROOT / "board" / "build_board.py"
+    template = SKILL_ROOT / "board" / "project-board.html"
+    if not builder.exists() or not template.exists():
+        raise SystemExit(
+            "board template missing from dm-software-machine/board/. "
+            "Re-run init from an updated skill package."
+        )
+    out = Path(args.output) if args.output else store.machine_dir / "board.html"
+    if not out.is_absolute():
+        out = store.root / out
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(builder),
+            "--export",
+            str(export_path),
+            "--out",
+            str(out),
+        ],
+        cwd=store.root,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or "board build failed"
+        )
+    print(out)
+    print(f"from {export_path}")
+    if getattr(args, "serve", False):
+        return serve_board(store, out, int(args.port))
+    return 0
+
+
+def serve_board(store: Store, board_path: Path, port: int) -> int:
+    """Serve the board and write specs from the card editor."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_OPTIONS(self) -> None:
+            self._cors(204)
+
+        def do_GET(self) -> None:
+            if self.path.split("?", 1)[0] not in ("/", "/board.html"):
+                self.send_error(404)
+                return
+            data = board_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_POST(self) -> None:
+            if self.path.split("?", 1)[0] != "/spec":
+                self.send_error(404)
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 2_000_000:
+                self._json(413, {"error": "spec too large"})
+                return
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+            except json.JSONDecodeError:
+                self._json(400, {"error": "invalid json"})
+                return
+            task_id = str(body.get("id") or "")
+            spec = body.get("spec")
+            if not isinstance(spec, str):
+                self._json(400, {"error": "spec must be a string"})
+                return
+            task = _task_for_spec_write(store, task_id)
+            if task is None:
+                self._json(404, {"error": f"unknown task {task_id}"})
+                return
+            note = write_task_spec(store, task, spec)
+            if note:
+                self._json(400, {"error": note})
+                return
+            self._json(200, {"ok": True, "spec_path": task.get("spec_path")})
+
+        def _cors(self, code: int) -> None:
+            self.send_response(code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def _json(self, code: int, payload: dict) -> None:
+            data = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        raise SystemExit(f"board serve failed on 127.0.0.1:{port}: {exc}") from exc
+    print(f"http://127.0.0.1:{port}/")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _task_for_spec_write(store: Store, task_id: str) -> dict | None:
+    pointer = store.machine_dir / "current-run"
+    if pointer.exists():
+        state = store.load_state()
+        task = (state.get("tasks") or {}).get(task_id)
+        if task is not None:
+            return task
+    project = load_project_store(store)
+    return (project.get("tasks") or {}).get(task_id)
 
 
 def _yn(value: Any) -> str:
@@ -1970,7 +4256,17 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="stamp machine files and optional fixture")
     init.add_argument("--profile", default="tauri")
     init.add_argument("--force", action="store_true")
-    init.add_argument("--scaffold", action=argparse.BooleanOptionalAction, default=True)
+    init.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="refresh vendored package, skill/docs/permissions, just recipes; keep machine.yaml layout",
+    )
+    init.add_argument(
+        "--scaffold",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="scaffold the profile app folder (off by default; safe for existing repos)",
+    )
     init.add_argument("--ask", action="store_true", help="ask layout questions after stamp")
     init.add_argument(
         "--accept-defaults",
@@ -1980,8 +4276,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--tracker",
         default="",
-        choices=("", "none", "beads"),
-        help="none (default) or beads — beads also runs when first-run tracker question is yes",
+        choices=("", "none"),
+        help="must be none (built-in store + board)",
     )
     init.set_defaults(func=cmd_init)
 
@@ -1991,7 +4287,12 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--app-folder", default="")
     configure.add_argument("--done", default="")
     configure.add_argument("--writes", action="append", default=[])
-    configure.add_argument("--tracker", default="", choices=("", "none", "beads"))
+    configure.add_argument(
+        "--tracker",
+        default="",
+        choices=("", "none"),
+        help="must be none (built-in store + board)",
+    )
     configure.add_argument(
         "--auto-advance",
         action=argparse.BooleanOptionalAction,
@@ -2009,39 +4310,94 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--done", default="")
     add.add_argument("--writes", action="append", default=[])
     add.add_argument("--depends", action="append", default=[])
+    add.add_argument("--priority", default="P2", choices=PRIORITIES)
+    add.add_argument("--milestone", default="")
+    add.add_argument("--owner", default="")
+    add.add_argument("--description", default="")
+    add.add_argument("--kind", default="task", choices=TASK_KINDS)
+    add.add_argument("--parent", default="")
+    add.add_argument("--problem", default="")
+    add.add_argument("--labels", default="", help="comma-separated labels")
     add.set_defaults(func=cmd_task_add)
 
-    brief = sub.add_parser("task-brief", help="create a briefing task; not claimable until sm-ready")
+    brief = sub.add_parser("task-brief", help="create a briefing ticket with a fill template")
     brief.add_argument("--title", required=True)
     brief.add_argument("--done", default="")
     brief.add_argument("--writes", action="append", default=[])
     brief.add_argument("--depends", action="append", default=[])
-    brief.add_argument(
-        "--problem",
-        default="",
-        help="optional verbatim Problem section; other headings stay empty",
-    )
+    brief.add_argument("--priority", default="P2", choices=PRIORITIES)
+    brief.add_argument("--milestone", default="")
+    brief.add_argument("--owner", default="")
+    brief.add_argument("--description", default="")
+    brief.add_argument("--kind", default="task", choices=TASK_KINDS)
+    brief.add_argument("--parent", default="")
+    brief.add_argument("--problem", default="")
     brief.set_defaults(func=cmd_task_brief)
 
     ticket = sub.add_parser(
         "task-ticket",
-        help="find an open specs/<id>.md or create a briefing ticket",
+        help="find an open ticket or create a briefing ticket",
     )
     ticket.add_argument("--title", required=True)
+    ticket.add_argument("--new", action="store_true")
     ticket.add_argument("--done", default="")
     ticket.add_argument("--writes", action="append", default=[])
     ticket.add_argument("--depends", action="append", default=[])
+    ticket.add_argument("--priority", default="P2", choices=PRIORITIES)
+    ticket.add_argument("--milestone", default="")
+    ticket.add_argument("--owner", default="")
+    ticket.add_argument("--description", default="")
+    ticket.add_argument("--kind", default="task", choices=TASK_KINDS)
+    ticket.add_argument("--parent", default="")
     ticket.add_argument("--problem", default="")
-    ticket.add_argument(
-        "--new",
-        action="store_true",
-        help="create even if an open ticket already matches",
-    )
     ticket.set_defaults(func=cmd_task_ticket)
 
     ready = sub.add_parser("task-ready", help="validate spec and move a briefing task to queued")
     ready.add_argument("task_id")
     ready.set_defaults(func=cmd_task_ready)
+
+    update = sub.add_parser("task-update", help="update PM fields on a task")
+    update.add_argument("task")
+    update.add_argument("--title", default="")
+    update.add_argument("--description", default=None)
+    update.add_argument("--priority", default="", choices=("",) + PRIORITIES)
+    update.add_argument("--milestone", default=None)
+    update.add_argument("--owner", default="")
+    update.add_argument("--reason", default=None)
+    update.add_argument("--kind", default="", choices=("",) + TASK_KINDS)
+    update.add_argument("--parent", default=None)
+    update.add_argument("--depends", action="append", default=None)
+    update.add_argument("--labels", default=None, help="replace labels (comma-separated)")
+    update.add_argument("--add-label", action="append", default=[])
+    update.add_argument("--remove-label", action="append", default=[])
+    update.set_defaults(func=cmd_task_update)
+
+    ov_imp = sub.add_parser(
+        "overrides-import",
+        help="apply board override JSON into the project store",
+    )
+    ov_imp.add_argument("--file", "-f", required=True)
+    ov_imp.add_argument(
+        "--pm-only",
+        action="store_true",
+        help="ignore board state/status changes; only PM/detail fields",
+    )
+    ov_imp.set_defaults(func=cmd_overrides_import)
+
+    ov_exp = sub.add_parser(
+        "overrides-export",
+        help="write current tasks as board-overrides JSON",
+    )
+    ov_exp.add_argument("--output", "-o", default="")
+    ov_exp.set_defaults(func=cmd_overrides_export)
+
+    ms_add = sub.add_parser("milestone-add", help="add or rename a project milestone")
+    ms_add.add_argument("--id", required=True)
+    ms_add.add_argument("--name", default="")
+    ms_add.set_defaults(func=cmd_milestone_add)
+
+    ms_list = sub.add_parser("milestone-list", help="list project milestones")
+    ms_list.set_defaults(func=cmd_milestone_list)
 
     nxt = sub.add_parser("task-next", help="claim next ready task")
     nxt.add_argument("--agent", default=os.environ.get("USER", "agent"))
@@ -2051,8 +4407,24 @@ def build_parser() -> argparse.ArgumentParser:
     claim = sub.add_parser("task-claim", help="claim a task")
     claim.add_argument("task_id")
     claim.add_argument("--agent", default=os.environ.get("USER", "agent"))
-    claim.add_argument("--force", action="store_true")
+    claim.add_argument(
+        "--force",
+        action="store_true",
+        help="override overlap/parallel; also requeue failed/blocked",
+    )
     claim.set_defaults(func=cmd_task_claim)
+
+    reclaim = sub.add_parser(
+        "reclaim",
+        help="release stale claimed tasks (or one task with --force)",
+    )
+    reclaim.add_argument("--task", default="")
+    reclaim.add_argument(
+        "--force",
+        action="store_true",
+        help="release even when the lease is still fresh",
+    )
+    reclaim.set_defaults(func=cmd_reclaim)
 
     handoff = sub.add_parser("handoff", help="store or print an envelope")
     handoff.add_argument("--task", required=True)
@@ -2089,8 +4461,65 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--task", required=True)
     accept.set_defaults(func=cmd_accept)
 
+    rebase = sub.add_parser(
+        "rebase",
+        help="merge main into a task worktree after an accept merge conflict",
+    )
+    rebase.add_argument("--task", required=True)
+    rebase.set_defaults(func=cmd_rebase)
+
+    doctor = sub.add_parser(
+        "doctor",
+        help="check install/config health (versions, app folder, just, git)",
+    )
+    doctor.set_defaults(func=cmd_doctor)
+
+    note = sub.add_parser("task-note", help="append a note on a task")
+    note.add_argument("task")
+    note.add_argument("text")
+    note.add_argument("--by", default="")
+    note.set_defaults(func=cmd_task_note)
+
+    prime = sub.add_parser(
+        "prime",
+        help="print an agent resume dump (queue, deps, stuck, next steps)",
+    )
+    prime.add_argument("--events", type=int, default=12)
+    prime.add_argument("--output", "-o", default="", help="also write to a file")
+    prime.set_defaults(func=cmd_prime)
+
     status = sub.add_parser("status", help="print run status")
     status.set_defaults(func=cmd_status)
+
+    export = sub.add_parser(
+        "export",
+        help="write JSON snapshot of the project task store",
+    )
+    export.add_argument(
+        "--output",
+        "-o",
+        default="",
+        help="destination path (default: .dm-software-machine/export.json)",
+    )
+    export.set_defaults(func=cmd_export)
+
+    board = sub.add_parser(
+        "board",
+        help="export tasks and build .dm-software-machine/board.html",
+    )
+    board.add_argument(
+        "--output",
+        "-o",
+        default="",
+        help="destination HTML (default: .dm-software-machine/board.html)",
+    )
+    board.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve the board and write specs from the card editor",
+    )
+    board.add_argument("--port", type=int, default=47321)
+    board.set_defaults(func=cmd_board)
 
     tail = sub.add_parser("tail", help="print recent events")
     tail.add_argument("--task")

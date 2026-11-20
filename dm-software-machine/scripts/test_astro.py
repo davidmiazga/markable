@@ -60,7 +60,7 @@ def test_live_fixture() -> None:
     try:
         subprocess.run(["git", "init"], cwd=tmp, check=True, capture_output=True)
         first = run(
-            ["init", "--profile", "astro", "--accept-defaults"],
+            ["init", "--profile", "astro", "--scaffold", "--accept-defaults"],
             tmp,
             timeout=600,
         )
@@ -87,11 +87,17 @@ def test_live_fixture() -> None:
             raise SystemExit(f"no task id\n{text}")
         claim = run(["task-claim", task_id], tmp)
         assert claim.returncode == 0, claim.stdout + claim.stderr
+        # Edits must land in the task worktree (gates run there when worktrees=true).
+        checkout = tmp / ".dm-software-machine" / "worktrees" / task_id
+        if not checkout.is_dir():
+            checkout = tmp
+        app_gate = checkout / "astro-app"
+        assert (app_gate / "package.json").is_file(), claim.stdout + claim.stderr
         green = run(["gate", "--task", task_id, "--kind", "fast"], tmp, timeout=600)
         if green.returncode != 0:
             raise SystemExit(f"expected green astro gate\n{green.stdout}\n{green.stderr}")
         assert "skip test" in green.stdout or "skip lint" in green.stdout or "skip " in green.stdout
-        page = next((app / "src").rglob("*.astro"))
+        page = next((app_gate / "src").rglob("*.astro"))
         original = page.read_text()
         page.write_text("---\nthrow new Error('sm-gate-fail')\n---\n" + original)
         red = run(["gate", "--task", task_id, "--kind", "fast"], tmp, timeout=600)

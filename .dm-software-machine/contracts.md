@@ -13,12 +13,14 @@ Four surfaces. Change them together.
 - `writes` — default paths a task may change (Tauri: app `src/`, `src-tauri/src/`, `index.html`; Astro: app `src/`, `public/`)
 - `never_write` — directory names that are never in a work envelope (`node_modules`, `target`, `dist`)
 - `done_means` — default acceptance line (fast gate + visible in dev)
-- `tracker` — `none` or `beads` (Beads only after the large-project question or `--tracker beads`)
+- `tracker` — must be `none` (built-in store + board)
 - `protected_paths` — never included in a work envelope
 - `ignore_dirty` — extra dirty paths that do not fail finish (include `.cursor/` so permissions stamps do not fail finish)
-- `max_repairs` — default 2
+- `max_repairs` — default 2. Over-repair moves the task to `failed` (not `blocked`) with a reason
 - `auto_advance` — default false. When true, accept does not pause; the agent claims the next ready task until idle or a red gate
-- `parallel` — max in-flight tasks (default 1). Overlapping `writes` always serialize.
+- `parallel` — max in-flight tasks (default 1; clamp to 1 when `worktrees` is false). Exact-file and directory `writes` scopes always serialize.
+- `worktrees` — default true. Claim creates `.dm-software-machine/worktrees/<id>/` on branch `sm/<id>`. Gates/finish use that checkout. Accept commits write-scoped dirty files, merges into the main checkout, then removes the worktree. Merge conflicts refuse accept. Reclaim removes the worktree. Set `false` to keep the old single-tree behavior.
+- `claim_lease_hours` — default 24. Stale `claimed` tasks are released on `task-claim` / `task-next` / `reclaim`
 
 `init` also stamps `.cursor/permissions.json` from `templates/permissions.json` (Cursor Auto-review allow/block for `just sm-*`, uv CLI, npm/cargo in the app folder). It does not turn Auto-review on; the engineer still picks Run / Auto-review in Cursor.
 
@@ -78,4 +80,21 @@ The CLI owns sequencing, retries, and verdicts. The agent owns judgment inside o
 
 `finish` is the required close-out: work envelope from `git status` (files inside `writes` only), then the named gate, then review from that same scope. It never accepts. Dirty files outside `writes` fail closed unless they match `protected_paths`, `ignore_dirty`, `specs/`, or `.dm-software-machine/`.
 
-When `tracker: beads`, each task may carry `bead_id`. That is a pointer only.
+## Project store and export
+
+Durable task records live in `.dm-software-machine/project-tasks.json` (gitignored). Run state under `runs/<run_id>/` still holds envelopes, logs, and the active queue; each `save_state` upserts that run’s tasks into the project store without wiping tasks from earlier runs.
+
+`export` (just `sm-export`) writes an atomic snapshot to `.dm-software-machine/export.json` (or `-o <path>`). Schema `0.5-smdm`. Canonical status names match the CLI (`briefing` / `queued` … `accepted` / `blocked` / `failed`). Export also includes board aliases (`state`, `deps`, `retries`), PM fields (`priority`, `milestone`, `owner`, `description`, `labels`), append-only `notes`, computed `waiting_on` / `blocks`, nesting (`kind`, `parent`), `writes`, `spec_path`, `external_ref`, `claim`, `reason`, and `latest_envelope` / `envelope_path`. `evidence.acceptance` is `accepted` only when `status` is `accepted`.
+
+`prime` (just `sm-prime`) prints an agent resume dump: layout, in-flight, ready, queued, briefing, stuck, unmet dependency edges, and next-step commands. Use after compaction or handoff to a new agent.
+
+`board` (just `sm-board`) runs export, then embeds it into
+`dm-software-machine/board/project-board.html` → `.dm-software-machine/board.html`.
+
+The board may edit cards locally and download `board-overrides.json`. `overrides-import` merges those patches into the durable store (and current run), including `labels` and append-only `note`/`add_note`. Top-level `settings` (`worktrees`, `parallel`) updates `.dm-software-machine/machine.yaml` with comments preserved. Board `done`/`accepted` is ignored — acceptance stays with `sm-accept`. Gate evidence from the board is recorded as a reason note only. `overrides-export` writes the current PM/detail skeleton plus settings. Last import is audited at `.dm-software-machine/board-overrides.json` (gitignored).
+
+Export includes `settings.worktrees` / `settings.parallel` for the board header controls. Claimed tasks may show `worktree_path` on cards.
+
+Cross-machine sync is intentional out of scope: copy `export.json` / re-run `sm-board` if a human needs a portable snapshot. The live authority stays the project’s local store.
+
+`milestone-add` / `milestone-list` manage project milestones. `task-update` sets priority/milestone/owner/title/description/kind/parent/reason. `reclaim` releases stale claims. `task-claim --force` on `failed`/`blocked` requeues the task.

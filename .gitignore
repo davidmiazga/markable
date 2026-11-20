@@ -51,3 +51,15 @@ __pycache__/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# dm-software-machine runtime
+.dm-software-machine/current-run
+.dm-software-machine/project-tasks.json
+.dm-software-machine/export.json
+.dm-software-machine/board.html
+.dm-software-machine/board-overrides.json
+.dm-software-machine/worktrees/
+**/node_modules/
+target/
+**/target/
+**/.astro/

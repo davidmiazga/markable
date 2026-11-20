@@ -6,7 +6,7 @@
 # Optional override only: APP_FOLDER / PROJ_APP_DIR in .env (never put secrets here).
 
 # Machine package version. Init overwrites this line.
-version: 1.0.0
+version: 1.2.6
 
 # Profile id: tauri or astro. Init overwrites this line.
 profile: tauri
@@ -42,18 +42,24 @@ ignore_dirty:
   - .beads/
   - .cursor/
 
-# none, or beads after the first-run large-project question (or --tracker beads).
+# Built-in project store + board are always on (sm-export / sm-board).
+# Leave none. Beads is not part of this approach.
 tracker: none
+
+# When true, Use sm / sm-add creates a briefing ticket; fill specs/<id>.md
+# then sm-ready before claim. When false, sm-add queues immediately.
+require_brief: false
 
 max_repairs: 2
 # After accept, keep claiming ready disjoint tasks until the queue is idle or a gate fails.
 # Requires Cursor Auto-review (or Run) plus stamped `.cursor/permissions.json`.
 auto_advance: false
-# When true, sm-add creates briefing tasks. Claim/next refuse until the spec is filled
-# and sm-ready succeeds. Pause after brief; do not invent In scope / UX / Tests.
-require_brief: false
-# Max in-flight tasks. Exact file writes serialize. Directory writes do not.
-# Worktrees not in this slice.
-parallel: 4
+# Max in-flight tasks. Overlapping writes always serialize.
+parallel: 1
+# Claim creates an isolated git worktree under .dm-software-machine/worktrees/<id>/.
+# Accept commits write-scoped changes and merges the task branch; conflicts refuse.
+worktrees: true
+# Claimed tasks without a heartbeat older than this are released on claim/next/reclaim.
+claim_lease_hours: 24
 artifact_dir: .dm-software-machine
 specs_dir: specs

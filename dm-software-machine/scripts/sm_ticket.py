@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pydantic>=2", "pyyaml"]
 # ///
-"""Find specs/<id>.md or create a briefing ticket (SM + Beads).
+"""Find specs/<id>.md or create a briefing ticket (built-in store; Beads optional).
 
 Usage (from the app repo root):
 

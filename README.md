@@ -33,4 +33,4 @@ See [docs/testing.md](docs/testing.md) for the recorded baseline.
 
 ## Status snapshot (2026-09-22)
 
-Local `main` is one commit ahead of GitHub. Vitest: 4828 passed, 7 Collections failures. Rust `fmt --check` is dirty. Software-machine / Beads are **not** initialized yet (layout must exist first).
+Local `main` is one commit ahead of GitHub. Vitest: 4828 passed, 7 Collections failures. Rust `fmt --check` is dirty. Tasks are on the software-machine board (`just sm-board`).

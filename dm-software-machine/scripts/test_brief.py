@@ -242,12 +242,13 @@ def test_ticket_find_or_create() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_writes_overlap_files_not_directories() -> None:
-    assert dmsm.writes_overlap(["src/"], ["src/"]) is False
-    assert dmsm.writes_overlap(["src/"], ["src/main.ts"]) is False
+def test_writes_overlap_files_and_directories() -> None:
+    assert dmsm.writes_overlap(["src/"], ["src/"]) is True
+    assert dmsm.writes_overlap(["src/"], ["src/main.ts"]) is True
     assert dmsm.writes_overlap(["src/main.ts"], ["src/main.ts"]) is True
     assert dmsm.writes_overlap(["src/a.ts"], ["src/b.ts"]) is False
-    assert dmsm.writes_overlap(["index.html/"], ["index.html/"]) is False
+    assert dmsm.writes_overlap(["src/a/"], ["src/b/"]) is False
+    assert dmsm.writes_overlap(["index.html"], ["index.html"]) is True
     assert dmsm.writes_overlap([], ["src/main.ts"]) is True
     print("writes overlap ok")
 
@@ -258,7 +259,7 @@ def main() -> None:
         test_spec_complete_unit(unit)
     finally:
         shutil.rmtree(unit, ignore_errors=True)
-    test_writes_overlap_files_not_directories()
+    test_writes_overlap_files_and_directories()
     test_live_brief_gate()
     test_ticket_find_or_create()
     print("brief checks passed")

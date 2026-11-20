@@ -8,8 +8,8 @@
 |---|---|
 | profile | tauri |
 | app_folder | `.` (this repo is the app; do not use `tauri-app/`) |
-| tracker | beads |
-| auto_advance | false (pause after accept) |
+| tracker | none (built-in project store and HTML board) |
+| auto_advance | true |
 | done_means | fast gate green and the feature is visible via `npm run tauri dev` |
 | writes | `src/`, `src-tauri/src/`, `index.html`, `flavors/`, `scripts/`, `src-tauri/tauri.conf.json`, `planning/` |
 
@@ -17,9 +17,9 @@ Gate cwd paths in `.dm-software-machine/profile.yaml` were rewritten from `tauri
 
 Prompt: `Use sm to <one sentence>`. Close-out: `just sm-finish <id>` then `just sm-accept <id>`.
 
-## Why Beads
+## Tracker
 
-This is a large project: many bounded tasks, dependencies, and a multi-app split. Beads track the graph; the machine still claims **one** task at a time.
+Tasks live in `.dm-software-machine/project-tasks.json`. `just sm-board` writes the HTML board.
 
 ## Writes caution
 
