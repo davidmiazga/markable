@@ -19,6 +19,7 @@
 import type { TabEntry } from "./tab-types";
 import { tabManager } from "./tab-manager";
 import { revealInFinder } from "../lib/bridge";
+import { openInNewMarkableWindow } from "./markable-window";
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 
@@ -142,12 +143,16 @@ export function showTabContextMenu(tab: TabEntry, x: number, y: number): void {
     ul,
     "Reveal in Finder",
     () => {
-      // The non-null assertion is safe because the handler is only attached when
-      // noPath is false (the _addItem disabled check prevents attachment otherwise).
       void revealInFinder(tab.filePath!);
     },
     noPath,
   );
+
+  if (tab.kind === "html" && tab.filePath) {
+    _addItem(ul, "Open in New Window", () => {
+      void openInNewMarkableWindow(tab.filePath!);
+    });
+  }
 
   // ── Append to body and position ──────────────────────────────────────────────
   // Append first so getBoundingClientRect() returns a real rendered size.

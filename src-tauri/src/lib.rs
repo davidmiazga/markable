@@ -29,13 +29,13 @@ pub use commands::{
     get_app_data_dir, get_exif_data, get_home_dir, get_image_dimensions, get_settings,
     get_vault_index, list_core_plugins, list_md_files, list_preset_files, list_recovered_notes,
     list_themes, list_user_plugins, list_vault_files, merge_vault_property, move_file,
-    open_asset_dialog, open_file_dialog, open_folder_dialog, read_file, read_plugin_file,
-    read_plugin_settings, read_theme_css, rename_file, rename_vault_property, render_html_pdf,
-    restore_recovered_note, reveal_in_finder, reveal_recovered_notes, save_file_dialog,
-    save_html_dialog, save_image_dialog, save_pdf_dialog, save_settings, save_vault_index,
-    scan_vault_tags, search_vault_content, settings_file_existed, sidecar_exists, switch_vault,
-    unwatch_vault, update_vault, update_wiki_links, validate_vault_paths, watch_vault,
-    write_binary_file, write_file, write_plugin_settings, WatcherRegistry,
+    open_asset_dialog, open_external_url, open_file_dialog, open_folder_dialog, read_file,
+    read_plugin_file, read_plugin_settings, read_theme_css, rename_file, rename_vault_property,
+    render_html_pdf, restore_recovered_note, reveal_in_finder, reveal_recovered_notes,
+    save_file_dialog, save_html_dialog, save_image_dialog, save_pdf_dialog, save_settings,
+    save_vault_index, scan_vault_tags, search_vault_content, settings_file_existed, sidecar_exists,
+    switch_vault, unwatch_vault, update_vault, update_wiki_links, validate_vault_paths,
+    watch_vault, write_binary_file, write_file, write_plugin_settings, WatcherRegistry,
 };
 
 // Folder-icon-assignment feature — batch reader for `_folder.md` icon: values
@@ -494,6 +494,7 @@ pub fn run() {
             open_asset_dialog,
             open_file_dialog,
             open_folder_dialog,
+            open_external_url,
             read_file,
             read_resource_file,
             save_file_dialog,

@@ -2,7 +2,7 @@
   "version": 1,
   "identifier": "default",
   "description": "Capability set for Markable file operations and window management",
-  "windows": ["main"],
+  "windows": ["main", "markable-*"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -27,6 +27,7 @@
     "dialog:allow-confirm",
     "dialog:allow-ask",
     "dialog:allow-message",
-    "core:webview:allow-print"
+    "core:webview:allow-print",
+    "core:webview:allow-create-webview-window"
   ]
 }

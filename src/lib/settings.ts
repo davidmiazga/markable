@@ -57,6 +57,12 @@ export interface SessionTabEntry {
    * Restored by TabManager.init() on the next launch.
    */
   pinned?: boolean;
+
+  /**
+   * "html" restores a vault HTML file as a running page.
+   * Absent or "editor" restores a markdown editor tab.
+   */
+  kind?: "editor" | "html";
 }
 
 /**

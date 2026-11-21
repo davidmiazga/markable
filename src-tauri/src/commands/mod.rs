@@ -24,8 +24,8 @@ pub use dialogs::{
     save_image_dialog, save_pdf_dialog,
 };
 pub use file_ops::{
-    create_directory, create_file, delete_directory, delete_file, move_file, rename_file,
-    reveal_in_finder, update_wiki_links,
+    create_directory, create_file, delete_directory, delete_file, move_file, open_external_url,
+    rename_file, reveal_in_finder, update_wiki_links,
 };
 pub use file_recovery::{list_recovered_notes, restore_recovered_note, reveal_recovered_notes};
 pub use files::{

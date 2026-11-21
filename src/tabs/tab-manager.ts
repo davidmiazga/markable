@@ -25,6 +25,7 @@
 import { EditorView } from "@codemirror/view";
 import type { TabEntry, ITabRenderer } from "./tab-types";
 import { readFile, writeFile, saveFileDialog } from "../lib/bridge";
+import { isHtmlFilePath, isHtmlSessionEntry, sessionEntryForHtml } from "../lib/html-dashboard";
 import { extractH1, h1ToFilename } from "../plugins/auto-title/auto-title-helpers";
 import { getCurrentSettings, updateSettings, addRecentFile } from "../lib/settings";
 import { applyFlavorWindowTitle, flavorWindowTitle } from "../lib/flavor";
@@ -35,6 +36,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 // help file tabs. Imported from extensions — TabManager is not a plugin and
 // is explicitly allowed to access editor internals directly.
 import { editableCompartment } from "../editor/extensions";
+import { mountHtmlDocument } from "./html-document-view";
+import { createHtmlDocumentHost } from "./html-document-host";
+import { readHtmlOpenQuery } from "./markable-window";
 // toggleSide is imported from the internal module (not the public facade) because
 // TabManager is not a plugin — it is allowed to reference sidebar internals directly.
 import { toggleSide } from "../sidebar/sidebar-manager";
@@ -89,6 +93,10 @@ export class TabManager {
 
   /** The #media-viewer DOM element injected by init(). Never removed from DOM. */
   private mediaViewerEl: HTMLElement | null = null;
+  /** Live vault HTML documents, keyed by tab id, so switching tabs keeps the page. */
+  private htmlViews = new Map<string, { slot: HTMLElement; unmount: () => void }>();
+  /** Secondary windows opened with ?html= do not overwrite the main session. */
+  private persistSession = true;
 
   /**
    * The #custom-tab-host DOM element, located in init().
@@ -134,7 +142,9 @@ export class TabManager {
     // Step 3: read persisted tab settings.
     const settings = getCurrentSettings();
     const tabMode = settings.tabMode ?? "minimal";
-    const openFiles = settings.openFiles ?? [];
+    const launchHtml = readHtmlOpenQuery(window.location.search);
+    this.persistSession = launchHtml === null;
+    const openFiles = this.persistSession ? (settings.openFiles ?? []) : [];
     const rawActiveIndex = settings.activeTabIndex ?? 0;
 
     this.mode = tabMode;
@@ -144,6 +154,21 @@ export class TabManager {
     // denied, etc.) are silently skipped so a stale session does not block
     // the app from opening (EC-1, EC-6).
     for (const entry of openFiles) {
+      if (isHtmlSessionEntry(entry)) {
+        const result = await readFile(entry.filePath);
+        if (!result.ok || !isHtmlFilePath(entry.filePath)) continue;
+        this.tabs.push({
+          id: crypto.randomUUID(),
+          kind: "html",
+          filePath: entry.filePath,
+          title: this._basenameFromPath(entry.filePath),
+          isDirty: false,
+          doc: "",
+          scrollTop: 0,
+          pinned: entry.pinned ?? false,
+        });
+        continue;
+      }
       const result = await readFile(entry.filePath);
       if (!result.ok) {
         // Silent skip: the file might have been moved/deleted since last session.
@@ -193,17 +218,17 @@ export class TabManager {
       this.renderer.mount(this.tabStripEl, this.tabs, this.activeIndex);
     }
 
-    // Step 8: apply active tab to the EditorView.
-    this._applyActiveTab();
-
-    // Inject #media-viewer as a sibling to .cm-editor inside #editor.
-    // Created once for the app lifetime; hidden by default via CSS.
+    // Inject #media-viewer before the first apply so an HTML or media tab
+    // restored from the session has a host element on the first paint.
     if (this.editorContainer) {
       const mv = document.createElement("div");
       mv.id = "media-viewer";
       this.editorContainer.appendChild(mv);
       this.mediaViewerEl = mv;
     }
+
+    // Step 8: apply active tab to the EditorView.
+    this._applyActiveTab();
 
     // Locate #custom-tab-host (must exist in index.html — FR-03).
     // Unlike #media-viewer which is created by init(), this element is static HTML.
@@ -213,6 +238,10 @@ export class TabManager {
         "TabManager.init: #custom-tab-host element not found in DOM. " +
         "Ensure index.html has been updated per step_01_custom-render-tab.md."
       );
+    }
+
+    if (launchHtml) {
+      this.openHtmlInTab(launchHtml);
     }
   }
 
@@ -317,8 +346,10 @@ export class TabManager {
     // Zero-tab guard: last tab was closed. Show a blank workspace.
     if (this.tabs.length === 0) {
       this.editorContainer?.classList.remove("has-media-tab");
+      this.editorContainer?.classList.remove("has-html-tab");
       document.body.classList.remove("has-custom-tab");
       document.body.classList.remove("has-layout-view");
+      this._disposeClosedHtmlViews();
       if (this.mediaViewerEl) this.mediaViewerEl.innerHTML = "";
       // Clear the editor and lock it — blank, non-editable empty state.
       if (this.editorView) {
@@ -343,9 +374,21 @@ export class TabManager {
 
     const tab = this.tabs[this.activeIndex];
 
+    if (tab.kind === "html") {
+      this.editorContainer?.classList.add("has-media-tab", "has-html-tab");
+      document.body.classList.remove("has-layout-view");
+      document.body.classList.remove("has-custom-tab");
+      this._showHtmlDocument(tab);
+      this._updateTitleBar(tab);
+      (window as unknown as Record<string, unknown>)["__MARKABLE_CURRENT_FILE__"] =
+        tab.filePath;
+      return;
+    }
+
     if (tab.kind === "media") {
       // Show the media viewer; hide the CM6 editor.
       this.editorContainer?.classList.add("has-media-tab");
+      this.editorContainer?.classList.remove("has-html-tab");
       document.body.classList.remove("has-layout-view");
       this._renderMediaViewer(tab.filePath!);
       this._updateTitleBar(tab);
@@ -359,6 +402,7 @@ export class TabManager {
       // Hide the CM6 editor; show the custom tab host.
       // Remove has-media-tab in case the previous tab was a media tab.
       this.editorContainer?.classList.remove("has-media-tab");
+      this.editorContainer?.classList.remove("has-html-tab");
       document.body.classList.remove("has-layout-view");
       document.body.classList.add("has-custom-tab");
       this._updateTitleBar(tab);
@@ -369,6 +413,7 @@ export class TabManager {
 
     // Editor tab: hide the media viewer and restore the CM6 editor.
     this.editorContainer?.classList.remove("has-media-tab");
+    this.editorContainer?.classList.remove("has-html-tab");
     // Remove has-custom-tab class in case the previous tab was a custom tab.
     document.body.classList.remove("has-custom-tab");
 
@@ -440,7 +485,7 @@ export class TabManager {
     const tab = this.tabs[this.activeIndex];
     // Media and custom tabs have no document text or meaningful scroll position.
     // Capturing them would overwrite doc: "" with stale EditorView content.
-    if (tab.kind === "media" || tab.kind === "custom") return;
+    if (tab.kind === "media" || tab.kind === "custom" || tab.kind === "html") return;
 
     tab.doc = this.editorView.state.doc.toString();
     tab.scrollTop = this.editorView.scrollDOM.scrollTop;
@@ -520,6 +565,46 @@ export class TabManager {
       p.className = "mv-unsupported";
       p.textContent = "Cannot preview this file type.";
       this.mediaViewerEl.appendChild(p);
+    }
+  }
+
+  /**
+   * Show the sandboxed page for this HTML tab. The iframe is created once
+   * per tab and reattached when the user comes back to it.
+   */
+  private _showHtmlDocument(tab: TabEntry): void {
+    if (!this.mediaViewerEl || !tab.filePath) return;
+    this._disposeClosedHtmlViews();
+    let view = this.htmlViews.get(tab.id);
+    if (!view) {
+      const slot = document.createElement("div");
+      slot.className = "html-document-slot";
+      const unmount = mountHtmlDocument(
+        slot,
+        tab.filePath,
+        createHtmlDocumentHost(tab.filePath, {
+          openHtml: (path) => {
+            this.openHtmlInTab(path);
+          },
+          openNote: (path) => {
+            void this.openFileInTab(path);
+          },
+        }),
+      );
+      view = { slot, unmount };
+      this.htmlViews.set(tab.id, view);
+    }
+    this.mediaViewerEl.replaceChildren(view.slot);
+  }
+
+  /** Drop pages whose tabs have been closed. */
+  private _disposeClosedHtmlViews(): void {
+    const live = new Set(this.tabs.map((tab) => tab.id));
+    for (const [id, view] of this.htmlViews) {
+      if (live.has(id)) continue;
+      view.unmount();
+      view.slot.remove();
+      this.htmlViews.delete(id);
     }
   }
 
@@ -673,11 +758,20 @@ export class TabManager {
       return false;
     }
 
-    // Read the file from disk. On failure, alert the user and abort.
+    if (isHtmlFilePath(filePath)) {
+      return this.openHtmlInTab(filePath);
+    }
+
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const previewable = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "svg", "pdf"]);
+    if (previewable.has(ext)) {
+      return this.openMediaInTab(filePath);
+    }
+
+    // Read the file from disk. A file that is not text still opens as a tab.
     const result = await readFile(filePath);
     if (!result.ok) {
-      alert(`Could not open file: ${result.error.message}`);
-      return false;
+      return this.openMediaInTab(filePath);
     }
 
     this._captureActiveTab();
@@ -794,6 +888,9 @@ export class TabManager {
    *           for the same path was activated (duplicate guard).
    */
   openMediaInTab(filePath: string): boolean {
+    if (isHtmlFilePath(filePath)) {
+      return this.openHtmlInTab(filePath);
+    }
     // Duplicate guard: activate existing media tab for this path rather than
     // opening a second copy (EC-01 / requirements FR-3 step 1).
     const existingIdx = this.tabs.findIndex(
@@ -847,6 +944,59 @@ export class TabManager {
       }
     }
 
+    return true;
+  }
+
+  /**
+   * Open an HTML file as an interactive tab. A vault is not required.
+   * The same path activates the existing tab. A non-HTML path stays on the
+   * media preview.
+   *
+   * @returns true when a new tab was created.
+   */
+  openHtmlInTab(filePath: string): boolean {
+    if (!isHtmlFilePath(filePath)) {
+      return this.openMediaInTab(filePath);
+    }
+    const existingIdx = this.tabs.findIndex(
+      (t) => t.kind === "html" && t.filePath === filePath,
+    );
+    if (existingIdx !== -1) {
+      this._captureActiveTab();
+      this.activeIndex = existingIdx;
+      this._applyActiveTab();
+      this._notifyRenderer();
+      return false;
+    }
+
+    this._captureActiveTab();
+    const newTab: TabEntry = {
+      id: crypto.randomUUID(),
+      kind: "html",
+      filePath,
+      title: this._basenameFromPath(filePath),
+      isDirty: false,
+      doc: "",
+      scrollTop: 0,
+    };
+    this.tabs.push(newTab);
+    this.activeIndex = this.tabs.length - 1;
+    if (this.editorContainer !== null) {
+      this._applyActiveTab();
+    }
+    this._notifyRenderer();
+    void addRecentFile(filePath);
+    void this.saveSession();
+    if (this.tabs.length === 2) {
+      const otherIdx = this.tabs.findIndex((t) => t.id !== newTab.id);
+      const other = otherIdx !== -1 ? this.tabs[otherIdx] : null;
+      if (other && other.kind === "editor" && other.filePath === null && !other.isDirty) {
+        this.tabs.splice(otherIdx, 1);
+        this.activeIndex = this.tabs.findIndex((t) => t.id === newTab.id);
+        this._notifyRenderer();
+        void this.saveSession();
+      }
+    }
     return true;
   }
 
@@ -1011,7 +1161,7 @@ export class TabManager {
     if (this.tabs.length === 1) {
       // This is the last tab.
       // Media and custom tabs are never dirty — skip the confirm dialog for them (FR-7).
-      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom" && tab.kind !== "html") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -1028,7 +1178,7 @@ export class TabManager {
 
     // Multiple tabs remain — closing this tab does not exit the app.
     // Media and custom tabs are never dirty — skip the confirm dialog for them (FR-7).
-    if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
+    if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom" && tab.kind !== "html") {
       const confirmed = confirm(
         `"${tab.title}" has unsaved changes. Close without saving?`
       );
@@ -1084,7 +1234,7 @@ export class TabManager {
 
     for (const tab of others) {
       // Media and custom tabs are never dirty — skip the confirm dialog for them.
-      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom" && tab.kind !== "html") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -1160,7 +1310,7 @@ export class TabManager {
       // Pinned tabs survive batch-close operations.
       if (tab.pinned) continue;
       // Media and custom tabs are never dirty — close without dialog.
-      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom") {
+      if (tab.isDirty && tab.kind !== "media" && tab.kind !== "custom" && tab.kind !== "html") {
         const confirmed = confirm(
           `"${tab.title}" has unsaved changes. Close without saving?`
         );
@@ -1437,7 +1587,7 @@ export class TabManager {
    */
   async saveActiveTab(): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab || tab.kind === "media" || tab.kind === "custom") return;
+    if (!tab || tab.kind === "media" || tab.kind === "custom" || tab.kind === "html") return;
 
     if (tab.filePath === null) {
       const resolver = (window as unknown as Record<string, unknown>)["__MARKABLE_AUTO_TITLE__"] as
@@ -1500,7 +1650,7 @@ export class TabManager {
    */
   async saveActiveTabAs(suggestedFilename?: string): Promise<void> {
     const tab = this.getActiveTab();
-    if (!tab || tab.kind === "media" || tab.kind === "custom") return;
+    if (!tab || tab.kind === "media" || tab.kind === "custom" || tab.kind === "html") return;
 
     const dialogResult = await saveFileDialog(suggestedFilename);
     if (dialogResult.cancelled) return; // User cancelled (EC-12).
@@ -1544,7 +1694,7 @@ export class TabManager {
    */
   markActiveTabDirty(): void {
     const tab = this.getActiveTab();
-    if (!tab || tab.isDirty || tab.kind === "media" || tab.kind === "custom") return; // Idempotency and media/custom guard (FR-7 / M-1).
+    if (!tab || tab.isDirty || tab.kind === "media" || tab.kind === "custom" || tab.kind === "html") return;
     tab.isDirty = true;
     this._updateTitleBar(tab);
     this._notifyRenderer();
@@ -1650,6 +1800,7 @@ export class TabManager {
    * because the files themselves are already on disk.
    */
   async saveSession(): Promise<void> {
+    if (!this.persistSession) return;
     // Capture the active tab's current scroll position before serialising.
     // scrollTop is normally updated by _captureActiveTab() on tab-switch, but
     // if the user never switched tabs the stored value is stale (FR-6.2 / M-3).
@@ -1664,12 +1815,16 @@ export class TabManager {
     }
 
     const openFiles = this.tabs
-      .filter((t) => t.kind === "editor" && t.filePath !== null)
-      .map((t) => ({
-        filePath: t.filePath!,
-        scrollTop: t.scrollTop,
-        ...(t.pinned ? { pinned: true as const } : {}),
-      }));
+      .filter((t) => (t.kind === "editor" || t.kind === "html") && t.filePath !== null)
+      .map((t) =>
+        t.kind === "html"
+          ? sessionEntryForHtml(t.filePath!, Boolean(t.pinned))
+          : {
+              filePath: t.filePath!,
+              scrollTop: t.scrollTop,
+              ...(t.pinned ? { pinned: true as const } : {}),
+            },
+      );
 
     await updateSettings((s) => ({
       ...s,
