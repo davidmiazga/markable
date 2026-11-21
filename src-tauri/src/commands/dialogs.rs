@@ -17,7 +17,7 @@ use std::sync::mpsc;
 ///
 /// # Dialog Behavior
 /// - Starts in user's home directory
-/// - Filters to `.md` and `.txt` files
+/// - Filters include Markdown, Text, HTML, and All Files
 /// - Single file selection (not multi-select)
 #[tauri::command]
 pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
@@ -29,6 +29,7 @@ pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, S
         .file()
         .add_filter("Markdown", &["md"])
         .add_filter("Text", &["txt"])
+        .add_filter("HTML", &["html", "htm"])
         .add_filter("All Files", &["*"])
         .pick_file(move |path| {
             let path_string = path.map(|p| p.to_string());
