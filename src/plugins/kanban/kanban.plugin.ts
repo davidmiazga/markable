@@ -1259,6 +1259,7 @@ interface PointerDrag {
   line: HTMLElement | null;
 }
 
+let _pointer: PointerDrag | null = null;
 let _reloadTimer: ReturnType<typeof setInterval> | null = null;
 
 function childOfList(list: HTMLElement, path: string): boolean {

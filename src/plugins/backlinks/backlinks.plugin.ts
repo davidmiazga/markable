@@ -737,15 +737,20 @@ export function buildWikiLinkDecorations(view: any): any {
 
   /*
    * Compute active lines from the selection.
-   * In view mode (cursor at 0, no interaction), the set is empty and all
-   * wiki-links get decorated — this is correct behavior (FR-2.1).
+   * View mode renders every line, including the cursor line, so a wiki
+   * link there stays a link instead of source text.
    */
   const activeLines = new Set<number>();
-  for (const range of state.selection.ranges) {
-    const startLine = state.doc.lineAt(range.from).number;
-    const endLine = state.doc.lineAt(range.to).number;
-    for (let i = startLine; i <= endLine; i++) {
-      activeLines.add(i);
+  const viewModeField = (window as unknown as { __MARKABLE_VIEW_MODE_FIELD__?: object })
+    .__MARKABLE_VIEW_MODE_FIELD__;
+  const inViewMode = viewModeField ? Boolean(state.field(viewModeField, false)) : false;
+  if (!inViewMode) {
+    for (const range of state.selection.ranges) {
+      const startLine = state.doc.lineAt(range.from).number;
+      const endLine = state.doc.lineAt(range.to).number;
+      for (let i = startLine; i <= endLine; i++) {
+        activeLines.add(i);
+      }
     }
   }
 
@@ -3538,6 +3543,11 @@ function _buildCmExtensions(api: MarkablePluginAPI): void {
   if (cmView && cmView.EditorView) {
     const clickHandler = (event: MouseEvent) => {
       if (!_enabled) return;
+      const armedAt = (globalThis as { __MARKABLE_LINK_CLICK_ARMED_AT__?: number })
+        .__MARKABLE_LINK_CLICK_ARMED_AT__;
+      const armMs = (globalThis as { __MARKABLE_LINK_CLICK_ARM_MS__?: number })
+        .__MARKABLE_LINK_CLICK_ARM_MS__ ?? 500;
+      if (typeof armedAt === "number" && armedAt > 0 && Date.now() - armedAt < armMs) return;
       const target = event.target as HTMLElement;
       if (!target) return;
 

@@ -20,6 +20,7 @@ import { StateEffect } from "@codemirror/state";
 import { createEditor } from "./editor/editor";
 import { previewCompartment, previewExtensions, spellCheckCompartment } from "./editor/extensions";
 import { setViewMode } from "./editor/live-preview";
+import { applyReadableLinkColor } from "./editor/link-color";
 import { createFindWidget } from "./editor/find-widget";
 import type { FindWidget } from "./editor/find-widget";
 import { QuickCaptureWidget } from "./editor/quick-capture";
@@ -226,6 +227,7 @@ function applyBundledTheme(themeName: string): boolean {
     removeCustomStylesheet();
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
+    applyReadableLinkColor();
     return true;
   }
 
@@ -234,6 +236,7 @@ function applyBundledTheme(themeName: string): boolean {
 
   removeCustomStylesheet();
   document.documentElement.setAttribute("data-theme", dataTheme);
+  applyReadableLinkColor();
   return true;
 }
 
@@ -250,6 +253,7 @@ async function applyCustomTheme(filename: string): Promise<boolean> {
   const base = entry?.base ?? "light";
   document.documentElement.setAttribute("data-theme", base);
   injectCustomStylesheet(css);
+  applyReadableLinkColor();
   return true;
 }
 
