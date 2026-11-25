@@ -39,6 +39,25 @@ import {
 const PLUGIN_ID = "kanban";
 const CSS_ID = "markable-kanban-styles";
 
+type ReadyTask = () => Promise<void>;
+
+function readyQueue(): ReadyTask[] {
+  const host = window as unknown as { __MARKABLE_WHEN_TABS_READY__?: ReadyTask[] };
+  host.__MARKABLE_WHEN_TABS_READY__ ??= [];
+  return host.__MARKABLE_WHEN_TABS_READY__;
+}
+
+let _pendingOpen: ReadyTask | null = null;
+
+function scheduleAfterTabs(task: ReadyTask): void {
+  if (document.body.dataset.markableTabs === "ready") {
+    void task();
+    return;
+  }
+  _pendingOpen = task;
+  readyQueue().push(task);
+}
+
 interface VaultFile {
   path: string;
 }
@@ -200,16 +219,20 @@ function injectCSS(): void {
   style.id = CSS_ID;
   style.textContent = `
     body.has-custom-tab #custom-tab-host:has(.kb-root) {
-      display: flex;
+      display: flex !important;
       flex-direction: column;
+      height: 100%;
+      min-height: 0;
       padding: 16px 18px 12px;
       overflow: hidden;
+      visibility: visible !important;
     }
     .kb-root {
       display: flex;
       flex-direction: column;
       gap: 14px;
-      flex: 1;
+      flex: 1 1 auto;
+      height: 100%;
       min-height: 0;
       box-sizing: border-box;
       font-family: var(--ui-font, system-ui, sans-serif);
@@ -246,13 +269,23 @@ function injectCSS(): void {
     .kb-toolbar button[aria-pressed="true"] {
       background: var(--bg-tertiary, rgba(255, 255, 255, 0.08));
     }
+    .kb-toolbar .kb-refresh { margin-left: auto; }
+    .kb-reason {
+      margin: 8px 0 0;
+      color: var(--text-danger, #d16969);
+      font-weight: 400;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
     .kb-board {
       display: flex;
       gap: 12px;
-      flex: 1;
+      flex: 1 1 auto;
       min-width: 0;
-      min-height: 0;
+      min-height: 280px;
+      height: 100%;
       overflow-x: auto;
+      overflow-y: hidden;
       align-items: stretch;
       padding-bottom: 4px;
     }
@@ -260,8 +293,9 @@ function injectCSS(): void {
       flex: 0 0 280px;
       display: flex;
       flex-direction: column;
-      min-height: 0;
-      max-height: 100%;
+      height: 100%;
+      min-height: 280px;
+      max-height: none;
       border: 1px solid var(--border-color, #333);
       border-top-width: 3px;
       border-radius: 12px;
@@ -272,6 +306,7 @@ function injectCSS(): void {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-shrink: 0;
       padding: 10px 10px 8px;
       font-weight: 600;
     }
@@ -362,6 +397,7 @@ function injectCSS(): void {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      flex: 1 1 auto;
       padding: 4px 8px 8px;
       overflow-y: auto;
       min-height: 0;
@@ -820,7 +856,26 @@ function commentLine(text: string): string {
   return `_${stamp}:_ ${text}`;
 }
 
+function editingBoardField(): boolean {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement) || _container === null || !_container.contains(target)) return false;
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
+}
+
+function onBoardFocus(): void {
+  if (_mode !== "board" || editingBoardField()) return;
+  void refresh();
+}
+
 function onBoardKey(event: KeyboardEvent): void {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r" && !event.altKey && !event.shiftKey) {
+    event.preventDefault();
+    void refresh();
+    return;
+  }
   if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
   if (
@@ -864,19 +919,57 @@ function paint(): void {
   }
 }
 
+function revealBoard(host: HTMLElement): void {
+  document.body.classList.remove("no-open-tabs");
+  document.body.classList.add("has-custom-tab");
+  const row = document.getElementById("app-row");
+  const height = row?.clientHeight ?? 0;
+  host.style.display = "flex";
+  host.style.flexDirection = "column";
+  host.style.visibility = "visible";
+  host.style.minHeight = "0";
+  host.style.overflow = "hidden";
+  host.style.height = height > 0 ? `${height}px` : "100%";
+}
+
 function present(): void {
   if (!ioCurrent()) return;
   const api = _api;
   if (api === null) return;
-  api.openCustomRenderTab("Project", (host) => {
+  const paintHost = (host: HTMLElement) => {
     _container = host;
+    revealBoard(host);
     paint();
-  });
+  };
+  const open = (window as unknown as {
+    __MARKABLE_OPEN_CUSTOM_TAB__?: (title: string, renderFn: (container: HTMLElement) => void) => void;
+  }).__MARKABLE_OPEN_CUSTOM_TAB__;
+  if (open) {
+    open("Project", paintHost);
+    return;
+  }
+  api.openCustomRenderTab("Project", paintHost);
 }
 
 async function refresh(): Promise<void> {
   await load();
   present();
+}
+
+function cardSnapshot(): string {
+  return _cards
+    .map((card) => {
+      const reason = card.custom.find((field) => field.key.toLowerCase() === "reason")?.value ?? "";
+      return [card.path, card.status, card.title, card.priority, card.assignee, reason].join("\t");
+    })
+    .join("\n");
+}
+
+async function reloadIfNotesChanged(): Promise<void> {
+  if (_mode !== "board" || _folder === "" || editingBoardField() || _pointer) return;
+  const before = cardSnapshot();
+  await load();
+  if (cardSnapshot() !== before) present();
 }
 
 function renderHome(root: HTMLElement): void {
@@ -913,6 +1006,11 @@ function renderToolbar(root: HTMLElement): void {
       paint();
     }));
   }
+  const reload = button("Refresh", "Reload notes from disk", false, () => {
+    void refresh();
+  });
+  reload.className = "kb-refresh";
+  bar.appendChild(reload);
   root.appendChild(bar);
 }
 
@@ -1051,6 +1149,8 @@ function renderCard(card: CardNote, children: CardNote[], laneColor: string): HT
     for (const tag of pills) tags.appendChild(el("span", "kb-tag", tag));
     article.appendChild(tags);
   }
+  const reason = card.custom.find((field) => field.key.toLowerCase() === "reason")?.value.trim() ?? "";
+  if (reason !== "") article.appendChild(el("p", "kb-reason", reason));
   const progress = progressOf(card, children);
   if (progress.total > 0) {
     const row = el("div", "kb-progress");
@@ -1159,7 +1259,7 @@ interface PointerDrag {
   line: HTMLElement | null;
 }
 
-let _pointer: PointerDrag | null = null;
+let _reloadTimer: ReturnType<typeof setInterval> | null = null;
 
 function childOfList(list: HTMLElement, path: string): boolean {
   const parent = _cards.find((card) => card.path === (list.dataset.parent ?? ""));
@@ -1879,17 +1979,40 @@ export default {
     }
     if (typeof stored?.folder === "string") _folder = stored.folder;
     if (typeof stored?.parent === "string") _parent = stored.parent;
-    if (_folder !== "") _mode = "board";
     injectCSS();
     document.addEventListener("keydown", onBoardKey);
-    await refresh();
+    window.addEventListener("focus", onBoardFocus);
+    _reloadTimer = setInterval(() => {
+      void reloadIfNotesChanged();
+    }, 2000);
+    const launched = await invoke<string | null>("launch_folder").catch(() => null);
+    scheduleAfterTabs(async () => {
+      _pendingOpen = null;
+      if (typeof launched === "string" && launched !== "") {
+        await adoptFolder(launched);
+        return;
+      }
+      if (_folder !== "") _mode = "board";
+      await refresh();
+    });
   },
 
   onDisable(): void {
     _epoch += 1;
     _io = Promise.resolve();
+    if (_pendingOpen) {
+      const queue = readyQueue();
+      const index = queue.indexOf(_pendingOpen);
+      if (index !== -1) queue.splice(index, 1);
+      _pendingOpen = null;
+    }
     document.querySelector(".kb-menu-pop")?.remove();
     document.removeEventListener("keydown", onBoardKey);
+    window.removeEventListener("focus", onBoardFocus);
+    if (_reloadTimer !== null) {
+      clearInterval(_reloadTimer);
+      _reloadTimer = null;
+    }
     clearPointer();
     document.getElementById(CSS_ID)?.remove();
     _api = null;

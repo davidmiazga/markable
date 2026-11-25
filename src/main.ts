@@ -1989,6 +1989,20 @@ async function initApp() {
     }
   });
 
+  // Plugins run before the tab session is restored, so a board opened in
+  // onEnable is wiped by the empty editor. Drain the queue after the theme
+  // is on, then show the window with the kanban already painted.
+  document.body.dataset.markableTabs = "ready";
+  {
+    const pending = (window as unknown as { __MARKABLE_WHEN_TABS_READY__?: Array<() => Promise<void>> }).__MARKABLE_WHEN_TABS_READY__;
+    if (pending && pending.length > 0) {
+      const tasks = pending.splice(0, pending.length);
+      await Promise.all(tasks.map((task) => Promise.resolve(task()).catch((err: unknown) => {
+        console.error("Startup tab task failed", err);
+      })));
+    }
+  }
+
   // Show the window now that everything is rendered
   await showWindow();
 

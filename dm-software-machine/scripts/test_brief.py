@@ -250,6 +250,18 @@ def test_writes_overlap_files_and_directories() -> None:
     assert dmsm.writes_overlap(["src/a/"], ["src/b/"]) is False
     assert dmsm.writes_overlap(["index.html"], ["index.html"]) is True
     assert dmsm.writes_overlap([], ["src/main.ts"]) is True
+    assert dmsm.claim_held({"status": "claimed"}) is False
+    assert dmsm.claim_held({"status": "claimed", "claimed_by": "dave", "claim_lease": "t"}) is True
+    assert dmsm.claim_held({"status": "queued", "claimed_by": "dave", "claim_lease": "t"}) is False
+    assert dmsm.board_lane_action("Claimed", {"status": "queued"}) == "claim"
+    assert dmsm.board_lane_action("Claimed", {"status": "claimed", "claimed_by": "dave", "claim_lease": "t"}) is None
+    assert dmsm.board_lane_action("Ready", {"status": "briefing"}) is None
+    assert dmsm.board_lane_action("Ready", {"status": "briefing"}, spec_ready=True) == "ready"
+    assert dmsm.board_lane_action("Ready", {"status": "claimed"}) == "reclaim"
+    assert dmsm.board_lane_action("Running", {"status": "claimed"}) == "running"
+    assert dmsm.board_lane_action("Review", {"status": "active"}) == "finish"
+    assert dmsm.board_lane_action("Done", {"status": "reviewed"}) == "accept"
+    assert dmsm.board_lane_action("Done", {"status": "accepted"}) is None
     print("writes overlap ok")
 
 

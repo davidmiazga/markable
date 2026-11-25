@@ -97,7 +97,7 @@ sm-board *ARGS:
 
 [positional-arguments]
 sm-board-serve *ARGS:
-    {{sm}} board --serve "$@"
+    {{sm}} board "$@"
 
 sm-overrides-import *ARGS:
     {{sm}} overrides-import "$@"

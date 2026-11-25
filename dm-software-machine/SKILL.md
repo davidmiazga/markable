@@ -30,10 +30,10 @@ After `init`:
 | `.dm-software-machine/profile.yaml` | Profile checks |
 | `just sm-*` | Recipes |
 | `.cursor/permissions.json` | Auto-review allowlist stamp |
-| `specs/` | Task briefs (created as you add work) |
+| `specs/` | The board. `board.md` plus one note per task. `status:` is the lane |
 | `.dm-software-machine/runs/` | Runtime (gitignored) |
-| `.dm-software-machine/project-tasks.json` | Durable store (gitignored) |
-| `.dm-software-machine/export.json` / `board.html` | Snapshots (gitignored) |
+| `.dm-software-machine/project-tasks.json` | Runtime mirror of the notes (gitignored). Not the board |
+| `.dm-software-machine/export.json` | Optional JSON dump (gitignored). Not the board |
 
 ## Startup
 
@@ -89,21 +89,18 @@ Always available (no Beads required):
 | Command | Purpose |
 |---|---|
 | `just sm-prime` | Agent resume dump (queue, deps, worktrees, next steps) |
-| `just sm-export` | Write `.dm-software-machine/export.json` (schema 0.5-smdm) |
-| `just sm-board` | Export + build `.dm-software-machine/board.html` |
-| `just sm-board-serve` | Serve that board. Card Save writes `specs/<id>.md` |
+| `just sm-export` | Optional JSON dump of the task store. The board does not read it |
+| `just sm-board` | Open the specs folder in the project tracker. Does not compile |
+| `just sm-board-serve` | Same as sm-board. The notes are the board |
 | `just sm-milestone-add` / `sm-milestone-list` | Milestones |
 | `just sm-update <id>` | Priority / milestone / owner / labels / depends / … |
 | `just sm-note <id> "…"` | Append an agent/human note on a task |
 | `just sm-overrides-import -f board-overrides.json` | Apply board card edits + settings into the store |
 | `just sm-overrides-export` | Skeleton overrides JSON (includes worktrees/parallel) |
 
-Board header shows **Worktrees** and **Parallel**. Change them, download
-Overrides JSON, then `sm-overrides-import` to write `machine.yaml`.
+`sm-board` opens `specs/` in the project tracker at `dm-software-machine/project tracker`, by that app's path, so a test Markable does not take the launch. It does not compile. Dropping a card, editing its fields, or adding a card updates the ticket. The board is the way to do that. `sm-*` commands stay as a backup. Replace that app when the project tracker itself changes. Each task is a markdown note. `specs/board.md` lists the lanes, and `status:` on the note is the lane. Dragging a card writes that line. `sm-accept` is still the only way to accept a task. A card dropped on Done stays unaccepted until then.
 
-Board UI may edit cards locally and download overrides. Import merges into the
-durable store. Board cannot force `accepted`/`done` — that stays with
-`sm-accept`. Gate evidence from the board is advisory (reason note only).
+Worktrees and parallel stay in `.dm-software-machine/machine.yaml`.
 
 ## Rules
 
@@ -128,7 +125,7 @@ durable store. Board cannot force `accepted`/`done` — that stays with
 | `sm-add` / `sm-ticket` / `sm-ready` / `sm-claim` / `sm-next` | Queue and claim |
 | `sm-handoff` / `sm-finish` / `sm-accept` / `sm-gate` | Work and close |
 | `sm-note` / `sm-update` | Notes, labels, deps, PM fields |
-| `sm-export` / `sm-board` / `sm-board-serve` | Store snapshot, HTML board, spec save |
+| `sm-export` / `sm-board` | Optional JSON dump. The board is the specs folder opened in Markable-Project |
 | `sm-overrides-import` / `sm-overrides-export` | Board ↔ store |
 | `sm-reclaim` / `sm-rebase` / `sm-doctor` | Leases, merge recovery, health |
 | `sm-auto` / `sm-watch` / `sm-tail` | Unattended + live view |

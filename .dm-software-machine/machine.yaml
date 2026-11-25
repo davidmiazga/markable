@@ -73,3 +73,6 @@ worktrees: true
 claim_lease_hours: 24
 artifact_dir: .dm-software-machine
 specs_dir: specs
+# Opens the specs folder in the project tracker. The folder path is appended.
+# The app lives in dm-software-machine/project tracker. Replace it when the tracker changes.
+board_command: ""

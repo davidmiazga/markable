@@ -63,3 +63,7 @@ worktrees: true
 claim_lease_hours: 24
 artifact_dir: .dm-software-machine
 specs_dir: specs
+# sm-board opens the project tracker in dm-software-machine/project tracker.
+# board_command is only used when that app is absent. The folder path is appended.
+# Replace the .app when the project tracker itself changes.
+board_command: ""

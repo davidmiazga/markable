@@ -56,9 +56,12 @@ def main() -> None:
         assert add.returncode == 0, add.stderr
         task_id = add.stdout.strip().splitlines()[0]
         assert task_id.startswith("t-"), add.stdout
+        spec_text = (tmp / "specs" / f"{task_id}.md").read_text()
+        assert "status: Ready" in spec_text
 
         claim_a = run(["task-claim", task_id, "--agent", "agent-a"], tmp)
         assert claim_a.returncode == 0, claim_a.stderr
+        assert "status: Claimed" in (tmp / "specs" / f"{task_id}.md").read_text()
         claim_b = run(["task-claim", task_id, "--agent", "agent-b"], tmp)
         assert claim_b.returncode != 0, "second agent must not steal claim"
         assert "already claimed by agent-a" in (claim_b.stderr + claim_b.stdout)
@@ -90,6 +93,10 @@ def main() -> None:
             "Quality gate red after 3 repairs (max 2); stopped for review."
         )
         save_state(tmp, state)
+        failed_note = tmp / "specs" / f"{task_id}.md"
+        failed_note.write_text(
+            failed_note.read_text().replace("status: Ready", "status: Failed", 1)
+        )
 
         blocked_claim = run(["task-claim", task_id, "--agent", "agent-c"], tmp)
         assert blocked_claim.returncode != 0
@@ -243,10 +250,12 @@ def main() -> None:
         assert ".dm-software-machine/board.html" in gitignore
         board = run(["board"], tmp)
         assert board.returncode == 0, board.stderr + board.stdout
-        board_html = tmp / ".dm-software-machine" / "board.html"
-        assert board_html.is_file()
-        html = board_html.read_text()
-        assert "pb-tasks" in html or "PB_TASKS" in html or task_id in html
+        assert str(tmp / "specs") in board.stdout
+        board_note = (tmp / "specs" / "board.md").read_text()
+        for lane in ("Ready", "Claimed", "Running", "Review", "Blocked", "Failed", "Done"):
+            assert lane in board_note
+        assert "kanban: board" in board_note
+        assert task_id in project_path.read_text()
 
         labeled = run(
             ["task-add", "--title", "Labeled child", "--labels", "ux, backend"],
@@ -281,6 +290,19 @@ def main() -> None:
         assert "sm prime" in prime.stdout
         assert "dependency edges" in prime.stdout
         assert f"{child} -> {task_id}" in prime.stdout
+        running_note = tmp / "specs" / f"{task_id}.md"
+        running_note.write_text(
+            running_note.read_text().replace("status: Claimed", "status: Running", 1)
+        )
+        ran = run(["task-note", task_id, "lane check"], tmp)
+        assert ran.returncode == 0, ran.stderr
+        assert load_state(tmp)["tasks"][task_id]["status"] == "active"
+        running_note.write_text(
+            running_note.read_text().replace("status: Running", "status: Done", 1)
+        )
+        done = run(["task-note", task_id, "done check"], tmp)
+        assert done.returncode == 0, done.stderr
+        assert load_state(tmp)["tasks"][task_id]["status"] == "reviewed"
         print("temp export + board + lease + labels/notes/prime ok")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -301,17 +323,15 @@ def main() -> None:
             assert row["state"] == "done", row
         if row["status"] == "accepted":
             assert row["evidence"]["acceptance"] == "accepted", row
-        assert row["priority"] in ("P1", "P2", "P3")
+        assert row["priority"] in ("P1", "P2", "P3", "P4")
         assert "owner" in row
         assert (row.get("kind") or "task") in ("task", "subtask", "subcard")
         assert "writes" in row
-    board_fix = run(["board"], ROOT)
-    assert board_fix.returncode == 0, board_fix.stderr + board_fix.stdout
-    board_html = (ROOT / ".dm-software-machine" / "board.html").read_text()
-    assert "syncDomFromBase" in board_html
-    assert "const makeCard" in board_html
+    shell = (ROOT / "dm-software-machine" / "board" / "project-board.html").read_text()
+    assert 'id="pb-new-ticket"' not in shell
+    store_text = (ROOT / ".dm-software-machine" / "project-tasks.json").read_text()
     for row in payload["tasks"]:
-        assert f'"id": "{row["id"]}"' in board_html or f'"{row["id"]}"' in board_html
+        assert f'"{row["id"]}"' in store_text
     print(f"fixture export + board ok ({payload['task_count']} tasks)")
     print("export checks passed")
 

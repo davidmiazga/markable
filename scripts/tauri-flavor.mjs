@@ -12,7 +12,7 @@
  * `npm run tauri dev` still uses src-tauri/tauri.conf.json (com.markable.app).
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,23 @@ if (flavorId === "") {
 }
 if (command.length === 0) {
   command = ["dev"];
+}
+
+const tauriCommand = [];
+const appArgs = [];
+let passToApp = false;
+const opensFolder = command[0] === "dev";
+for (const arg of command) {
+  if (passToApp || arg === "--") {
+    if (arg !== "--") appArgs.push(arg);
+    passToApp = true;
+    continue;
+  }
+  if (opensFolder && tauriCommand.length > 0 && !arg.startsWith("-")) {
+    appArgs.push(arg);
+    continue;
+  }
+  tauriCommand.push(arg);
 }
 
 const flavorPath = flavorFile(flavorId);
@@ -68,6 +85,9 @@ const iconDir =
 const merge = {
   identifier,
   productName,
+  build: {
+    beforeBuildCommand: `VITE_FLAVOR=${flavorId} npm run build:plugins && VITE_FLAVOR=${flavorId} npm run build`,
+  },
   bundle: {
     icon: [
       `${iconDir}/32x32.png`,
@@ -81,9 +101,38 @@ const merge = {
 
 console.log(`[tauri-flavor] ${flavorId} → ${identifier} (${productName}) icons ${iconDir}`);
 
+if (tauriCommand.includes("dev")) {
+  let stopped = false;
+  try {
+    const listeners = execFileSync("lsof", ["-nP", "-iTCP:1420", "-sTCP:LISTEN", "-t"], { encoding: "utf8" });
+    for (const pid of listeners.split(/\s+/).filter(Boolean)) {
+      try {
+        process.kill(Number(pid), "SIGTERM");
+        stopped = true;
+        console.log("[tauri-flavor] Stopped the dev server already using port 1420");
+      } catch {
+        /* already gone */
+      }
+    }
+  } catch {
+    /* port is free */
+  }
+  if (stopped) {
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      try {
+        execFileSync("lsof", ["-nP", "-iTCP:1420", "-sTCP:LISTEN", "-t"], { stdio: "ignore" });
+      } catch {
+        break;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+}
+
 const child = spawn(
   "npm",
-  ["exec", "--", "tauri", ...command, "--config", JSON.stringify(merge)],
+  ["exec", "--", "tauri", ...tauriCommand, "--config", JSON.stringify(merge), "--", ...appArgs],
   {
     cwd: root,
     stdio: "inherit",

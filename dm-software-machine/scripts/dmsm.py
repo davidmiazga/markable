@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -67,7 +68,7 @@ PROJECT_STORE_SCHEMA = "0.5-smdm"
 EXPORT_SCHEMA = "0.5-smdm"
 OVERRIDES_SCHEMA = "0.5-smdm-overrides"
 DEFAULT_CLAIM_LEASE_HOURS = 24
-PRIORITIES = ("P1", "P2", "P3")
+PRIORITIES = ("P1", "P2", "P3", "P4")
 TASK_KINDS = ("task", "subtask", "subcard")
 BOARD_STATUS = {
     "briefing": "ready",
@@ -115,6 +116,240 @@ TICKET_STOPWORDS = frozenset(
 )
 WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Lane titles the Markable kanban reads from specs/board.md. status: on each
+# card is one of these titles. Dragging a card rewrites that line.
+BOARD_LANES = (
+    ("Ready", "#4c78e8"),
+    ("Claimed", "#7a6bb5"),
+    ("Running", "#e6a23c"),
+    ("Review", "#3aa0c8"),
+    ("Blocked", "#b32e35"),
+    ("Failed", "#8a3d3d"),
+    ("Done", "#3d9a6a"),
+)
+CARD_FIELDS = (
+    "title",
+    "status",
+    "priority",
+    "assignee",
+    "tags",
+    "blocked-by",
+    "writes",
+    "claimed-by",
+    "claim-lease",
+    "repairs",
+    "order",
+)
+
+
+def lane_title(status: str, existing: str = "") -> str:
+    """Column name for a machine status. A Done card that is not accepted stays Done."""
+    if status == "reviewed" and existing.strip().lower() == "done":
+        return "Done"
+    return {
+        "briefing": "Ready",
+        "queued": "Ready",
+        "claimed": "Claimed",
+        "active": "Running",
+        "gated": "Review",
+        "reviewed": "Review",
+        "blocked": "Blocked",
+        "failed": "Failed",
+        "accepted": "Done",
+    }.get(status, "Ready")
+
+
+def status_from_lane(lane: str, current: str) -> str:
+    """Machine status for a lane. Done is reviewed until sm-accept writes accepted."""
+    key = lane.strip().lower()
+    if key == "ready":
+        return "briefing" if current == "briefing" else "queued"
+    if key == "review":
+        return "reviewed" if current == "reviewed" else "gated"
+    if key == "done":
+        return "accepted" if current == "accepted" else "reviewed"
+    return {
+        "claimed": "claimed",
+        "running": "active",
+        "blocked": "blocked",
+        "failed": "failed",
+    }.get(key, current or "queued")
+
+
+def yaml_quote(value: str) -> str:
+    if value == "":
+        return '""'
+    if any(ch in value for ch in ':#{}[],&*!|>%@`"\'\n') or value.strip() != value:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def yaml_unquote(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        inner = text[1:-1]
+        if text[0] == '"':
+            return inner.replace('\\"', '"').replace("\\\\", "\\")
+        return inner
+    return text
+
+
+def split_note(text: str) -> tuple[dict[str, str], str]:
+    """Split a card into frontmatter scalars and the spec body."""
+    normalized = text.replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return {}, normalized
+    end = normalized.find("\n---\n", 4)
+    if end < 0:
+        return {}, normalized
+    meta: dict[str, str] = {}
+    for line in normalized[4:end].splitlines():
+        if not line.strip() or line[0] in " \t" or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = yaml_unquote(value.strip())
+    return meta, normalized[end + 5 :]
+
+
+def task_spec_path(store: "Store", task: dict) -> Path:
+    specs = str(store.cfg.get("specs_dir") or "specs").strip("/")
+    rel = task.get("spec_path") or f"{specs}/{task['id']}.md"
+    path = Path(str(rel))
+    if not path.is_absolute():
+        path = store.root / path
+    return path
+
+
+def board_dir(store: "Store") -> Path:
+    specs = str(store.cfg.get("specs_dir") or "specs").strip("/")
+    return store.root / specs
+
+
+def board_markdown(title: str = "Project") -> str:
+    lanes = "\n".join(
+        f"  - {yaml_quote(name + '|' + color)}" for name, color in BOARD_LANES
+    )
+    return (
+        "---\n"
+        "kanban: board\n"
+        f"title: {yaml_quote(title)}\n"
+        "show-title: yes\n"
+        "show-tags: yes\n"
+        "show-progress: yes\n"
+        "lane:\n"
+        f"{lanes}\n"
+        "---\n"
+        "\n"
+        "This folder is the project. This file is the board. Every other note here is a task.\n"
+    )
+
+
+def ensure_board_file(store: "Store") -> Path:
+    path = board_dir(store) / "board.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(board_markdown())
+    return path
+
+
+def card_frontmatter(task: dict, existing: dict[str, str]) -> dict[str, str]:
+    fields: dict[str, str] = {
+        "title": str(task.get("title") or ""),
+        "status": lane_title(str(task.get("status") or ""), existing.get("status", "")),
+        "priority": str(task.get("priority") or "P2"),
+    }
+    owner = str(task.get("owner") or "").strip()
+    if owner and owner != "unassigned":
+        fields["assignee"] = owner
+    labels = [str(item) for item in (task.get("labels") or []) if str(item).strip()]
+    if labels:
+        fields["tags"] = ", ".join(labels)
+    deps = [str(item) for item in (task.get("depends_on") or []) if str(item).strip()]
+    if deps:
+        fields["blocked-by"] = ", ".join(deps)
+    writes = [str(item) for item in (task.get("writes") or []) if str(item).strip()]
+    if writes:
+        fields["writes"] = ", ".join(writes)
+    holder = str(task.get("claimed_by") or "").strip()
+    if holder:
+        fields["claimed-by"] = holder
+    lease = str(task.get("claim_lease") or "").strip()
+    if lease:
+        fields["claim-lease"] = lease
+    repairs = int(task.get("repair_count") or 0)
+    if repairs:
+        fields["repairs"] = str(repairs)
+    if existing.get("order"):
+        fields["order"] = existing["order"]
+    reason = str(task.get("reason") or "").strip()
+    if reason:
+        fields["reason"] = reason
+    for key, value in existing.items():
+        if key == "reason" or key in fields or key in CARD_FIELDS:
+            continue
+        fields[key] = value
+    return fields
+
+
+def compose_note(fields: dict[str, str], body: str) -> str:
+    ordered = [key for key in CARD_FIELDS if key in fields]
+    ordered.extend(key for key in fields if key not in ordered)
+    lines = [f"{key}: {yaml_quote(fields[key])}" for key in ordered]
+    if not body.startswith("\n"):
+        body = "\n" + body
+    if not body.endswith("\n"):
+        body += "\n"
+    return "---\n" + "\n".join(lines) + "\n---\n" + body
+
+
+def write_task_note(store: "Store", task: dict) -> None:
+    path = task_spec_path(store, task)
+    if path.name == "board.md" or not path.is_file():
+        return
+    existing, body = split_note(path.read_text(encoding="utf-8"))
+    path.write_text(compose_note(card_frontmatter(task, existing), body), encoding="utf-8")
+
+
+def apply_note_to_task(task: dict, meta: dict[str, str]) -> None:
+    """Copy the visible card fields onto the task. The note wins."""
+    if "status" not in meta:
+        return
+    title = meta.get("title", "").strip()
+    if title:
+        task["title"] = title
+    task["status"] = status_from_lane(meta.get("status", ""), str(task.get("status") or ""))
+    if meta.get("priority") in PRIORITIES:
+        task["priority"] = meta["priority"]
+    if "assignee" in meta:
+        task["owner"] = meta["assignee"].strip() or task.get("owner") or "unassigned"
+    if "tags" in meta:
+        task["labels"] = [part.strip() for part in meta["tags"].split(",") if part.strip()]
+    if "blocked-by" in meta:
+        task["depends_on"] = [
+            part.strip()
+            for part in meta["blocked-by"].split(",")
+            if part.strip().startswith("t-")
+        ]
+    task["kind"] = "task"
+    task["parent"] = None
+
+
+def apply_notes_to_state(store: "Store", state: dict) -> None:
+    for task in (state.get("tasks") or {}).values():
+        path = task_spec_path(store, task)
+        if not path.is_file():
+            continue
+        try:
+            meta, _body = split_note(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        apply_note_to_task(task, meta)
+
+
+def write_notes_from_state(store: "Store", state: dict) -> None:
+    for task in (state.get("tasks") or {}).values():
+        write_task_note(store, task)
 
 
 def spec_sections(text: str) -> dict[str, str]:
@@ -1395,9 +1630,12 @@ class Store:
         path = self.state_path(run_id)
         if not path.exists():
             raise SystemExit("run state missing")
-        return json.loads(path.read_text())
+        state = json.loads(path.read_text())
+        apply_notes_to_state(self, state)
+        return state
 
     def save_state(self, state: dict) -> None:
+        write_notes_from_state(self, state)
         path = self.state_path(state["run_id"])
         atomic_write_json(path, state)
         sync_project_from_state(self, state)
@@ -1561,7 +1799,7 @@ def ensure_justfile(root: Path) -> str:
         additions.append("sm-board *ARGS:\n    {{sm}} board \"$@\"\n")
     if "sm-board-serve" not in text:
         additions.append(
-            "sm-board-serve *ARGS:\n    {{sm}} board --serve \"$@\"\n"
+            "sm-board-serve *ARGS:\n    {{sm}} board \"$@\"\n"
         )
     if "sm-overrides-import" not in text:
         additions.append(
@@ -3643,22 +3881,43 @@ def _save_task_edit(
         save_project_store(store, project)
 
 
-def write_task_spec(store: Store, task: dict, text: str) -> str | None:
-    """Write a task spec. Returns an error note, or None when the file is written."""
+def spec_file_for_task(store: Store, task: dict) -> tuple[Path | None, str | None]:
+    """Resolve a task spec to a path under specs/. Refuse anything else."""
     rel = str(task.get("spec_path") or "").replace("\\", "/").strip()
     if not rel or rel.startswith("/") or ".." in Path(rel).parts:
-        return f"{task['id']}: spec path refused"
+        return None, f"{task['id']}: spec path refused"
     if not rel.startswith("specs/") or not rel.endswith(".md"):
-        return f"{task['id']}: spec path must stay under specs/"
+        return None, f"{task['id']}: spec path must stay under specs/"
     path = (store.root / rel).resolve()
     specs = (store.root / "specs").resolve()
     try:
         path.relative_to(specs)
     except ValueError:
-        return f"{task['id']}: spec path refused"
+        return None, f"{task['id']}: spec path refused"
+    return path, None
+
+
+def write_task_spec(store: Store, task: dict, text: str) -> str | None:
+    """Write a task spec. Returns an error note, or None when the file is written."""
+    path, err = spec_file_for_task(store, task)
+    if err or path is None:
+        return err or f"{task['id']}: spec path refused"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return None
+
+
+def read_task_spec(store: Store, task: dict) -> tuple[str, str, str | None]:
+    """Read a task spec from specs/. Returns text, absolute path, and an error note."""
+    path, err = spec_file_for_task(store, task)
+    if err or path is None:
+        return "", "", err or f"{task['id']}: spec path refused"
+    if not path.is_file():
+        return "", str(path), None
+    try:
+        return path.read_text(encoding="utf-8"), str(path), None
+    except OSError as exc:
+        return "", str(path), str(exc)
 
 
 def apply_board_override_to_task(
@@ -4065,65 +4324,418 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_board(args: argparse.Namespace) -> int:
-    """Export tasks and build the project board HTML into the machine dir."""
+def board_launch_env() -> dict[str, str]:
+    """PATH for board_command. Homebrew node is often installed but not linked onto PATH."""
+    env = os.environ.copy()
+    prepend: list[str] = []
+    for candidate in ("/opt/homebrew/opt/node/bin", "/usr/local/opt/node/bin"):
+        if (Path(candidate) / "npm").is_file():
+            prepend.append(candidate)
+    if prepend:
+        env["PATH"] = os.pathsep.join([*prepend, env.get("PATH", "")])
+    return env
+
+
+def project_tracker_binary() -> Optional[Path]:
+    """Shipped project tracker. Opening the board must not compile."""
+    macos = SKILL_ROOT / "project tracker" / "Markable-Project.app" / "Contents" / "MacOS"
+    if not macos.is_dir():
+        return None
+    for name in ("markable", "Markable-Project"):
+        path = macos / name
+        if path.is_file() and os.access(path, os.X_OK):
+            return path
+    for path in macos.iterdir():
+        if path.is_file() and os.access(path, os.X_OK) and path.suffix != ".dylib":
+            return path
+    return None
+
+
+def project_tracker_app() -> Optional[Path]:
+    """The Markable-Project bundle shipped with the machine."""
+    binary = project_tracker_binary()
+    if binary is None:
+        return None
+    app = binary.parents[2]
+    if app.suffix == ".app" and app.is_dir():
+        return app
+    return None
+
+
+def open_project_tracker(app: Path, folder: Path) -> None:
+    """Open this bundle by path so a test Markable does not take the launch."""
+    subprocess.Popen(
+        ["open", "-n", str(app), "--args", str(folder)],
+        start_new_session=True,
+    )
+
+
+def claim_held(task: dict) -> bool:
+    """True when the machine already claimed this task, not merely the lane."""
+    return (
+        task.get("status") == "claimed"
+        and bool(task.get("claimed_by"))
+        and bool(task.get("claim_lease"))
+    )
+
+
+def board_lane_action(lane: str, task: dict, *, spec_ready: bool = False) -> str | None:
+    """Machine action for a card sitting in a lane, or None when the ticket already matches."""
+    key = lane.strip().lower()
+    status = str(task.get("status") or "")
+    if key == "ready":
+        if status == "briefing":
+            return "ready" if spec_ready else None
+        if status in ("claimed", "active", "gated", "reviewed", "blocked", "failed"):
+            return "reclaim"
+        return None
+    if key == "claimed":
+        return None if claim_held(task) else "claim"
+    if key == "running":
+        return None if status == "active" else "running"
+    if key == "review":
+        return None if status in ("gated", "reviewed") else "finish"
+    if key == "done":
+        return None if status == "accepted" else "accept"
+    if key == "blocked":
+        return None if status == "blocked" else "block"
+    if key == "failed":
+        return None if status == "failed" else "fail"
+    return None
+
+
+def load_state_disk(store: Store) -> dict:
+    """Run state as saved. Notes are not copied on top."""
+    path = store.state_path()
+    if not path.exists():
+        raise SystemExit("run state missing")
+    return json.loads(path.read_text())
+
+
+def apply_note_fields(task: dict, meta: dict[str, str]) -> bool:
+    """Copy the card's editable info onto the ticket. Returns whether anything changed."""
+    changed = False
+    title = meta.get("title", "").strip()
+    if title and title != str(task.get("title") or ""):
+        task["title"] = title
+        changed = True
+    priority = meta.get("priority", "").strip()
+    if priority in PRIORITIES and priority != str(task.get("priority") or ""):
+        task["priority"] = priority
+        changed = True
+    if "assignee" in meta:
+        owner = meta.get("assignee", "").strip() or "unassigned"
+        if owner != str(task.get("owner") or ""):
+            task["owner"] = owner
+            changed = True
+    if "tags" in meta:
+        labels = [part.strip() for part in meta.get("tags", "").split(",") if part.strip()]
+        if labels != list(task.get("labels") or []):
+            task["labels"] = labels
+            changed = True
+    if "blocked-by" in meta:
+        deps = [
+            part.strip()
+            for part in meta.get("blocked-by", "").split(",")
+            if part.strip().startswith("t-")
+        ]
+        if deps != list(task.get("depends_on") or []):
+            task["depends_on"] = deps
+            changed = True
+    return changed
+
+
+def run_board_action(store: Store, task_id: str, action: str) -> None:
+    """Do what the card asks. The ticket, not the typed command, is the result."""
+    agent = os.environ.get("USER") or "board"
+    if action == "ready":
+        cmd_task_ready(argparse.Namespace(task_id=task_id))
+        return
+    if action == "claim":
+        _claim(store, load_state_disk(store), task_id, agent, force=False)
+        return
+    if action == "reclaim":
+        state = load_state_disk(store)
+        task = state["tasks"][task_id]
+        if task.get("status") == "claimed":
+            release_claim(task, "Returned to Ready from the board.", store=store)
+        else:
+            task["status"] = "queued"
+            task["claimed_by"] = None
+            task["claim_lease"] = None
+            task["phase"] = "reclaimed"
+        task["reason"] = ""
+        store.save_state(state)
+        return
+    if action == "running":
+        state = load_state_disk(store)
+        task = state["tasks"][task_id]
+        if not claim_held(task):
+            _claim(store, state, task_id, agent, force=False)
+            state = load_state_disk(store)
+            task = state["tasks"][task_id]
+        task["status"] = "active"
+        task["phase"] = "work"
+        task["reason"] = ""
+        refresh_claim_lease(task)
+        store.save_state(state)
+        return
+    if action == "finish":
+        cmd_finish(argparse.Namespace(task=task_id, kind="fast"))
+        return
+    if action == "accept":
+        cmd_accept(argparse.Namespace(task=task_id))
+        return
+    if action in ("block", "fail"):
+        state = load_state_disk(store)
+        task = state["tasks"][task_id]
+        task["status"] = "blocked" if action == "block" else "failed"
+        task["reason"] = ""
+        store.save_state(state)
+        return
+    raise SystemExit(f"unknown board action {action}")
+
+
+def remember_board_failure(store: Store, task_id: str, meta: dict[str, str], message: str) -> None:
+    """Keep the ticket where it really is, and leave the reason on the card."""
+    state = load_state_disk(store)
+    task = (state.get("tasks") or {}).get(task_id)
+    if task is None:
+        return
+    apply_note_fields(task, meta)
+    task["reason"] = " ".join(message.split()) or "The board could not update this ticket."
+    store.save_state(state)
+
+
+def adopt_board_cards(store: Store) -> list[str]:
+    """A new card in the specs folder becomes a ticket."""
+    folder = board_dir(store)
+    if not folder.is_dir():
+        return []
+    messages: list[str] = []
+    for path in sorted(folder.glob("*.md")):
+        if path.name == "board.md" or path.stem.startswith("t-"):
+            continue
+        try:
+            meta, _body = split_note(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if meta.get("kanban") == "board" or "status" not in meta:
+            continue
+        if meta.get("parent", "").strip():
+            continue
+        title = meta.get("title", "").strip() or path.stem
+        priority = meta.get("priority", "").strip()
+        args = argparse.Namespace(
+            title=title,
+            writes=[],
+            done="",
+            priority=priority if priority in PRIORITIES else "P2",
+            milestone="",
+            owner=meta.get("assignee", "").strip(),
+            description="",
+            kind="task",
+            parent="",
+            depends=[],
+            labels=[part.strip() for part in meta.get("tags", "").split(",") if part.strip()],
+            problem="",
+        )
+        task = create_task(store, args, status="briefing", spec_mode="template")
+        lane = meta.get("status", "").strip()
+        if lane and lane.lower() != "ready":
+            note = task_spec_path(store, task)
+            text = note.read_text(encoding="utf-8")
+            text = re.sub(r"(?m)^status:.*$", f"status: {lane}", text, count=1)
+            note.write_text(text, encoding="utf-8")
+        path.unlink()
+        messages.append(f"ticket {task['id']} {title}")
+    return messages
+
+
+def sync_board(store: Store) -> list[str]:
+    """Make every card agree with its ticket, and carry a lane change through."""
+    messages = adopt_board_cards(store)
+    folder = board_dir(store)
+    if not folder.is_dir():
+        return messages
+    for path in sorted(folder.glob("t-*.md")):
+        try:
+            meta, _body = split_note(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        task_id = path.stem
+        state = load_state_disk(store)
+        task = (state.get("tasks") or {}).get(task_id)
+        if task is None:
+            continue
+        action = board_lane_action(
+            meta.get("status", ""),
+            task,
+            spec_ready=spec_complete(path)[0],
+        )
+        if action:
+            try:
+                run_board_action(store, task_id, action)
+            except SystemExit as exc:
+                message = str(exc).strip() or f"{task_id} could not move"
+                remember_board_failure(store, task_id, meta, message)
+                messages.append(message)
+                continue
+            state = load_state_disk(store)
+            task = state["tasks"][task_id]
+            task["reason"] = ""
+            apply_note_fields(task, meta)
+            store.save_state(state)
+            messages.append(f"{action} {task_id}")
+            continue
+        if apply_note_fields(task, meta):
+            store.save_state(state)
+            messages.append(f"updated {task_id}")
+    return messages
+
+
+def board_watch_paths(store: Store) -> tuple[Path, Path]:
+    runtime = store.machine_dir / "runs"
+    runtime.mkdir(parents=True, exist_ok=True)
+    return runtime / "board-watch.pid", runtime / "board-watch.log"
+
+
+def board_watch_alive(store: Store) -> bool:
+    pidfile, _log = board_watch_paths(store)
+    if not pidfile.is_file():
+        return False
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def start_board_watch(store: Store) -> None:
+    """Keep the tickets caught up with the board."""
+    if board_watch_alive(store):
+        print("The board is already updating the tickets.")
+        return
+    pidfile, log = board_watch_paths(store)
+    script = str(Path(__file__).resolve())
+    uv = shutil.which("uv")
+    argv = [uv, "run", script, "board-watch"] if uv else [sys.executable, script, "board-watch"]
+    subprocess.Popen(
+        argv,
+        cwd=store.root,
+        start_new_session=True,
+        stdout=log.open("a"),
+        stderr=subprocess.STDOUT,
+    )
+    print("The board updates the tickets.")
+
+
+def cmd_board_watch(args: argparse.Namespace) -> int:
+    """Update tickets from the board. Stays running unless --once."""
     store = Store(repo_root())
     store.require_configured()
-    export_path, _payload = write_export_payload(store)
-    builder = SKILL_ROOT / "board" / "build_board.py"
-    template = SKILL_ROOT / "board" / "project-board.html"
-    if not builder.exists() or not template.exists():
-        raise SystemExit(
-            "board template missing from dm-software-machine/board/. "
-            "Re-run init from an updated skill package."
-        )
-    out = Path(args.output) if args.output else store.machine_dir / "board.html"
-    if not out.is_absolute():
-        out = store.root / out
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(builder),
-            "--export",
-            str(export_path),
-            "--out",
-            str(out),
-        ],
-        cwd=store.root,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise SystemExit(
-            completed.stderr.strip()
-            or completed.stdout.strip()
-            or "board build failed"
-        )
-    print(out)
-    print(f"from {export_path}")
+    pidfile, _log = board_watch_paths(store)
+    if not args.once:
+        pidfile.write_text(str(os.getpid()))
+    seen: dict[str, str] = {}
+    try:
+        while True:
+            for message in sync_board(store):
+                key = message.splitlines()[0] if message else ""
+                if seen.get(key) == message:
+                    continue
+                seen[key] = message
+                print(message, flush=True)
+            if args.once:
+                return 0
+            time.sleep(1)
+    finally:
+        if not args.once and pidfile.is_file() and pidfile.read_text().strip() == str(os.getpid()):
+            pidfile.unlink()
+
+
+def cmd_board(args: argparse.Namespace) -> int:
+    """Open the specs folder in the shipped Markable-Project. The notes are the board."""
+    store = Store(repo_root())
+    store.require_configured()
+    state = ensure_run(store)
+    ensure_board_file(store)
+    write_notes_from_state(store, state)
+    store.save_state(state)
+    folder = board_dir(store)
+    print(folder)
+    start_board_watch(store)
     if getattr(args, "serve", False):
-        return serve_board(store, out, int(args.port))
+        print("The board is this folder of notes. There is no board server.")
+    app = project_tracker_app()
+    if app is not None:
+        print(app)
+        open_project_tracker(app, folder)
+        return 0
+    command = str(store.cfg.get("board_command") or "").strip()
+    if not command:
+        print(
+            "The project tracker is not in dm-software-machine/project tracker. "
+            "Build it once with npm run bundle:project and copy the .app there. "
+            "Replace that .app when the project tracker itself changes."
+        )
+        return 0
+    argv = [*shlex.split(command), str(folder)]
+    env = board_launch_env()
+    if shutil.which(argv[0], path=env.get("PATH")) is None:
+        print(f"board_command could not find {argv[0]!r} on PATH.", file=sys.stderr)
+        return 1
+    subprocess.Popen(
+        argv,
+        cwd=store.root,
+        env=env,
+        start_new_session=True,
+    )
     return 0
 
 
 def serve_board(store: Store, board_path: Path, port: int) -> int:
-    """Serve the board and write specs from the card editor."""
+    """Serve the board. Tasks come from project-tasks.json; specs come from specs/."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
 
     class Handler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:
             self._cors(204)
 
         def do_GET(self) -> None:
-            if self.path.split("?", 1)[0] not in ("/", "/board.html"):
-                self.send_error(404)
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path in ("/", "/board.html"):
+                data = board_path.read_bytes()
+                self._bytes(200, "text/html; charset=utf-8", data)
                 return
-            data = board_path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            if path == "/project-tasks.json":
+                file = store.machine_dir / "project-tasks.json"
+                if not file.is_file():
+                    self.send_error(404)
+                    return
+                self._bytes(200, "application/json", file.read_bytes())
+                return
+            if path == "/spec":
+                task_id = (parse_qs(parsed.query).get("id") or [""])[0]
+                task = _task_for_spec_write(store, task_id)
+                if task is None:
+                    self._json(404, {"error": f"unknown task {task_id}"})
+                    return
+                text, spec_file, err = read_task_spec(store, task)
+                if err:
+                    self._json(400, {"error": err})
+                    return
+                self._json(200, {
+                    "ok": True,
+                    "spec": text,
+                    "spec_path": task.get("spec_path") or "",
+                    "spec_file": spec_file,
+                })
+                return
+            self.send_error(404)
 
         def do_POST(self) -> None:
             if self.path.split("?", 1)[0] != "/spec":
@@ -4160,10 +4772,20 @@ def serve_board(store: Store, board_path: Path, port: int) -> int:
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.end_headers()
 
+        def _bytes(self, code: int, content_type: str, data: bytes) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def _json(self, code: int, payload: dict) -> None:
             data = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -4176,7 +4798,7 @@ def serve_board(store: Store, board_path: Path, port: int) -> int:
         server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError as exc:
         raise SystemExit(f"board serve failed on 127.0.0.1:{port}: {exc}") from exc
-    print(f"http://127.0.0.1:{port}/")
+    print(f"http://127.0.0.1:{server.server_address[1]}/", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -4505,21 +5127,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     board = sub.add_parser(
         "board",
-        help="export tasks and build .dm-software-machine/board.html",
+        help="open the specs folder in Markable-Project",
     )
     board.add_argument(
         "--output",
         "-o",
         default="",
-        help="destination HTML (default: .dm-software-machine/board.html)",
+        help="unused; the board is the specs folder",
     )
     board.add_argument(
         "--serve",
         action="store_true",
-        help="serve the board and write specs from the card editor",
+        help="unused; the board is the specs folder, not a server",
     )
     board.add_argument("--port", type=int, default=47321)
     board.set_defaults(func=cmd_board)
+
+    board_watch = sub.add_parser(
+        "board-watch",
+        help="claim a task when its note is dropped on the Claimed lane",
+    )
+    board_watch.add_argument("--once", action="store_true")
+    board_watch.set_defaults(func=cmd_board_watch)
 
     tail = sub.add_parser("tail", help="print recent events")
     tail.add_argument("--task")

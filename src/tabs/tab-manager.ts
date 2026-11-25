@@ -403,6 +403,7 @@ export class TabManager {
       // Remove has-media-tab in case the previous tab was a media tab.
       this.editorContainer?.classList.remove("has-media-tab");
       this.editorContainer?.classList.remove("has-html-tab");
+      document.body.classList.remove("no-open-tabs");
       document.body.classList.remove("has-layout-view");
       document.body.classList.add("has-custom-tab");
       this._updateTitleBar(tab);
@@ -1064,6 +1065,8 @@ export class TabManager {
     }
 
     // Show the custom tab host and hide the editor via body class.
+    // An empty session marks the workspace closed, which hides this host.
+    document.body.classList.remove("no-open-tabs");
     document.body.classList.add("has-custom-tab");
     this._updateTitleBar(this.tabs[this.activeIndex]);
     this._notifyRenderer();

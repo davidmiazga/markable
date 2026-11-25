@@ -59,6 +59,22 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// First directory argument, so `markable-project /path/to/specs` opens that board.
+#[tauri::command]
+fn launch_folder() -> Option<String> {
+    folder_from_args(std::env::args().skip(1))
+}
+
+fn folder_from_args<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().map(|arg| arg.as_ref().to_string()).find(|arg| {
+        !arg.starts_with('-') && std::path::Path::new(arg).is_dir()
+    })
+}
+
 // Unique-ID counter so dynamically-created menu items never collide.
 static MENU_ITEM_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -487,6 +503,7 @@ pub fn run() {
         .manage(WatcherRegistry::default())
         .invoke_handler(tauri::generate_handler![
             greet,
+            launch_folder,
             compose_merge_notes,
             compose_split_note,
             create_daily_note,
@@ -607,7 +624,20 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use super::folder_from_args;
     use super::test_utils::*;
+
+    #[test]
+    fn launch_folder_is_the_directory_argument() {
+        let folder = std::env::temp_dir();
+        let found = folder_from_args([
+            "--config".to_string(),
+            "{}".to_string(),
+            folder.to_string_lossy().to_string(),
+        ]);
+        assert_eq!(found.as_deref(), Some(folder.to_string_lossy().as_ref()));
+        assert_eq!(folder_from_args(["--flag", "not-a-directory"]), None);
+    }
 
     #[test]
     fn temp_file_create_and_cleanup() {
