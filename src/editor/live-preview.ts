@@ -156,6 +156,10 @@ export const viewModeField = StateField.define<boolean>({
   },
 });
 
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__MARKABLE_VIEW_MODE_FIELD__ = viewModeField;
+}
+
 /** Current file path — set by main.ts so image widgets can resolve relative paths. */
 let _currentFilePath: string | null = null;
 export function setLivePreviewFilePath(path: string | null) { _currentFilePath = path; }
@@ -833,6 +837,7 @@ function handleLink(
   let openBracket: { from: number; to: number } | null = null;
   let closeBracket: { from: number; to: number } | null = null;
   let urlEnd = -1;
+  let href = "";
 
   do {
     if (cursor.name === "LinkMark") {
@@ -846,8 +851,13 @@ function handleLink(
         decorations.push(Decoration.replace({}).range(cursor.from, cursor.to));
       }
     } else if (cursor.name === "URL" || cursor.name === "LinkTitle") {
+      if (cursor.name === "URL") href = state.doc.sliceString(cursor.from, cursor.to);
       if (urlEnd < cursor.to) urlEnd = cursor.to;
-      decorations.push(Decoration.replace({}).range(cursor.from, cursor.to));
+      // The destination comes after "]". A URL used as the link text comes
+      // first and must stay visible.
+      if (closeBracket) {
+        decorations.push(Decoration.replace({}).range(cursor.from, cursor.to));
+      }
     }
   } while (cursor.nextSibling());
 
@@ -865,8 +875,29 @@ function handleLink(
   const textFrom = openBracket.to;
   const textTo = closeBracket.from;
   if (textFrom < textTo) {
-    decorations.push(Decoration.mark({ class: "cm-live-link" }).range(textFrom, textTo));
+    decorations.push(Decoration.mark({
+      class: "cm-live-link",
+      attributes: href ? { "data-link-href": href } : {},
+    }).range(textFrom, textTo));
   }
+}
+
+function insideSkippedUrlParent(node: SyntaxNodeRef): boolean {
+  for (let parent = node.node.parent; parent; parent = parent.parent) {
+    if (
+      parent.name === "Link" ||
+      parent.name === "Image" ||
+      parent.name === "Autolink" ||
+      parent.name === "InlineCode" ||
+      parent.name === "FencedCode" ||
+      parent.name === "CodeBlock" ||
+      parent.name === "Comment" ||
+      parent.name === "CommentBlock"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 
@@ -1309,10 +1340,25 @@ function buildDecorations(view: EditorView): DecorationSet {
             handleBulletItem(node, state, decorations);
           }
         } else if (name === "Autolink") {
-          // Style bare URLs (https://..., www....) as clickable links
+          let href = state.doc.sliceString(node.from, node.to);
+          href = href.replace(/^</, "").replace(/>$/, "");
           decorations.push(
-            Decoration.mark({ class: "cm-live-link cm-live-autolink" }).range(node.from, node.to)
+            Decoration.mark({
+              class: "cm-live-link cm-live-autolink",
+              attributes: href ? { "data-link-href": href } : {},
+            }).range(node.from, node.to)
           );
+          return false;
+        } else if (name === "URL") {
+          if (!insideSkippedUrlParent(node)) {
+            const href = state.doc.sliceString(node.from, node.to);
+            decorations.push(
+              Decoration.mark({
+                class: "cm-live-link cm-live-autolink",
+                attributes: href ? { "data-link-href": href } : {},
+              }).range(node.from, node.to)
+            );
+          }
         } else if (name === "Image") {
           handleImage(node, state, decorations);
           return false;

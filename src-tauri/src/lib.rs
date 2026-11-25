@@ -70,9 +70,9 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    args.into_iter().map(|arg| arg.as_ref().to_string()).find(|arg| {
-        !arg.starts_with('-') && std::path::Path::new(arg).is_dir()
-    })
+    args.into_iter()
+        .map(|arg| arg.as_ref().to_string())
+        .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).is_dir())
 }
 
 // Unique-ID counter so dynamically-created menu items never collide.
