@@ -491,6 +491,11 @@ function injectCSS(): void {
     }
     .kb-card-head { display: flex; align-items: flex-start; gap: 8px; }
     .kb-card-head .kb-card-title, .kb-nested-title, .kb-subcard-open { flex: 1; min-width: 0; }
+    .kb-card-foot {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
     .kb-trash {
       flex: 0 0 auto;
       width: 22px;
@@ -1330,7 +1335,7 @@ function renderCard(card: CardNote, children: CardNote[], laneColor: string): HT
 
   const head = el("div", "kb-card-head");
   if (card.working) head.appendChild(workingPattern());
-  head.append(el("div", "kb-card-title", card.title), trashButton(card), grip());
+  head.append(el("div", "kb-card-title", card.title), grip());
   article.appendChild(head);
   bindPointerDrag(article, card.path, "card");
   const pills = [...card.tags];
@@ -1371,6 +1376,9 @@ function renderCard(card: CardNote, children: CardNote[], laneColor: string): HT
     article.appendChild(toggle);
     if (!collapsed) article.appendChild(nestedList(card, children, laneColor));
   }
+  const foot = el("div", "kb-card-foot");
+  foot.appendChild(trashButton(card));
+  article.appendChild(foot);
   return wrap;
 }
 

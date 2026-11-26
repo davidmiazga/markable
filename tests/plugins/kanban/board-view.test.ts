@@ -453,7 +453,8 @@ describe("project board flows", () => {
     ]);
     expect(cardNamed("Test01 renamed").querySelector(".kb-frac")?.textContent).toBe("2/5");
     const head = cardNamed("Test01 renamed").querySelector(".kb-card-head");
-    expect([...(head?.children ?? [])].map((node) => node.className)).toEqual(["kb-card-title", "kb-trash", "kb-grip"]);
+    expect([...(head?.children ?? [])].map((node) => node.className)).toEqual(["kb-card-title", "kb-grip"]);
+    expect(cardNamed("Test01 renamed").querySelector(".kb-card-foot .kb-trash")).not.toBeNull();
     const draft = [...cardNamed("Test01 renamed").querySelectorAll<HTMLElement>(".kb-nested")].find((node) => node.textContent === "Draft the note");
     const alpha = [...cardNamed("Test01 renamed").querySelectorAll<HTMLElement>(".kb-nested")].find((node) => node.textContent === "Alpha note");
     if (!draft || !alpha) throw new Error("missing nested cards");
