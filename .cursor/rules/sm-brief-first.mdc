@@ -13,17 +13,14 @@ One-off questions (what does X do, why did Y fail) may stay in chat. Software im
 
 When the user asks to implement or change app behavior and there is no complete spec for that change:
 
-1. `just sm-ticket "<one sentence>"` from the repo root (`markable/`). That finds `specs/<id>.md` or creates a briefing ticket. Fallback: `uv run dm-software-machine/scripts/sm_ticket.py "…"`.
-2. You may pass their last message verbatim as `--problem`. Do not invent In scope / UX / Tests.
-3. Stop. Paste the CLI fill template into the reply and **ask them to fill it** so the ticket is well-formed.
-4. Do not edit `src/`, `src-tauri/`, `index.html`, `flavors/`, or other writes.
-5. Do not `sm-claim`.
+1. `just sm-ticket "<one sentence>"` from the repo root (`markable/`). Pass their words as `--problem`. Fallback: `uv run dm-software-machine/scripts/dmsm.py task-ticket --new --title "…" --problem "…"`.
+2. Their description is the brief. Translate it into Problem, In scope, Out of scope, UX / behavior, and Tests. The general idea is enough. Ask a question only when that description cannot be carried out.
+3. Do not hand them a fill template. Do not add behavior they did not describe.
+4. `just sm-ready <id>` once the translation is in the file. Do not `sm-claim` until the spec is ready. Do not edit `src/`, `src-tauri/`, `index.html`, `flavors/`, or other writes before claim.
 
-They replace the HTML comments under Problem, In scope, Out of scope, UX / behavior, and Tests.
+## After the translation is in the file
 
-## After they say the spec is filled
-
-`just sm-ready <id>`, then `just sm-claim <id>` or `just sm-next`. Implement that ticket only. `sm-finish` then `sm-accept`. Auto-advance may claim the next **queued complete** ticket. Briefing tickets stay parked.
+`just sm-ready <id>`. They move the card. `sm-claim` stays a backup. Implement that ticket only. `sm-finish` then `sm-accept`. Auto-advance may claim the next **queued complete** ticket. Briefing tickets stay parked.
 
 ## Carve-outs
 

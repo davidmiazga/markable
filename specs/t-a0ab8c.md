@@ -5,6 +5,7 @@ priority: P4
 assignee: dave
 tags: features
 writes: "src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.conf.json/, planning/, tests/"
+order: 2
 ---
 
 # Read and write Microsoft Office files

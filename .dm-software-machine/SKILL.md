@@ -71,10 +71,10 @@ Defaults come from `defaults` (machine.yaml + profile + optional `.env`
 
 ### When `require_brief` is true
 
-1. `just sm-ticket "<one sentence>"` — briefing ticket + fill template; stop.
-2. Engineer fills `specs/<id>.md` (no TODO/TBD). Then `just sm-ready <id>`.
-3. `just sm-claim <id>` → handoff → implement inside `writes` → `sm-finish` →
-   `sm-accept` when ready. Fan out agents only on disjoint files inside one claim.
+1. `just sm-ticket "<one sentence>"` with their words as `--problem`.
+2. Their description is the brief. Translate it into the spec headings. The general idea is enough. Ask a question only when the description cannot be carried out. Do not hand them a fill template.
+3. `just sm-ready <id>` once that translation is in the file.
+4. They move the card. `sm-claim` stays a backup. Implement inside `writes`, then `sm-finish`, then `sm-accept`. Fan out agents only on disjoint files inside one claim.
 
 ### When `require_brief` is false
 

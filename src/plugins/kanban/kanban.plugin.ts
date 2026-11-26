@@ -426,8 +426,17 @@ function injectCSS(): void {
       font-size: 12px;
       font-weight: 500;
     }
-    .kb-card, .kb-nested, .kb-subcard { cursor: grab; touch-action: none; }
-    .kb-card.kb-dragging, .kb-nested.kb-dragging, .kb-subcard.kb-dragging { opacity: 0.45; }
+    .kb-card, .kb-nested, .kb-subcard {
+      cursor: grab;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .kb-card.kb-dragging, .kb-nested.kb-dragging, .kb-subcard.kb-dragging {
+      opacity: 0.3;
+      outline: 1px solid var(--link-color, #7aa2ff);
+      outline-offset: -1px;
+    }
     .kb-card-head { display: flex; align-items: flex-start; gap: 8px; }
     .kb-card-head .kb-card-title, .kb-nested-title, .kb-subcard-open { flex: 1; min-width: 0; }
     .kb-grip {
@@ -455,21 +464,20 @@ function injectCSS(): void {
       background: #7aa2ff;
       pointer-events: none;
     }
+    body.kb-drag-active, body.kb-drag-active * {
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
     .kb-ghost {
       position: fixed;
       z-index: 81;
-      max-width: 220px;
-      padding: 6px 10px;
-      border: 1px solid #3a3a3a;
-      border-radius: 8px;
-      background: #2a2a2e;
-      color: #e8e8e8;
-      font: 600 13px sans-serif;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      margin: 0;
+      opacity: 0.3;
       pointer-events: none;
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+      outline: 1px solid var(--link-color, #7aa2ff);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+      -webkit-user-select: none;
+      user-select: none;
     }
     .kb-card-wrap { display: flex; flex-direction: column; }
     .kb-sub-toggle {
@@ -1257,6 +1265,8 @@ interface PointerDrag {
   armed: boolean;
   ghost: HTMLElement | null;
   line: HTMLElement | null;
+  offsetX: number;
+  offsetY: number;
 }
 
 let _pointer: PointerDrag | null = null;
@@ -1295,11 +1305,24 @@ function bindPointerDrag(source: HTMLElement, path: string, kind: "card" | "sub"
       armed: false,
       ghost: null,
       line: null,
+      offsetX: 0,
+      offsetY: 0,
     };
+    holdSelection();
     document.addEventListener("pointermove", onPointerMove);
     document.addEventListener("pointerup", onPointerUp);
     document.addEventListener("pointercancel", onPointerCancel);
   });
+}
+
+function holdSelection(): void {
+  document.addEventListener("selectstart", blockSelect, true);
+  document.body.classList.add("kb-drag-active");
+  window.getSelection()?.removeAllRanges();
+}
+
+function blockSelect(event: Event): void {
+  event.preventDefault();
 }
 
 function onPointerMove(event: PointerEvent): void {
@@ -1308,16 +1331,18 @@ function onPointerMove(event: PointerEvent): void {
   if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
   if (!drag.moved) {
     drag.moved = true;
-    drag.source.classList.add("kb-dragging");
-    const label = drag.source.querySelector(".kb-card-title, .kb-nested-title, .kb-subcard-open")?.textContent ?? "";
-    drag.ghost = el("div", "kb-ghost", label);
+    const rect = drag.source.getBoundingClientRect();
+    drag.offsetX = event.clientX - rect.left;
+    drag.offsetY = event.clientY - rect.top;
+    drag.ghost = liftCard(drag.source, rect);
     drag.line = el("div", "kb-insert");
+    drag.source.classList.add("kb-dragging");
     document.body.append(drag.ghost, drag.line);
-    document.body.style.userSelect = "none";
+    window.getSelection()?.removeAllRanges();
   }
   if (drag.ghost) {
-    drag.ghost.style.left = `${event.clientX + 12}px`;
-    drag.ghost.style.top = `${event.clientY + 8}px`;
+    drag.ghost.style.left = `${event.clientX - drag.offsetX}px`;
+    drag.ghost.style.top = `${event.clientY - drag.offsetY}px`;
   }
   moveInsertion(drag, event.clientX, event.clientY);
 }
@@ -1410,11 +1435,23 @@ function clearPointer(): void {
   document.removeEventListener("pointermove", onPointerMove);
   document.removeEventListener("pointerup", onPointerUp);
   document.removeEventListener("pointercancel", onPointerCancel);
+  document.removeEventListener("selectstart", blockSelect, true);
+  document.body.classList.remove("kb-drag-active");
+  window.getSelection()?.removeAllRanges();
   _pointer?.source.classList.remove("kb-dragging");
   _pointer?.ghost?.remove();
   _pointer?.line?.remove();
-  document.body.style.userSelect = "";
   _pointer = null;
+}
+
+function liftCard(source: HTMLElement, rect: DOMRect): HTMLElement {
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.classList.add("kb-ghost");
+  clone.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  clone.style.width = `${rect.width}px`;
+  clone.style.left = `${rect.left}px`;
+  clone.style.top = `${rect.top}px`;
+  return clone;
 }
 
 async function reorderLaneCard(path: string, status: string, before: string | null): Promise<void> {

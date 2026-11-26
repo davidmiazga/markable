@@ -144,8 +144,8 @@ def test_live_brief_gate() -> None:
         if briefed.returncode != 0:
             raise SystemExit(briefed.stdout + briefed.stderr)
         assert "briefing" in briefed.stdout
-        assert "Please fill out this ticket" in briefed.stdout
-        assert "When filled:" in briefed.stdout
+        assert "Translate it into the empty headings." in briefed.stdout
+        assert "When the translation is in the file:" in briefed.stdout
         task_id = task_id_from(briefed.stdout)
         spec = tmp / "specs" / f"{task_id}.md"
         assert spec.is_file()
@@ -210,7 +210,7 @@ def test_ticket_find_or_create() -> None:
         if created.returncode != 0:
             raise SystemExit(created.stdout + created.stderr)
         assert "action created" in created.stdout
-        assert "Please fill out this ticket" in created.stdout
+        assert "Translate it into the empty headings." in created.stdout
         task_id = task_id_from(created.stdout)
         spec = tmp / "specs" / f"{task_id}.md"
         assert spec.is_file()
@@ -265,6 +265,35 @@ def test_writes_overlap_files_and_directories() -> None:
     print("writes overlap ok")
 
 
+def test_card_stays_in_sync_with_ticket() -> None:
+    noisy = (
+        "frontend_build: `npm run build` exited 2\n"
+        "src/plugins/kanban/kanban.plugin.ts(969,69): error TS2304: Cannot find name '_pointer'."
+    )
+    quoted = dmsm.yaml_quote("a\nb: c")
+    assert "\n" not in quoted
+    assert dmsm.yaml_unquote(quoted) == "a\nb: c"
+    fields = dmsm.card_frontmatter(
+        {"title": "Links", "status": "active", "priority": "P1", "reason": noisy},
+        {
+            "status": "Running",
+            "unread": "no",
+            "src/plugins/kanban/kanban.plugin.ts(969,69)": "junk",
+        },
+    )
+    note = dmsm.compose_note(fields, "\n# Links\n")
+    front = note.split("---", 2)[1]
+    assert "\n" not in front.strip().split("reason: ", 1)[-1].split("\n", 1)[0]
+    meta, _body = dmsm.split_note(note)
+    assert meta["status"] == "Running"
+    assert meta["unread"] == "no"
+    assert "src/plugins/kanban/kanban.plugin.ts(969,69)" not in meta
+    assert "_pointer" in meta["reason"]
+    assert "\n" not in meta["reason"]
+    assert dmsm.lane_title("gated") == "Review"
+    print("card stays in sync ok")
+
+
 def main() -> None:
     unit = Path(tempfile.mkdtemp(prefix="sm-brief-unit-"))
     try:
@@ -272,6 +301,7 @@ def main() -> None:
     finally:
         shutil.rmtree(unit, ignore_errors=True)
     test_writes_overlap_files_and_directories()
+    test_card_stays_in_sync_with_ticket()
     test_live_brief_gate()
     test_ticket_find_or_create()
     print("brief checks passed")

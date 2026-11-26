@@ -1,11 +1,13 @@
 ---
 title: Give links a readable color in every theme and open them on click
-status: Ready
+status: Done
 priority: P1
 assignee: dave
 writes: "src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.conf.json/, planning/, tests/"
+claimed-by: dave
+claim-lease: "2026-11-25T23:51:54+00:00"
+repairs: 1
 order: 1
-reason: "t-bd1aa8 refused: main checkout has dirty files inside writes. Commit, stash, or finish that work before claiming a worktree. scripts/tauri-flavor.mjs, src-tauri/src/lib.rs, src/main.ts, src/plugins/kanban/kanban.plugin.ts, src/tabs/tab-manager.ts"
 unread: no
 ---
 
@@ -54,3 +56,7 @@ Parent: -
 
 ## History
 Moved from Ready to Claimed.
+
+Moved from Ready to Claimed.
+
+Moved from Running to Claimed.

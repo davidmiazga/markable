@@ -139,6 +139,7 @@ CARD_FIELDS = (
     "claim-lease",
     "repairs",
     "order",
+    "reason",
 )
 
 
@@ -176,11 +177,21 @@ def status_from_lane(lane: str, current: str) -> str:
     }.get(key, current or "queued")
 
 
+def one_line(value: str) -> str:
+    """A card field is one line. A newline would split the note from the ticket."""
+    return " ".join(str(value).split())
+
+
 def yaml_quote(value: str) -> str:
     if value == "":
         return '""'
-    if any(ch in value for ch in ':#{}[],&*!|>%@`"\'\n') or value.strip() != value:
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    if any(ch in value for ch in ':#{}[],&*!|>%@`"\'\n\\') or value.strip() != value:
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "")
+        )
         return f'"{escaped}"'
     return value
 
@@ -190,7 +201,17 @@ def yaml_unquote(value: str) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         inner = text[1:-1]
         if text[0] == '"':
-            return inner.replace('\\"', '"').replace("\\\\", "\\")
+            out: list[str] = []
+            index = 0
+            while index < len(inner):
+                if inner[index] == "\\" and index + 1 < len(inner):
+                    nxt = inner[index + 1]
+                    out.append({"n": "\n", "\\": "\\", '"': '"'}.get(nxt, nxt))
+                    index += 2
+                    continue
+                out.append(inner[index])
+                index += 1
+            return "".join(out)
         return inner
     return text
 
@@ -282,11 +303,13 @@ def card_frontmatter(task: dict, existing: dict[str, str]) -> dict[str, str]:
         fields["repairs"] = str(repairs)
     if existing.get("order"):
         fields["order"] = existing["order"]
-    reason = str(task.get("reason") or "").strip()
+    reason = one_line(str(task.get("reason") or ""))
     if reason:
         fields["reason"] = reason
     for key, value in existing.items():
-        if key == "reason" or key in fields or key in CARD_FIELDS:
+        if key in fields or key in CARD_FIELDS:
+            continue
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key):
             continue
         fields[key] = value
     return fields
@@ -492,26 +515,15 @@ def print_ticket_ask(store: "Store", task: dict, *, action: str) -> None:
         if any(heading in item for item in missing)
     ]
     print()
-    print("Please fill out this ticket so the work is well-formed.")
-    print("One-off questions can stay in chat. Software implementations need this spec.")
+    print("Description is the brief. Translate it into the empty headings.")
+    print("Ask only when the description cannot be carried out.")
     print()
-    print("Replace the HTML comments under each heading (no TODO/TBD):")
     for heading in SPEC_HEADINGS:
         mark = "MISSING" if heading in missing_heads else "ok"
         print(f"  [{mark}] {heading}")
     print()
-    print("Template to paste into the file:")
-    print()
-    print("```md")
-    for heading in missing_heads or SPEC_HEADINGS:
-        print(f"## {heading}")
-        print(f"(fill {heading.lower()})")
-        print()
-    print("```")
-    print()
     print(f"File: {spec_rel}")
-    print(f"When filled: just sm-ready {task['id']}")
-    print("Do not implement until then.")
+    print(f"When the translation is in the file: just sm-ready {task['id']}")
 
 
 
@@ -3157,9 +3169,9 @@ def cmd_gate(args: argparse.Namespace) -> int:
                 mark_over_repair_failed(task, kind="Quality gate")
             else:
                 task["status"] = "active"
-                task["reason"] = (
-                    failures[0][:240] if failures else f"{args.kind} gate failed"
-                )
+                task["reason"] = one_line(
+                    failures[0] if failures else f"{args.kind} gate failed"
+                )[:240]
             task["phase"] = f"gate:{args.kind}:fail"
         refresh_claim_lease(task)
     store.emit("gate", {"kind": args.kind, "passed": passed, "envelope": str(dest)}, args.task)
@@ -3301,6 +3313,10 @@ def cmd_finish(args: argparse.Namespace) -> int:
         raise SystemExit(f"unknown task {args.task}")
     if task["status"] == "accepted":
         raise SystemExit(f"{args.task} is already accepted")
+    kind = args.kind or "fast"
+    task["status"] = "gated"
+    task["phase"] = f"gate:{kind}"
+    task["reason"] = f"{kind} gate is running."
     refresh_claim_lease(task)
     store.save_state(state)
     store.emit("checkpoint", {"message": "finish: work from git"}, args.task)
@@ -4445,15 +4461,13 @@ def apply_note_fields(task: dict, meta: dict[str, str]) -> bool:
     return changed
 
 
-def run_board_action(store: Store, task_id: str, action: str) -> None:
+def run_board_action(store: Store, task_id: str, action: str) -> int:
     """Do what the card asks. The ticket, not the typed command, is the result."""
     agent = os.environ.get("USER") or "board"
     if action == "ready":
-        cmd_task_ready(argparse.Namespace(task_id=task_id))
-        return
+        return cmd_task_ready(argparse.Namespace(task_id=task_id))
     if action == "claim":
-        _claim(store, load_state_disk(store), task_id, agent, force=False)
-        return
+        return _claim(store, load_state_disk(store), task_id, agent, force=False)
     if action == "reclaim":
         state = load_state_disk(store)
         task = state["tasks"][task_id]
@@ -4466,7 +4480,7 @@ def run_board_action(store: Store, task_id: str, action: str) -> None:
             task["phase"] = "reclaimed"
         task["reason"] = ""
         store.save_state(state)
-        return
+        return 0
     if action == "running":
         state = load_state_disk(store)
         task = state["tasks"][task_id]
@@ -4479,20 +4493,18 @@ def run_board_action(store: Store, task_id: str, action: str) -> None:
         task["reason"] = ""
         refresh_claim_lease(task)
         store.save_state(state)
-        return
+        return 0
     if action == "finish":
-        cmd_finish(argparse.Namespace(task=task_id, kind="fast"))
-        return
+        return cmd_finish(argparse.Namespace(task=task_id, kind="fast"))
     if action == "accept":
-        cmd_accept(argparse.Namespace(task=task_id))
-        return
+        return cmd_accept(argparse.Namespace(task=task_id))
     if action in ("block", "fail"):
         state = load_state_disk(store)
         task = state["tasks"][task_id]
         task["status"] = "blocked" if action == "block" else "failed"
         task["reason"] = ""
         store.save_state(state)
-        return
+        return 0
     raise SystemExit(f"unknown board action {action}")
 
 
@@ -4503,7 +4515,7 @@ def remember_board_failure(store: Store, task_id: str, meta: dict[str, str], mes
     if task is None:
         return
     apply_note_fields(task, meta)
-    task["reason"] = " ".join(message.split()) or "The board could not update this ticket."
+    task["reason"] = one_line(message) or "The board could not update this ticket."
     store.save_state(state)
 
 
@@ -4575,11 +4587,14 @@ def sync_board(store: Store) -> list[str]:
         )
         if action:
             try:
-                run_board_action(store, task_id, action)
+                rc = run_board_action(store, task_id, action)
             except SystemExit as exc:
                 message = str(exc).strip() or f"{task_id} could not move"
                 remember_board_failure(store, task_id, meta, message)
                 messages.append(message)
+                continue
+            if rc:
+                messages.append(f"{action} {task_id} failed")
                 continue
             state = load_state_disk(store)
             task = state["tasks"][task_id]
