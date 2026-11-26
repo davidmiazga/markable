@@ -2974,16 +2974,12 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
     unmet = [dep for dep in task.get("depends_on") or [] if dep not in accepted]
     if unmet:
         raise SystemExit(f"{task_id} blocked by {unmet}")
+    spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
+    clarify = task.get("phase") == "clarify"
     if task["status"] == "briefing":
-        spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
-        raise SystemExit(
-            f"{task_id} is briefing — fill {spec_rel} then: just sm-ready {task_id}"
-        )
-    if require_brief(store):
-        spec_rel = task.get("spec_path") or f"specs/{task_id}.md"
-        ok, missing = spec_complete(store.root / spec_rel)
-        if not ok:
-            raise SystemExit(spec_refuse_message(task_id, missing, spec_rel))
+        clarify = True
+    elif require_brief(store) and not spec_complete(store.root / spec_rel)[0]:
+        clarify = True
     holder = task.get("claimed_by")
     if (
         task["status"] == "claimed"
@@ -2992,9 +2988,9 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
         and not force
     ):
         raise SystemExit(f"{task_id} already claimed by {holder}")
-    if task["status"] not in ("queued", "claimed"):
+    if task["status"] not in ("queued", "claimed", "briefing"):
         raise SystemExit(f"{task_id} is {task['status']}")
-    if task["status"] == "queued" and not force:
+    if task["status"] in ("queued", "briefing") and not force:
         flying = in_flight_tasks(state)
         hits = overlapping_inflight(task, flying)
         if hits:
@@ -3008,7 +3004,7 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
     task["claimed_by"] = agent
     task["claim_lease"] = now_iso()
     task["reason"] = ""
-    task["phase"] = "claimed"
+    task["phase"] = "clarify" if clarify else "claimed"
     task.pop("agent_pid", None)
     task["agent_stopped"] = False
     writes = task.get("writes") or resolve_defaults(store)["writes"]
@@ -4644,15 +4640,163 @@ def ticket_agent_step(task: dict, *, alive: bool, was_working: bool) -> str:
     return "none"
 
 
-def agent_prompt(task: dict, piece: list[str], spec_text: str) -> str:
+def agent_prompt(
+    task: dict,
+    piece: list[str],
+    spec_text: str,
+    park_path: Path | None = None,
+) -> str:
     paths = ", ".join(piece) if piece else "the paths named in the spec"
+    bail = ""
+    if park_path is not None:
+        bail = (
+            "\nIf the card cannot be carried out, do not invent the product. "
+            f"Write {park_path} as "
+            '{"lane": "ready", "reason": "one line"} or '
+            '{"lane": "blocked", "reason": "one question"} and exit. '
+            "Use ready after you put decent direction in the spec. "
+            "Use blocked when you need an answer.\n"
+        )
     return (
         f"Implement ticket {task.get('id')} in this checkout.\n\n"
         f"{spec_text.strip()}\n\n"
         f"Edit only these paths: {paths}\n"
         "Do not commit. Do not run sm-finish or sm-accept. "
         "Exit when this piece is implemented.\n"
+        f"{bail}"
     )
+
+
+def direction_result(spec_ok: bool, park: dict | None) -> tuple[str, str]:
+    """Where a card goes after the agent asks or fills direction."""
+    if park:
+        lane = str(park.get("lane") or "").strip().lower()
+        if lane not in ("ready", "blocked"):
+            lane = "blocked"
+        reason = one_line(str(park.get("reason") or ""))
+        if not reason:
+            reason = "Direction is on the card." if lane == "ready" else "The card needs a decision."
+        return lane, reason
+    if spec_ok:
+        return "ready", "Direction is on the card."
+    return "blocked", "The card needs a decision."
+
+
+def read_park(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def clarify_prompt(task: dict, spec_path: Path, park_path: Path, spec_text: str) -> str:
+    return (
+        f"The card {task.get('id')} does not have enough direction to build yet.\n\n"
+        f"The spec file is {spec_path}.\n\n"
+        f"{spec_text.strip()}\n\n"
+        "If you can write decent direction from what is already there, fill "
+        "Problem, In scope, Out of scope, UX / behavior, and Tests in that file. "
+        "Do not leave a placeholder. Do not implement the product. Do not commit.\n"
+        "If you cannot carry it out without an answer, do not invent the answer. "
+        f"Write {park_path} as "
+        '{"lane": "blocked", "reason": "<one question>"}.\n'
+        "If you filled the direction and it should be reviewed before anyone builds, "
+        f"write {park_path} as "
+        '{"lane": "ready", "reason": "<one line saying what you decided>"}.\n'
+        "lane is ready or blocked. Then exit.\n"
+    )
+
+
+def adopt_clearer_spec(store: "Store", task: dict, checkout: Path) -> None:
+    """Keep a filled spec that the agent wrote in its work folder."""
+    main_path = task_spec_path(store, task)
+    if not main_path.is_file():
+        return
+    try:
+        other = checkout / main_path.relative_to(store.root)
+    except ValueError:
+        return
+    if not other.is_file() or other.resolve() == main_path.resolve():
+        return
+    if spec_complete(main_path)[0] or not spec_complete(other)[0]:
+        return
+    _existing, body = split_note(other.read_text(encoding="utf-8"))
+    existing, _old = split_note(main_path.read_text(encoding="utf-8"))
+    main_path.write_text(compose_note(existing, body), encoding="utf-8")
+
+
+def park_ticket(store: "Store", task_id: str, lane: str, reason: str) -> None:
+    """Stop the agent and leave the card on Ready or Blocked."""
+    state = store.load_state()
+    task = (state.get("tasks") or {}).get(task_id)
+    if task is None:
+        return
+    chosen, text = direction_result(False, {"lane": lane, "reason": reason})
+    if task.get("phase") == "clarify":
+        remove_task_worktree(store, task, force=True)
+    task["status"] = "queued" if chosen == "ready" else "blocked"
+    task["claimed_by"] = None
+    task["claim_lease"] = None
+    task["agent_stopped"] = True
+    task["phase"] = f"parked:{chosen}"
+    task.pop("agent_pid", None)
+    task["reason"] = text
+    store.save_state(state)
+
+
+def run_clarify(store: "Store", task: dict, checkout: Path) -> tuple[int, str]:
+    spec_path = task_spec_path(store, task)
+    logs = store.task_dir(task["id"]) / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    park_path = logs / "agent-park.json"
+    prompt_path = logs / "agent-clarify.prompt"
+    spec_text = spec_path.read_text(encoding="utf-8") if spec_path.is_file() else ""
+    prompt_path.write_text(
+        clarify_prompt(task, spec_path, park_path, spec_text),
+        encoding="utf-8",
+    )
+    return run_commands(
+        [agent_worker_command(prompt_path)],
+        parallel=1,
+        cwd=checkout,
+        log=logs / "agent.log",
+    )
+
+
+def park_if_requested(store: "Store", task_id: str) -> bool:
+    state = store.load_state()
+    task = state["tasks"][task_id]
+    checkout = task_checkout_root(store, task)
+    adopt_clearer_spec(store, task, checkout)
+    park = read_park(store.task_dir(task_id) / "logs" / "agent-park.json")
+    if not park:
+        return False
+    lane, reason = direction_result(spec_complete(task_spec_path(store, task))[0], park)
+    park_ticket(store, task_id, lane, reason)
+    return True
+
+
+def clarify_and_park(store: "Store", task: dict, checkout: Path) -> int:
+    task_id = str(task["id"])
+    try:
+        code, detail = run_clarify(store, task, checkout)
+    except SystemExit as exc:
+        park_ticket(store, task_id, "blocked", str(exc) or "The card needs a decision.")
+        return 0
+    adopt_clearer_spec(store, task, checkout)
+    park = read_park(store.task_dir(task_id) / "logs" / "agent-park.json")
+    spec_ok = spec_complete(task_spec_path(store, task))[0]
+    if code != 0 and not park and not spec_ok:
+        park_ticket(store, task_id, "blocked", detail or "The card needs a decision.")
+        return 0
+    lane, reason = direction_result(spec_ok, park)
+    park_ticket(store, task_id, lane, reason)
+    return 0
 
 
 def cursor_sdk_home() -> Path:
@@ -4746,7 +4890,10 @@ def run_ticket_workers(store: "Store", task: dict, checkout: Path) -> tuple[int,
     for index, piece in enumerate(pieces):
         prompt_path = logs / f"agent-{index}.prompt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        prompt_path.write_text(agent_prompt(task, piece, spec_text), encoding="utf-8")
+        prompt_path.write_text(
+            agent_prompt(task, piece, spec_text, logs / "agent-park.json"),
+            encoding="utf-8",
+        )
         commands.append(agent_worker_command(prompt_path))
     return run_commands(commands, parallel=parallel, cwd=checkout, log=logs / "agent.log")
 
@@ -4773,6 +4920,9 @@ def cmd_agent_run(args: argparse.Namespace) -> int:
     if task is None:
         raise SystemExit(f"unknown task {task_id}")
     checkout = task_checkout_root(store, task)
+    spec_path = task_spec_path(store, task)
+    if task.get("phase") == "clarify" or not spec_complete(spec_path)[0]:
+        return clarify_and_park(store, task, checkout)
     attempts = int(task.get("max_repairs") or 2) + 1
     worked = False
     detail = "The agent stopped."
@@ -4783,6 +4933,8 @@ def cmd_agent_run(args: argparse.Namespace) -> int:
             mark_agent_failed(store, task_id, str(exc) or "The agent could not start.")
             return 1
         if code == 0:
+            if park_if_requested(store, task_id):
+                return 0
             worked = True
             break
     if not worked:
@@ -4926,7 +5078,8 @@ def sync_board(store: Store) -> list[str]:
             state = load_state_disk(store)
             task = state["tasks"][task_id]
             task["id"] = task_id
-            task["reason"] = ""
+            previous = one_line(str(task.get("reason") or meta.get("reason") or ""))
+            task["reason"] = previous if action == "reclaim" else ""
             if action in ("claim", "running"):
                 task["agent_stopped"] = False
                 held = str(task.get("agent_pid") or meta.get("agent") or "").strip()
