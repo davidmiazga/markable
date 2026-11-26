@@ -19,6 +19,7 @@ import {
   withDescription,
   withLanes,
   withScalar,
+  withoutScalar,
 } from "../../../src/plugins/kanban/board-model";
 
 const BOARD = defaultBoardContent("Launch");
@@ -116,6 +117,19 @@ describe("project board notes", () => {
     expect(off.working).toBe(false);
     expect(plain.working).toBe(false);
     expect(on.custom.some((field) => field.key.toLowerCase() === "working")).toBe(false);
+  });
+
+  it("keeps a hidden card out of the lane", () => {
+    const hidden = parseCard(withScalar(newCardContent("Quiet", "To Do"), "hidden", "yes"), "/v/quiet.md");
+    const shown = parseCard(newCardContent("Loud", "To Do"), "/v/loud.md");
+    expect(hidden.hidden).toBe(true);
+    expect(shown.hidden).toBe(false);
+    expect(hidden.custom.some((field) => field.key.toLowerCase() === "hidden")).toBe(false);
+    expect(cardVisible(hidden, [], "quiet", new Set(), "2026-11-25")).toBe(false);
+    expect(cardVisible(shown, [], "", new Set(), "2026-11-25")).toBe(true);
+    const back = parseCard(withoutScalar(withScalar(newCardContent("Quiet", "To Do"), "hidden", "yes"), "hidden"), "/v/quiet.md");
+    expect(back.hidden).toBe(false);
+    expect(cardVisible(back, [], "", new Set(), "2026-11-25")).toBe(true);
   });
 
   it("toggles and adds a checkbox without dropping the rest of the note", () => {

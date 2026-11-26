@@ -411,6 +411,29 @@ def write_notes_from_state(store: "Store", state: dict) -> None:
         write_task_note(store, task)
 
 
+def drop_missing_notes(store: "Store", state: dict) -> list[str]:
+    """A deleted note is gone. A later board update does not write it back."""
+    folder = board_dir(store)
+    if not folder.is_dir():
+        return []
+    messages: list[str] = []
+    tasks = state.get("tasks") or {}
+    root = folder.resolve()
+    for task_id, task in list(tasks.items()):
+        path = task_spec_path(store, task)
+        if path.name == "board.md":
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except ValueError:
+            continue
+        if path.is_file():
+            continue
+        tasks.pop(task_id, None)
+        messages.append(f"{task_id} deleted")
+    return messages
+
+
 def spec_sections(text: str) -> dict[str, str]:
     sections: dict[str, str] = {}
     current: str | None = None
@@ -5043,6 +5066,11 @@ def advance_ticket_agent(store: "Store", task: dict, meta: dict[str, str]) -> st
 def sync_board(store: Store) -> list[str]:
     """Make every card agree with its ticket, and carry a lane change through."""
     messages = adopt_board_cards(store)
+    state = load_state_disk(store)
+    dropped = drop_missing_notes(store, state)
+    if dropped:
+        store.save_state(state)
+        messages.extend(dropped)
     folder = board_dir(store)
     if not folder.is_dir():
         return messages
