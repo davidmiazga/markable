@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -294,6 +295,28 @@ def test_card_stays_in_sync_with_ticket() -> None:
     print("card stays in sync ok")
 
 
+def test_working_pattern_is_a_live_agent() -> None:
+    alive = dmsm.card_frontmatter(
+        {"title": "T", "status": "active", "priority": "P2"},
+        {"status": "Running", "working": "yes", "agent": str(os.getpid())},
+    )
+    assert alive["working"] == "yes"
+    assert alive["agent"] == str(os.getpid())
+    stopped = dmsm.card_frontmatter(
+        {"title": "T", "status": "claimed", "priority": "P2"},
+        {"status": "Claimed", "working": "yes"},
+    )
+    assert "working" not in stopped
+    assert stopped["reason"] == "The agent stopped."
+    plain = dmsm.card_frontmatter(
+        {"title": "T", "status": "queued", "priority": "P2"},
+        {"status": "Ready"},
+    )
+    assert "working" not in plain
+    assert "reason" not in plain
+    print("live agent pattern ok")
+
+
 def main() -> None:
     unit = Path(tempfile.mkdtemp(prefix="sm-brief-unit-"))
     try:
@@ -302,6 +325,7 @@ def main() -> None:
         shutil.rmtree(unit, ignore_errors=True)
     test_writes_overlap_files_and_directories()
     test_card_stays_in_sync_with_ticket()
+    test_working_pattern_is_a_live_agent()
     test_live_brief_gate()
     test_ticket_find_or_create()
     print("brief checks passed")

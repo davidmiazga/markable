@@ -140,6 +140,8 @@ CARD_FIELDS = (
     "repairs",
     "order",
     "reason",
+    "working",
+    "agent",
 )
 
 
@@ -274,6 +276,25 @@ def ensure_board_file(store: "Store") -> Path:
     return path
 
 
+def pid_alive(raw: str) -> bool:
+    """True when that process is still running. The pattern is a live agent."""
+    try:
+        pid = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def card_frontmatter(task: dict, existing: dict[str, str]) -> dict[str, str]:
     fields: dict[str, str] = {
         "title": str(task.get("title") or ""),
@@ -306,6 +327,14 @@ def card_frontmatter(task: dict, existing: dict[str, str]) -> dict[str, str]:
     reason = one_line(str(task.get("reason") or ""))
     if reason:
         fields["reason"] = reason
+    agent_pid = str(existing.get("agent") or "").strip()
+    was_working = str(existing.get("working") or "").strip().lower() in ("yes", "true", "1", "on")
+    if agent_pid and pid_alive(agent_pid):
+        fields["working"] = "yes"
+        fields["agent"] = agent_pid
+    elif was_working or agent_pid:
+        if not fields.get("reason"):
+            fields["reason"] = "The agent stopped."
     for key, value in existing.items():
         if key in fields or key in CARD_FIELDS:
             continue
@@ -4585,6 +4614,14 @@ def sync_board(store: Store) -> list[str]:
             task,
             spec_ready=spec_complete(path)[0],
         )
+        agent_pid = str(meta.get("agent") or "").strip()
+        was_working = str(meta.get("working") or "").strip().lower() in ("yes", "true", "1", "on")
+        if (was_working or agent_pid) and not (agent_pid and pid_alive(agent_pid)):
+            if not str(task.get("reason") or "").strip():
+                task["reason"] = "The agent stopped."
+            store.save_state(state)
+            messages.append(f"{task_id} live agent ended")
+            continue
         if action:
             try:
                 rc = run_board_action(store, task_id, action)
