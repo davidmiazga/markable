@@ -82,6 +82,7 @@ let _parent = "";
 let _known: string[] = [];
 let _mode: "pick" | "board" = "pick";
 const _collapsedSubs = new Set<string>();
+const _openLanes = new Set<string>();
 let _io: Promise<void> = Promise.resolve();
 let _ioDepth = 0;
 let _epoch = 0;
@@ -222,8 +223,10 @@ function injectCSS(): void {
       display: flex !important;
       flex-direction: column;
       height: 100%;
+      max-height: 100%;
       min-height: 0;
-      padding: 16px 18px 12px;
+      box-sizing: border-box;
+      padding: 40px 18px 12px;
       overflow: hidden;
       visibility: visible !important;
     }
@@ -231,8 +234,8 @@ function injectCSS(): void {
       display: flex;
       flex-direction: column;
       gap: 14px;
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 1 1 0;
+      height: auto;
       min-height: 0;
       box-sizing: border-box;
       font-family: var(--ui-font, system-ui, sans-serif);
@@ -269,7 +272,17 @@ function injectCSS(): void {
     .kb-toolbar button[aria-pressed="true"] {
       background: var(--bg-tertiary, rgba(255, 255, 255, 0.08));
     }
-    .kb-toolbar .kb-refresh { margin-left: auto; }
+    .kb-toolbar .kb-refresh {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+    }
+    .kb-refresh-icon { width: 18px; height: 18px; display: block; }
+    .kb-refresh.kb-refreshing .kb-refresh-icon { animation: kb-spin 0.7s linear infinite; }
+    @keyframes kb-spin { to { transform: rotate(360deg); } }
     .kb-reason {
       margin: 8px 0 0;
       color: var(--text-danger, #d16969);
@@ -281,21 +294,26 @@ function injectCSS(): void {
       display: flex;
       gap: 12px;
       flex: 1 1 auto;
+      align-self: stretch;
       min-width: 0;
-      min-height: 280px;
-      height: 100%;
+      min-height: 0;
+      height: auto;
       overflow-x: auto;
       overflow-y: hidden;
       align-items: stretch;
-      padding-bottom: 4px;
+      padding-bottom: 0;
     }
     .kb-column {
       flex: 0 0 280px;
+      width: 280px;
+      max-width: 280px;
+      align-self: stretch;
       display: flex;
       flex-direction: column;
-      height: 100%;
-      min-height: 280px;
+      height: auto;
+      min-height: 0;
       max-height: none;
+      box-sizing: border-box;
       border: 1px solid var(--border-color, #333);
       border-top-width: 3px;
       border-radius: 12px;
@@ -318,16 +336,48 @@ function injectCSS(): void {
       background: var(--text-secondary, #888);
     }
     .kb-column-count {
-      margin-left: auto;
-      min-width: 1.5em;
-      padding: 1px 7px;
-      border-radius: 999px;
-      background: var(--bg-primary, #1e1e22);
-      color: var(--text-secondary, #aaa);
-      font-size: 12px;
+      position: relative;
+      top: -0.45em;
+      min-width: 1.1em;
+      padding: 1px 4px;
+      border-radius: 6px;
+      background: var(--border-color, #666);
+      color: #fff;
+      font-size: 10px;
       font-weight: 500;
+      line-height: 1.3;
       text-align: center;
     }
+    .kb-column-spacer { flex: 1; min-width: 4px; }
+    .kb-column-mini {
+      flex-basis: 36px;
+      width: 36px;
+      min-width: 36px;
+      max-width: 36px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 10px;
+      padding-top: 10px;
+    }
+    .kb-column-mini .kb-column-count {
+      position: static;
+      top: auto;
+      margin-top: 0;
+      flex-shrink: 0;
+    }
+    .kb-fold-top {
+      align-self: flex-start;
+      margin: 8px 0 0 10px;
+    }
+    .kb-mini-name {
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      max-height: 100%;
+      overflow: hidden;
+      font-weight: 500;
+    }
+    .kb-fold { width: 16px; height: 16px; display: block; }
     .kb-chevron, .kb-more {
       display: inline-flex;
       align-items: center;
@@ -342,7 +392,9 @@ function injectCSS(): void {
       font: inherit;
       cursor: pointer;
     }
-    .kb-chevron { width: 28px; height: 28px; }
+    .kb-chevron { width: 18px; height: 18px; }
+    .kb-column-mini.kb-drop { outline: 2px solid var(--link-color, #7aa2ff); outline-offset: -2px; }
+    .kb-ghost, .kb-ghost * { pointer-events: none !important; }
     .kb-twirl {
       width: 16px;
       height: 16px;
@@ -377,7 +429,7 @@ function injectCSS(): void {
       cursor: pointer;
     }
     .kb-menu-pop button:hover { background: var(--bg-secondary, #2a2a2e); }
-    .kb-rename { flex: 1; min-width: 0; }
+    .kb-rename { min-width: 0; }
     .kb-rename input {
       width: 100%;
       box-sizing: border-box;
@@ -539,16 +591,20 @@ function injectCSS(): void {
       font-size: 11px;
       font-variant-numeric: tabular-nums;
     }
-    .kb-add { padding: 2px 8px 8px; }
+    .kb-add { padding: 2px 8px 6px; box-sizing: border-box; max-width: 100%; }
     .kb-add input {
+      box-sizing: border-box;
       width: 100%;
+      max-width: 100%;
       height: 28px;
-      padding: 0 4px;
-      border: none;
+      padding: 0 10px;
+      border: 1px solid var(--border-color, #3a3a3a);
+      border-radius: 8px;
       background: transparent;
-      color: var(--text-secondary, #9a9a9a);
+      color: var(--text-secondary, #8d8d8d);
       font: inherit;
     }
+    .kb-add input::placeholder { color: var(--text-secondary, #8d8d8d); opacity: 0.7; }
     .kb-add input:focus { outline: none; color: inherit; }
     .kb-flags { display: flex; gap: 8px; flex-wrap: wrap; }
     .kb-add-col {
@@ -619,9 +675,10 @@ function injectCSS(): void {
     .kb-meta { color: var(--text-secondary, #9a9a9a); word-break: break-word; }
     .kb-stage {
       display: flex;
-      flex: 1;
+      flex: 1 1 0;
       min-width: 0;
       min-height: 0;
+      height: auto;
       gap: 12px;
       align-items: stretch;
       overflow: hidden;
@@ -930,14 +987,14 @@ function paint(): void {
 function revealBoard(host: HTMLElement): void {
   document.body.classList.remove("no-open-tabs");
   document.body.classList.add("has-custom-tab");
-  const row = document.getElementById("app-row");
-  const height = row?.clientHeight ?? 0;
   host.style.display = "flex";
   host.style.flexDirection = "column";
   host.style.visibility = "visible";
+  host.style.boxSizing = "border-box";
   host.style.minHeight = "0";
+  host.style.height = "100%";
+  host.style.maxHeight = "100%";
   host.style.overflow = "hidden";
-  host.style.height = height > 0 ? `${height}px` : "100%";
 }
 
 function present(): void {
@@ -960,8 +1017,17 @@ function present(): void {
 }
 
 async function refresh(): Promise<void> {
-  await load();
-  present();
+  const button = _container?.querySelector(".kb-refresh");
+  button?.classList.add("kb-refreshing");
+  button?.setAttribute("aria-busy", "true");
+  try {
+    await load();
+    present();
+  } catch (error) {
+    button?.classList.remove("kb-refreshing");
+    button?.removeAttribute("aria-busy");
+    throw error;
+  }
 }
 
 function cardSnapshot(): string {
@@ -1014,10 +1080,12 @@ function renderToolbar(root: HTMLElement): void {
       paint();
     }));
   }
-  const reload = button("Refresh", "Reload notes from disk", false, () => {
+  const reload = button("", "Reload notes from disk", false, () => {
     void refresh();
   });
   reload.className = "kb-refresh";
+  reload.setAttribute("aria-label", "Refresh");
+  reload.appendChild(refreshIcon());
   bar.appendChild(reload);
   root.appendChild(bar);
 }
@@ -1078,46 +1146,80 @@ function renderLane(
   const col = el("section", "kb-column");
   col.style.borderTopColor = lane.color || "var(--border-color, #ddd)";
   col.setAttribute("aria-label", lane.title);
+  const total = _cards.filter((card) => card.parent.trim() === "" && card.status === lane.title).length;
+  const mini = lane.collapsed || (total === 0 && !_openLanes.has(lane.title));
+  const count = el("span", "kb-column-count", String(rows.length));
+  if (lane.color) {
+    count.style.background = lane.color;
+    count.style.color = "#fff";
+  }
+
+  if (mini) {
+    col.classList.add("kb-column-mini");
+    col.append(laneMark(lane, null), el("span", "kb-mini-name", lane.title), count);
+    col.addEventListener("click", () => openLane(board, lane));
+    return col;
+  }
 
   const heading = el("div", "kb-column-title");
-  const dot = el("span", "kb-dot");
-  if (lane.color) dot.style.background = lane.color;
-  const collapse = button("", lane.collapsed ? "Expand column" : "Collapse column", false, () => {
-    void writeLanes(board, board.lanes.map((item) => (
-      item.title === lane.title ? { ...item, collapsed: !item.collapsed } : item
-    )));
-  });
-  collapse.className = "kb-chevron";
-  collapse.appendChild(twirl(!lane.collapsed));
   const title = el("span", "kb-rename", lane.title);
   title.addEventListener("dblclick", () => beginRename(board, lane, title));
   const more = button("⋯", "Column options", false, () => openLaneMenu(board, lane, more));
   more.className = "kb-more";
-  heading.append(dot, title, el("span", "kb-column-count", String(rows.length)), collapse, more);
-  col.appendChild(heading);
+  heading.append(title, count, el("span", "kb-column-spacer"), more);
+  const mark = laneMark(lane, () => foldLane(board, lane));
+  mark.classList.add("kb-fold-top");
+  col.append(mark, heading);
 
-  if (!lane.collapsed) {
-    const list = el("div", "kb-cards");
-    for (const row of rows) list.appendChild(renderCard(row.card, row.children, lane.color));
-    const form = el("form", "kb-add");
-    const input = document.createElement("input");
-    input.type = "text";
-    input.placeholder = "+ Add a card";
-    input.setAttribute("aria-label", `Add a card to ${lane.title}`);
-    form.appendChild(input);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const titleText = input.value.trim();
-      if (titleText === "") return;
-      void createCard(board, lane.title, titleText);
-    });
-    col.append(list, form);
-    if (_focusLane === lane.title) {
-      input.focus();
-      _focusLane = "";
-    }
+  const list = el("div", "kb-cards");
+  for (const row of rows) list.appendChild(renderCard(row.card, row.children, lane.color));
+  const form = el("form", "kb-add");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ Add a card";
+  input.setAttribute("aria-label", `Add a card to ${lane.title}`);
+  form.appendChild(input);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const titleText = input.value.trim();
+    if (titleText === "") return;
+    _openLanes.add(lane.title);
+    void createCard(board, lane.title, titleText);
+  });
+  col.append(form, list);
+  if (_focusLane === lane.title) {
+    input.focus();
+    _focusLane = "";
   }
   return col;
+}
+
+function laneMark(lane: Lane, onClick: (() => void) | null): HTMLElement {
+  const node = onClick === null
+    ? el("span", "kb-chevron")
+    : button("", "Collapse column", false, onClick);
+  node.className = "kb-chevron";
+  node.style.color = lane.color || "currentColor";
+  node.appendChild(foldIcon());
+  return node;
+}
+
+function openLane(board: BoardNote, lane: Lane): void {
+  _openLanes.add(lane.title);
+  if (!lane.collapsed) {
+    paint();
+    return;
+  }
+  void writeLanes(board, board.lanes.map((item) => (
+    item.title === lane.title ? { ...item, collapsed: false } : item
+  )));
+}
+
+function foldLane(board: BoardNote, lane: Lane): void {
+  _openLanes.delete(lane.title);
+  void writeLanes(board, board.lanes.map((item) => (
+    item.title === lane.title ? { ...item, collapsed: true } : item
+  )));
 }
 
 function renderCard(card: CardNote, children: CardNote[], laneColor: string): HTMLElement {
@@ -1226,6 +1328,33 @@ function insertAt(items: CardNote[], dragged: CardNote, beforePath: string | nul
   const index = rest.findIndex((item) => item.path === beforePath);
   if (index < 0) return [...rest, dragged];
   return [...rest.slice(0, index), dragged, ...rest.slice(index)];
+}
+
+function refreshIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "kb-refresh-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z",
+  );
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  return svg;
+}
+
+function foldIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "kb-fold");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  const bar = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  bar.setAttribute("d", "M3 2.5h2.2v11H3zM7.2 4.2H13v7.6H7.2z");
+  bar.setAttribute("fill", "currentColor");
+  svg.appendChild(bar);
+  return svg;
 }
 
 function twirl(open: boolean): SVGSVGElement {
@@ -1347,6 +1476,15 @@ function onPointerMove(event: PointerEvent): void {
   moveInsertion(drag, event.clientX, event.clientY);
 }
 
+function columnAt(x: number, y: number): HTMLElement | null {
+  for (const node of document.elementsFromPoint(x, y)) {
+    if (!(node instanceof Element) || node.closest(".kb-ghost, .kb-insert")) continue;
+    const column = node.closest<HTMLElement>(".kb-column");
+    if (column) return column;
+  }
+  return null;
+}
+
 function moveInsertion(drag: PointerDrag, x: number, y: number): void {
   const line = drag.line;
   if (!line) return;
@@ -1367,10 +1505,20 @@ function moveInsertion(drag: PointerDrag, x: number, y: number): void {
     paintLine(line, slot, list.closest(".kb-column"));
     return;
   }
-  const column = hit instanceof Element ? hit.closest<HTMLElement>(".kb-column") : null;
+  const column = columnAt(x, y);
+  document.querySelectorAll(".kb-column-mini.kb-drop").forEach((node) => node.classList.remove("kb-drop"));
   const list = column?.querySelector<HTMLElement>(":scope > .kb-cards") ?? null;
-  if (!column || !list) {
+  if (!column) {
     line.style.display = "none";
+    return;
+  }
+  if (!list) {
+    column.classList.add("kb-drop");
+    const rect = column.getBoundingClientRect();
+    drag.before = null;
+    drag.status = column.getAttribute("aria-label") ?? "";
+    drag.armed = drag.status !== "";
+    paintLine(line, { before: null, top: rect.top + 10, left: rect.left + 4, width: Math.max(rect.width - 8, 8) }, column);
     return;
   }
   const items = [...list.querySelectorAll<HTMLElement>(":scope > .kb-card-wrap")];
@@ -1437,6 +1585,7 @@ function clearPointer(): void {
   document.removeEventListener("pointercancel", onPointerCancel);
   document.removeEventListener("selectstart", blockSelect, true);
   document.body.classList.remove("kb-drag-active");
+  document.querySelectorAll(".kb-column-mini.kb-drop").forEach((node) => node.classList.remove("kb-drop"));
   window.getSelection()?.removeAllRanges();
   _pointer?.source.classList.remove("kb-dragging");
   _pointer?.ghost?.remove();
@@ -1457,6 +1606,14 @@ function liftCard(source: HTMLElement, rect: DOMRect): HTMLElement {
 async function reorderLaneCard(path: string, status: string, before: string | null): Promise<void> {
   const dragged = _cards.find((card) => card.path === path);
   if (!dragged || dragged.parent.trim() !== "") return;
+  _openLanes.add(status);
+  const board = _boards.find((item) => item.path === _boardPath) ?? _boards[0];
+  const lane = board?.lanes.find((item) => item.title === status);
+  if (board && lane?.collapsed) {
+    await writeLanes(board, board.lanes.map((item) => (
+      item.title === status ? { ...item, collapsed: false } : item
+    )));
+  }
   const laneCards = groupByParent(_cards)
     .filter((row) => row.card.status === status)
     .map((row) => row.card);
