@@ -9,7 +9,7 @@ lane:
   - "Claimed|#7a6bb5"
   - "Running|#e6a23c"
   - "Review|#3aa0c8"
-  - "Blocked|#b32e35|collapsed"
+  - "Blocked|#b32e35"
   - "Failed|#8a3d3d"
   - "Done|#3d9a6a"
 ---

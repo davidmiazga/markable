@@ -1,10 +1,13 @@
 ---
 title: Set the working pattern when an AI is working a ticket
-status: Ready
+status: Done
 priority: P2
 assignee: dave
 writes: dm-software-machine/
-order: 1
+claimed-by: dave
+claim-lease: "2026-11-26T04:49:46+00:00"
+repairs: 1
+order: 7
 unread: no
 ---
 

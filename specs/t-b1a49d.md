@@ -6,7 +6,7 @@ assignee: dave
 writes: "src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.conf.json/, planning/, tests/"
 claimed-by: dave
 claim-lease: "2026-11-26T03:57:41+00:00"
-order: 1
+order: 6
 unread: no
 ---
 
