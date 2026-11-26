@@ -29,25 +29,26 @@ if [[ ! -d "$volume" ]]; then
   exit 1
 fi
 
+excludes=(
+  --exclude node_modules/
+  --exclude dist/
+  --exclude .astro/
+  --exclude .DS_Store
+  --exclude target/
+  --exclude .venv/
+  --exclude .dm-software-machine/worktrees/
+  --exclude .dm-software-machine/runs/
+)
+
 echo "QNAP ← 26DM-003-markdownAppRewrite"
 mkdir -p "$qnap/26DM-003-markdownAppRewrite/jobWorking/markable"
-rsync -avuP \
-  --exclude node_modules/ \
-  --exclude dist/ \
-  --exclude .astro/ \
-  --exclude .DS_Store \
-  --exclude src-tauri/target/ \
-  --exclude .dm-software-machine/worktrees/ \
-  --exclude .dm-software-machine/runs/ \
+rsync -au "${excludes[@]}" \
   "$markable/" \
   "$qnap/26DM-003-markdownAppRewrite/jobWorking/markable/"
 
 echo "QNAP ← 26DM-020-SoftwareMachine"
 mkdir -p "$qnap/26DM-020-SoftwareMachine/jobWorking/sm"
-rsync -avuP \
-  --exclude node_modules/ \
-  --exclude .DS_Store \
-  --exclude .venv/ \
+rsync -au "${excludes[@]}" \
   "$job020/jobWorking/sm/" \
   "$qnap/26DM-020-SoftwareMachine/jobWorking/sm/"
 
