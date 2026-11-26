@@ -295,6 +295,9 @@ def test_card_stays_in_sync_with_ticket() -> None:
     assert "_pointer" in meta["reason"]
     assert "\n" not in meta["reason"]
     assert dmsm.lane_title("gated") == "Review"
+    assert dmsm.waits_for_a_person("A person reviews this.") is True
+    assert dmsm.waits_for_a_person("Move to Done without a person.") is False
+    assert dmsm.waits_for_a_person("move to done without a person") is False
     hidden = dmsm.card_frontmatter(
         {"title": "Keep", "status": "queued", "priority": "P2"},
         {"status": "Ready", "hidden": "yes"},
