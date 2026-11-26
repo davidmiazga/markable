@@ -491,6 +491,40 @@ function injectCSS(): void {
     }
     .kb-card-head { display: flex; align-items: flex-start; gap: 8px; }
     .kb-card-head .kb-card-title, .kb-nested-title, .kb-subcard-open { flex: 1; min-width: 0; }
+    .kb-working {
+      display: grid;
+      grid-template-columns: repeat(3, 3px);
+      gap: 2px;
+      flex: 0 0 auto;
+      width: 13px;
+      height: 13px;
+      margin-top: 4px;
+    }
+    .kb-working span {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.18;
+      animation-name: kb-work;
+      animation-timing-function: ease-in-out;
+      animation-iteration-count: infinite;
+    }
+    .kb-working span:nth-child(1) { animation-duration: 1.25s; animation-delay: 0.05s; }
+    .kb-working span:nth-child(2) { animation-duration: 1.7s; animation-delay: 0.62s; }
+    .kb-working span:nth-child(3) { animation-duration: 1.05s; animation-delay: 0.28s; }
+    .kb-working span:nth-child(4) { animation-duration: 1.55s; animation-delay: 0.91s; }
+    .kb-working span:nth-child(5) { animation-duration: 1.9s; animation-delay: 0.17s; }
+    .kb-working span:nth-child(6) { animation-duration: 1.15s; animation-delay: 0.74s; }
+    .kb-working span:nth-child(7) { animation-duration: 1.4s; animation-delay: 0.43s; }
+    .kb-working span:nth-child(8) { animation-duration: 1.8s; animation-delay: 1.02s; }
+    .kb-working span:nth-child(9) { animation-duration: 1.35s; animation-delay: 0.33s; }
+    .kb-nested .kb-working, .kb-subcard .kb-working { margin-top: 1px; }
+    @keyframes kb-work {
+      0%, 100% { opacity: 0.15; }
+      38% { opacity: 1; }
+      62% { opacity: 0.22; }
+    }
     .kb-grip {
       display: grid;
       grid-template-columns: 3px 3px;
@@ -1222,6 +1256,14 @@ function foldLane(board: BoardNote, lane: Lane): void {
   )));
 }
 
+function workingPattern(): HTMLElement {
+  const node = el("div", "kb-working");
+  node.setAttribute("role", "img");
+  node.setAttribute("aria-label", "Working");
+  for (let i = 0; i < 9; i += 1) node.appendChild(document.createElement("span"));
+  return node;
+}
+
 function renderCard(card: CardNote, children: CardNote[], laneColor: string): HTMLElement {
   const wrap = el("div", "kb-card-wrap");
   wrap.dataset.path = card.path;
@@ -1248,6 +1290,7 @@ function renderCard(card: CardNote, children: CardNote[], laneColor: string): HT
   });
 
   const head = el("div", "kb-card-head");
+  if (card.working) head.appendChild(workingPattern());
   head.append(el("div", "kb-card-title", card.title), grip());
   article.appendChild(head);
   bindPointerDrag(article, card.path, "card");
@@ -1300,6 +1343,7 @@ function nestedList(card: CardNote, children: CardNote[], laneColor: string): HT
     nested.type = "button";
     nested.className = "kb-nested kb-sort-item";
     nested.dataset.path = child.path;
+    if (child.working) nested.appendChild(workingPattern());
     nested.append(el("span", "kb-nested-title", child.title), grip());
     const stripe = child.border || child.color || laneColor;
     if (stripe) nested.style.borderLeftColor = stripe;
@@ -1477,7 +1521,11 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function columnAt(x: number, y: number): HTMLElement | null {
-  for (const node of document.elementsFromPoint(x, y)) {
+  const stack = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [];
+  const nodes = stack.length > 0
+    ? stack
+    : [document.elementFromPoint(x, y)].filter((node): node is Element => node instanceof Element);
+  for (const node of nodes) {
     if (!(node instanceof Element) || node.closest(".kb-ghost, .kb-insert")) continue;
     const column = node.closest<HTMLElement>(".kb-column");
     if (column) return column;

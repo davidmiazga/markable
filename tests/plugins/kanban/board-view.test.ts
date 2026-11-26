@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCardContent, defaultBoardContent } from "../../../src/plugins/kanban/board-model";
+import { buildCardContent, defaultBoardContent, withScalar } from "../../../src/plugins/kanban/board-model";
 
 const files = vi.hoisted(() => new Map<string, string>());
 
@@ -39,6 +39,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import plugin from "../../../src/plugins/kanban/kanban.plugin";
 
 function host(): HTMLElement {
+  document.body.dataset.markableTabs = "ready";
   const node = document.createElement("div");
   node.id = "custom-tab-host";
   document.body.appendChild(node);
@@ -73,6 +74,7 @@ describe("project board in the editor", () => {
     host();
     const surface = api(null);
     await plugin.onEnable(surface as never);
+    await flush();
     const node = document.getElementById("custom-tab-host");
     expect(node?.textContent).toContain("Choose a folder");
     expect(node?.textContent).not.toContain("Repair");
@@ -92,6 +94,7 @@ describe("project board in the editor", () => {
     host();
     const surface = api({ folder: "/proj", folders: ["/proj"], parent: "" });
     await plugin.onEnable(surface as never);
+    await flush();
 
     const node = document.getElementById("custom-tab-host");
     expect(node?.querySelector("input[type=search]")?.getAttribute("placeholder")).toContain("Search cards");
@@ -105,7 +108,7 @@ describe("project board in the editor", () => {
     expect(node?.textContent).toContain("PM");
     expect(node?.textContent).toContain("GM");
     expect(node?.textContent).toContain("1/2");
-    expect(node?.querySelectorAll("input[placeholder='+ Add a card']").length).toBe(3);
+    expect(node?.querySelectorAll("input[placeholder='+ Add a card']").length).toBe(1);
     expect(node?.textContent).toContain("+ Add column");
     expect(node?.textContent).not.toContain("Repair");
     expect(node?.textContent).not.toContain("No cards");
@@ -123,6 +126,26 @@ describe("project board in the editor", () => {
     expect(node?.querySelector(".kb-card .kb-panel")).toBeNull();
     expect(node?.querySelector("button[title='Column options']")).not.toBeNull();
     expect(surface.registerSidebarPanel).not.toHaveBeenCalled();
+  });
+
+  it("shows the working pattern only when a card asks for it", async () => {
+    files.set("/proj/board.md", defaultBoardContent("Launch"));
+    files.set("/proj/live.md", withScalar(buildCardContent({ title: "Live", status: "To Do" }), "working", "yes"));
+    files.set("/proj/plain.md", buildCardContent({ title: "Plain", status: "To Do" }));
+    files.set("/proj/off.md", withScalar(buildCardContent({ title: "Off", status: "In Progress" }), "working", "no"));
+    host();
+    const surface = api({ folder: "/proj", folders: ["/proj"], parent: "" });
+    await plugin.onEnable(surface as never);
+    await flush();
+    const node = document.getElementById("custom-tab-host");
+    const card = (title: string) => [...(node?.querySelectorAll(".kb-card") ?? [])].find((item) => item.textContent?.includes(title));
+    const live = card("Live");
+    const plain = card("Plain");
+    const off = card("Off");
+    expect(live?.querySelectorAll(".kb-working span").length).toBe(9);
+    expect(live?.querySelector(".kb-working")?.getAttribute("aria-label")).toBe("Working");
+    expect(plain?.querySelector(".kb-working")).toBeNull();
+    expect(off?.querySelector(".kb-working")).toBeNull();
   });
 });
 
@@ -243,6 +266,7 @@ describe("project board flows", () => {
     if (!add) throw new Error("missing add-card field");
     submit(add, "Ship the board");
     await flush();
+    click(lane("In Progress"));
     const side = lane("In Progress").querySelector<HTMLInputElement>("input[placeholder='+ Add a card']");
     if (!side) throw new Error("missing in-progress add field");
     submit(side, "Side quest");
@@ -481,7 +505,7 @@ describe("project board flows", () => {
     click(lane("Ready").querySelector("button[title='Collapse column']"));
     await flush();
     expect(lane("Ready").textContent).not.toContain("Ship the board");
-    click(lane("Ready").querySelector("button[title='Expand column']"));
+    click(lane("Ready"));
     await flush();
     expect(lane("Ready").textContent).toContain("Ship the board");
 

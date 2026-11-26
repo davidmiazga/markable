@@ -108,6 +108,16 @@ describe("project board notes", () => {
     expect(parseCard(moved, "/vault/ship-it.md").status).toBe("Done");
   });
 
+  it("reads an optional working pattern", () => {
+    const on = parseCard(withScalar(newCardContent("Live", "To Do"), "working", "yes"), "/v/live.md");
+    const off = parseCard(withScalar(newCardContent("Off", "Done"), "working", "no"), "/v/off.md");
+    const plain = parseCard(newCardContent("Plain", "In Progress"), "/v/plain.md");
+    expect(on.working).toBe(true);
+    expect(off.working).toBe(false);
+    expect(plain.working).toBe(false);
+    expect(on.custom.some((field) => field.key.toLowerCase() === "working")).toBe(false);
+  });
+
   it("toggles and adds a checkbox without dropping the rest of the note", () => {
     const start = `${newCardContent("Ship it", "To Do")}- [ ] draft\n\n## Comments\nKeep me.\n`;
     const toggled = toggleCheck(start, parseCard(start, "/v/a.md").checks[0].bodyLineIndex);

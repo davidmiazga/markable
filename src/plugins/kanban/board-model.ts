@@ -36,6 +36,7 @@ const RESERVED_KEYS = new Set([
   "color",
   "border",
   "unread",
+  "working",
   "parent",
   "order",
   "lane",
@@ -76,6 +77,8 @@ export interface CardNote {
   color: string;
   border: string;
   unread: boolean;
+  /** Optional. The card shows the working pattern only when this is true. */
+  working: boolean;
   parent: string;
   order: string;
   description: string;
@@ -324,6 +327,7 @@ export function parseCard(content: string, path: string): CardNote {
     color: scalar(lines, "color"),
     border: scalar(lines, "border"),
     unread: yes(scalar(lines, "unread"), false),
+    working: yes(scalar(lines, "working"), false),
     parent: scalar(lines, "parent"),
     order: scalar(lines, "order"),
     description: prose.join("\n").trim(),
