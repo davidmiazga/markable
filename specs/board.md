@@ -6,9 +6,9 @@ show-tags: yes
 show-progress: yes
 lane:
   - "Ready|#4c78e8"
-  - "Claimed|#7a6bb5|collapsed"
+  - "Claimed|#7a6bb5"
   - "Running|#e6a23c"
-  - "Review|#3aa0c8|collapsed"
+  - "Review|#3aa0c8"
   - "Blocked|#b32e35|collapsed"
   - "Failed|#8a3d3d"
   - "Done|#3d9a6a"

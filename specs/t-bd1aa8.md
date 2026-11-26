@@ -7,7 +7,7 @@ writes: "src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.
 claimed-by: dave
 claim-lease: "2026-11-25T23:51:54+00:00"
 repairs: 1
-order: 1
+order: 2
 unread: no
 ---
 

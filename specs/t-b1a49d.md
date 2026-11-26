@@ -1,39 +1,43 @@
 ---
-title: Show an animating dot on a kanban card while an agent is working
-status: Ready
+title: "Let a card optionally show Cursor's working pattern"
+status: Done
 priority: P2
 assignee: dave
 writes: "src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.conf.json/, planning/, tests/"
-order: 6
+claimed-by: dave
+claim-lease: "2026-11-26T03:57:41+00:00"
+order: 1
+unread: no
 ---
 
-# Show an animating dot on a kanban card while an agent is working
-
+# Let a card optionally show Cursor's working pattern
 Done means: the fast gate is green and the feature is visible in the profile dev command
 Writes: src/, src-tauri/src/, index.html/, flavors/, scripts/, src-tauri/tauri.conf.json/, planning/, tests/
 Dev: cd . && npm run tauri dev
-
 ## Problem
-I really like that animating dot pattern you have in the cursor chat interface to indicate something is happening. Hopefully something like that can be added to our kanban so I know an agent is working? Darn, that means our port to /dm-software-machine will need updating. But updates are to be expected.
-
+I really like that animating dot pattern you have in the cursor chat interface to indicate something is happening. Hopefully something like that can be added to our kanban so I know an agent is working? It is a grid of small dots and it’s kinda random. If needed we can have it change somehow to indicate a status - have a % for progress if that makes sense.
 ## In scope
-- A kanban card shows an animating dot while an agent is working on that ticket, so the board shows that something is happening.
-- The project tracker that dm-software-machine opens shows the same dot, and the machine records that an agent is working so the card can show it.
-
+- A card note can optionally set `working: yes`. The card then shows a grid of small dots that light up in a random-looking pattern, the same kind of motion Cursor uses while an agent is working.
+- The lane does not matter. Any card with `working: yes` shows the pattern.
+- `working: no`, or no `working` line, leaves the card plain.
 ## Out of scope
+- Deciding that an agent is working. Markable-Project does not start agents and does not infer this from the lane.
+- dm-software-machine setting `working` when an AI is on a ticket. That uses this feature afterward.
 - Other card details, lanes, and colors.
 - The link color and click ticket.
-
 ## UX / behavior
-The dot uses the same kind of motion as the Cursor chat indicator that something is happening. It sits on the card on the board. It shows while an agent is working on that ticket. It is absent when no agent is working on that ticket.
-
+The pattern sits on the card. Something working on that card, including an agent in a user's own workflow, turns it on by writing `working: yes`. The kanban only draws it.
 ## Tests
-- A card with an agent working shows the animating dot.
-- A card with no agent working does not show the dot.
-- The project tracker opened by dm-software-machine shows that same dot.
-
+- A card with `working: yes` shows the grid, in any lane.
+- A card with `working: no`, or without the line, does not show the pattern.
+- Two cards in the same lane can differ: one shows the pattern and the other does not.
 Priority: P2
 Milestone: -
 Owner: dave
 Kind: task
 Parent: -
+
+## History
+Moved from Ready to Claimed.
+
+Moved from Review to Done.
