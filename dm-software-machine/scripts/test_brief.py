@@ -317,6 +317,65 @@ def test_working_pattern_is_a_live_agent() -> None:
     print("live agent pattern ok")
 
 
+def test_claimed_card_starts_agents() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="sm-agent-"))
+    assert dmsm.agent_pieces(["src/a.ts", "src/b.ts"]) == [["src/a.ts"], ["src/b.ts"]]
+    assert dmsm.agent_pieces(["dm-software-machine/"]) == [["dm-software-machine/"]]
+    assert dmsm.agent_pieces(["src/", "src/a.ts"]) == [["src/", "src/a.ts"]]
+    claimed = {"id": "t-1", "status": "claimed"}
+    assert dmsm.ticket_agent_step(claimed, alive=False, was_working=False) == "start"
+    moved = {"id": "t-1", "status": "active"}
+    assert dmsm.ticket_agent_step(moved, alive=False, was_working=False) == "start"
+    live = {"id": "t-1", "status": "claimed", "agent_pid": "42"}
+    assert dmsm.ticket_agent_step(live, alive=True, was_working=True) == "promote"
+    working = {"id": "t-1", "status": "active", "agent_pid": "42"}
+    assert dmsm.ticket_agent_step(working, alive=True, was_working=True) == "none"
+    ended = {"id": "t-1", "status": "active", "agent_pid": "42"}
+    assert dmsm.ticket_agent_step(ended, alive=False, was_working=True) == "ended"
+    held = {"id": "t-1", "status": "claimed", "agent_stopped": True}
+    assert dmsm.ticket_agent_step(held, alive=False, was_working=False) == "hold"
+    done = {"id": "t-1", "status": "accepted", "agent_pid": "42"}
+    assert dmsm.ticket_agent_step(done, alive=False, was_working=True) == "clear"
+
+    dead = "99999999"
+    settled = dmsm.card_frontmatter(
+        {"title": "T", "status": "reviewed", "priority": "P2"},
+        {"status": "Review", "working": "yes", "agent": dead},
+    )
+    assert "working" not in settled
+    assert "reason" not in settled
+    from_task = dmsm.card_frontmatter(
+        {"title": "T", "status": "active", "priority": "P2", "agent_pid": str(os.getpid())},
+        {"status": "Running"},
+    )
+    assert from_task["working"] == "yes"
+    assert from_task["agent"] == str(os.getpid())
+
+    marker = tmp / "ran.txt"
+    script = tmp / "worker.sh"
+    script.write_text(f"#!/bin/sh\necho \"$1\" >> {marker}\n")
+    script.chmod(0o755)
+    os.environ["DMSM_AGENT_CMD"] = str(script)
+    first = tmp / "one.prompt"
+    second = tmp / "two.prompt"
+    first.write_text("one")
+    second.write_text("two")
+    try:
+        code, detail = dmsm.run_commands(
+            [dmsm.agent_worker_command(first), dmsm.agent_worker_command(second)],
+            parallel=2,
+            cwd=tmp,
+            log=tmp / "agent.log",
+        )
+    finally:
+        os.environ.pop("DMSM_AGENT_CMD", None)
+    assert code == 0, detail
+    text = marker.read_text()
+    assert str(first) in text and str(second) in text
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("claimed card starts agents ok")
+
+
 def main() -> None:
     unit = Path(tempfile.mkdtemp(prefix="sm-brief-unit-"))
     try:
@@ -326,6 +385,7 @@ def main() -> None:
     test_writes_overlap_files_and_directories()
     test_card_stays_in_sync_with_ticket()
     test_working_pattern_is_a_live_agent()
+    test_claimed_card_starts_agents()
     test_live_brief_gate()
     test_ticket_find_or_create()
     print("brief checks passed")
