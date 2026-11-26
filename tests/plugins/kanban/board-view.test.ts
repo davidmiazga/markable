@@ -32,6 +32,11 @@ vi.mock("@tauri-apps/api/core", () => ({
       return Promise.resolve();
     }
     if (cmd === "ensure_directory") return Promise.resolve();
+    if (cmd === "delete_file") {
+      if (!files.has(path)) return Promise.reject(new Error("missing"));
+      files.delete(path);
+      return Promise.resolve();
+    }
     return Promise.resolve(null);
   },
 }));
@@ -146,6 +151,90 @@ describe("project board in the editor", () => {
     expect(live?.querySelector(".kb-working")?.getAttribute("aria-label")).toBe("Working");
     expect(plain?.querySelector(".kb-working")).toBeNull();
     expect(off?.querySelector(".kb-working")).toBeNull();
+  });
+
+  it("hides a card from the sidebar and brings the lane back with Show", async () => {
+    files.set("/proj/board.md", defaultBoardContent("Launch"));
+    files.set("/proj/quiet.md", buildCardContent({ title: "Quiet", status: "To Do" }));
+    files.set("/proj/loud.md", buildCardContent({ title: "Loud", status: "To Do" }));
+    host();
+    await plugin.onEnable(api({ folder: "/proj", folders: ["/proj"], parent: "" }) as never);
+    await flush();
+
+    click(cardNamed("Quiet"));
+    const panel = document.querySelector(".kb-panel");
+    const hidden = panel?.querySelector<HTMLInputElement>("input[aria-label='Hidden']");
+    if (!hidden) throw new Error("missing Hidden checkbox");
+    hidden.checked = true;
+    hidden.dispatchEvent(new Event("change"));
+    await flush();
+    expect(document.querySelector(".kb-panel")).toBeNull();
+    expect(lane("To Do").textContent).not.toContain("Quiet");
+    expect(lane("To Do").textContent).toContain("Loud");
+    expect(files.get("/proj/quiet.md")).toContain("hidden: yes");
+
+    click(lane("To Do").querySelector("button[title='Column options']"));
+    const showHide = document.querySelector<HTMLSelectElement>("select[aria-label='Show/hide cards']");
+    if (!showHide) throw new Error("missing Show/hide cards");
+    showHide.value = "hide";
+    showHide.dispatchEvent(new Event("change"));
+    await flush();
+    expect(lane("To Do").textContent).not.toContain("Quiet");
+    expect(lane("To Do").textContent).not.toContain("Loud");
+
+    click(lane("To Do").querySelector("button[title='Column options']"));
+    const show = document.querySelector<HTMLSelectElement>("select[aria-label='Show/hide cards']");
+    if (!show) throw new Error("missing Show/hide cards");
+    show.value = "show";
+    show.dispatchEvent(new Event("change"));
+    await flush();
+    expect(lane("To Do").textContent).toContain("Quiet");
+    expect(lane("To Do").textContent).toContain("Loud");
+    expect(files.get("/proj/quiet.md")).not.toContain("hidden:");
+  });
+
+  it("deletes one card from the trash icon and deletes a lane only after confirm", async () => {
+    files.set("/proj/board.md", defaultBoardContent("Launch"));
+    files.set("/proj/one.md", buildCardContent({ title: "One", status: "To Do" }));
+    files.set("/proj/two.md", buildCardContent({ title: "Two", status: "To Do" }));
+    files.set("/proj/keep.md", buildCardContent({ title: "Keep", status: "Done" }));
+    host();
+    await plugin.onEnable(api({ folder: "/proj", folders: ["/proj"], parent: "" }) as never);
+    await flush();
+
+    const confirm = vi.fn(() => false);
+    window.confirm = confirm;
+    click(lane("To Do").querySelector("button[title='Column options']"));
+    click([...document.querySelectorAll(".kb-menu-pop button")].find((node) => node.textContent === "Delete all"));
+    await flush();
+    expect(confirm).toHaveBeenCalled();
+    expect(files.has("/proj/one.md")).toBe(true);
+    expect(files.has("/proj/two.md")).toBe(true);
+
+    click(cardNamed("One").querySelector("button[aria-label='Delete card']"));
+    await flush();
+    expect(files.has("/proj/one.md")).toBe(false);
+    expect(lane("To Do").textContent).not.toContain("One");
+    expect(files.has("/proj/two.md")).toBe(true);
+
+    click(cardNamed("Two"));
+    click(document.querySelector(".kb-panel button[aria-label='Delete card']"));
+    await flush();
+    expect(document.querySelector(".kb-panel")).toBeNull();
+    expect(files.has("/proj/two.md")).toBe(false);
+
+    confirm.mockImplementation(() => true);
+    files.set("/proj/one.md", buildCardContent({ title: "One", status: "To Do" }));
+    files.set("/proj/two.md", buildCardContent({ title: "Two", status: "To Do" }));
+    click(document.querySelector("button[aria-label='Refresh']"));
+    await flush();
+    click(lane("To Do").querySelector("button[title='Column options']"));
+    click([...document.querySelectorAll(".kb-menu-pop button")].find((node) => node.textContent === "Delete all"));
+    await flush();
+    expect(files.has("/proj/one.md")).toBe(false);
+    expect(files.has("/proj/two.md")).toBe(false);
+    expect(files.has("/proj/keep.md")).toBe(true);
+    expect(files.has("/proj/board.md")).toBe(true);
   });
 });
 
@@ -364,7 +453,7 @@ describe("project board flows", () => {
     ]);
     expect(cardNamed("Test01 renamed").querySelector(".kb-frac")?.textContent).toBe("2/5");
     const head = cardNamed("Test01 renamed").querySelector(".kb-card-head");
-    expect([...(head?.children ?? [])].map((node) => node.className)).toEqual(["kb-card-title", "kb-grip"]);
+    expect([...(head?.children ?? [])].map((node) => node.className)).toEqual(["kb-card-title", "kb-trash", "kb-grip"]);
     const draft = [...cardNamed("Test01 renamed").querySelectorAll<HTMLElement>(".kb-nested")].find((node) => node.textContent === "Draft the note");
     const alpha = [...cardNamed("Test01 renamed").querySelectorAll<HTMLElement>(".kb-nested")].find((node) => node.textContent === "Alpha note");
     if (!draft || !alpha) throw new Error("missing nested cards");

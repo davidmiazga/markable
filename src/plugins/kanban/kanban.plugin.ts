@@ -491,6 +491,41 @@ function injectCSS(): void {
     }
     .kb-card-head { display: flex; align-items: flex-start; gap: 8px; }
     .kb-card-head .kb-card-title, .kb-nested-title, .kb-subcard-open { flex: 1; min-width: 0; }
+    .kb-trash {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      margin-top: 1px;
+      padding: 0;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-secondary, #9a9a9a);
+      cursor: pointer;
+    }
+    .kb-trash:hover { background: var(--bg-secondary, #2a2a2e); color: inherit; }
+    .kb-trash svg { width: 16px; height: 16px; display: block; margin: 3px auto; }
+    .kb-menu-choice {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 4px 8px 6px;
+      color: inherit;
+      font: inherit;
+    }
+    .kb-menu-choice span {
+      font-size: 12px;
+      font-weight: 450;
+      color: var(--text-secondary, #9a9a9a);
+    }
+    .kb-menu-choice select {
+      height: 28px;
+      border: 1px solid var(--border-color, #3a3a3a);
+      border-radius: 6px;
+      background: var(--bg-primary, #1c1c20);
+      color: inherit;
+      font: inherit;
+    }
     .kb-working {
       display: grid;
       grid-template-columns: repeat(3, 3px);
@@ -693,13 +728,15 @@ function injectCSS(): void {
       gap: 12px;
     }
     .kb-subcards { margin-bottom: 8px; }
-    .kb-check {
+    .kb-check, .kb-hide {
       display: flex;
       align-items: center;
       gap: 8px;
       margin: 0;
     }
-    .kb-panel .kb-check input[type="checkbox"] {
+    .kb-hide { margin: 0 0 12px; }
+    .kb-panel .kb-check input[type="checkbox"],
+    .kb-panel .kb-hide input[type="checkbox"] {
       width: 18px;
       height: 18px;
       flex: 0 0 18px;
@@ -1206,7 +1243,9 @@ function renderLane(
   col.append(mark, heading);
 
   const list = el("div", "kb-cards");
-  for (const row of rows) list.appendChild(renderCard(row.card, row.children, lane.color));
+  for (const row of rows) {
+    list.appendChild(renderCard(row.card, row.children.filter((child) => !child.hidden), lane.color));
+  }
   const form = el("form", "kb-add");
   const input = document.createElement("input");
   input.type = "text";
@@ -1291,7 +1330,7 @@ function renderCard(card: CardNote, children: CardNote[], laneColor: string): HT
 
   const head = el("div", "kb-card-head");
   if (card.working) head.appendChild(workingPattern());
-  head.append(el("div", "kb-card-title", card.title), grip());
+  head.append(el("div", "kb-card-title", card.title), trashButton(card), grip());
   article.appendChild(head);
   bindPointerDrag(article, card.path, "card");
   const pills = [...card.tags];
@@ -1361,6 +1400,7 @@ function nestedList(card: CardNote, children: CardNote[], laneColor: string): HT
 function childrenOf(card: CardNote): CardNote[] {
   const stem = card.fileName.replace(/\.md$/i, "").toLowerCase();
   return _cards.filter((item) => {
+    if (item.hidden) return false;
     const parent = item.parent.trim().toLowerCase();
     return parent === card.fileName.toLowerCase() || parent === stem || parent === `${stem}.md`;
   }).sort((a, b) => orderRank(a) - orderRank(b) || a.title.localeCompare(b.title));
@@ -1387,6 +1427,30 @@ function refreshIcon(): SVGSVGElement {
   path.setAttribute("fill", "currentColor");
   svg.appendChild(path);
   return svg;
+}
+
+function trashIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  );
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  return svg;
+}
+
+function trashButton(card: CardNote): HTMLButtonElement {
+  const node = button("", "Delete card", false, () => {
+    void deleteCards([card]);
+  });
+  node.className = "kb-trash";
+  node.setAttribute("aria-label", "Delete card");
+  node.appendChild(trashIcon());
+  return node;
 }
 
 function foldIcon(): SVGSVGElement {
@@ -1768,8 +1832,22 @@ function renderPanel(board: BoardNote, card: CardNote, children: CardNote[]): HT
     paint();
   });
   close.className = "kb-panel-close";
-  head.append(title, close);
+  head.append(title, trashButton(card), close);
   panel.appendChild(head);
+
+  const hide = el("label", "kb-hide");
+  const hideBox = document.createElement("input");
+  hideBox.type = "checkbox";
+  hideBox.checked = card.hidden;
+  hideBox.setAttribute("aria-label", "Hidden");
+  hideBox.addEventListener("change", () => {
+    if (hideBox.checked) _openPath = "";
+    void updateCard(card.path, (content) => hideBox.checked
+      ? withScalar(content, "hidden", "yes")
+      : withoutScalar(content, "hidden"));
+  });
+  hide.append(hideBox, document.createTextNode("Hidden"));
+  panel.appendChild(hide);
 
   const file = el("div", "kb-field");
   const fileInput = document.createElement("input");
@@ -2025,6 +2103,34 @@ function openLaneMenu(board: BoardNote, lane: Lane, anchor: HTMLElement): void {
       void writeLanes(board, lanes);
     });
   }
+  const choice = el("label", "kb-menu-choice");
+  choice.appendChild(el("span", "", "Show/hide cards"));
+  const showHide = document.createElement("select");
+  showHide.setAttribute("aria-label", "Show/hide cards");
+  const pending = document.createElement("option");
+  pending.value = "";
+  pending.textContent = "Show/hide cards";
+  pending.selected = true;
+  showHide.appendChild(pending);
+  for (const [value, label] of [["show", "Show"], ["hide", "Hide"]] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    showHide.appendChild(option);
+  }
+  showHide.addEventListener("change", () => {
+    const value = showHide.value;
+    pop.remove();
+    if (value === "show" || value === "hide") void setLaneCardsHidden(lane, value === "hide");
+  });
+  choice.appendChild(showHide);
+  pop.appendChild(choice);
+  item("Delete all", () => {
+    const doomed = _cards.filter((card) => card.status === lane.title);
+    if (doomed.length === 0) return;
+    if (!window.confirm(`Delete all cards in ${lane.title}? This cannot be undone.`)) return;
+    void deleteCards(doomed);
+  });
   item(lane.hidden ? "Show" : "Hide", () => {
     void writeLanes(board, board.lanes.map((entry) => (
       entry.title === lane.title ? { ...entry, hidden: !entry.hidden } : entry
@@ -2047,6 +2153,34 @@ function openLaneMenu(board: BoardNote, lane: Lane, anchor: HTMLElement): void {
   });
   pop.appendChild(color);
   document.body.appendChild(pop);
+}
+
+async function setLaneCardsHidden(lane: Lane, hidden: boolean): Promise<void> {
+  await enqueue(async () => {
+    for (const card of _cards.filter((item) => item.status === lane.title)) {
+      const content = await readText(card.path);
+      if (content === null) continue;
+      const next = hidden
+        ? withScalar(content, "hidden", "yes")
+        : withoutScalar(content, "hidden");
+      if (next !== content) await writeText(card.path, next);
+    }
+    await refresh();
+  });
+}
+
+async function deleteCards(cards: CardNote[]): Promise<void> {
+  await enqueue(async () => {
+    for (const card of cards) {
+      try {
+        await invoke("delete_file", { path: card.path });
+      } catch {
+        continue;
+      }
+      if (_openPath === card.path) _openPath = "";
+    }
+    await refresh();
+  });
 }
 
 async function writeLanes(board: BoardNote, lanes: Lane[]): Promise<void> {

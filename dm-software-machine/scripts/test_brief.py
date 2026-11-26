@@ -295,6 +295,43 @@ def test_card_stays_in_sync_with_ticket() -> None:
     assert "_pointer" in meta["reason"]
     assert "\n" not in meta["reason"]
     assert dmsm.lane_title("gated") == "Review"
+    hidden = dmsm.card_frontmatter(
+        {"title": "Keep", "status": "queued", "priority": "P2"},
+        {"status": "Ready", "hidden": "yes"},
+    )
+    assert hidden["hidden"] == "yes"
+    kept = Path(tempfile.mkdtemp(prefix="sm-hide-"))
+    try:
+        specs = kept / "specs"
+        specs.mkdir()
+        (specs / "t-keep.md").write_text("---\ntitle: Keep\nstatus: Ready\nhidden: yes\n---\n\n# Keep\n", encoding="utf-8")
+        store = dmsm.Store(kept)
+        store.cfg["specs_dir"] = "specs"
+        state = {
+            "tasks": {
+                "t-keep": {
+                    "id": "t-keep",
+                    "title": "Keep",
+                    "status": "queued",
+                    "priority": "P2",
+                    "spec_path": "specs/t-keep.md",
+                },
+                "t-gone": {
+                    "id": "t-gone",
+                    "title": "Gone",
+                    "status": "queued",
+                    "priority": "P2",
+                    "spec_path": "specs/t-gone.md",
+                },
+            }
+        }
+        assert dmsm.drop_missing_notes(store, state) == ["t-gone deleted"]
+        assert "t-gone" not in state["tasks"]
+        dmsm.write_notes_from_state(store, state)
+        assert not (specs / "t-gone.md").exists()
+        assert "hidden: yes" in (specs / "t-keep.md").read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(kept, ignore_errors=True)
     print("card stays in sync ok")
 
 

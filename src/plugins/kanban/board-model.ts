@@ -37,6 +37,7 @@ const RESERVED_KEYS = new Set([
   "border",
   "unread",
   "working",
+  "hidden",
   "parent",
   "order",
   "lane",
@@ -79,6 +80,8 @@ export interface CardNote {
   unread: boolean;
   /** Optional. The card shows the working pattern only when this is true. */
   working: boolean;
+  /** Hidden cards are left out of the lane until Show brings them back. */
+  hidden: boolean;
   parent: string;
   order: string;
   description: string;
@@ -328,6 +331,7 @@ export function parseCard(content: string, path: string): CardNote {
     border: scalar(lines, "border"),
     unread: yes(scalar(lines, "unread"), false),
     working: yes(scalar(lines, "working"), false),
+    hidden: yes(scalar(lines, "hidden"), false),
     parent: scalar(lines, "parent"),
     order: scalar(lines, "order"),
     description: prose.join("\n").trim(),
@@ -795,6 +799,7 @@ export function cardVisible(
   filters: ReadonlySet<BoardFilter>,
   today: string,
 ): boolean {
+  if (card.hidden) return false;
   const needle = query.trim().toLowerCase();
   if (needle !== "" && !haystack(card, children).includes(needle)) return false;
   if (filters.has("blocked") && card.blockedBy.trim() === "") return false;
