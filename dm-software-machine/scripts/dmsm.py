@@ -4933,8 +4933,13 @@ def mark_agent_failed(store: "Store", task_id: str, message: str) -> None:
     store.save_state(state)
 
 
+def waits_for_a_person(spec_text: str) -> bool:
+    """Review stays with a person unless the spec says otherwise."""
+    return "move to done without a person" not in spec_text.lower()
+
+
 def cmd_agent_run(args: argparse.Namespace) -> int:
-    """Work the ticket, then run Review and accept when the gate is green."""
+    """Work the ticket, then leave Review for a person unless the spec says otherwise."""
     store = Store(repo_root())
     store.require_configured()
     task_id = args.task
@@ -4986,6 +4991,15 @@ def cmd_agent_run(args: argparse.Namespace) -> int:
             return code
     if finish_rc != 0:
         return finish_rc
+    spec_now = spec_path.read_text(encoding="utf-8") if spec_path.is_file() else ""
+    if waits_for_a_person(spec_now):
+        state = store.load_state()
+        task = state["tasks"][task_id]
+        task["agent_stopped"] = True
+        task["reason"] = "Ready for a person to review."
+        store.save_state(state)
+        print(f"{task_id} is in Review for a person")
+        return 0
     try:
         return cmd_accept(argparse.Namespace(task=task_id))
     except SystemExit as exc:
