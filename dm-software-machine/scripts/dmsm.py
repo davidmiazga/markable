@@ -327,13 +327,20 @@ def card_frontmatter(task: dict, existing: dict[str, str]) -> dict[str, str]:
     reason = one_line(str(task.get("reason") or ""))
     if reason:
         fields["reason"] = reason
-    agent_pid = str(existing.get("agent") or "").strip()
+    agent_pid = str(task.get("agent_pid") or existing.get("agent") or "").strip()
     was_working = str(existing.get("working") or "").strip().lower() in ("yes", "true", "1", "on")
+    settled = str(task.get("status") or "") in (
+        "gated",
+        "reviewed",
+        "accepted",
+        "failed",
+        "blocked",
+    )
     if agent_pid and pid_alive(agent_pid):
         fields["working"] = "yes"
         fields["agent"] = agent_pid
     elif was_working or agent_pid:
-        if not fields.get("reason"):
+        if not settled and not fields.get("reason"):
             fields["reason"] = "The agent stopped."
     for key, value in existing.items():
         if key in fields or key in CARD_FIELDS:
@@ -1161,6 +1168,22 @@ def share_worktree_build_artifacts(store: "Store", worktree: Path) -> None:
     ]
     for main_rel, wt_rel in pairs:
         _symlink_share(store.root / main_rel, worktree / wt_rel)
+    share_plugin_bundles(store, worktree)
+
+
+def share_plugin_bundles(store: "Store", worktree: Path) -> None:
+    """The Tauri build glob needs the generated plugin files, which git does not keep."""
+    defaults = resolve_defaults(store)
+    app = str(defaults.get("app_folder") or store.profile.get("app_dir") or "").rstrip("/")
+    if not app or _is_unset(app):
+        return
+    main_core = store.root / app / "src-tauri" / "plugins" / "core"
+    wt_core = worktree / app / "src-tauri" / "plugins" / "core"
+    if not main_core.is_dir():
+        return
+    wt_core.mkdir(parents=True, exist_ok=True)
+    for src in main_core.glob("*.js"):
+        _symlink_share(src, wt_core / src.name)
 
 
 def worktree_has_precious_work(store: "Store", task: dict, dest: Path) -> list[str]:
@@ -2986,6 +3009,8 @@ def _claim(store: Store, state: dict, task_id: str, agent: str, force: bool = Fa
     task["claim_lease"] = now_iso()
     task["reason"] = ""
     task["phase"] = "claimed"
+    task.pop("agent_pid", None)
+    task["agent_stopped"] = False
     writes = task.get("writes") or resolve_defaults(store)["writes"]
     wt_meta = None
     if worktrees_enabled(store):
@@ -4593,6 +4618,276 @@ def adopt_board_cards(store: Store) -> list[str]:
     return messages
 
 
+AGENT_SETTLED = {"gated", "reviewed", "accepted", "failed", "blocked"}
+
+
+def agent_pieces(writes: list[str]) -> list[list[str]]:
+    """One agent per file. A directory, or a mix of directories, stays one agent."""
+    cleaned = [str(item).strip() for item in writes if str(item).strip()]
+    if len(cleaned) <= 1 or any(item.endswith("/") for item in cleaned):
+        return [cleaned]
+    return [[item] for item in cleaned]
+
+
+def ticket_agent_step(task: dict, *, alive: bool, was_working: bool) -> str:
+    """start, promote, ended, clear, hold, or none."""
+    status = str(task.get("status") or "")
+    pid = str(task.get("agent_pid") or "").strip()
+    if pid and alive:
+        return "promote" if status == "claimed" else "none"
+    if was_working or pid:
+        return "clear" if status in AGENT_SETTLED else "ended"
+    if task.get("agent_stopped"):
+        return "hold"
+    if status in ("claimed", "active"):
+        return "start"
+    return "none"
+
+
+def agent_prompt(task: dict, piece: list[str], spec_text: str) -> str:
+    paths = ", ".join(piece) if piece else "the paths named in the spec"
+    return (
+        f"Implement ticket {task.get('id')} in this checkout.\n\n"
+        f"{spec_text.strip()}\n\n"
+        f"Edit only these paths: {paths}\n"
+        "Do not commit. Do not run sm-finish or sm-accept. "
+        "Exit when this piece is implemented.\n"
+    )
+
+
+def cursor_sdk_home() -> Path:
+    return Path.home() / ".dm-software-machine" / "cursor-sdk"
+
+
+def ensure_cursor_sdk() -> Path:
+    """Install the Cursor agent runner once, next to a copy of agent_work.mjs."""
+    home = cursor_sdk_home()
+    source = Path(__file__).resolve().parent / "agent_work.mjs"
+    if not source.is_file():
+        raise SystemExit("agent_work.mjs is missing, so the agent could not start.")
+    marker = home / "node_modules" / "@cursor" / "sdk" / "package.json"
+    env = board_launch_env()
+    if not marker.is_file():
+        home.mkdir(parents=True, exist_ok=True)
+        npm = shutil.which("npm", path=env.get("PATH")) or "npm"
+        completed = subprocess.run(
+            [npm, "install", "--prefix", str(home), "@cursor/sdk"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise SystemExit(detail or "Could not install the Cursor agent runner.")
+    script = home / "agent_work.mjs"
+    script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return script
+
+
+def agent_worker_command(prompt_path: Path) -> list[str]:
+    custom = os.environ.get("DMSM_AGENT_CMD", "").strip()
+    if custom:
+        return [*shlex.split(custom), str(prompt_path)]
+    env = board_launch_env()
+    node = shutil.which("node", path=env.get("PATH"))
+    if not node:
+        raise SystemExit("node is not on PATH, so the agent could not start.")
+    return [node, str(ensure_cursor_sdk()), str(prompt_path)]
+
+
+def log_tail(path: Path, limit: int = 240) -> str:
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    return one_line(text[-limit:])
+
+
+def run_commands(
+    commands: list[list[str]],
+    *,
+    parallel: int,
+    cwd: Path,
+    log: Path,
+) -> tuple[int, str]:
+    """Run agent commands, at most `parallel` at a time. Returns the first failure."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    width = max(1, parallel)
+    with log.open("a", encoding="utf-8") as handle:
+        for start in range(0, len(commands), width):
+            procs = [
+                subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    env=board_launch_env(),
+                )
+                for argv in commands[start : start + width]
+            ]
+            codes = [proc.wait() for proc in procs]
+            failed = next((code for code in codes if code != 0), 0)
+            if failed:
+                return failed, log_tail(log) or f"The agent stopped ({failed})."
+    return 0, ""
+
+
+def run_ticket_workers(store: "Store", task: dict, checkout: Path) -> tuple[int, str]:
+    writes = [str(item) for item in (task.get("writes") or [])]
+    pieces = agent_pieces(writes)
+    parallel = max(1, int(store.cfg.get("parallel") or 1))
+    spec_path = task_spec_path(store, task)
+    spec_text = (
+        spec_path.read_text(encoding="utf-8")
+        if spec_path.is_file()
+        else str(task.get("title") or "")
+    )
+    commands: list[list[str]] = []
+    logs = store.task_dir(task["id"]) / "logs"
+    for index, piece in enumerate(pieces):
+        prompt_path = logs / f"agent-{index}.prompt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(agent_prompt(task, piece, spec_text), encoding="utf-8")
+        commands.append(agent_worker_command(prompt_path))
+    return run_commands(commands, parallel=parallel, cwd=checkout, log=logs / "agent.log")
+
+
+def mark_agent_failed(store: "Store", task_id: str, message: str) -> None:
+    state = store.load_state()
+    task = state["tasks"].get(task_id)
+    if task is None:
+        return
+    if task.get("status") not in ("accepted", "failed"):
+        task["status"] = "failed"
+    task["agent_stopped"] = True
+    task["reason"] = one_line(message) or "The agent stopped."
+    store.save_state(state)
+
+
+def cmd_agent_run(args: argparse.Namespace) -> int:
+    """Work the ticket, then run Review and accept when the gate is green."""
+    store = Store(repo_root())
+    store.require_configured()
+    task_id = args.task
+    state = store.load_state()
+    task = (state.get("tasks") or {}).get(task_id)
+    if task is None:
+        raise SystemExit(f"unknown task {task_id}")
+    checkout = task_checkout_root(store, task)
+    attempts = int(task.get("max_repairs") or 2) + 1
+    worked = False
+    detail = "The agent stopped."
+    for _ in range(attempts):
+        try:
+            code, detail = run_ticket_workers(store, task, checkout)
+        except SystemExit as exc:
+            mark_agent_failed(store, task_id, str(exc) or "The agent could not start.")
+            return 1
+        if code == 0:
+            worked = True
+            break
+    if not worked:
+        mark_agent_failed(store, task_id, detail or "The agent stopped.")
+        return 1
+    finish_rc = 1
+    for _ in range(attempts):
+        try:
+            finish_rc = cmd_finish(argparse.Namespace(task=task_id, kind="fast"))
+        except SystemExit as exc:
+            mark_agent_failed(store, task_id, str(exc) or "The agent stopped.")
+            return 1
+        if finish_rc == 0:
+            break
+        state = store.load_state()
+        task = state["tasks"][task_id]
+        if task.get("status") == "failed":
+            return finish_rc
+        try:
+            code, detail = run_ticket_workers(store, task, checkout)
+        except SystemExit as exc:
+            mark_agent_failed(store, task_id, str(exc) or "The agent stopped.")
+            return 1
+        if code != 0:
+            mark_agent_failed(store, task_id, detail or "The agent stopped.")
+            return code
+    if finish_rc != 0:
+        return finish_rc
+    try:
+        return cmd_accept(argparse.Namespace(task=task_id))
+    except SystemExit as exc:
+        message = one_line(str(exc)) or "Accept failed."
+        state = store.load_state()
+        task = state["tasks"][task_id]
+        task["reason"] = message
+        store.save_state(state)
+        return 1
+
+
+def spawn_ticket_agent(store: "Store", task_id: str) -> int:
+    script = str(Path(__file__).resolve())
+    uv = shutil.which("uv")
+    argv = [uv, "run", script, "agent-run", "--task", task_id] if uv else [
+        sys.executable,
+        script,
+        "agent-run",
+        "--task",
+        task_id,
+    ]
+    log = store.task_dir(task_id) / "logs" / "agent-run.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        argv,
+        cwd=store.root,
+        start_new_session=True,
+        stdout=log.open("a"),
+        stderr=subprocess.STDOUT,
+        env=board_launch_env(),
+    )
+    return proc.pid
+
+
+def advance_ticket_agent(store: "Store", task: dict, meta: dict[str, str]) -> str | None:
+    """Start the agent, move a live one to Running, or clear a dead one."""
+    if os.environ.get("DMSM_AGENTS", "").strip().lower() == "off":
+        return None
+    task_id = str(task.get("id") or "")
+    was_working = str(meta.get("working") or "").strip().lower() in ("yes", "true", "1", "on")
+    pid = str(task.get("agent_pid") or "").strip()
+    alive = bool(pid) and pid_alive(pid)
+    step = ticket_agent_step(task, alive=alive, was_working=was_working)
+    if step == "promote":
+        task["status"] = "active"
+        task["phase"] = "work"
+        task["reason"] = ""
+        return f"{task_id} running"
+    if step == "clear":
+        task.pop("agent_pid", None)
+        return f"{task_id} live agent ended"
+    if step == "ended":
+        task.pop("agent_pid", None)
+        task["agent_stopped"] = True
+        if not str(task.get("reason") or "").strip():
+            task["reason"] = "The agent stopped."
+        return f"{task_id} live agent ended"
+    if step != "start":
+        return None
+    try:
+        new_pid = spawn_ticket_agent(store, task_id)
+    except OSError as exc:
+        task["agent_stopped"] = True
+        task["reason"] = one_line(f"The agent could not start. {exc}")
+        return f"{task_id} agent could not start"
+    task["agent_pid"] = str(new_pid)
+    task["agent_stopped"] = False
+    if pid_alive(str(new_pid)):
+        task["status"] = "active"
+        task["phase"] = "work"
+        task["reason"] = ""
+        return f"{task_id} running"
+    task["agent_stopped"] = True
+    task["reason"] = "The agent stopped."
+    return f"{task_id} live agent ended"
+
+
 def sync_board(store: Store) -> list[str]:
     """Make every card agree with its ticket, and carry a lane change through."""
     messages = adopt_board_cards(store)
@@ -4609,19 +4904,14 @@ def sync_board(store: Store) -> list[str]:
         task = (state.get("tasks") or {}).get(task_id)
         if task is None:
             continue
+        task["id"] = task_id
+        if not str(task.get("agent_pid") or "").strip() and meta.get("agent"):
+            task["agent_pid"] = meta["agent"]
         action = board_lane_action(
             meta.get("status", ""),
             task,
             spec_ready=spec_complete(path)[0],
         )
-        agent_pid = str(meta.get("agent") or "").strip()
-        was_working = str(meta.get("working") or "").strip().lower() in ("yes", "true", "1", "on")
-        if (was_working or agent_pid) and not (agent_pid and pid_alive(agent_pid)):
-            if not str(task.get("reason") or "").strip():
-                task["reason"] = "The agent stopped."
-            store.save_state(state)
-            messages.append(f"{task_id} live agent ended")
-            continue
         if action:
             try:
                 rc = run_board_action(store, task_id, action)
@@ -4635,10 +4925,26 @@ def sync_board(store: Store) -> list[str]:
                 continue
             state = load_state_disk(store)
             task = state["tasks"][task_id]
+            task["id"] = task_id
             task["reason"] = ""
+            if action in ("claim", "running"):
+                task["agent_stopped"] = False
+                held = str(task.get("agent_pid") or meta.get("agent") or "").strip()
+                if held and pid_alive(held):
+                    task["agent_pid"] = held
+                else:
+                    task.pop("agent_pid", None)
             apply_note_fields(task, meta)
+            agent_message = advance_ticket_agent(store, task, meta)
             store.save_state(state)
             messages.append(f"{action} {task_id}")
+            if agent_message:
+                messages.append(agent_message)
+            continue
+        agent_message = advance_ticket_agent(store, task, meta)
+        if agent_message:
+            store.save_state(state)
+            messages.append(agent_message)
             continue
         if apply_note_fields(task, meta):
             store.save_state(state)
@@ -5194,6 +5500,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     board.add_argument("--port", type=int, default=47321)
     board.set_defaults(func=cmd_board)
+
+    agent_run = sub.add_parser(
+        "agent-run",
+        help="work a claimed ticket, then review and accept when the gate is green",
+    )
+    agent_run.add_argument("--task", required=True)
+    agent_run.set_defaults(func=cmd_agent_run)
 
     board_watch = sub.add_parser(
         "board-watch",
