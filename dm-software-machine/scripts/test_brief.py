@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -154,12 +155,14 @@ def test_live_brief_gate() -> None:
         assert not ok
 
         claimed = run(["task-claim", task_id], tmp)
-        assert claimed.returncode != 0
-        assert "briefing" in (claimed.stderr + claimed.stdout)
-
-        forced = run(["task-claim", task_id, "--force"], tmp)
-        assert forced.returncode != 0
-        assert "briefing" in (forced.stderr + forced.stdout)
+        assert claimed.returncode == 0, claimed.stdout + claimed.stderr
+        pointer = (tmp / ".dm-software-machine" / "current-run").read_text().strip()
+        state = json.loads(
+            (tmp / ".dm-software-machine" / "runs" / pointer / "state.json").read_text()
+        )
+        assert state["tasks"][task_id]["phase"] == "clarify"
+        released = run(["reclaim", "--task", task_id, "--force"], tmp)
+        assert released.returncode == 0, released.stdout + released.stderr
 
         nxt = run(["task-next"], tmp)
         assert nxt.returncode != 0
@@ -372,6 +375,21 @@ def test_claimed_card_starts_agents() -> None:
     assert code == 0, detail
     text = marker.read_text()
     assert str(first) in text and str(second) in text
+    ready_lane, ready_reason = dmsm.direction_result(True, None)
+    assert ready_lane == "ready" and ready_reason == "Direction is on the card."
+    blocked_lane, blocked_reason = dmsm.direction_result(
+        False, {"lane": "blocked", "reason": "Which edge?"}
+    )
+    assert blocked_lane == "blocked" and blocked_reason == "Which edge?"
+    review_lane, review_reason = dmsm.direction_result(
+        False, {"lane": "ready", "reason": "Page edge on all sides."}
+    )
+    assert review_lane == "ready" and review_reason == "Page edge on all sides."
+    unknown_lane, _unknown_reason = dmsm.direction_result(True, {"lane": "later"})
+    assert unknown_lane == "blocked"
+    park = tmp / "agent-park.json"
+    park.write_text('{"lane": "blocked", "reason": "Need a decision."}\n')
+    assert dmsm.read_park(park)["reason"] == "Need a decision."
     shutil.rmtree(tmp, ignore_errors=True)
     print("claimed card starts agents ok")
 
